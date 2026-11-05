@@ -34,7 +34,7 @@ Grammar rules (strict; any violation is `malformed_auth`):
 - the parameter set is exactly `kid`, `ts`, `nonce`, `sig`, each once, in any order;
 - `ts` is a Unix time in whole seconds, decimal, no sign, no leading zeros (`0` is allowed), at most 12 digits;
 - `nonce` is 16 bytes from a CSPRNG, fresh for every request;
-- a scheme of the form `v` + digits other than `v1` is `unsupported_version`; any other scheme is `malformed_auth`.
+- a scheme of the form `v` + digits other than `v1` is `unsupported_version`; any other scheme is `malformed_auth`. The scheme is examined first: a header whose scheme is `v2` is `unsupported_version` even if its parameters are malformed, because the grammar of other versions is unknown.
 
 ### 3.1 Signing string
 
@@ -57,7 +57,7 @@ mcp-jack/v1/request
 | `target` | The origin-form request target as sent on the wire: path plus `?query` if present, no fragment, byte-for-byte (no normalisation, no re-encoding). It MUST NOT contain control characters. |
 | `aud` | The audience identifier configured on the server and in the client (for example `https://svc.example.test`). The server compares against its own configuration, never against the `Host` header, so the check survives reverse proxies. |
 | `kid`, `ts`, `nonce` | The header values as sent. |
-| `body-hash` | `base64url(SHA-256(body_bytes))` over the exact request body bytes; the empty body hashes as the empty string. |
+| `body-hash` | `base64url(SHA-256(body_bytes))` over the exact request body bytes. An empty body is hashed as an empty byte string, so the field is never empty (it is the encoding of the SHA-256 of zero bytes). |
 
 `sig` = `base64url(Ed25519_sign(private_key, signing_string))`.
 
@@ -114,7 +114,7 @@ mcp-jack/v1/response
 - `request-sig` is the `sig` value of the request being answered; this binds the response to that request.
 - `kid` is the server's key id; the client MUST have the server public key pinned in its configuration and MUST reject any other `kid`.
 
-Client verification order, each failure being a client-side error:
+Client verification order, each failure being a client-side error. These codes are never sent over HTTP, so they have no HTTP status. As on the server, the scheme is examined first (step 3 applies before the parameter rules of step 2):
 
 | # | Check | `code` |
 |---|---|---|
