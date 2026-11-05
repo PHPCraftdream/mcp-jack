@@ -222,7 +222,7 @@ export function parseJsonRaw(text: string): { readonly value: JsonValue; readonl
       return { text: text.slice(start, i), value: true, members: undefined, items: undefined };
     }
     if (text.startsWith("false", i)) {
-      i += 6;
+      i += 5;
       return { text: text.slice(start, i), value: false, members: undefined, items: undefined };
     }
     if (text.startsWith("null", i)) {
