@@ -1,0 +1,9 @@
+{
+  "name": "license-fixture-dep-array",
+  "version": "1.0.0",
+  "description": "CI-only licence fixture: ambiguous array metadata must fail closed.",
+  "licenses": [
+    { "type": "MIT" },
+    { "type": "GPL-3.0-only" }
+  ]
+}

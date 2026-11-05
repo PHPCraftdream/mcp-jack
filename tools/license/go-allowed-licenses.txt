@@ -1,0 +1,11 @@
+# Allowlist for Go dependencies and this module's own licence files.
+# Names must match the licence names go-licenses reports (it uses
+# github.com/google/licenseclassifier). One name per line; '#' starts a
+# comment. Applied by tools/license/check-go.sh; rationale in
+# tools/license/README.md.
+MIT
+Apache-2.0
+BSD-2-Clause
+BSD-3-Clause
+ISC
+Unlicense

@@ -1,0 +1,7 @@
+# CI-only licence fixture: deliberately missing the licence field; cargo-deny
+# must refuse this crate as unlicensed. See tools/license/README.md.
+[package]
+name = "license-fixture-unlicensed"
+version = "0.0.0"
+edition = "2021"
+publish = false

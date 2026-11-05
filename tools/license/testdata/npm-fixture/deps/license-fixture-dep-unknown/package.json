@@ -1,0 +1,5 @@
+{
+  "name": "license-fixture-dep-unknown",
+  "version": "1.0.0",
+  "description": "CI-only licence fixture: deliberately has no licence field."
+}

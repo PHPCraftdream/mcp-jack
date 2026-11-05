@@ -1,0 +1,6 @@
+{
+  "name": "license-fixture-dep-and",
+  "version": "1.0.0",
+  "description": "CI-only licence fixture: AND requires every branch allowed.",
+  "license": "MIT AND GPL-3.0-only"
+}

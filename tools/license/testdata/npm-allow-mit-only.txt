@@ -1,0 +1,4 @@
+# CI-only fixture allowlist: MIT only. The OR fixture must pass (the MIT
+# branch satisfies the expression), the AND and unknown-licence fixtures must
+# be refused. See tools/license/README.md.
+MIT

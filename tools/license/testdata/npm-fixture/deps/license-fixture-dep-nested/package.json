@@ -1,0 +1,6 @@
+{
+  "name": "license-fixture-dep-nested",
+  "version": "1.0.0",
+  "description": "CI-only licence fixture: nested OR/AND expression.",
+  "license": "(MIT AND GPL-3.0-only) OR Apache-2.0"
+}

@@ -20,6 +20,11 @@ CI runs all of these; run what applies to your change before opening a pull requ
 | TypeScript (`ts/`) | `npm ci --no-audit --no-fund`, `npm run typecheck`, `npm test` |
 | Fixtures | `node spec/tools/gen-fixtures.mjs --check` |
 | Interop (3 x 3 matrix) | build the executables as in `interop/README.md`, then `node interop/run.mjs` |
+| Licences | CI-only: the `license` workflow; policy and rationale in `tools/license/README.md` |
+
+### Licence checks
+
+The `license` workflow enforces dependency licence compatibility for all three SDKs against the allowlists in `tools/license/`: Go (module plus all dependencies, test imports included), Rust (the whole `Cargo.lock` graph, including optional `http`/`interop` features, dev, build and platform-specific crates), and TypeScript (installed tree, dev dependencies included). It also verifies that the repository itself consistently declares the dual licence. Unknown or unlisted licences fail the build; see `tools/license/README.md` for the policy, the allowed licence categories and the exception process.
 
 ## Licence
 

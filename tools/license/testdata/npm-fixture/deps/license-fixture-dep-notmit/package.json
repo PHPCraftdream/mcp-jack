@@ -1,0 +1,6 @@
+{
+  "name": "license-fixture-dep-notmit",
+  "version": "1.0.0",
+  "description": "CI-only licence fixture: not an SPDX identifier.",
+  "license": "NotMIT"
+}

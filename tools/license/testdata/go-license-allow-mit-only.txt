@@ -1,0 +1,4 @@
+# Rejection control only: deliberately narrower than
+# go-allowed-licenses.txt. The fixture's Apache-2.0-only dependency
+# (github.com/google/go-cmp) must fail this list. See tools/license/README.md.
+MIT

@@ -1,0 +1,8 @@
+# CI-only licence-expression fixture: with AND, every term must be allowed,
+# so an MIT-only allowlist must refuse this crate. See tools/license/README.md.
+[package]
+name = "license-fixture-and"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "GPL-3.0-only AND MIT"

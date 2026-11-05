@@ -1,0 +1,7 @@
+# Rejection control only: MIT-only policy. Must fail against the real
+# workspace (Apache-2.0-only, BSD-3-Clause and Unicode-3.0 AND-term crates)
+# and against the AND and unlicensed fixtures; the OR fixture passes via its
+# MIT branch. See tools/license/README.md.
+[licenses]
+include-dev = true
+allow = ["MIT"]

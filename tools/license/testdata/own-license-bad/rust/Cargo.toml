@@ -1,0 +1,6 @@
+# Deliberately inconsistent fixture: wrong licence expression. Must fail
+# tools/license/check-own-license.mjs. See tools/license/README.md.
+[package]
+name = "own-license-bad-fixture"
+version = "0.0.0"
+license = "MIT"
