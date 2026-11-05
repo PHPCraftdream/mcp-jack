@@ -167,6 +167,10 @@ type StateUpdate func(*StateEdit) error
 // and file-backed implementations.
 type StateStore interface {
 	View() StateView
+	// Lookup returns a copy of the entry with the given kid. Request
+	// verification calls it once per request, so it must not copy the whole
+	// registry the way View does.
+	Lookup(kid string) (RegistryEntry, bool)
 	Update(update StateUpdate) error
 }
 
@@ -196,6 +200,23 @@ func (s *MemoryState) View() StateView {
 		Keys:    sortedKeys(s.keys),
 		Invites: sortedInvites(s.invites),
 	}
+}
+
+// Lookup returns a copy of the entry with the given kid, if present.
+func (s *MemoryState) Lookup(kid string) (RegistryEntry, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return lookupKey(s.keys, kid)
+}
+
+// lookupKey finds an entry by kid and returns a deep copy of it.
+func lookupKey(keys []RegistryEntry, kid string) (RegistryEntry, bool) {
+	for i := range keys {
+		if keys[i].Kid == kid {
+			return cloneEntry(keys[i]), true
+		}
+	}
+	return RegistryEntry{}, false
 }
 
 // Update runs update on a deep copy of the state while the mutex is held;

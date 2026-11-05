@@ -15,6 +15,16 @@ import (
 //go:embed fixtures/*.json
 var fixtures embed.FS
 
+// Fixture returns the raw bytes of one embedded fixture file, for consumers
+// that interpret a document themselves (for example a policy loader).
+func Fixture(name string) ([]byte, error) {
+	data, err := fixtures.ReadFile("fixtures/" + name)
+	if err != nil {
+		return nil, fmt.Errorf("fixture %s: %w", name, err)
+	}
+	return data, nil
+}
+
 // decodeFixture decodes one embedded fixture strictly: unknown fields and
 // trailing data are load errors, so a fixture field without a Go field fails
 // loudly instead of being ignored.
