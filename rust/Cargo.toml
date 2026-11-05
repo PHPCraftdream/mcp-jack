@@ -12,6 +12,17 @@ name = "mcp_jack"
 [features]
 default = []
 http = ["dep:http", "dep:bytes", "dep:http-body-util", "dep:tower-service", "dep:tower-layer"]
+interop = ["http", "dep:hyper", "dep:hyper-util", "dep:tokio"]
+
+[[bin]]
+name = "interop-server"
+path = "src/bin/interop_server.rs"
+required-features = ["interop"]
+
+[[bin]]
+name = "interop-client"
+path = "src/bin/interop_client.rs"
+required-features = ["interop"]
 
 [dependencies]
 ed25519-dalek = { version = "2.2", features = ["std"] }
@@ -27,6 +38,14 @@ bytes = { version = "1", optional = true }
 http-body-util = { version = "0.1", optional = true, features = ["channel"] }
 tower-service = { version = "0.3", optional = true }
 tower-layer = { version = "0.3", optional = true }
+
+# The four optional deps back the interop executables only: the hyper server
+# plus the tokio runtime of interop-server. The interop-client transport is
+# plain std TCP (no HTTP crate: keeps the graph within the 1.85 MSRV).
+hyper = { version = "1", optional = true, features = ["server", "http1"] }
+# TokioIo adapter + TowerToHyperService bridge for interop-server.
+hyper-util = { version = "0.1", optional = true, features = ["tokio", "service"] }
+tokio = { version = "1", optional = true, features = ["rt-multi-thread", "net", "macros", "signal"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros", "time"] }

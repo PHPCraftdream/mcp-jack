@@ -33,3 +33,12 @@ let service = layer.layer(tower::service_fn(
     },
 ));
 ```
+
+## Interop executables (feature `interop`)
+
+`cargo build --release --features interop` builds the harness executables `interop-server` and `interop-client` (`--features interop,http` also works, since `interop` enables `http`); the feature gates the optional HTTP dependencies (hyper/tokio) so the default library build is unaffected. The interop harness (`interop/targets.json`) expects the release paths below, with `.exe` appended automatically on Windows by the harness (interop/README.md section 2). Run `node interop/run.mjs` to drive them, or `node interop/run.mjs --clients rust --servers rust` for just the Rust pair (interop/README.md section 3); the `--verify-only` and `--bootstrap-ttl` contract lives in interop/README.md section 4.
+
+```text
+rust/target/release/interop-server
+rust/target/release/interop-client
+```
