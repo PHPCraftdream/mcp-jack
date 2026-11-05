@@ -53,5 +53,5 @@ node spec/tools/gen-fixtures.mjs --check  # fail if files on disk are stale
 - **Q6.** How a client learns `aud` and the server public key (configuration, well-known document, both).
 - **Q7.** Whether to adopt RFC 9421 plus RFC 9530 (`Content-Digest`) instead of the custom format (D3).
 - **Q8.** Human approval for destructive operations and the two-step change flow.
-- **Q9.** Licence.
+- **Q9.** ~~Licence~~ — resolved: the project is dual licensed under MIT OR Apache-2.0 ([LICENSE-MIT](../LICENSE-MIT), [LICENSE-APACHE](../LICENSE-APACHE)); the same terms apply to contributions ([CONTRIBUTING.md](../CONTRIBUTING.md)) and are stated in the [README](../README.md).
 - **Q10.** Policy matching beyond methods and tool names (resource URIs, prompt names, argument conditions).

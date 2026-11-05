@@ -36,7 +36,7 @@ The six executables come from CI builds:
 | Language | Server | Client | Built with |
 |---|---|---|---|
 | Go | `interop/bin/go-server` | `interop/bin/go-client` | `interop/go/server/main.go`, `interop/go/client/main.go` |
-| Rust | `rust/target/release/interop-server` | `rust/target/release/interop-client` | `cargo build --release --features interop,http` |
+| Rust | `rust/target/release/interop-server` | `rust/target/release/interop-client` | `cargo build --locked --release --features interop` (`interop` enables `http`; as in CI) |
 | TypeScript | `node ts/dist/interop/server.js` | `node ts/dist/interop/client.js` | the package's build (`ts/src/interop/*.ts`) |
 
 On Windows the harness appends `.exe` to a plain binary path automatically when

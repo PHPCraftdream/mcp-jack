@@ -17,7 +17,7 @@ CI runs all of these; run what applies to your change before opening a pull requ
 |---|---|
 | Go | `gofmt -l .`, `go vet ./...`, `go test -race ./...` |
 | Rust (`rust/`) | `cargo fmt --check`, `cargo clippy --locked --all-targets --all-features -- -D warnings`, `cargo test --locked --all-features` |
-| TypeScript (`ts/`) | `npm install`, `npm run typecheck`, `npm test` |
+| TypeScript (`ts/`) | `npm ci --no-audit --no-fund`, `npm run typecheck`, `npm test` |
 | Fixtures | `node spec/tools/gen-fixtures.mjs --check` |
 | Interop (3 x 3 matrix) | build the executables as in `interop/README.md`, then `node interop/run.mjs` |
 

@@ -1,6 +1,6 @@
 # Design: Rust and TypeScript server SDKs
 
-Status: draft, not implemented. Scope: server side only, matching the Go `jack` + `spec` + `server` packages. Client SDKs for Rust and TypeScript are a later step.
+Status: implemented; kept as the design record. Scope at design time: server side only, matching the Go `jack` + `spec` + `server` packages; the Rust and TypeScript client SDKs have since been added as well.
 
 ## 1. Goal and acceptance
 
@@ -65,7 +65,7 @@ These are the places where three independent implementations drift. Each gets a 
 - **Missing vs null.** Policy `scope` absent and `scope: null` differ. Rust: deserialize rules into `serde_json::Map` and inspect keys; TypeScript: `Object.hasOwn`. No `Option<T>` shortcut in Rust that merges the two.
 - **Unknown fields.** Strict loaders reject unknown fields (`#[serde(deny_unknown_fields)]` in Rust; an explicit key whitelist in TypeScript).
 - **Integers.** Native tool arguments such as `ttl_seconds` follow Go's `intFrom`: the JSON number must be an integer in range. `1.0`, `1e3` and `-0` are a cross-language hazard; the TypeScript side cannot tell `1` from `1.0` after `JSON.parse`. A shared fixture task first checks which of these Go accepts, then adds fixture cases so all three agree (a `JSON.parse` reviver with source text is not available on Node 20, so TypeScript inspects the raw argument text).
-- **Duplicate JSON object keys.** Go, `serde_json::Map` and `JSON.parse` all keep the last value. This matches today, but is unspecified; recorded as a spec question rather than solved here.
+- **Duplicate JSON object keys.** Go, `serde_json::Map` and `JSON.parse` all keep the last value. Now normative: spec decision D13 and 02 section 4 pin last-occurrence-wins, with `dup-*` cases in the request and admin vectors.
 - **Clocks and randomness.** Injected clock (Unix seconds) and injected random source for invite codes, as in Go; no wall-clock reads in logic.
 - **Atomic state.** `StateStore.update` takes a closure over a deep-copied edit and swaps it in only on success; the closure may run against a snapshot taken under the store lock. The last-admin rule depends on this.
 
@@ -94,22 +94,22 @@ These are the places where three independent implementations drift. Each gets a 
 
 ## 7. CI
 
-Add to `.github/workflows/ci.yml`:
+As built in `.github/workflows/ci.yml`:
 
-- `rust` (ubuntu, windows): `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --all-features`, plus `cargo test --no-default-features` on ubuntu.
-- `ts` (ubuntu, windows; Node 20 and 22): `npm ci`, `npx tsc -p . --noEmit`, `npm test`.
+- `rust` (ubuntu, windows): `cargo fmt --check`, `cargo clippy --locked --all-targets --all-features -- -D warnings`, `cargo test --locked --all-features`, plus `cargo test --locked --no-default-features` on ubuntu; a separate job checks the MSRV with `cargo check --locked --all-targets --all-features` on Rust 1.85.
+- `ts` (ubuntu, windows; Node 20 and 22): `npm ci --no-audit --no-fund`, `npm run typecheck`, `npm test`.
 - Path filters are not added: the fixtures are shared, so every SDK must run on every change.
 
-Local checks follow the project rule: builds and tests run in CI. Locally only `cargo fmt`, `cargo check` and `cargo clippy` for Rust; for TypeScript nothing beyond formatting unless the user allows `tsc --noEmit`.
+Design-time policy, kept for the record: builds and tests run in CI; locally only `cargo fmt`, `cargo check` and `cargo clippy` for Rust and, for TypeScript, nothing beyond formatting. CONTRIBUTING.md now asks for the checks that apply to a change before opening a pull request.
 
 ## 8. Risks
 
-- No local test runs: as with Go, the first CI run will surface compile and test failures. Mitigation: Rust is checked locally with `cargo check` and `cargo clippy`, which the rules allow.
+- Design-time risk (superseded): with no local test runs, the first CI run would surface compile and test failures; Rust was checked locally with `cargo check` and `cargo clippy`.
 - Crypto library strictness differs from the spec; the key and request vectors are the arbiter (section 4).
-- The Go SDK itself has never run; a divergence found by Rust or TypeScript may be a Go bug. Decision rule: the spec text and the JavaScript reference verifier decide, then the vectors.
+- Design-time risk (resolved): the Go SDK had never run when this was written, so a divergence found by Rust or TypeScript could have been a Go bug. Decision rule: the spec text and the JavaScript reference verifier decide, then the vectors.
 
 ## 9. Open questions
 
-1. Allow `tsc --noEmit` locally for TypeScript (type check only, no build output)?
+1. Allow `tsc --noEmit` locally for TypeScript (type check only, no build output)? CI already runs `npm run typecheck`; permission for local execution remains a separate operator decision.
 2. Package names on crates.io and npm are free (checked on 2026-11-05); reserve them now or at the first release?
-3. Duplicate JSON object keys in request bodies: reject in all SDKs (needs a custom parser in Go and TypeScript) or keep last-wins and state it in the spec?
+3. ~~Duplicate JSON object keys in request bodies: reject in all SDKs or keep last-wins and state it in the spec?~~ Resolved: keep last-wins, specified as D13 in the spec README (normative text in 02 section 4) with `dup-*` conformance vectors.

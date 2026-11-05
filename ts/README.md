@@ -1,6 +1,6 @@
-# mcp-jack (TypeScript server SDK)
+# mcp-jack (TypeScript SDK)
 
-The `mcp-jack` npm package is the TypeScript server SDK: it wraps an unmodified MCP endpoint with mcp-jack's authenticated, authorized and audited transport, mirroring the Go `jack` and `server` packages. It is ESM-only with zero runtime dependencies (only `node:crypto`, `node:fs`, `node:http`) and targets Node >= 20 under TypeScript's strictest settings; build with `npm run build`, type-check with `npm run typecheck`. Conformance tests in `test/` load the normative fixtures from `spec/fixtures/` in place via `npm test` (`node --test`), so a fixture change breaks every SDK at once.
+The `mcp-jack` npm package is the TypeScript SDK: it wraps an unmodified MCP endpoint with mcp-jack's authenticated, authorized and audited transport, mirroring the Go `jack` and `server` packages, and also ships the client as the namespaced `client` entry of the root export (mirroring the Go `client` package). It is ESM-only with zero runtime dependencies (only `node:crypto`, `node:fs`, `node:http`) and targets Node >= 20 under TypeScript's strictest settings; install with `npm ci` (the committed `package-lock.json` pins the dev dependencies; CI runs `npm ci --no-audit --no-fund`), build with `npm run build`, type-check with `npm run typecheck`. Conformance tests in `test/` load the normative fixtures from `spec/fixtures/` in place via `npm test` (`node --test`), so a fixture change breaks every SDK at once.
 
 ## Usage
 
