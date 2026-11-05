@@ -1,6 +1,12 @@
 {
   "name": "mcp-jack",
   "version": "0.0.0",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PHPCraftdream/mcp-jack.git",
+    "directory": "ts"
+  },
   "private": true,
   "type": "module",
   "engines": {

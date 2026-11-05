@@ -73,7 +73,12 @@ The draft lives in [spec/](spec/README.md): authentication, authorization, user 
 - Whether services will be local only or also remote.
 - Whether clients will be only our own agents or also third-party programs.
 - How services discover each other (registry or a well-known address on each).
-- Licence.
+
+## Licence
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT licence](LICENSE-MIT) at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this work, as defined in the Apache-2.0 licence, shall be dual licensed as above, without any additional terms or conditions.
 
 ## Name
 
