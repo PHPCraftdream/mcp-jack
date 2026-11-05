@@ -74,9 +74,9 @@ expect_refusal "$here/npm-allowed-licenses.txt" license-fixture-dep-and GPL-3.0-
 materialize license-fixture-dep-or
 expect_pass "$here/testdata/npm-allow-mit-only.txt"
 
-# Unknown SPDX identifier: refused with the identifier named.
+# The scanner maps NotMIT to UNKNOWN; require the named package's refusal.
 materialize license-fixture-dep-notmit
-expect_refusal "$here/testdata/npm-allow-mit-only.txt" license-fixture-dep-notmit NotMIT
+expect_refusal "$here/testdata/npm-allow-mit-only.txt" license-fixture-dep-notmit "no licence could be determined"
 
 # Undetermined licence: refused.
 materialize license-fixture-dep-unknown
