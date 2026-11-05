@@ -22,7 +22,7 @@ Before a public key is stored (enrollment, `jack.admin.user.create`, `jack.key.r
 
 ## 3. Tools
 
-All arguments are in `params.arguments`. A tool result is an MCP `CallToolResult` whose `structuredContent` holds the object described below and `isError` is `false`. An argument that is missing, of the wrong type, or outside its stated range is `400 invalid_params`. Errors use the rejection body from 01-authentication section 4, with the codes in section 7.
+All arguments are in `params.arguments`. A tool result is an MCP `CallToolResult` whose `structuredContent` holds the object described below and `isError` is `false`. An argument that is missing, of the wrong type, or outside its stated range is `400 invalid_params`. In particular: `name` matches the pattern in section 1; `scopes` is an array of distinct strings, each a valid scope (02 section 2); `kind` is `"human"` or `"agent"`; `not_before` and `not_after` are non-negative integers or `null`, and `not_before` is below `not_after` when both are set; `kid` and `invite_id` are strings. Errors use the rejection body from 01-authentication section 4, with the codes in section 7.
 
 ### 3.1 Self-service (any active key, no scope)
 
@@ -41,7 +41,7 @@ mcp-jack/v1/rotate
 <ts>
 ```
 
-`ts` is the `ts` parameter of the request's `Jack-Auth` header. A wrong proof is `400 invalid_proof`; a new key that is already registered is `409 key_exists`. On success the old key is removed immediately.
+`ts` is the `ts` parameter of the request's `Jack-Auth` header. Checks run in this order: arguments (`400 invalid_params`), the new key (`400 key_rejected`), the proof (`400 invalid_proof`; a proof that is not a canonical 64-byte value is also `invalid_proof`), and only then whether the new key is already registered (`409 key_exists`). The proof is checked first so that a caller cannot learn which keys are registered without holding the matching private key. On success the old key is removed immediately.
 
 ### 3.2 Enrollment
 
@@ -59,9 +59,10 @@ The request is signed by the **new key** and carries `kid` = `base64url(SHA-256(
 2. Step 4 exception: if `kid` is not in the registry and the request is a `POST` `tools/call` of `jack.enroll` with a valid JSON-RPC body, take `public_key` from the arguments. Otherwise `401 unknown_key`.
 3. The public key passes section 2 (`400 key_rejected`) and `kid` equals its hash (`401 unknown_key`).
 4. Steps 6-8 of 01 (time window, signature verified with the **submitted** key, nonce recording).
-5. The invite exists, has not expired, has not been used and has not been revoked: otherwise `403 invalid_invite`. All four cases return the same code.
-6. `name` is valid and unused (`409 name_taken`); `kid` is not registered (`409 key_exists`).
-7. Atomically: mark the invite used, add the entry with the invite's scopes, `kind` and `not_after`, `not_before` null. Result: `{kid, name, kind, scopes}`.
+5. Arguments: `code` and `name` are strings and `name` is valid, otherwise `400 invalid_params`.
+6. The invite exists, has not expired (`now < expires_at`), has not been used and has not been revoked: otherwise `403 invalid_invite`. All of these cases, and a `code` that is not a canonical base64url encoding of 32 bytes, return the same code, so a caller cannot tell them apart.
+7. `name` is unused: otherwise `409 name_taken`. A failure here does not consume the invite.
+8. Atomically: mark the invite used, add the entry with the invite's scopes, `kind` and `not_after`, `not_before` null. Result: `{kid, name, kind, scopes}`.
 
 A request with an already registered `kid` takes the normal path; `jack.enroll` from a registered key is `409 key_exists`.
 
@@ -86,14 +87,25 @@ An *entry* is `{kid, public_key, name, kind, scopes, not_before, not_after}`.
 
 Invites:
 
-- `ttl_seconds` is an integer 1..604800, default 3600. `key_ttl_seconds`, if present, sets the enrolled key's `not_after` to the enrollment time plus that many seconds.
+- `ttl_seconds` is an integer 1..604800, default 3600; the invite expires at `created_at + ttl_seconds` (valid while `now < expires_at`). `key_ttl_seconds`, if present, is an integer 1..31536000 and sets the enrolled key's `not_after` to the enrollment time plus that many seconds.
 - `code` is 32 bytes from a CSPRNG, base64url. It is returned **once**, by `invite.create`, and never again.
-- The server stores only `invite_id` = `base64url(SHA-256(code))`; `invite_id` is also how an invite is listed and revoked. A server MUST NOT log or persist `code`.
+- The server stores only `invite_id` = `base64url(SHA-256(code_bytes))`, computed over the 32 raw bytes of the code; `invite_id` is also how an invite is listed and revoked. A server MUST NOT log or persist `code`.
 - An invite is single-use. Expired and used invites are not listed.
 
 ## 4. Administration rules
 
-Evaluated after the `admin` scope check, in this order:
+Every `jack.admin.*` tool runs these checks in this order and stops at the first failure:
+
+1. the caller holds `admin` (`403 insufficient_scope`);
+2. the arguments are valid (`400 invalid_params`);
+3. any submitted public key is valid (`400 key_rejected`);
+4. the target exists (`404 unknown_target`);
+5. rules 1, 2 and 3 below, in that order;
+6. conflicts: the name is unused (`409 name_taken`), the key is not registered (`409 key_exists`);
+7. rule 4 below (`409 last_admin`), evaluated against the registry as it would be after the change;
+8. the change is applied atomically.
+
+The rules:
 
 1. **No escalation.** Every scope that an operation adds (in `scopes` of `invite.create`, `user.create`, `user.set_scopes`) MUST be held by the caller, otherwise `403 scope_escalation`.
 2. **Agent keys.** A key with `kind` `agent` MUST NOT be given `admin`, by any tool: `403 agent_admin_forbidden`.
@@ -132,7 +144,7 @@ An agent that reads untrusted content (logs, web pages, documents) can be steere
 
 ## 8. Audit
 
-A server MUST record an audit event for every `jack.admin.*`, `jack.enroll` and `jack.key.rotate` call, successful or not, with: time, caller `kid` and `name` (or the submitted `kid` for enrollment), tool, target (`kid`, `invite_id` or name), outcome and, on failure, the `code`. Events MUST NOT contain invite codes or private keys. The destination (file, syslog, external sink) is implementation-defined.
+A server MUST record an audit event for every `jack.admin.*`, `jack.enroll` and `jack.key.rotate` call that reaches the tool, successful or not, with: time, caller `kid` and `name` (or the submitted `kid` for enrollment), tool, target (`kid`, `invite_id` or name), outcome and, on failure, the `code`. Events MUST NOT contain invite codes or private keys. A call that reaches the tool is one that passed authentication (01-authentication steps 1-8); a call for an undefined `jack.` tool is not audited as a tool call. A server SHOULD also log rejected authentication attempts, at a level of detail of its choosing. The destination (file, syslog, external sink) is implementation-defined.
 
 ## 9. Atomicity
 

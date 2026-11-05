@@ -1,5 +1,9 @@
 {
   "registry": "registry.json",
+  "policies": {
+    "default": "policy.json",
+    "wildcard": "policy-wildcard.json"
+  },
   "cases": [
     {
       "id": "accept-read-status",
@@ -8,6 +12,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -16,15 +21,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=qyLu21LcaPozMDCt-LZ8AQ,sig=073wXcn4T4qXT5Npvsty5VXWhmAuDGCZOFZYalOTgE0i7Voqwh_U8aIy5knbM6XBUp3Ds2LuaPKdtVDf7fbzBw"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=qyLu21LcaPozMDCt-LZ8AQ,sig=aON13a39JDhDTyZBbNJLVfoNOJf6AykCGwKzb3ASjmSxi4EFkpxUWEG1GfQfJLsPKcNgHitmgiZiK9o1NVEhCw"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "accept",
@@ -40,7 +45,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "qyLu21LcaPozMDCt-LZ8AQ",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -51,6 +56,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -59,15 +65,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns,ts=1767225600,nonce=VoajilUeCa5VwYScIbAyLg,sig=HXj3KoFk1H93ofu3CmcgMXi_7Y24eS7-19vSCnjEM8ftdBD0KMi2oZql_9zFdfLtTfYeReh5pNOq_WtXvIVNBg"
+            "v1 kid=g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns,ts=1767225600,nonce=VoajilUeCa5VwYScIbAyLg,sig=ozkkaUBXsopuwMNm4LfTJFANg_yDg21bcKzZBr1F7_ON1YeGf6MUz88A5bybBqm4aiRTB7MRC93el57UXvIBAg"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2sucmVzdGFydCIsImFyZ3VtZW50cyI6e319fQ",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.restart\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5yZXN0YXJ0In19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.restart\"}}"
       },
       "expect": {
         "result": "accept",
@@ -83,7 +89,7 @@
           "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
           "1767225600",
           "VoajilUeCa5VwYScIbAyLg",
-          "MPJLRhTBsnLAuTrJoUeMSN1sSaE-Ml1G60G6Rgj60H0"
+          "X7jrLz9-TnF_2obf6G7f2Cq3OBzyfAjxTmbbBEFhu6c"
         ]
       }
     },
@@ -94,6 +100,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -102,15 +109,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns,ts=1767225600,nonce=XKZoXSnXU54R_h3XhNNDSw,sig=kNo5rc-jUNgpgJ0cxPvVjTtd4j_jEZOTof-9dMBtOQ5PXU_8gKc-naa-CkhiBv7SJoFGvxVaWR0b6OmWuf11BQ"
+            "v1 kid=g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns,ts=1767225600,nonce=XKZoXSnXU54R_h3XhNNDSw,sig=WuooRYhpObExwFnW8BvX1S3gaWglopJ9AqtfNA1xc9Ji5s5Q1dQn9xnKlBMVzV2yfEkXp0oOgQ2mSCgcW1ycBw"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2sucmVsb2FkIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.reload\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5yZWxvYWQifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.reload\"}}"
       },
       "expect": {
         "result": "accept",
@@ -126,7 +133,7 @@
           "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
           "1767225600",
           "XKZoXSnXU54R_h3XhNNDSw",
-          "0F7dKkupY7IATwYBmk-AIEthL3PDxAJiIw_qntq53FA"
+          "XxE2uJX3XP88mDGFeIjH6Uin_3WftJYeHgJupRkRnjs"
         ]
       }
     },
@@ -137,6 +144,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -145,15 +153,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=bu9N_ld9z81i0mvxfKO0bgHdiYjZx7jBF8sd8DTo9gc,ts=1767225600,nonce=MBTY1-GlS4MfN6SC1W7W7Q,sig=ui4OIsamjdoNHBfbT2l7IGCEWbNtzqPtPQfWCOOGAh4FoaT4PZzqjOfrTh1h7uwR1cIJGZrNrZEc9Cj-ZM3QDg"
+            "v1 kid=bu9N_ld9z81i0mvxfKO0bgHdiYjZx7jBF8sd8DTo9gc,ts=1767225600,nonce=MBTY1-GlS4MfN6SC1W7W7Q,sig=q5tw5rr_qoVI-1vylHVctvwQTd2gQiOmRwzTDX09bmf4v-eNz8qqylZ5XUzdhwN0Qh0EatwkyDf_Hu_72IosAQ"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suY29uZmlnLnNldCIsImFyZ3VtZW50cyI6eyJrIjoidiJ9fX0",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.config.set\",\"arguments\":{\"k\":\"v\"}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5jb25maWcuc2V0IiwiYXJndW1lbnRzIjp7ImsiOiJ2In19fQ",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.config.set\",\"arguments\":{\"k\":\"v\"}}}"
       },
       "expect": {
         "result": "accept",
@@ -169,7 +177,7 @@
           "bu9N_ld9z81i0mvxfKO0bgHdiYjZx7jBF8sd8DTo9gc",
           "1767225600",
           "MBTY1-GlS4MfN6SC1W7W7Q",
-          "P3J2iZL3n_QyEYFGkWvwspJkqiqhrvlCkKYKGeMW4vg"
+          "4mMQzcCA6S0g9RDGNXkBdmGR-IX6HoGw9rR76wJlgpo"
         ]
       }
     },
@@ -180,6 +188,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -223,6 +232,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -260,12 +270,145 @@
       }
     },
     {
+      "id": "accept-notification",
+      "description": "notifications/* matched by a glob rule with no scope",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=aQiZ2vykQrOtH-CfLZF6GQ,sig=0S0BrUNRAeO9YJLXLVyWmN2sXndvFq5FVR2CT5ooiMuHVAKXp8dW9Ezq49F6JyprFWUkmRyCrALjafBaYRybDA"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6Im5vdGlmaWNhdGlvbnMvaW5pdGlhbGl6ZWQifQ",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"notifications/initialized\"}"
+      },
+      "expect": {
+        "result": "accept",
+        "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "aQiZ2vykQrOtH-CfLZF6GQ",
+          "1idQ6eb--9OKzvTcsApPqvBj3GnNeGxIW4xQbklCN-0"
+        ]
+      }
+    },
+    {
+      "id": "accept-response-object",
+      "description": "a JSON-RPC response from the client needs authentication only",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=ShC9-ccxt5xs3_y1Y00sWw,sig=v00uMx9PU1B8aKEluqnoaRQtBuHZrSm6Y73MUEht0kP8Qz7FPY4pAQOunf0FKOxX0Cax1cSjJoLbHEbzb8tfDw"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsInJlc3VsdCI6e319",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}"
+      },
+      "expect": {
+        "result": "accept",
+        "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "ShC9-ccxt5xs3_y1Y00sWw",
+          "_NjHen4KDiyTv4nL-LAsZiVagKyoEUs0jeaVI6T21kA"
+        ]
+      }
+    },
+    {
+      "id": "accept-error-response-object",
+      "description": "a JSON-RPC error response needs authentication only",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=fjivPsmbkrXfyqgwUCwutQ,sig=Q4TyrvhgWP1c8qzbRg_jZY53gxE6jWbhPt9WRMWiinvkGkmKmxGN6tmiJlgeWbAYYAJ6lnPH49yXLwn-KybJAw"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsImVycm9yIjp7ImNvZGUiOi0xLCJtZXNzYWdlIjoieCJ9fQ",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-1,\"message\":\"x\"}}"
+      },
+      "expect": {
+        "result": "accept",
+        "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "fjivPsmbkrXfyqgwUCwutQ",
+          "_YzE4zYuE30TMnoUZ-ykRuvnTdETgkUJ6PAQmY78Tt4"
+        ]
+      }
+    },
+    {
       "id": "accept-query-string",
       "description": "query string is part of the signed target",
       "state": {
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -274,15 +417,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=LuCEZ9FAEEmCg6xVUaJ84g,sig=NzpTi5ttOc-wIBk_3bZUV3zMdL4O5TvGwsBnMm3Yru-tuRqs1n7caAmVdmInDyFQd5k51z3m7uDX9_FcaHooCQ"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=LuCEZ9FAEEmCg6xVUaJ84g,sig=Y6FoEd6LUeR9D0JIeX92iW5PW_iTE1GrZR9bYzsnatLfajznbi-y3YAWIW3I03Ro_ShKPFPWiwUNTa2Q7Pe-Cw"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "accept",
@@ -298,7 +441,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "LuCEZ9FAEEmCg6xVUaJ84g",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -309,6 +452,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -347,6 +491,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -355,14 +500,14 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=atj18jYWfRTjZUV4ATkz-Q,sig=Fqhfsjp2KZ8JWhNL4_ZmI3Nzir7A0yPRgSoOhARFgH-sneKE7EpdZdLH032RWvWMXm9RCMuRQxOG0_G6ZnQ9DA"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=atj18jYWfRTjZUV4ATkz-Q,sig=mHaO2RLenzkBBCHf20QZsewooUknypSMdyWtwJti5pkAlscl7pyUvXO3_eOZdjKRl1ApSnDkon3KN5NHQBLCDw"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2subG9ncy5xdWVyeSIsImFyZ3VtZW50cyI6eyJxIjoi0LvQvtCzINC-0YjQuNCx0L7QuiJ9fX0"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5sb2dzLnF1ZXJ5IiwiYXJndW1lbnRzIjp7InEiOiJuYcOvdmUgY2Fmw6kg4oCTIOaXpeacrOiqniJ9fX0"
       },
       "expect": {
         "result": "accept",
@@ -378,7 +523,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "atj18jYWfRTjZUV4ATkz-Q",
-          "zBpp6lttUGLDQOWo3s-7rcU2u9M8RfPi75wp_cs4-q8"
+          "62mGoS7jFo-zPQCJhhh2438CFWCyGCrQMNOyQhqNr7Q"
         ]
       }
     },
@@ -389,6 +534,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -397,15 +543,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225570,nonce=YRv07ITEsH4L4IsDkkw5kg,sig=w-VBecNX51SGfen4tWJnQPxFzH6spcRHhTmOveZFogmBeHuP4h17VPDI7nr1D7xZ7-wnFgEMFc9YYZ6f0dKVBg"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225570,nonce=YRv07ITEsH4L4IsDkkw5kg,sig=FLaDn_rt-QacOXGZIdHLyjt4XpYeEulm7zcEQkoTTzassdHnaQ20igBoN91ytAZHds5VYUo_jPFQHaFzYEjKCw"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "accept",
@@ -421,7 +567,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225570",
           "YRv07ITEsH4L4IsDkkw5kg",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -432,6 +578,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -440,15 +587,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225630,nonce=-mdRe5H35ssPyQlI58Pz7g,sig=NIulVIveyi28LV5K2wsI5gKnkCF3WggICmouQHRiMtdGrjtyYIS_RitBij0XfwKQI_eVYEuN6dJx_gAbUal2CQ"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225630,nonce=-mdRe5H35ssPyQlI58Pz7g,sig=CloM--siv6Zhc_GT3KvjMiJxtqTv5HReVxtDj0i1G0sDa_4hbY_LKRRU0sQ_9A_664YhMTPbJ_cW5Tz_j-rNBQ"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "accept",
@@ -464,7 +611,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225630",
           "-mdRe5H35ssPyQlI58Pz7g",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -475,6 +622,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": [
           {
             "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
@@ -489,15 +637,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns,ts=1767225600,nonce=aTqC_43o4mfH1AahpGDDrw,sig=PsiSrG5mDvlcvqNjUd5U_NQuvmklPdJ5oOe8h2tlE2Kyj2nGjM-uYY5w0U6cLzPA67s9bfIkbwsdrYGOY58SCA"
+            "v1 kid=g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns,ts=1767225600,nonce=aTqC_43o4mfH1AahpGDDrw,sig=_Et6P7QhVxggCj86f4SkOfdVKTF2n-P3vIH0ZBdzChcB9NBj9qnonAjGEneySV13JN7T-nHCc9xhcOzr089JAg"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "accept",
@@ -513,7 +661,7 @@
           "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
           "1767225600",
           "aTqC_43o4mfH1AahpGDDrw",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -524,6 +672,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": [
           {
             "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
@@ -538,15 +687,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=QcZtWwkHFp6hTkuM7JL07A,sig=ctgMGJYb0jTnizFdOu8hP24gxah66PzpBf2_rxRlAtjpv78G2Gp7Ct6lFKM4vDs09eD0JCfusLhc3u76ICY0Dg"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=QcZtWwkHFp6hTkuM7JL07A,sig=hgEP3qNTILYA2gN-gnpUIkBoE0Vq2sohd-1HTOc7zKuVYNL90zz1-Zub0Lsn2Xl7d-ol1o-lEMsoh1xR9xIKDQ"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "accept",
@@ -562,7 +711,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "QcZtWwkHFp6hTkuM7JL07A",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -573,6 +722,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -584,8 +734,8 @@
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -602,7 +752,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "0omvfEwrZqRNx5SWnyVurA",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -613,6 +763,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -621,19 +772,19 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=sX_J8kg4ER_08C1_CwQkoA,sig=kE6CsqMHAQhRoPXfrGG20zjIOasIvi6uKaAwEM3-t2QTO-in79FHx7rRTpP6BhZEABgC-uiW6TIGsvclV_0KAQ"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=sX_J8kg4ER_08C1_CwQkoA,sig=mcPjWJ2r_B3zvbUixAMkEmAM_Xnq3b4oQjh3hKIpmmLp17ZwsHUvb7Ie-ERZyq-bmGWGbaAIrBbjT423IcRMCw"
           ],
           [
             "jack-auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=sX_J8kg4ER_08C1_CwQkoA,sig=kE6CsqMHAQhRoPXfrGG20zjIOasIvi6uKaAwEM3-t2QTO-in79FHx7rRTpP6BhZEABgC-uiW6TIGsvclV_0KAQ"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=sX_J8kg4ER_08C1_CwQkoA,sig=mcPjWJ2r_B3zvbUixAMkEmAM_Xnq3b4oQjh3hKIpmmLp17ZwsHUvb7Ie-ERZyq-bmGWGbaAIrBbjT423IcRMCw"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -650,7 +801,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "sX_J8kg4ER_08C1_CwQkoA",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -661,6 +812,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -669,15 +821,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=2hdY3E_h9vUjEepcUGa69A,sig=oufmWPBacV-DRmvtkg5J6uSQRCNhc2Kt_VrOvHqpPNgwvSBLrdLXTGz3FoPWG0vy5_ojcQ291A66txuysHq5DQ,ts=1767225600"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=2hdY3E_h9vUjEepcUGa69A,sig=Lv78FWyv6ngehYb6LjJgzjD76AwyUdpPIBl0htZkzza7TI-4G0zJnDEfG0Uo0aGSQIQokOPuvcnmD7pAfww4BA,ts=1767225600"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -694,7 +846,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "2hdY3E_h9vUjEepcUGa69A",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -705,6 +857,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -713,15 +866,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=MOgGSldxgBh0mIOmup9lGw,sig=NQZh7ZaIfnIBps-IgxX7EnGc3DDKM8CHbyfnyt6fJt880CTq2OGRmpLopGnDloIzQItFQXuldXx3eYxmzsSHDQ,extra=abc"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=MOgGSldxgBh0mIOmup9lGw,sig=FJ50lY7jwlH15o9tJtt6YZKaResnmab6AkKvBwSlCS7PF8n3UnFtJjKBQZnmHDgtrn0losI0TYQdVg8SvTdMAg,extra=abc"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -738,7 +891,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "MOgGSldxgBh0mIOmup9lGw",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -749,6 +902,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -757,15 +911,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,sig=8g5F0WS5lo6DKod2Ubm9eu8sHgyCS9Tz1OmSVn51T4ctTjJ3ovZUG5SNPYM5ZBwYoqTUeKO6LLZkBD0gcoRcAQ"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,sig=BBQTMkO-GErV3WXL0_7i5SXBlaxj8DwGb_GbHtML1Y_jsNf3SEVz_Gi0OWtwSmTc3i74f6zsRp9pfQQgIQkGBQ"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -782,7 +936,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "yhFPfzJNUa_VjIlfmNgzYQ",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -793,6 +947,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -801,15 +956,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=CGpohrpjatxEY3FwsO0g1Q,sig=qJB5eMpY937y3QVD-gC3Mcb-SlOmgSMWhCqEOqMPgkv7mUeTySkFL0YxIJTamVotG8MPK74XQ3FGxP0fRdliCg="
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=CGpohrpjatxEY3FwsO0g1Q,sig=r8JwaHivoONtXcEFkBIezHsr7APrs-38m8GqRtIsbAe2F0TN7BbrHgD62WAnfl6qCGRSNZhpOjeAmdlBKyd3DQ="
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -826,7 +981,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "CGpohrpjatxEY3FwsO0g1Q",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -837,6 +992,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -845,15 +1001,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=hI9uDssBWZY3-fFNbt6U5A,sig=f9tx2767ktDKfKy_mZEv0nlk6GeRYc_z0YsR1iJ3Tb75SeKMMBBH3hy5FMGkq_NwBBoAVFYj9fHnCzH9Q_8HDB"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=hI9uDssBWZY3-fFNbt6U5A,sig=-F5DRREsBjbnlThBctFGEcmgqZE6ADi0h990HnJoz53SOiG-RTsReoIftK0wCnnIv9YTH0i3meLqherRuKCmBB"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -870,7 +1026,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "hI9uDssBWZY3-fFNbt6U5A",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -881,6 +1037,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -889,15 +1046,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=lwdJWGCcvOXpB8bOYbs4,sig=Q6Sk8zLQG2QU2jgB8yz6NmqUdcn5QlgvdBQis8TCm9DI2THe04Sx4F5PnYuy30Kh3HaWDgGTBkiIySebJHEcCA"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=lwdJWGCcvOXpB8bOYbs4,sig=e7njVm8akJAlhNKWWfgsQRBd59GdgWFJ4dm4Q7prt4rqUk3Li9VHsWTvNHYaH1174TKvj_nnEJA-mx2-wayEAQ"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -914,7 +1071,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "lwdJWGCcvOXpB8bOYbs4rw",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -925,6 +1082,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -933,15 +1091,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=8SybVJFqCX28Lf3JNuw86w,sig=JB2MylEtqTFn_t3IAu4HRF1-Ynjht26sPhRuXxFeaVTFyy-tmlFvGAv0vyVp7RA3Dbgxqf7IH49Gq1Pp"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=8SybVJFqCX28Lf3JNuw86w,sig=LG2WbCe6h9bHMxfAulmitdtCV0HBr7I9U3GCI_De1n_QwsGiHLXSb-C9hNgnkTYdF3puaBRW5p4TTVyf"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -958,7 +1116,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "8SybVJFqCX28Lf3JNuw86w",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -969,6 +1127,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -977,15 +1136,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=01767225600,nonce=u1t4m7vDuNhWe8Ypp-Ja6g,sig=mA_sg5aZksZ_5lUIXECrIWhMhGDgDM5ycKjqs2A9GOSy5z5bAjft41PXrcoPLzA-gugk_10SB7k_Gjijun48Cw"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=01767225600,nonce=u1t4m7vDuNhWe8Ypp-Ja6g,sig=-2Gsk7jXhnFPK2VkFA3qwiYIvM6LDlMQFMa7VWzszVDTwQUDVHFxSFpsS7FnKO89DHZjD8jfN9ovWf_7jH69Dg"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -1002,7 +1161,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "u1t4m7vDuNhWe8Ypp-Ja6g",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -1013,6 +1172,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -1021,15 +1181,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=-1,nonce=Pw_DNuV8mJofR-TsjPDngQ,sig=ZP4YOukBCJvTuEzzKObQ4MWH71Q6jgDazNQABGO2EnaJrnO3jKbZPY83QI8Lw7Tm305dRsweODykVHfZ2Mx7BA"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=-1,nonce=Pw_DNuV8mJofR-TsjPDngQ,sig=QXbedqTNJpddYCNoEujI1BCyLhTLQkftuK1Hu_lTR90Q5jVphGWxDijKz5A0IlaLI3Hz4uDTchuMTcvgWgRUDQ"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -1046,7 +1206,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "Pw_DNuV8mJofR-TsjPDngQ",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -1057,6 +1217,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -1065,15 +1226,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600.5,nonce=Rsn_qC2I-TxCCJYI8kix9g,sig=Ji7gI54bBJmV-SRJf9ExeYhTtD4IdKPwDHwGgFpw9nqLl3xq9yFCYvWgjlWzYy9F33Tbkdkaik5o0uDCLCpzAw"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600.5,nonce=Rsn_qC2I-TxCCJYI8kix9g,sig=KnhgkyW6GVu1Y0YV64uqHcA-5YmejSCza00gYIgJxB5RysZvRx-vxueNbhvkaRGp0HNebu8amOYagOGfpC9SBg"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -1090,7 +1251,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "Rsn_qC2I-TxCCJYI8kix9g",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -1101,6 +1262,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -1109,15 +1271,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs, ts=1767225600,nonce=-zSox4USuJ6TK5tybpAisA,sig=fgQrLMPpUwv44nkv2lq_xOovJ83ViVUBg-UCsrioX-GyQ4YU-yIR8l6CSpVefi2-33lrEJauofGQjdBBWIruCg"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs, ts=1767225600,nonce=-zSox4USuJ6TK5tybpAisA,sig=UXXtqkD2o30ZgPI7ClPW6g5ngyGgiaaAiYvSH5PvLMTCI1tiGRL5xPwKOyMbOnjeTC1YatxRO1AG6BkVYAeoDw"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -1134,7 +1296,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "-zSox4USuJ6TK5tybpAisA",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -1145,6 +1307,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -1153,15 +1316,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 KID=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=r9WOi-tSbyBZ2gpRH07mOw,sig=Jlyf4JiXCMfd67LrOlgliZkA8zlw89QOv7e466DICqDfDuGXbY3RbbfYlIzwG69XKLtPpqp20P9lfO0vhK_-BA"
+            "v1 KID=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=r9WOi-tSbyBZ2gpRH07mOw,sig=EuZ8HZ4Ms9lzfvZ-isS168j8tjUAEJliTB1GfjYusNlcMug88PY68O4409cK2OswfpbzXc30wIkz-Y_Lk2l1CA"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -1178,7 +1341,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "r9WOi-tSbyBZ2gpRH07mOw",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -1189,6 +1352,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -1204,8 +1368,8 @@
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -1222,7 +1386,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "BBTK40xybDjPL6dNgJQu_g",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -1233,6 +1397,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -1241,15 +1406,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "V1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=H-j6bhTcrRJl7HNbaNXTdA,sig=EGaxAIFQDDuyTGs_K0AdWuKROSbaL4KrCpMFGDBYxTp_Hx7o7fd10K5FKTR5e78WHBJH_wzE_EZyA8ytx7Z3Cw"
+            "V1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=H-j6bhTcrRJl7HNbaNXTdA,sig=aYXDc16jWKMzdr-IJid6tkulR4FlMuL87QrIPMkRKi65u8z865a5P9Sm3wRvv-sjfBdhi6vNgP1y45OJk-cZDw"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -1266,7 +1431,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "H-j6bhTcrRJl7HNbaNXTdA",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -1277,6 +1442,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -1292,8 +1458,8 @@
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -1310,7 +1476,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "x91SjCyqRPP6Yu8Euz34dA",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -1321,6 +1487,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -1329,15 +1496,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v2 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=dC5imuV8kQnA3q4Z5NUcpA,sig=vqVagawEXDfu6lcDqc09YsREZEYqLd4TcZ1jCn36tJiBP4DEaIDAdtbwAAmqq5otP3CFeY6wQJyQY35HRMAcBA"
+            "v2 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=dC5imuV8kQnA3q4Z5NUcpA,sig=Iz8P09IZthVLRvILsrnLGdy1yqhwRGvkI2YhLYHzNskpibTWJZi2oHzvm795szraV24RvagVj40IlI1ui327Ag"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -1354,7 +1521,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "dC5imuV8kQnA3q4Z5NUcpA",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -1365,6 +1532,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -1373,15 +1541,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=nhm6mvruffGPDQX7NHE8mbh7yD4Z_AndUTr_AOgYiLQ,ts=1767225600,nonce=qfbDra9H0GcSLR8qN6Q8iQ,sig=3uHM8IMv94Ty0WHnNhDYEb3I9nlYLY9Wr-qeSflzCyVyndHggJp3RV5OhqgcwCkoqeQKAc-kktUbH6lIZ-xQAA"
+            "v1 kid=nhm6mvruffGPDQX7NHE8mbh7yD4Z_AndUTr_AOgYiLQ,ts=1767225600,nonce=qfbDra9H0GcSLR8qN6Q8iQ,sig=iWm2_CWbzr0jNhGGw9H8Ex7QaW9FVHcFgj6u0VfJaHe-MHEO0xHaJFSsKlV-P4DG7aULT3RwIRJqy9VpjXzuAg"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -1398,7 +1566,52 @@
           "nhm6mvruffGPDQX7NHE8mbh7yD4Z_AndUTr_AOgYiLQ",
           "1767225600",
           "qfbDra9H0GcSLR8qN6Q8iQ",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
+        ]
+      }
+    },
+    {
+      "id": "unknown-key-other-tool",
+      "description": "unregistered key calling anything but jack.enroll",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg,ts=1767225600,nonce=nWfW0dywfDj9xse_1sv69Q,sig=4RDa_qHm0qVc7Eas4sazwY8CwSoLPgCZgVZ-vNGZnquDoI8To94ZeE10LcmOUdCFpd12ri3qhVVsuhJwfudOCQ"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2sud2hvYW1pIn19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.whoami\"}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "unknown_key",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg",
+          "1767225600",
+          "nWfW0dywfDj9xse_1sv69Q",
+          "5tpEf_hnprWfzBJ1mbGIAM9zQtHwsjxlLRMsEl7MSBo"
         ]
       }
     },
@@ -1409,6 +1622,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -1417,15 +1631,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=EO02KVTMv4Y2l4PhmwUsLHNMcdRTCoMClOs-tP6TO68,ts=1767225600,nonce=tIcoNeKYMwkduN7LMMYdUw,sig=unpKR0wTnwpj4TRLBn8r7aMazRPlz3bTNVbivmvqJjI64o5al4nwt5geqVyJrtUAl2A-6_e3b5y63K0xC5WjAA"
+            "v1 kid=EO02KVTMv4Y2l4PhmwUsLHNMcdRTCoMClOs-tP6TO68,ts=1767225600,nonce=tIcoNeKYMwkduN7LMMYdUw,sig=A4kWIys1LO9C1orBhg1aVDv84ysRYc6ppKk8uaQpdZt5rXfScZPOjdet0kUaH47atV7mxO2wBAAkIe9VeH2JBw"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -1442,7 +1656,7 @@
           "EO02KVTMv4Y2l4PhmwUsLHNMcdRTCoMClOs-tP6TO68",
           "1767225600",
           "tIcoNeKYMwkduN7LMMYdUw",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -1453,6 +1667,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -1461,15 +1676,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=RqSoWowFxe1uB6c58AVUAxxlAgGufdo1pwXxaZkqEjA,ts=1767225600,nonce=iUEqW_Zm4FDil24KAWEswA,sig=dOmkg3qNTzN-xMUE1oZ3HLLr371fUCUHAGhECwbxdirQz74ZlJhYY0h8zhvo06cpG0RS9PtPSujcd6tYC48kAw"
+            "v1 kid=RqSoWowFxe1uB6c58AVUAxxlAgGufdo1pwXxaZkqEjA,ts=1767225600,nonce=iUEqW_Zm4FDil24KAWEswA,sig=WubsY0wG5ONqCe0Q3D9HbhDifSoOuqJehsmp1sJJEvOwf7g55eumczmWumMdDQ2Z0MVoaUlFFbxM11FZUtk9DQ"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -1486,7 +1701,7 @@
           "RqSoWowFxe1uB6c58AVUAxxlAgGufdo1pwXxaZkqEjA",
           "1767225600",
           "iUEqW_Zm4FDil24KAWEswA",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -1497,6 +1712,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -1505,15 +1721,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225569,nonce=nq4kuNFmukDE8kuvQ4E4NQ,sig=1Nts467vaEG6SaldNZZiEIBkAAoDf6QI1RS3S1b_rY64rJRRDvW9o5FFlrR6fOKWNXWtLVS09mBZmDRQ9YvoAg"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225569,nonce=nq4kuNFmukDE8kuvQ4E4NQ,sig=YNJCIUXXb-cpsCrqJfVx-0TQL1_fMxkdpvVsnFxC4huARsRqSllEpEXgyTOoGopB5Acuhgbjqp2LSz_elWN2AQ"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -1530,7 +1746,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225569",
           "nq4kuNFmukDE8kuvQ4E4NQ",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -1541,6 +1757,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -1549,15 +1766,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225631,nonce=KledoYmhS9cbJv8NyvyZ5A,sig=vVuxVXXjHnwd49K3gLVmxDW1-bqdmg9pgwIdU39wJNAdFlvyfqDS-JY8mwO4bKxsPhtTGJK054S3fOKu6MN9Dg"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225631,nonce=KledoYmhS9cbJv8NyvyZ5A,sig=tM7AoqiCloc26UYjdk-cXK5hapkeH1wVGYPMIY3koC-w6vFk50UNBC_2QVo89DL_SFO4sos1MGv_a4QzHVe0Cg"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -1574,7 +1791,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225631",
           "KledoYmhS9cbJv8NyvyZ5A",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -1585,6 +1802,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -1593,15 +1811,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225100,nonce=eIJG_qk6ETSXODj9qxwhKg,sig=06pCeYzB9wyUiCk_5Gt_PrO4AsSyUuZRLgamN_NVC81Sn5bfYlddjzKhYIKzDO3ovMXeRBp69_VzM8NQgVBAAg"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225100,nonce=eIJG_qk6ETSXODj9qxwhKg,sig=j6N9CGLa8FFgu9f1GdgxjJf9m1zCyHPs3jwr49W_LtkvmTXboEHYtM0sEH7xm37MzjH0nv3YyXDmqVnz79F0AQ"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -1618,7 +1836,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225100",
           "eIJG_qk6ETSXODj9qxwhKg",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -1629,6 +1847,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -1637,15 +1856,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=8w3oCwYsrkLgasOScuYdnA,sig=q2hoJItpyomkWosF7otlgay5IJWV6W-jO8S8zQsPDyPSAuK2oHkRfLdBLelySpnxFlNuHzifGBKrgoIGlJCWAQ"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=8w3oCwYsrkLgasOScuYdnA,sig=OLhATafUJEy6dH5Tth7D4R9pInjYCJUJhxHsclNoTIXtUWNwj5WJQodlcUIDQvNr2zf9GnyquvjBKwtyM814AQ"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2sucmVzdGFydCIsImFyZ3VtZW50cyI6e319fQ",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.restart\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5yZXN0YXJ0In19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.restart\"}}"
       },
       "expect": {
         "result": "reject",
@@ -1662,7 +1881,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "8w3oCwYsrkLgasOScuYdnA",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -1673,6 +1892,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -1681,15 +1901,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=vuhwfmDN9ZA45ThtUCjPZg,sig=yhEct2LQZa1KBBWCOkzdCvH7BaYOQwQXC-EHaSBCL1gH-v40x-DpztgLwpKsIS_lpFyaDZN9oO9cA5KdbvesCA"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=vuhwfmDN9ZA45ThtUCjPZg,sig=7PFAG8yq9A8ih71ee_RRN1eJk_qbnQec6juNL2ZENJlKrFA-qvkqgCnMX0O8VNJHFjMmmgsCjLL8LrR3QJ3VDA"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -1706,7 +1926,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "vuhwfmDN9ZA45ThtUCjPZg",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -1717,6 +1937,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -1756,6 +1977,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -1764,15 +1986,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=AkHp3OCDNfdwPRFa_710-Q,sig=icGig16L2orEgNek9K3S6bOEkwDUQ3mJ40c0vWMmpF3nOxLegQyGebArrx_jEDCfRwwdGgi9YFQM-BnF-BhhBQ"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=AkHp3OCDNfdwPRFa_710-Q,sig=EUVK3cP7HzW19N_7PyfzLZ2ccr_75plKEGs_ezqSiLCK8FG8x-hTKuUhnCK7_PIjTTFtiD2j_rnx5RfTzj34BQ"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -1789,7 +2011,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "AkHp3OCDNfdwPRFa_710-Q",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -1800,6 +2022,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -1808,15 +2031,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=ss_-OrJ_STCJe19_YkiHJg,sig=kJpjxzU0iSnYsvsG0BYYOr_MMdpsrq6lk0PPAQ6uRDl7YoL7xdFmRPU1hgOf_p06l03aVSZSKB-g7_5KvPapAA"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=ss_-OrJ_STCJe19_YkiHJg,sig=kxMfX74FzZNIq3Gorub_JENaNNkOnG5IzMejQAV82zjIGqnprow2qd6FB_UqQW_lqkb03RYl5aM_3r3BSDylBQ"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -1833,7 +2056,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "ss_-OrJ_STCJe19_YkiHJg",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -1844,6 +2067,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -1852,15 +2076,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=6B2_wq7RqlxL5wnw_YmSTg,sig=8I9CkuD_D2szajdV5xV1DgGMl3H7Ckj_VRC8abOEZhxF4sx7DVTEzEFEpLaQqo5aAuAZAHu6qgNAhHDPwxtKBA"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=6B2_wq7RqlxL5wnw_YmSTg,sig=t6Uig3USbO8LcYiLLJnRacnSIDBdBCdHsHIKTVmNem0LgG9xIBWREiqbfD0uhG88QiPK8ry8Gve44IzJNuw8Dw"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -1877,7 +2101,52 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "6B2_wq7RqlxL5wnw_YmSTg",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
+        ]
+      }
+    },
+    {
+      "id": "sig-noncanonical-s",
+      "description": "S replaced by S + L satisfies the equation but is non-canonical",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=Ixh3lkghkbkAvExUs6TjmA,sig=a79kc0zsqPxRUKgTNHiSEI5dlUcc5ET-I7mRBg5sJjynZjoS9jIw30-UFDL41blVwHlHFYb5yubQhBT8WhC8Gw"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "bad_signature",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "Ixh3lkghkbkAvExUs6TjmA",
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -1888,6 +2157,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -1896,15 +2166,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=bSCZgJ_AIs0qVd85L1ej4g,sig=2OCUxtJtDBKZgz5hTsJIW51qaNo-5Evr9AA_LvxWs7Vrrz_lJunMvzcpaSGLJx14t5tDy8BQf6OUKNQicnrCCA"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=bSCZgJ_AIs0qVd85L1ej4g,sig=vTev5ibwyfe9qFqb_fNKEym1-m4emFLA2c7V4OAEDLT7Sao9yue80CmBcSm0YJM-vXdmfp4OWc1LAA_srsgkDQ"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -1921,7 +2191,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "L-C17seD7szTnjo2ekCjfQ",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -1932,6 +2202,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -1940,15 +2211,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225599,nonce=8-hETv640e_3rJlPexqeKw,sig=yIWz0eaCFmXlfK_eV6s6cxJq1R6OcOI7WPkG4XtD1P7xnS05bDvrNwcVYzZWs58_W6LNFozQYWaN1T-BP3c2Ag"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225599,nonce=8-hETv640e_3rJlPexqeKw,sig=HHCamuDlgNxhPfR86DEtjpVgqu6Ew2dimx6nqhp-fukJoZUFdu7WiNrWPFsskAkJuz8gLrk7W9hdPa3bEQ3vCg"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -1965,7 +2236,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "8-hETv640e_3rJlPexqeKw",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -1976,6 +2247,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": [
           {
             "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
@@ -1990,15 +2262,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=u-ZvoqWVeyCp6dDlf5kl7Q,sig=OdGpKfC70eEQyod8D_ok7-QSqIrLKQRbZp4lrO9IBoumbVqQAVxqX_RROeSKaOxcTXCSRRIjKzpV6p-XmqkqBw"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=u-ZvoqWVeyCp6dDlf5kl7Q,sig=ZnuIWokcHCFoz_PWfjuoua593h-TT2z84hldK2rGEHVYfsC9HMyMu7fFFEOkRmDsFM3NrIPPIPFoO1bFQksdAw"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -2015,7 +2287,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "u-ZvoqWVeyCp6dDlf5kl7Q",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -2026,6 +2298,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": [
           {
             "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
@@ -2040,15 +2313,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=lN-sUzuLkQs5QsNrtbdxJA,sig=eBuob7W0mXuSUPCdt_AO9Jc8AIq10VGKvOn9CZpJlWi_Fj8V77sJj5rqk1I22HfIlegWDd5onVlfWUY8CNBFAA"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=lN-sUzuLkQs5QsNrtbdxJA,sig=kP0netCXae2HtIObd6fcBI4ujhsELSo3cOYDlg2h_lSsFcWH7MrPalzANxHsY-H9pekfyTExdZTB-rtr5smgCA"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -2065,7 +2338,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "lN-sUzuLkQs5QsNrtbdxJA",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -2076,6 +2349,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -2084,15 +2358,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=kjyMozKW5J8b5trk4BwOiw,sig=OepBVoloU-xkGLq7OMx1-ralnMsE9Eq7qlWX-NcUm9rQ_B3lwF6pEyX0L0ql95lysTSqes_QN3QyCFN5knMBDw"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=kjyMozKW5J8b5trk4BwOiw,sig=CD3goIDMBq4u9jIjz9IJki_9gSCpfAgOx3ASUXKLxQeyBIQe-VjSfFe7r60AkjCfZWBi0DiK_mXxT2nWgp32Dw"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}"
       },
       "expect": {
         "result": "reject",
@@ -2109,7 +2383,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "kjyMozKW5J8b5trk4BwOiw",
-          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+          "0dKhS2XakRw5atYvDH7kFN_qWa9W8E_APBA6q04DzNE"
         ]
       }
     },
@@ -2120,6 +2394,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -2128,15 +2403,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=bwmvvQqAF9MYxnBp8zLdxQ,sig=QYzPeETG_PqT7-A1X3Iry3kwiz8tQbLoAHXs9EXCJJWdzEO19tT1mcKFm39Gh5Ug2zez2dgWaCPIG6tKUOIvBA"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=bwmvvQqAF9MYxnBp8zLdxQ,sig=DyepyHfcqMTi7wtjpLSCuac728oaBX-nd5XxC54vl1t8AHAf47usl1bNn8xIgdeD20FK9lJ9mPzlPsTNeUJnBQ"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2sucmVzdGFydCIsImFyZ3VtZW50cyI6e319fQ",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.restart\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5yZXN0YXJ0In19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.restart\"}}"
       },
       "expect": {
         "result": "reject",
@@ -2153,17 +2428,18 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "bwmvvQqAF9MYxnBp8zLdxQ",
-          "MPJLRhTBsnLAuTrJoUeMSN1sSaE-Ml1G60G6Rgj60H0"
+          "X7jrLz9-TnF_2obf6G7f2Cq3OBzyfAjxTmbbBEFhu6c"
         ]
       }
     },
     {
       "id": "authz-read-key-config-set",
-      "description": "read key may not write config",
+      "description": "read key may not write config (specific rule before svc.*)",
       "state": {
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -2172,15 +2448,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=QMhXc6KimrfRVQZ8dPDhDA,sig=ui1Rpknwv_Y01TgsVUQLTBCyMH5jEVGcdsYHGTopGTRdpsvAITx9XO2LKmrvvJnJ5Ffx-MH0lBaSaUnJaPpeCg"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=QMhXc6KimrfRVQZ8dPDhDA,sig=cpIz_4JP2JkEjwJml8mWv3x8XxKWHo5VbkwdFOgExmXtt0HYL1Y0G-Z553SQJQhCZau1YhRVB-xgd9qaQvXqCw"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suY29uZmlnLnNldCIsImFyZ3VtZW50cyI6e319fQ",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.config.set\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5jb25maWcuc2V0In19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.config.set\"}}"
       },
       "expect": {
         "result": "reject",
@@ -2197,7 +2473,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "QMhXc6KimrfRVQZ8dPDhDA",
-          "3Q_Yi2cWR9urVWF-Eeg1Nbs1ZCg18zcYhh9-Zh_FQmE"
+          "sGKDwmF0QOGyOm0CCye8Z4nw-NzcRlFLGZjKffYcat8"
         ]
       }
     },
@@ -2208,6 +2484,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -2216,15 +2493,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=bu9N_ld9z81i0mvxfKO0bgHdiYjZx7jBF8sd8DTo9gc,ts=1767225600,nonce=zqH4zyYbSnUmAWS0rfE0OA,sig=yDLfY0nv1rVx_4RaSVbKB7uJgbT3zr3fwtWdCATN6tCvFnHUgyM6yVqfDtqui7HDKaRGBBDadWf7WlQ2OPvYCg"
+            "v1 kid=bu9N_ld9z81i0mvxfKO0bgHdiYjZx7jBF8sd8DTo9gc,ts=1767225600,nonce=zqH4zyYbSnUmAWS0rfE0OA,sig=p64EKs1Ulp-FFhm4zVTXmLZzo9cVgWlTUG4-l0Ov0Nz3ZZ8TwL1E4uq_VmuomcatBeRoGqVF9hcbICuwDoFjDQ"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suY29uZmlnLmdldCIsImFyZ3VtZW50cyI6e319fQ",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.config.get\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5jb25maWcuZ2V0In19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.config.get\"}}"
       },
       "expect": {
         "result": "reject",
@@ -2241,7 +2518,7 @@
           "bu9N_ld9z81i0mvxfKO0bgHdiYjZx7jBF8sd8DTo9gc",
           "1767225600",
           "zqH4zyYbSnUmAWS0rfE0OA",
-          "hsOQVZQzOO0pMSNaYmeEAQx9Ybc0osxqJB0ylXNGuko"
+          "M1v0i_ZVp2tqu7_bANQCf2BgkkSAk_1mVkBBDODikCU"
         ]
       }
     },
@@ -2252,6 +2529,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -2260,15 +2538,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns,ts=1767225600,nonce=Mq9zkZ1N1Ltinegxb4lb-Q,sig=JYCNARHb_RSm__IqQ-XsH5EopQ7V5kNTkmT_qZpzKCMPWj2rPCfTF7F81BtMwLrl6iz25ZfdrFTbCEs3XPySDQ"
+            "v1 kid=g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns,ts=1767225600,nonce=Mq9zkZ1N1Ltinegxb4lb-Q,sig=eIS0TNOd-AnfhbW2yb9sEWq1DQWZZCSa_46iWEYbqWvHaHoys7Iv3tuTbeTlgC3eUGfmVMQ4xlyhzbTwVBEmAg"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suY29uZmlnLnNldCIsImFyZ3VtZW50cyI6e319fQ",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.config.set\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5jb25maWcuc2V0In19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.config.set\"}}"
       },
       "expect": {
         "result": "reject",
@@ -2285,17 +2563,18 @@
           "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
           "1767225600",
           "Mq9zkZ1N1Ltinegxb4lb-Q",
-          "3Q_Yi2cWR9urVWF-Eeg1Nbs1ZCg18zcYhh9-Zh_FQmE"
+          "sGKDwmF0QOGyOm0CCye8Z4nw-NzcRlFLGZjKffYcat8"
         ]
       }
     },
     {
-      "id": "authz-unmapped-tool",
-      "description": "unknown tool is denied",
+      "id": "authz-deny-rule",
+      "description": "an explicit deny rule wins over the later svc.* rule",
       "state": {
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -2304,20 +2583,65 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=hib362HqBGylBv7GeHJ_Dw,sig=N8bmyvKfoUCLLlf-1_7eSFJUXC2ELhesQPZe9IoQbeGJr9D9gbk5u3lnfJ96Y33-WlVOxaUIlsvIYo4NkMasCw"
+            "v1 kid=Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU,ts=1767225600,nonce=LkOOU7IRXy-ibjvlQpT0uQ,sig=d4t5EvQwFyozf3fsFkXDz-DA8SQ6JWXBtX8gurtobNqvaJsP-aZJyBy-_u0Ftqn2XNwrKYT5QDt8a45eLGCLDQ"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2sudW5rbm93biIsImFyZ3VtZW50cyI6e319fQ",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.unknown\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5kYW5nZXIud2lwZSJ9fQ",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.danger.wipe\"}}"
       },
       "expect": {
         "result": "reject",
         "http_status": 403,
-        "code": "unmapped_operation",
+        "code": "operation_denied",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+          "1767225600",
+          "LkOOU7IRXy-ibjvlQpT0uQ",
+          "IDcsnorEx1j5979HjGzhT_H2WrS9SXWV9N-cxK4AeHo"
+        ]
+      }
+    },
+    {
+      "id": "authz-unmapped-tool",
+      "description": "a tool no rule matches is denied",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=hib362HqBGylBv7GeHJ_Dw,sig=BhsU0ei-Ule0qq8GanSGfSc82Mbp1vzJS7bUBka0N5hKsMCCIqjt5DfkcScJ4ww54inRk0YX3mRxxKDWFFKWAA"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6Im90aGVyLnRvb2wifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"other.tool\"}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 403,
+        "code": "operation_denied",
         "nonce_recorded": true
       },
       "debug": {
@@ -2329,7 +2653,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "hib362HqBGylBv7GeHJ_Dw",
-          "cLj3KxL5bvNipgJZuBJH7Z6QarlmG67UmHvQeFqEDvY"
+          "HsgraQ-AKyC5S0KHYJAJQNUvZBj41SBLIVxO2JXtKTQ"
         ]
       }
     },
@@ -2340,6 +2664,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -2348,20 +2673,20 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=S9LVjq8XxVzZ91F1UpNMzA,sig=3wflpdQjLQa16EALZe-s6SiK3jUclJ_fy7IOf0yBVc8dfeSMzaa3UV-ZtmXQQ1_6AXxhrf8XSjwvhft47Pq9DQ"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=S9LVjq8XxVzZ91F1UpNMzA,sig=tlUuUm1qGYEuuDa6nAVFiVLX0buQTOWtUUlK2eJumzonh5Cr4NrVnizZFtDAj6TVqT5v_PpiWwtb2CztIDpsAA"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6Il9fcHJvdG9fXyIsImFyZ3VtZW50cyI6e319fQ",
-        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"__proto__\",\"arguments\":{}}}"
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6Il9fcHJvdG9fXyJ9fQ",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"__proto__\"}}"
       },
       "expect": {
         "result": "reject",
         "http_status": 403,
-        "code": "unmapped_operation",
+        "code": "operation_denied",
         "nonce_recorded": true
       },
       "debug": {
@@ -2373,17 +2698,18 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "S9LVjq8XxVzZ91F1UpNMzA",
-          "Y1j8LJqGbkeZpdrm0w00toGAxrU1BqgIB9abaj2DKD4"
+          "f1Kf9bfmweeVwokS2hQ7FDf9Fch-3_zfBI_6cl9RQ9w"
         ]
       }
     },
     {
       "id": "authz-unmapped-method",
-      "description": "unlisted MCP method is denied",
+      "description": "a method no rule matches is denied",
       "state": {
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -2405,7 +2731,7 @@
       "expect": {
         "result": "reject",
         "http_status": 403,
-        "code": "unmapped_operation",
+        "code": "operation_denied",
         "nonce_recorded": true
       },
       "debug": {
@@ -2428,6 +2754,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -2472,6 +2799,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -2510,12 +2838,193 @@
       }
     },
     {
+      "id": "request-method-not-string",
+      "description": "method is not a string",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=6ssXASJCI2x2frJBwrIdMQ,sig=_kX0kAz8DEZznVeIYs1H1lERhGvQJ3f1NkhDOBA961VGou-Y5M-MNiUoWUHnB6zIeM4bfhdxwwJlMyS4Xh_uDw"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6N30",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":7}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 400,
+        "code": "invalid_request",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "6ssXASJCI2x2frJBwrIdMQ",
+          "ptG3udhVrh_Y2hs1qHXK6Q7aAX389mgS_cC4WFl_lzY"
+        ]
+      }
+    },
+    {
+      "id": "request-wrong-jsonrpc-version",
+      "description": "jsonrpc is not \"2.0\"",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=siRZpe-CyVTB1NnAdbjJ5g,sig=CnCpgeNEOdjxWokgcGJu44QZkeX3z-Zfk83e4kEvOtP3yvoRUqhkLr_JeTrfj6uuHeSJMarSlfp0y5UMJ0jsBg"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMS4wIiwiaWQiOjEsIm1ldGhvZCI6InBpbmcifQ",
+        "body_text": "{\"jsonrpc\":\"1.0\",\"id\":1,\"method\":\"ping\"}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 400,
+        "code": "invalid_request",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "siRZpe-CyVTB1NnAdbjJ5g",
+          "MOBAtp4fs8pv0jpHmesZHh__euUNAFBbar7uU8skWo8"
+        ]
+      }
+    },
+    {
+      "id": "request-response-with-both",
+      "description": "response object with result and error",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=ixtK_lyshj6KFG-EEcJXbg,sig=syL4Tdc0ikTnpa-MCz8_hOb5nzk2KITcIfhmPVJA5qPy2l5DxBcH6kmYgsbn6p2GYX11eJUJIhKdXmo0j1eqBQ"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsInJlc3VsdCI6e30sImVycm9yIjp7fX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{},\"error\":{}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 400,
+        "code": "invalid_request",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "ixtK_lyshj6KFG-EEcJXbg",
+          "eGrzXucmSz9AtIYsOBAOQr2yW-fl4fSKI0i61Kk3g1c"
+        ]
+      }
+    },
+    {
+      "id": "request-response-without-id",
+      "description": "response object without id",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=mKHUNdF5-XpknXZ0ZvL9Dg,sig=Ra-0A2z1Za-hW6G9_2OwthE6h0hNMCe-dK6zSKonLQcHx6DHFFn2-iVxBPsdOA0oqHEE8ZWZC5rBLsbanJm0BQ"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwicmVzdWx0Ijp7fX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"result\":{}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 400,
+        "code": "invalid_request",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "mKHUNdF5-XpknXZ0ZvL9Dg",
+          "w2iaFF7NTPw2a9836ViT7H2UfdbBvpo8xVCCZjw6VJU"
+        ]
+      }
+    },
+    {
       "id": "request-invalid-json",
       "description": "signed body is not JSON",
       "state": {
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -2560,6 +3069,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -2603,6 +3113,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -2611,15 +3122,15 @@
         "headers": [
           [
             "Jack-Auth",
-            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=snKSLfoXYRnW_RINEBfuCg,sig=tjJytKTqZmsKMyWbNRxai9QKANDa4uThXEG6Fn8BkzJMn4gWNOp97AQ_dbVylP02CCgmn3qEzmWKEIsT4F4zCA"
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=snKSLfoXYRnW_RINEBfuCg,sig=2-44LpBk9DpZbR9Oc8aMCKfHUbnFIfJr46tOnzy7hV2BX-JhjTRwL36w9cRaV6aPTU2T6m3YtXWqh1Tv_qT1CQ"
           ],
           [
             "Content-Type",
             "application/json"
           ]
         ],
-        "body_b64u": "W3sianNvbnJwYyI6IjIuMCIsImlkIjoxLCJtZXRob2QiOiJ0b29scy9jYWxsIiwicGFyYW1zIjp7Im5hbWUiOiJqYWNrLnN0YXR1cyIsImFyZ3VtZW50cyI6e319fV0",
-        "body_text": "[{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}]"
+        "body_b64u": "W3sianNvbnJwYyI6IjIuMCIsImlkIjoxLCJtZXRob2QiOiJ0b29scy9jYWxsIiwicGFyYW1zIjp7Im5hbWUiOiJzdmMuc3RhdHVzIn19XQ",
+        "body_text": "[{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"}}]"
       },
       "expect": {
         "result": "reject",
@@ -2636,7 +3147,7 @@
           "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
           "1767225600",
           "snKSLfoXYRnW_RINEBfuCg",
-          "ZP_X8jBYO-R-KJFscquObTjyQKPzYjnt_Hae5pmY-sk"
+          "hNtVjRaa6rfTfxPU0hw6kFgPCA-FVKmPQII-cxiJG70"
         ]
       }
     },
@@ -2647,6 +3158,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -2690,6 +3202,7 @@
         "now": 1767225600,
         "window_seconds": 30,
         "aud": "https://svc.example.test",
+        "policy": "default",
         "nonce_cache": []
       },
       "request": {
@@ -2724,6 +3237,437 @@
           "1767225600",
           "e8oJKlA5NV3ClIahc9d_jw",
           "MYeTRnqF5Raw3yK-rM68c_o0reUwxGAjD45po5CwnAA"
+        ]
+      }
+    },
+    {
+      "id": "native-whoami",
+      "description": "jack.whoami returns the caller (no public key)",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=vfWYW8-fg71rqsTTNs3Vsw,sig=ZqhvGDJzk8IkZ8r95KPrsZcEaneVtKrx-zJEW6wEXYbkl_iEONroozT6EcvTgfFO2eOucXXSO1GYO6aKQ_vIBw"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2sud2hvYW1pIn19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.whoami\"}}"
+      },
+      "expect": {
+        "result": "accept",
+        "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+        "structured": {
+          "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "name": "alice",
+          "kind": "human",
+          "scopes": [
+            "read"
+          ],
+          "not_before": null,
+          "not_after": null
+        },
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "vfWYW8-fg71rqsTTNs3Vsw",
+          "5tpEf_hnprWfzBJ1mbGIAM9zQtHwsjxlLRMsEl7MSBo"
+        ]
+      }
+    },
+    {
+      "id": "native-admin-list",
+      "description": "an admin lists users",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU,ts=1767225600,nonce=HQ_DebuNfaelpRND7kjfJw,sig=HTyc3GdZ7xFYlWYjcsUk4nYJcc5T9jSmAmi9Bkyjk8dxFMOOmEOpKbC_09DKu1Ucn60tpMMrvfp5gf0KtDiACg"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suYWRtaW4udXNlci5saXN0In19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.admin.user.list\"}}"
+      },
+      "expect": {
+        "result": "accept",
+        "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+        "structured": {
+          "users": [
+            {
+              "kid": "YxMGvPvuOv27jJMVYE1ONMxjgIQEbXbWiKgoQymoRbM",
+              "public_key": "aPGHxh3YJf4B6IBcMkOdLGTPaTqmMBpfitIBcEmnYNs",
+              "name": "agentx",
+              "kind": "agent",
+              "scopes": [
+                "read"
+              ],
+              "not_before": null,
+              "not_after": null
+            },
+            {
+              "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+              "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+              "name": "alice",
+              "kind": "human",
+              "scopes": [
+                "read"
+              ],
+              "not_before": null,
+              "not_after": null
+            },
+            {
+              "kid": "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
+              "public_key": "27O5sjd6_PRkCVbNLwEbIwxpfh0DZCURwFI9lWF-UHE",
+              "name": "bob",
+              "kind": "human",
+              "scopes": [
+                "read",
+                "lifecycle"
+              ],
+              "not_before": null,
+              "not_after": null
+            },
+            {
+              "kid": "bu9N_ld9z81i0mvxfKO0bgHdiYjZx7jBF8sd8DTo9gc",
+              "public_key": "r1DLsXDIaAY-rmPFCzV9dgAxes6dpdXkOrJNHiFkQl4",
+              "name": "carol",
+              "kind": "human",
+              "scopes": [
+                "config:write"
+              ],
+              "not_before": null,
+              "not_after": null
+            },
+            {
+              "kid": "EO02KVTMv4Y2l4PhmwUsLHNMcdRTCoMClOs-tP6TO68",
+              "public_key": "axZb1B_q1F6s3zc6V0glCNJMJJSHy-nrRRRJwPFU3rY",
+              "name": "erin",
+              "kind": "human",
+              "scopes": [
+                "read"
+              ],
+              "not_before": 1767226600,
+              "not_after": null
+            },
+            {
+              "kid": "RqSoWowFxe1uB6c58AVUAxxlAgGufdo1pwXxaZkqEjA",
+              "public_key": "aCS3Iwv_1ZGPZRsGtUKK-5yJx5Q8jk8q0FveD4kLO1Q",
+              "name": "frank",
+              "kind": "human",
+              "scopes": [
+                "read"
+              ],
+              "not_before": null,
+              "not_after": 1767224600
+            },
+            {
+              "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+              "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+              "name": "root",
+              "kind": "human",
+              "scopes": [
+                "admin",
+                "read",
+                "lifecycle",
+                "config:write"
+              ],
+              "not_before": null,
+              "not_after": null
+            }
+          ]
+        },
+        "audit": {
+          "tool": "jack.admin.user.list",
+          "outcome": "success",
+          "code": null,
+          "actor_kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU"
+        },
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+          "1767225600",
+          "HQ_DebuNfaelpRND7kjfJw",
+          "SrfoTqjY0ejvjhzkc0nFOzVrJdIXRK97i5mR9I4H3Bk"
+        ]
+      }
+    },
+    {
+      "id": "native-admin-denied-for-read-key",
+      "description": "admin tools need the admin scope",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=H2aeRyW63CmLnA7aL_pSAQ,sig=Mkm3_Rj6-0c3dZn6f-Z8xbl2KNNA009wWAige-vBkx9os1fMcjeajxaNhKcorBdBWaBO6Vx7oLgahIbWYAKcAA"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suYWRtaW4udXNlci5saXN0In19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.admin.user.list\"}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 403,
+        "code": "insufficient_scope",
+        "audit": {
+          "tool": "jack.admin.user.list",
+          "outcome": "failure",
+          "code": "insufficient_scope",
+          "actor_kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs"
+        },
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "H2aeRyW63CmLnA7aL_pSAQ",
+          "SrfoTqjY0ejvjhzkc0nFOzVrJdIXRK97i5mR9I4H3Bk"
+        ]
+      }
+    },
+    {
+      "id": "native-admin-denied-for-agent-key",
+      "description": "an agent key cannot hold admin",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=YxMGvPvuOv27jJMVYE1ONMxjgIQEbXbWiKgoQymoRbM,ts=1767225600,nonce=MHXVz0cANiZOd5b8pDgQtQ,sig=_w7isBpGRG-Y9NcfINS5wXg8-1NP9yTTzh0Xy1bf_Hz5Y0C_OcINyDwkyaSmxjTbh20_4Cl-0fo1HYOE2moKDg"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suYWRtaW4udXNlci5saXN0In19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.admin.user.list\"}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 403,
+        "code": "insufficient_scope",
+        "audit": {
+          "tool": "jack.admin.user.list",
+          "outcome": "failure",
+          "code": "insufficient_scope",
+          "actor_kid": "YxMGvPvuOv27jJMVYE1ONMxjgIQEbXbWiKgoQymoRbM"
+        },
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "YxMGvPvuOv27jJMVYE1ONMxjgIQEbXbWiKgoQymoRbM",
+          "1767225600",
+          "MHXVz0cANiZOd5b8pDgQtQ",
+          "SrfoTqjY0ejvjhzkc0nFOzVrJdIXRK97i5mR9I4H3Bk"
+        ]
+      }
+    },
+    {
+      "id": "native-admin-not-opened-by-policy",
+      "description": "a wildcard policy does not open jack.admin.*",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "wildcard",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=ZgFsCEme0jIcFTM00zGxPQ,sig=i2-8YMELl_FQ8PjXAd5m5nZvtBqciV4-sL9EgOL9N2TO9uKmjwSSY8DQT9fOW289aqpwIDW1LwPh_amVT9LwBg"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suYWRtaW4udXNlci5saXN0In19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.admin.user.list\"}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 403,
+        "code": "insufficient_scope",
+        "audit": {
+          "tool": "jack.admin.user.list",
+          "outcome": "failure",
+          "code": "insufficient_scope",
+          "actor_kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs"
+        },
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "ZgFsCEme0jIcFTM00zGxPQ",
+          "SrfoTqjY0ejvjhzkc0nFOzVrJdIXRK97i5mR9I4H3Bk"
+        ]
+      }
+    },
+    {
+      "id": "native-unknown-tool-not-opened-by-policy",
+      "description": "an undefined jack.* tool is denied even under a wildcard policy",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "wildcard",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=UNaQTPolvTYt1GiPZElo0w,sig=kpqoKlymluDAkrvnHXObEQuLY9cPY3D6QYWRlGw-THOrQCBzUCYUFTOryATSGE2YajGtISYh3ikWc_687SoPBw"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2subm9wZSJ9fQ",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.nope\"}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 403,
+        "code": "operation_denied",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "UNaQTPolvTYt1GiPZElo0w",
+          "i-7SvSg21h0u_XEOM0h2LO8bRaRs_dMPm3jKV3MN2PQ"
+        ]
+      }
+    },
+    {
+      "id": "native-wildcard-policy-other-tool",
+      "description": "the wildcard policy still allows ordinary tools",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "wildcard",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=Y4KugZmKozP4wxaJLc5Knw,sig=ZjTwF9WKeEsnZifelVxg6pDjhKdFhGgILlZqerEXl2dFJfn6DkceSH4ZpxY7DRgZlwHXEC1PFDuDJ_1ynJGNAQ"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6Im90aGVyLnRvb2wifX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"other.tool\"}}"
+      },
+      "expect": {
+        "result": "accept",
+        "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "Y4KugZmKozP4wxaJLc5Knw",
+          "HsgraQ-AKyC5S0KHYJAJQNUvZBj41SBLIVxO2JXtKTQ"
         ]
       }
     }

@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "match": {
+        "method": "ping"
+      },
+      "scope": null
+    },
+    {
+      "match": {
+        "method": "tools/list"
+      },
+      "scope": null
+    },
+    {
+      "match": {
+        "method": "notifications/*"
+      },
+      "scope": null
+    },
+    {
+      "match": {
+        "method": "tools/call",
+        "tool": "svc.danger.*"
+      },
+      "effect": "deny"
+    },
+    {
+      "match": {
+        "method": "tools/call",
+        "tool": "svc.config.set"
+      },
+      "scope": "config:write"
+    },
+    {
+      "match": {
+        "method": "tools/call",
+        "tool": "svc.reload"
+      },
+      "scope": "lifecycle"
+    },
+    {
+      "match": {
+        "method": "tools/call",
+        "tool": "svc.restart"
+      },
+      "scope": "lifecycle"
+    },
+    {
+      "match": {
+        "method": "tools/call",
+        "tool": "svc.*"
+      },
+      "scope": "read"
+    }
+  ]
+}

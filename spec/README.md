@@ -10,7 +10,7 @@ Status: draft v0.1. Authentication, authorization and user management are specif
 | [02-authorization.md](02-authorization.md) | Key registry, scopes, server policy, deny-by-default evaluation |
 | [03-user-management.md](03-user-management.md) | Protocol-native tools for users, invites, enrollment and key rotation |
 | [04-service-management-profile.md](04-service-management-profile.md) | Optional profile: ordinary MCP tools for operating a service |
-| `fixtures/` | Deterministic test keys, registry and request/response vectors (normative) |
+| `fixtures/` | Deterministic test keys, documents and vectors: requests, state-changing sequences, keys, policy/registry loading, pattern matching, responses (normative) |
 | `tests/` | Conformance runner contract and the generated case index |
 | `tools/` | Fixture generator and the reference verifier used to cross-check them |
 

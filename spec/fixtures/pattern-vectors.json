@@ -1,0 +1,136 @@
+{
+  "cases": [
+    {
+      "id": "pattern-01",
+      "pattern": "svc.*",
+      "input": "svc.status",
+      "match": true
+    },
+    {
+      "id": "pattern-02",
+      "pattern": "svc.*",
+      "input": "svc.",
+      "match": true
+    },
+    {
+      "id": "pattern-03",
+      "pattern": "svc.*",
+      "input": "svc",
+      "match": false
+    },
+    {
+      "id": "pattern-04",
+      "pattern": "*",
+      "input": "",
+      "match": true
+    },
+    {
+      "id": "pattern-05",
+      "pattern": "*",
+      "input": "anything at all",
+      "match": true
+    },
+    {
+      "id": "pattern-06",
+      "pattern": "a*b*c",
+      "input": "aXXbYYc",
+      "match": true
+    },
+    {
+      "id": "pattern-07",
+      "pattern": "a*b*c",
+      "input": "abc",
+      "match": true
+    },
+    {
+      "id": "pattern-08",
+      "pattern": "a*b*c",
+      "input": "acb",
+      "match": false
+    },
+    {
+      "id": "pattern-09",
+      "pattern": "svc.status",
+      "input": "svc.status",
+      "match": true
+    },
+    {
+      "id": "pattern-10",
+      "pattern": "svc.status",
+      "input": "svcXstatus",
+      "match": false
+    },
+    {
+      "id": "pattern-11",
+      "pattern": "svc.status",
+      "input": "SVC.STATUS",
+      "match": false
+    },
+    {
+      "id": "pattern-12",
+      "pattern": "tools/*",
+      "input": "tools/call",
+      "match": true
+    },
+    {
+      "id": "pattern-13",
+      "pattern": "a+b",
+      "input": "a+b",
+      "match": true
+    },
+    {
+      "id": "pattern-14",
+      "pattern": "a+b",
+      "input": "aab",
+      "match": false
+    },
+    {
+      "id": "pattern-15",
+      "pattern": "(x)",
+      "input": "(x)",
+      "match": true
+    },
+    {
+      "id": "pattern-16",
+      "pattern": "[ab]",
+      "input": "a",
+      "match": false
+    },
+    {
+      "id": "pattern-17",
+      "pattern": "?",
+      "input": "a",
+      "match": false
+    },
+    {
+      "id": "pattern-18",
+      "pattern": "?",
+      "input": "?",
+      "match": true
+    },
+    {
+      "id": "pattern-19",
+      "pattern": "*.*",
+      "input": "jack.nope",
+      "match": true
+    },
+    {
+      "id": "pattern-20",
+      "pattern": "a*",
+      "input": "a\nb",
+      "match": true
+    },
+    {
+      "id": "pattern-21",
+      "pattern": "*status",
+      "input": "svc.status",
+      "match": true
+    },
+    {
+      "id": "pattern-22",
+      "pattern": "*status",
+      "input": "svc.status.extra",
+      "match": false
+    }
+  ]
+}

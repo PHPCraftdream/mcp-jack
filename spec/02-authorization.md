@@ -26,7 +26,7 @@ The server holds a registry of keys it trusts:
 }
 ```
 
-- `kid` MUST equal `base64url(SHA-256(public_key))`; a registry entry where it does not MUST be rejected at load time.
+- A registry MUST be rejected at load time if: `version` is not 1 or the document or an entry has an unknown field; an entry's `public_key` fails the validity rules of 03 section 2; `kid` is not `base64url(SHA-256(public_key))`; `name` is invalid (03 section 1); two entries share a `kid` or a `name`; `kind` is neither `human` nor `agent`; `scopes` is not an array of distinct valid scopes; an `agent` entry holds `admin`; or `not_before` / `not_after` is not a non-negative integer or `null`, or `not_before >= not_after`.
 - `not_before` / `not_after` are Unix seconds or `null`. A key is active when `not_before <= now < not_after` (`not_after` is exclusive; `null` means unbounded).
 - `name` is a label, unique across the registry, used in audit records.
 - `kind` is `"human"` (default) or `"agent"`; an `agent` key cannot hold `admin` (see 03).
@@ -70,7 +70,7 @@ Patterns: `*` matches zero or more characters of any kind; every other character
 
 Evaluation is **first match wins**, in document order, so exceptions go before the general rule. If no rule matches, the operation is denied.
 
-A policy MUST be rejected at load time if a rule has an unknown field, a malformed scope, a `scope` together with `effect: "deny"`, or `match.tool` with a `method` other than `tools/call`.
+A policy MUST be rejected at load time if: the document has a `version` other than 1 or an unknown field; a rule has an unknown field (in the rule or in `match`); `match.method` is missing or empty; `match.tool` is empty or present with a `method` that is not exactly `tools/call`; `effect` is neither `allow` nor `deny`; a `deny` rule has a `scope`; an `allow` rule has no `scope` (use `null` for "any authenticated key"); a `scope` is malformed; or a `scope` is `admin`, which only the protocol-native tools may require.
 
 ### 3.1 Protocol-native tools
 

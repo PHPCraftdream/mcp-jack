@@ -1,0 +1,133 @@
+{
+  "cases": [
+    {
+      "id": "valid-alice",
+      "public_key_hex": "91e955a18a316f75d26fe90590e30464d43fc7a194149360748d918ebb1d8091",
+      "expect": "valid"
+    },
+    {
+      "id": "valid-bob",
+      "public_key_hex": "dbb3b9b2377afcf4640956cd2f011b230c697e1d03642511c0523d95617e5071",
+      "expect": "valid"
+    },
+    {
+      "id": "valid-carol",
+      "public_key_hex": "af50cbb170c868063eae63c50b357d7600317ace9da5d5e43ab24d1e2164425e",
+      "expect": "valid"
+    },
+    {
+      "id": "valid-erin",
+      "public_key_hex": "6b165bd41fead45eacdf373a57482508d24c249487cbe9eb451449c0f154deb6",
+      "expect": "valid"
+    },
+    {
+      "id": "valid-frank",
+      "public_key_hex": "6824b7230bffd5918f651b06b5428afb9c89c7943c8e4f2ad05bde0f890b3b54",
+      "expect": "valid"
+    },
+    {
+      "id": "valid-root",
+      "public_key_hex": "4d31f130e7ce85f856fc88d905b444c813831c07ffe49c664d5cfe7cc33cea10",
+      "expect": "valid"
+    },
+    {
+      "id": "valid-agentx",
+      "public_key_hex": "68f187c61dd825fe01e8805c32439d2c64cf693aa6301a5f8ad2017049a760db",
+      "expect": "valid"
+    },
+    {
+      "id": "valid-lowadmin",
+      "public_key_hex": "62eb904092e9a8661e20cd6cbd2e859bb675571dbf050502ea6876745643fe15",
+      "expect": "valid"
+    },
+    {
+      "id": "valid-admin2",
+      "public_key_hex": "7881bc65978ca66f121e8d6301e30fcb907e382f5fd89486034f89ec60b5fd86",
+      "expect": "valid"
+    },
+    {
+      "id": "valid-expadmin",
+      "public_key_hex": "9f6ec597d3d5e268edfe94ebb31ea5a6227fcb7cd9a6a2044750ace74b5c70f6",
+      "expect": "valid"
+    },
+    {
+      "id": "valid-mallory",
+      "public_key_hex": "41867b107359fdbc166c83d24c85c546d8201c3eff1d716a612aa68f5ff110f5",
+      "expect": "valid"
+    },
+    {
+      "id": "valid-svc",
+      "public_key_hex": "c23b4ceda472d6f9e9f993eec98ffdf6772c6d156fdbcbc6253219cc55ef38cc",
+      "expect": "valid"
+    },
+    {
+      "id": "valid-newbie",
+      "public_key_hex": "ef524c08db35f2dec4e48cac14c6442ac9e5afd0b0d246a10bf8791640d6add4",
+      "expect": "valid"
+    },
+    {
+      "id": "valid-newbie2",
+      "public_key_hex": "f6f4556b045d60181e6a76619d98ca580713fd11cccd2c866ff04ee4b27d26c0",
+      "expect": "valid"
+    },
+    {
+      "id": "valid-newbie3",
+      "public_key_hex": "cc3077242d350daa245718d5c2552e1ae30eaca4c569af2216f66c0eebdb46bc",
+      "expect": "valid"
+    },
+    {
+      "id": "reject-identity",
+      "public_key_hex": "0100000000000000000000000000000000000000000000000000000000000000",
+      "expect": "rejected",
+      "reason": "identity"
+    },
+    {
+      "id": "reject-order-2",
+      "public_key_hex": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "expect": "rejected",
+      "reason": "small order"
+    },
+    {
+      "id": "reject-order-8",
+      "public_key_hex": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+      "expect": "rejected",
+      "reason": "small order"
+    },
+    {
+      "id": "reject-noncanonical-identity",
+      "public_key_hex": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "expect": "rejected",
+      "reason": "y = p + 1"
+    },
+    {
+      "id": "reject-y-above-p",
+      "public_key_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "expect": "rejected",
+      "reason": "y >= p"
+    },
+    {
+      "id": "reject-mixed-order",
+      "public_key_hex": "98519eadf35b995233b51b5cd23e9cc5a28b639b5a4af0ec903cb960d81b7819",
+      "expect": "rejected",
+      "reason": "base point plus an order-8 point"
+    },
+    {
+      "id": "reject-off-curve",
+      "public_key_hex": "0200000000000000000000000000000000000000000000000000000000000000",
+      "expect": "rejected",
+      "reason": "not on the curve"
+    },
+    {
+      "id": "reject-31-bytes",
+      "public_key_hex": "91e955a18a316f75d26fe90590e30464d43fc7a194149360748d918ebb1d80",
+      "expect": "rejected",
+      "reason": "length"
+    },
+    {
+      "id": "reject-33-bytes",
+      "public_key_hex": "91e955a18a316f75d26fe90590e30464d43fc7a194149360748d918ebb1d809100",
+      "expect": "rejected",
+      "reason": "length"
+    }
+  ]
+}

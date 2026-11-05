@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "match": {
+        "method": "tools/call"
+      },
+      "scope": null
+    }
+  ]
+}

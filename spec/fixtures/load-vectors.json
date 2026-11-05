@@ -1,0 +1,871 @@
+{
+  "policies": [
+    {
+      "id": "valid-default",
+      "document": {
+        "version": 1,
+        "rules": [
+          {
+            "match": {
+              "method": "ping"
+            },
+            "scope": null
+          },
+          {
+            "match": {
+              "method": "tools/list"
+            },
+            "scope": null
+          },
+          {
+            "match": {
+              "method": "notifications/*"
+            },
+            "scope": null
+          },
+          {
+            "match": {
+              "method": "tools/call",
+              "tool": "svc.danger.*"
+            },
+            "effect": "deny"
+          },
+          {
+            "match": {
+              "method": "tools/call",
+              "tool": "svc.config.set"
+            },
+            "scope": "config:write"
+          },
+          {
+            "match": {
+              "method": "tools/call",
+              "tool": "svc.reload"
+            },
+            "scope": "lifecycle"
+          },
+          {
+            "match": {
+              "method": "tools/call",
+              "tool": "svc.restart"
+            },
+            "scope": "lifecycle"
+          },
+          {
+            "match": {
+              "method": "tools/call",
+              "tool": "svc.*"
+            },
+            "scope": "read"
+          }
+        ]
+      },
+      "expect": "valid"
+    },
+    {
+      "id": "valid-wildcard",
+      "document": {
+        "version": 1,
+        "rules": [
+          {
+            "match": {
+              "method": "tools/call"
+            },
+            "scope": null
+          }
+        ]
+      },
+      "expect": "valid"
+    },
+    {
+      "id": "valid-empty-rules",
+      "document": {
+        "version": 1,
+        "rules": []
+      },
+      "expect": "valid"
+    },
+    {
+      "id": "valid-deny-rule-without-scope",
+      "document": {
+        "version": 1,
+        "rules": [
+          {
+            "match": {
+              "method": "tools/call",
+              "tool": "x.*"
+            },
+            "effect": "deny"
+          }
+        ]
+      },
+      "expect": "valid"
+    },
+    {
+      "id": "invalid-version",
+      "document": {
+        "version": 2,
+        "rules": []
+      },
+      "expect": "invalid",
+      "reason": "document"
+    },
+    {
+      "id": "invalid-unknown-document-field",
+      "document": {
+        "version": 1,
+        "rules": [],
+        "comment": "x"
+      },
+      "expect": "invalid",
+      "reason": "document"
+    },
+    {
+      "id": "invalid-unknown-rule-field",
+      "document": {
+        "version": 1,
+        "rules": [
+          {
+            "match": {
+              "method": "ping"
+            },
+            "scope": null,
+            "comment": "x"
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "unknown_field"
+    },
+    {
+      "id": "invalid-unknown-match-field",
+      "document": {
+        "version": 1,
+        "rules": [
+          {
+            "match": {
+              "method": "ping",
+              "uri": "x"
+            },
+            "scope": null
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "unknown_field"
+    },
+    {
+      "id": "invalid-missing-method",
+      "document": {
+        "version": 1,
+        "rules": [
+          {
+            "match": {},
+            "scope": null
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "method"
+    },
+    {
+      "id": "invalid-empty-method",
+      "document": {
+        "version": 1,
+        "rules": [
+          {
+            "match": {
+              "method": ""
+            },
+            "scope": null
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "method"
+    },
+    {
+      "id": "invalid-tool-without-tools-call",
+      "document": {
+        "version": 1,
+        "rules": [
+          {
+            "match": {
+              "method": "ping",
+              "tool": "x"
+            },
+            "scope": null
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "tool_without_tools_call"
+    },
+    {
+      "id": "invalid-tool-with-glob-method",
+      "document": {
+        "version": 1,
+        "rules": [
+          {
+            "match": {
+              "method": "tools/*",
+              "tool": "x"
+            },
+            "scope": null
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "tool_without_tools_call"
+    },
+    {
+      "id": "invalid-scope-with-deny",
+      "document": {
+        "version": 1,
+        "rules": [
+          {
+            "match": {
+              "method": "ping"
+            },
+            "scope": "read",
+            "effect": "deny"
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "scope_with_deny"
+    },
+    {
+      "id": "invalid-missing-scope",
+      "document": {
+        "version": 1,
+        "rules": [
+          {
+            "match": {
+              "method": "ping"
+            }
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "missing_scope"
+    },
+    {
+      "id": "invalid-malformed-scope",
+      "document": {
+        "version": 1,
+        "rules": [
+          {
+            "match": {
+              "method": "ping"
+            },
+            "scope": "Read"
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "malformed_scope"
+    },
+    {
+      "id": "invalid-reserved-scope",
+      "document": {
+        "version": 1,
+        "rules": [
+          {
+            "match": {
+              "method": "ping"
+            },
+            "scope": "admin"
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "reserved_scope"
+    },
+    {
+      "id": "invalid-effect",
+      "document": {
+        "version": 1,
+        "rules": [
+          {
+            "match": {
+              "method": "ping"
+            },
+            "scope": null,
+            "effect": "permit"
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "effect"
+    }
+  ],
+  "registries": [
+    {
+      "id": "valid-default",
+      "document": {
+        "version": 1,
+        "aud": "https://svc.example.test",
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice",
+            "kind": "human",
+            "scopes": [
+              "read"
+            ],
+            "not_before": null,
+            "not_after": null
+          },
+          {
+            "kid": "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
+            "public_key": "27O5sjd6_PRkCVbNLwEbIwxpfh0DZCURwFI9lWF-UHE",
+            "name": "bob",
+            "kind": "human",
+            "scopes": [
+              "read",
+              "lifecycle"
+            ],
+            "not_before": null,
+            "not_after": null
+          },
+          {
+            "kid": "bu9N_ld9z81i0mvxfKO0bgHdiYjZx7jBF8sd8DTo9gc",
+            "public_key": "r1DLsXDIaAY-rmPFCzV9dgAxes6dpdXkOrJNHiFkQl4",
+            "name": "carol",
+            "kind": "human",
+            "scopes": [
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          },
+          {
+            "kid": "EO02KVTMv4Y2l4PhmwUsLHNMcdRTCoMClOs-tP6TO68",
+            "public_key": "axZb1B_q1F6s3zc6V0glCNJMJJSHy-nrRRRJwPFU3rY",
+            "name": "erin",
+            "kind": "human",
+            "scopes": [
+              "read"
+            ],
+            "not_before": 1767226600,
+            "not_after": null
+          },
+          {
+            "kid": "RqSoWowFxe1uB6c58AVUAxxlAgGufdo1pwXxaZkqEjA",
+            "public_key": "aCS3Iwv_1ZGPZRsGtUKK-5yJx5Q8jk8q0FveD4kLO1Q",
+            "name": "frank",
+            "kind": "human",
+            "scopes": [
+              "read"
+            ],
+            "not_before": null,
+            "not_after": 1767224600
+          },
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          },
+          {
+            "kid": "YxMGvPvuOv27jJMVYE1ONMxjgIQEbXbWiKgoQymoRbM",
+            "public_key": "aPGHxh3YJf4B6IBcMkOdLGTPaTqmMBpfitIBcEmnYNs",
+            "name": "agentx",
+            "kind": "agent",
+            "scopes": [
+              "read"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ]
+      },
+      "expect": "valid"
+    },
+    {
+      "id": "valid-kind-omitted",
+      "document": {
+        "version": 1,
+        "aud": "https://svc.example.test",
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice",
+            "scopes": [
+              "read"
+            ],
+            "not_before": null,
+            "not_after": null
+          },
+          {
+            "kid": "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
+            "public_key": "27O5sjd6_PRkCVbNLwEbIwxpfh0DZCURwFI9lWF-UHE",
+            "name": "bob",
+            "kind": "human",
+            "scopes": [
+              "read",
+              "lifecycle"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ]
+      },
+      "expect": "valid"
+    },
+    {
+      "id": "invalid-version",
+      "document": {
+        "version": 2,
+        "aud": "https://svc.example.test",
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice",
+            "kind": "human",
+            "scopes": [
+              "read"
+            ],
+            "not_before": null,
+            "not_after": null
+          },
+          {
+            "kid": "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
+            "public_key": "27O5sjd6_PRkCVbNLwEbIwxpfh0DZCURwFI9lWF-UHE",
+            "name": "bob",
+            "kind": "human",
+            "scopes": [
+              "read",
+              "lifecycle"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "document"
+    },
+    {
+      "id": "invalid-unknown-field",
+      "document": {
+        "version": 1,
+        "aud": "https://svc.example.test",
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice",
+            "kind": "human",
+            "scopes": [
+              "read"
+            ],
+            "not_before": null,
+            "not_after": null,
+            "comment": "x"
+          },
+          {
+            "kid": "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
+            "public_key": "27O5sjd6_PRkCVbNLwEbIwxpfh0DZCURwFI9lWF-UHE",
+            "name": "bob",
+            "kind": "human",
+            "scopes": [
+              "read",
+              "lifecycle"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "unknown_field"
+    },
+    {
+      "id": "invalid-kid-mismatch",
+      "document": {
+        "version": 1,
+        "aud": "https://svc.example.test",
+        "keys": [
+          {
+            "kid": "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice",
+            "kind": "human",
+            "scopes": [
+              "read"
+            ],
+            "not_before": null,
+            "not_after": null
+          },
+          {
+            "kid": "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
+            "public_key": "27O5sjd6_PRkCVbNLwEbIwxpfh0DZCURwFI9lWF-UHE",
+            "name": "bob",
+            "kind": "human",
+            "scopes": [
+              "read",
+              "lifecycle"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "kid_mismatch"
+    },
+    {
+      "id": "invalid-small-order-key",
+      "document": {
+        "version": 1,
+        "aud": "https://svc.example.test",
+        "keys": [
+          {
+            "kid": "AdD6vSUfy74rk7S5J7Jq0qGpkHcVLkXe0eZ4r6RdvsU",
+            "public_key": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "name": "alice",
+            "kind": "human",
+            "scopes": [
+              "read"
+            ],
+            "not_before": null,
+            "not_after": null
+          },
+          {
+            "kid": "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
+            "public_key": "27O5sjd6_PRkCVbNLwEbIwxpfh0DZCURwFI9lWF-UHE",
+            "name": "bob",
+            "kind": "human",
+            "scopes": [
+              "read",
+              "lifecycle"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "public_key"
+    },
+    {
+      "id": "invalid-mixed-order-key",
+      "document": {
+        "version": 1,
+        "aud": "https://svc.example.test",
+        "keys": [
+          {
+            "kid": "Re4iJPVIo_sq7C42oNUBy5cQATrPazcXC_0b7udbRWI",
+            "public_key": "mFGerfNbmVIztRtc0j6cxaKLY5taSvDskDy5YNgbeBk",
+            "name": "alice",
+            "kind": "human",
+            "scopes": [
+              "read"
+            ],
+            "not_before": null,
+            "not_after": null
+          },
+          {
+            "kid": "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
+            "public_key": "27O5sjd6_PRkCVbNLwEbIwxpfh0DZCURwFI9lWF-UHE",
+            "name": "bob",
+            "kind": "human",
+            "scopes": [
+              "read",
+              "lifecycle"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "public_key"
+    },
+    {
+      "id": "invalid-duplicate-name",
+      "document": {
+        "version": 1,
+        "aud": "https://svc.example.test",
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice",
+            "kind": "human",
+            "scopes": [
+              "read"
+            ],
+            "not_before": null,
+            "not_after": null
+          },
+          {
+            "kid": "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
+            "public_key": "27O5sjd6_PRkCVbNLwEbIwxpfh0DZCURwFI9lWF-UHE",
+            "name": "alice",
+            "kind": "human",
+            "scopes": [
+              "read",
+              "lifecycle"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "duplicate_name"
+    },
+    {
+      "id": "invalid-duplicate-kid",
+      "document": {
+        "version": 1,
+        "aud": "https://svc.example.test",
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice",
+            "kind": "human",
+            "scopes": [
+              "read"
+            ],
+            "not_before": null,
+            "not_after": null
+          },
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "other",
+            "kind": "human",
+            "scopes": [
+              "read"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "duplicate_kid"
+    },
+    {
+      "id": "invalid-name-characters",
+      "document": {
+        "version": 1,
+        "aud": "https://svc.example.test",
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "bad name",
+            "kind": "human",
+            "scopes": [
+              "read"
+            ],
+            "not_before": null,
+            "not_after": null
+          },
+          {
+            "kid": "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
+            "public_key": "27O5sjd6_PRkCVbNLwEbIwxpfh0DZCURwFI9lWF-UHE",
+            "name": "bob",
+            "kind": "human",
+            "scopes": [
+              "read",
+              "lifecycle"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "name"
+    },
+    {
+      "id": "invalid-kind",
+      "document": {
+        "version": 1,
+        "aud": "https://svc.example.test",
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice",
+            "kind": "robot",
+            "scopes": [
+              "read"
+            ],
+            "not_before": null,
+            "not_after": null
+          },
+          {
+            "kid": "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
+            "public_key": "27O5sjd6_PRkCVbNLwEbIwxpfh0DZCURwFI9lWF-UHE",
+            "name": "bob",
+            "kind": "human",
+            "scopes": [
+              "read",
+              "lifecycle"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "kind"
+    },
+    {
+      "id": "invalid-agent-with-admin",
+      "document": {
+        "version": 1,
+        "aud": "https://svc.example.test",
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice",
+            "kind": "agent",
+            "scopes": [
+              "admin"
+            ],
+            "not_before": null,
+            "not_after": null
+          },
+          {
+            "kid": "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
+            "public_key": "27O5sjd6_PRkCVbNLwEbIwxpfh0DZCURwFI9lWF-UHE",
+            "name": "bob",
+            "kind": "human",
+            "scopes": [
+              "read",
+              "lifecycle"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "agent_admin"
+    },
+    {
+      "id": "invalid-duplicate-scope",
+      "document": {
+        "version": 1,
+        "aud": "https://svc.example.test",
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice",
+            "kind": "human",
+            "scopes": [
+              "read",
+              "read"
+            ],
+            "not_before": null,
+            "not_after": null
+          },
+          {
+            "kid": "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
+            "public_key": "27O5sjd6_PRkCVbNLwEbIwxpfh0DZCURwFI9lWF-UHE",
+            "name": "bob",
+            "kind": "human",
+            "scopes": [
+              "read",
+              "lifecycle"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "scopes"
+    },
+    {
+      "id": "invalid-malformed-scope",
+      "document": {
+        "version": 1,
+        "aud": "https://svc.example.test",
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice",
+            "kind": "human",
+            "scopes": [
+              "Bad Scope"
+            ],
+            "not_before": null,
+            "not_after": null
+          },
+          {
+            "kid": "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
+            "public_key": "27O5sjd6_PRkCVbNLwEbIwxpfh0DZCURwFI9lWF-UHE",
+            "name": "bob",
+            "kind": "human",
+            "scopes": [
+              "read",
+              "lifecycle"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "scopes"
+    },
+    {
+      "id": "invalid-validity-order",
+      "document": {
+        "version": 1,
+        "aud": "https://svc.example.test",
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice",
+            "kind": "human",
+            "scopes": [
+              "read"
+            ],
+            "not_before": 1767225610,
+            "not_after": 1767225600
+          },
+          {
+            "kid": "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
+            "public_key": "27O5sjd6_PRkCVbNLwEbIwxpfh0DZCURwFI9lWF-UHE",
+            "name": "bob",
+            "kind": "human",
+            "scopes": [
+              "read",
+              "lifecycle"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "validity"
+    }
+  ]
+}

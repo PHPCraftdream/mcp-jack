@@ -32,6 +32,36 @@
       "kid": "RqSoWowFxe1uB6c58AVUAxxlAgGufdo1pwXxaZkqEjA"
     },
     {
+      "name": "root",
+      "seed_hex": "b25e7cd6e4b7528df098bd668a1c765f37f8c28f407d13f18dbb84aea6dcaff1",
+      "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+      "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU"
+    },
+    {
+      "name": "agentx",
+      "seed_hex": "fdd6a825a92c2ac8927e5c3697adabfcd4a4b7b4970abd344f1ac6e639f383f7",
+      "public_key": "aPGHxh3YJf4B6IBcMkOdLGTPaTqmMBpfitIBcEmnYNs",
+      "kid": "YxMGvPvuOv27jJMVYE1ONMxjgIQEbXbWiKgoQymoRbM"
+    },
+    {
+      "name": "lowadmin",
+      "seed_hex": "68196c849a51b1af3296c37cf7fbd1a9501019925065610196f6d91b22eb82cc",
+      "public_key": "YuuQQJLpqGYeIM1svS6Fm7Z1Vx2_BQUC6mh2dFZD_hU",
+      "kid": "69iUreDMqLRKDMwejn61HU2WVAOCli7mIkwP9Xhn2w4"
+    },
+    {
+      "name": "admin2",
+      "seed_hex": "e3377fbafae5012165ccb195276304c044ce480fd0515cbae9468cf58721248b",
+      "public_key": "eIG8ZZeMpm8SHo1jAeMPy5B-OC9f2JSGA0-J7GC1_YY",
+      "kid": "xag3G42kjg7W68A1O-YMXWof7WOtUb4fAmFiv_koy8w"
+    },
+    {
+      "name": "expadmin",
+      "seed_hex": "d8a403e22548f584508e7857d79443405895e1f5bc003d48d6409ef6853321af",
+      "public_key": "n27Fl9PV4mjt_pTrsx6lpiJ_y3zZpqIER1Cs50tccPY",
+      "kid": "UGCbsJvSzcSh-Gvwp24BnETvJCp-gpFFhf_FG-1UQOw"
+    },
+    {
       "name": "mallory",
       "seed_hex": "d21cc781e50666f47925cf9b57bcd9912a8d51f016176a9459c7ff3cb1778775",
       "public_key": "QYZ7EHNZ_bwWbIPSTIXFRtggHD7_HXFqYSqmj1_xEPU",
@@ -42,6 +72,24 @@
       "seed_hex": "cc9e39e830a43e09c6372b14852ef80a2bb8e7b1aa4c04bf076f33e0aad2c901",
       "public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
       "kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88"
+    },
+    {
+      "name": "newbie",
+      "seed_hex": "22af6707051f8639dc30a68754bb09b21da86fd23a32ec7aeb196535520b8518",
+      "public_key": "71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ",
+      "kid": "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg"
+    },
+    {
+      "name": "newbie2",
+      "seed_hex": "e0428348dba6da75691e8cd4af601b39a93ad29b2a9ac7377907aec1cc6b6f18",
+      "public_key": "9vRVawRdYBgeanZhnZjKWAcT_RHMzSyGb_BO5LJ9JsA",
+      "kid": "5WagpSYUiSUNAUEb2yn1foTj_zpE75JB3D7DOCjz6uM"
+    },
+    {
+      "name": "newbie3",
+      "seed_hex": "a8fcc94b434a68c237d35ff148b04808b0886a2fe6f8f7fc119015f2cb8e8de3",
+      "public_key": "zDB3JC01DaokVxjVwlUuGuMOrKTFaa8iFvZsDuvbRrw",
+      "kid": "NKnUJEEV9t83j7kaXqDacfFDy9PPaQzKhp_rfVjqWzA"
     }
   ]
 }
