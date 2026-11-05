@@ -417,12 +417,12 @@ pub fn load_registry() -> Result<RegistryDocument, FixtureError> {
     read_strict("registry.json")
 }
 
-/// Policies stay raw: typed policy parsing is a later step.
+/// Loads the policy document as raw JSON; the typed loader is mcp_jack::server::policy::Policy::parse.
 pub fn load_default_policy() -> Result<serde_json::Value, FixtureError> {
     read_strict("policy.json")
 }
 
-/// Policies stay raw: typed policy parsing is a later step.
+/// Loads the policy document as raw JSON; the typed loader is mcp_jack::server::policy::Policy::parse.
 pub fn load_wildcard_policy() -> Result<serde_json::Value, FixtureError> {
     read_strict("policy-wildcard.json")
 }
