@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// One `[name, value]` pair; the list form keeps repeated headers representable.
 /// Manual impl mirrors Go's UnmarshalJSON: wrong arity and null elements are
@@ -135,7 +135,7 @@ pub struct AuditExpect {
 }
 
 /// UserSummary is one entry of an after.users expectation.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct UserSummary {
     pub name: String,

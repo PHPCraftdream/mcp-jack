@@ -456,7 +456,7 @@ fn rejection_from(err: &JackError) -> VerifyResult {
 
 /// Reports whether now is inside the entry's validity interval
 /// (spec 02 section 1: not_before <= now < not_after).
-fn entry_active(entry: &RegistryEntry, now: i64) -> bool {
+pub(crate) fn entry_active(entry: &RegistryEntry, now: i64) -> bool {
     entry.not_before.is_none_or(|t| t <= now) && entry.not_after.is_none_or(|t| now < t)
 }
 
@@ -640,6 +640,7 @@ fn classify_body(body: &[u8]) -> Option<RpcMessage> {
 mod tests {
     use super::*;
     use crate::encoding::encode_b64url;
+    use crate::server::native::{Native, NativeOptions};
     use crate::server::state::{MemoryState, StateEdit, KIND_HUMAN};
     use ed25519_dalek::Signer;
     use ed25519_dalek::SigningKey;
@@ -1384,6 +1385,75 @@ mod tests {
             assert_eq!(res.code, codes::INVALID_REQUEST, "body: {body}");
             assert!(res.nonce_recorded, "body: {body}");
         }
+    }
+
+    #[test]
+    fn audit_target_set_on_failed_native_calls() {
+        let (root_key, mut root) = test_key("root");
+        root.scopes = vec!["admin".to_owned(), "read".to_owned()];
+        let native: Arc<dyn NativeTools> = Arc::new(Native::new(NativeOptions::default()));
+        let v = verifier(config(
+            NOW,
+            seeded_state(&[&root]),
+            Some(Arc::clone(&native)),
+        ));
+
+        // (a) user.create: valid name, small-order public key -> the failure
+        //     is key_rejected and the audit target is already the name (spec
+        //     03 section 8). Both failure paths exit before new_invite_code,
+        //     so the default (OS) random source is never reached.
+        let bad_pub = encode_b64url(&[1u8; 32]);
+        let args = format!(r#"{{"name":"dave","public_key":"{bad_pub}","scopes":["read"]}}"#);
+        let req = post_call(
+            TOOL_ADMIN_USER_CREATE,
+            Some(&args),
+            &root_key,
+            &root.kid,
+            &nonce(50),
+        );
+        let res = v.verify(&req);
+        assert_eq!(res.http_status, 400);
+        let event = res.audit.expect("user.create is audited");
+        assert_eq!(event.outcome, AUDIT_FAILURE);
+        assert_eq!(event.code, codes::KEY_REJECTED);
+        assert_eq!(event.target, "dave");
+
+        // (b) user.set_scopes: well-formed kid, scopes as a string -> the
+        //     failure is invalid_params and the audit target is the kid.
+        let (_, alice) = test_key("alice");
+        let args = format!(r#"{{"kid":"{}","scopes":"read"}}"#, alice.kid);
+        let req = post_call(
+            TOOL_ADMIN_USER_SET_SCOPES,
+            Some(&args),
+            &root_key,
+            &root.kid,
+            &nonce(51),
+        );
+        let res = v.verify(&req);
+        assert_eq!(res.http_status, 400);
+        let event = res.audit.expect("user.set_scopes is audited");
+        assert_eq!(event.outcome, AUDIT_FAILURE);
+        assert_eq!(event.code, codes::INVALID_PARAMS);
+        assert_eq!(event.target, alice.kid);
+
+        // (c) A SUCCESSFUL user.create still targets the name.
+        let (_, dave) = test_key("dave");
+        let args = format!(
+            r#"{{"name":"dave","public_key":"{}","scopes":["read"]}}"#,
+            dave.public_key
+        );
+        let req = post_call(
+            TOOL_ADMIN_USER_CREATE,
+            Some(&args),
+            &root_key,
+            &root.kid,
+            &nonce(52),
+        );
+        let res = v.verify(&req);
+        assert!(res.accepted, "code: {}", res.code);
+        let event = res.audit.expect("user.create is audited");
+        assert_eq!(event.outcome, AUDIT_SUCCESS);
+        assert_eq!(event.target, "dave");
     }
 
     #[test]

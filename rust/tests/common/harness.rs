@@ -288,3 +288,105 @@ pub fn fresh_key() -> [u8; 32] {
 pub fn decode_body(id: &str, b64: &str) -> Vec<u8> {
     decode_b64url(b64).unwrap_or_else(|e| panic!("{id}: bad body b64u: {e:?}"))
 }
+
+/// The runner-side rule of spec/tests/README.md: a string equal to
+/// "<b64u43>" in an expectation matches any canonical base64url string of
+/// 43 characters (invite codes and ids are random in real servers).
+/// Objects must have the same key set; arrays the same length.
+pub fn structured_matches(want: &serde_json::Value, got: &serde_json::Value) -> bool {
+    match (want, got) {
+        (serde_json::Value::String(w), serde_json::Value::String(g)) => {
+            // The literal "<b64u43>" must never match itself: the placeholder
+            // matches only a CANONICAL base64url string of exactly 43 chars
+            // (`<`/`>` are outside the alphabet; re-encoding proves
+            // canonicity) — the runner-side rule of spec/tests/README.md.
+            if w == "<b64u43>" {
+                g.len() == 43
+                    && mcp_jack::encoding::decode_b64url(g)
+                        .is_ok_and(|raw| &mcp_jack::encoding::encode_b64url(&raw) == g)
+            } else {
+                w == g
+            }
+        }
+        (serde_json::Value::Array(w), serde_json::Value::Array(g)) => {
+            w.len() == g.len() && w.iter().zip(g).all(|(a, b)| structured_matches(a, b))
+        }
+        (serde_json::Value::Object(w), serde_json::Value::Object(g)) => {
+            w.len() == g.len()
+                && w.iter()
+                    .all(|(k, v)| g.get(k).is_some_and(|gv| structured_matches(v, gv)))
+        }
+        _ => want == got,
+    }
+}
+
+/// Asserts the audit expectation of one step: the event on the result and the
+/// sink's last record must match (or both be absent).
+pub fn check_audit(
+    label: &str,
+    got: &Option<mcp_jack::server::audit::AuditEvent>,
+    want: &Option<super::fixtures::AuditExpect>,
+    sink: &mcp_jack::server::audit::MemoryAuditSink,
+) {
+    match (want, got) {
+        (None, Some(a)) => panic!("case {}: unexpected audit event {:?}", label, a),
+        (Some(w), None) => panic!("case {}: missing audit event, want {:?}", label, w),
+        (Some(w), Some(a)) => {
+            let want_code = w.code.clone().unwrap_or_default();
+            assert_eq!(a.tool, w.tool, "case {}: audit tool", label);
+            assert_eq!(a.outcome, w.outcome, "case {}: audit outcome", label);
+            assert_eq!(a.code, want_code, "case {}: audit code", label);
+            assert_eq!(a.actor_kid, w.actor_kid, "case {}: audit actor_kid", label);
+            // The sink must have recorded exactly this event.
+            let events = sink.events();
+            let last = events
+                .last()
+                .unwrap_or_else(|| panic!("case {}: audit sink empty", label));
+            assert_eq!(last, a, "case {}: audit sink last event", label);
+        }
+        (None, None) => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn placeholder_never_matches_literal() {
+        let ph = serde_json::json!("<b64u43>");
+        // The literal placeholder is not a canonical base64url string.
+        assert!(!structured_matches(&ph, &ph));
+
+        let real = encode_b64url(&[0xA5; 32]);
+        assert_eq!(real.len(), 43);
+        assert!(structured_matches(&ph, &serde_json::json!(real)));
+        // 42 characters: too short.
+        assert!(!structured_matches(&ph, &serde_json::json!(&real[..42])));
+        // Non-canonical trailing bits: encode_b64url([0u8;32]) is 43 'A's;
+        // replacing the last char breaks canonicity.
+        let mut non_canonical = encode_b64url(&[0u8; 32]);
+        non_canonical.replace_range(42..43, "B");
+        assert!(!structured_matches(&ph, &serde_json::json!(non_canonical)));
+
+        // Plain equality is untouched for non-placeholder strings.
+        assert!(structured_matches(
+            &serde_json::json!("alice"),
+            &serde_json::json!("alice")
+        ));
+        assert!(!structured_matches(
+            &serde_json::json!("alice"),
+            &serde_json::json!("bob")
+        ));
+
+        // Nested object: matches a real code, not the literal.
+        assert!(structured_matches(
+            &serde_json::json!({"code": "<b64u43>"}),
+            &serde_json::json!({"code": real})
+        ));
+        assert!(!structured_matches(
+            &serde_json::json!({"code": "<b64u43>"}),
+            &serde_json::json!({"code": "<b64u43>"})
+        ));
+    }
+}

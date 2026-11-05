@@ -5,40 +5,16 @@ mod common;
 use std::fs;
 use std::sync::Arc;
 
-use common::fixtures::{self, AuditExpect, RequestCase, RequestVectors};
+use common::fixtures::{self, RequestCase, RequestVectors};
+use common::harness;
 
 use mcp_jack::encoding::decode_b64url;
-use mcp_jack::error::{codes, JackError};
 use mcp_jack::server::audit::{AuditSink, MemoryAuditSink};
+use mcp_jack::server::native::{Native, NativeOptions};
 use mcp_jack::server::nonce::NonceStore;
 use mcp_jack::server::policy::Policy;
 use mcp_jack::server::state::{MemoryState, RegistryEntry, StateStore};
-use mcp_jack::server::verify::{Clock, Config, NativeCall, NativeResult, Request, Verifier};
-
-/// Minimal native-tool double: admin tools enforce the caller's admin scope
-/// (spec 03 section 4 rule 1) so the audit expectations of the vectors
-/// (failure + code) are reproduced; everything else succeeds with an empty
-/// structured result. The real jack.* tools are the native.rs task.
-struct StubNative;
-
-impl mcp_jack::server::verify::NativeTools for StubNative {
-    fn call(&self, c: &mut NativeCall) -> Result<NativeResult, JackError> {
-        c.target = c.kid.to_owned();
-        let admin = c
-            .caller
-            .is_some_and(|e| e.scopes.iter().any(|s| s == "admin"));
-        if c.tool.starts_with("jack.admin.") && !admin {
-            return Err(JackError::new(
-                403,
-                codes::INSUFFICIENT_SCOPE,
-                "stub: admin required",
-            ));
-        }
-        Ok(NativeResult {
-            structured: serde_json::Value::Null,
-        })
-    }
-}
+use mcp_jack::server::verify::{Clock, Config, Request, Verifier};
 
 fn seed_registry(state: &MemoryState, registry: &fixtures::RegistryDocument) {
     // kind omitted in a fixture means "human" (spec 02 section 1); the Go
@@ -59,32 +35,6 @@ fn seed_registry(state: &MemoryState, registry: &fixtures::RegistryDocument) {
             Ok(())
         })
         .expect("seed registry");
-}
-
-fn check_audit(
-    label: &str,
-    got: &Option<mcp_jack::server::audit::AuditEvent>,
-    want: &Option<AuditExpect>,
-    sink: &MemoryAuditSink,
-) {
-    match (want, got) {
-        (None, Some(a)) => panic!("case {}: unexpected audit event {:?}", label, a),
-        (Some(w), None) => panic!("case {}: missing audit event, want {:?}", label, w),
-        (Some(w), Some(a)) => {
-            let want_code = w.code.clone().unwrap_or_default();
-            assert_eq!(a.tool, w.tool, "case {}: audit tool", label);
-            assert_eq!(a.outcome, w.outcome, "case {}: audit outcome", label);
-            assert_eq!(a.code, want_code, "case {}: audit code", label);
-            assert_eq!(a.actor_kid, w.actor_kid, "case {}: audit actor_kid", label);
-            // The sink must have recorded exactly this event.
-            let events = sink.events();
-            let last = events
-                .last()
-                .unwrap_or_else(|| panic!("case {}: audit sink empty", label));
-            assert_eq!(last, a, "case {}: audit sink last event", label);
-        }
-        (None, None) => {}
-    }
 }
 
 fn check_outcome(
@@ -118,19 +68,19 @@ fn check_outcome(
         "case {}: nonce_recorded",
         label
     );
-    check_audit(label, &res.audit, &want.audit, sink);
+    harness::check_audit(label, &res.audit, &want.audit, sink);
     if let Some(want_structured) = &want.structured {
-        if res.native {
-            // structuredContent comparison skipped: StubNative returns an empty
-            // result; the real jack.* tools are the native.rs task.
-        } else {
-            assert_eq!(
-                res.structured.as_ref(),
-                Some(want_structured),
-                "case {}: structured result",
-                label
-            );
-        }
+        // Native expectations may embed the "<b64u43>" placeholder.
+        assert!(
+            harness::structured_matches(
+                want_structured,
+                res.structured.as_ref().unwrap_or(&serde_json::Value::Null)
+            ),
+            "case {}: structured result, want {:?}, got {:?}",
+            label,
+            want_structured,
+            res.structured
+        );
     }
 }
 
@@ -168,7 +118,9 @@ fn run_case(vectors: &RequestVectors, registry: &fixtures::RegistryDocument, cas
         nonces: Arc::new(nonces),
         policy,
         audit: Some(audit),
-        native: Some(Arc::new(StubNative)),
+        // The real jack.* tools; OS randomness is fine here because the
+        // expectations use the "<b64u43>" placeholder, never a literal code.
+        native: Some(Arc::new(Native::new(NativeOptions::default()))),
         window_seconds: case.state.window_seconds,
         now: now_clock,
     })
