@@ -86,7 +86,7 @@ jobs:
         working-directory: rust
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85
+      - uses: dtolnay/rust-toolchain@1.120
       - run: cargo check --locked --all-targets --all-features
 
   ts:
