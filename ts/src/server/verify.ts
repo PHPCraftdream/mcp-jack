@@ -521,6 +521,11 @@ export class Verifier {
     this.now = cfg.now;
   }
 
+  /** The injected clock (Go cfg.Now): adapters sign responses with the same injected clock that verified the request, never the wall clock. */
+  get clock(): () => number {
+    return this.now;
+  }
+
   /** Runs the pipeline of spec 01 section 4 / spec 02 section 4; stops at the first failing step. */
   verify(req: VerifyRequest): VerifyResult {
     const now = this.now();
