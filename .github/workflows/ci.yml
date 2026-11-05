@@ -105,8 +105,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-      # No lockfile is committed yet, so npm ci is not usable.
-      - run: npm install --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
       - run: npm run typecheck
       - run: npm test
 
@@ -136,7 +135,7 @@ jobs:
       - name: Build TypeScript executables
         working-directory: ts
         run: |
-          npm install --no-audit --no-fund
+          npm ci --no-audit --no-fund
           npm run build
       - run: node interop/run.mjs --self-test
       - name: Run the matrix

@@ -3,7 +3,6 @@ import { parseRequestAuth } from "../auth-header.js";
 import { Code, JackError } from "../errors.js";
 import { randomNonce, signRequest, verifyResponse } from "./auth.js";
 import type { Clock, NonceSource } from "./auth.js";
-import { parseErrorBody } from "./errors.js";
 import type { Signer } from "./signer.js";
 
 // The lib is ES2022 without DOM: derive the fetch types from the Node globals.
@@ -22,15 +21,13 @@ export class StreamingUnsupportedError extends Error {
   }
 }
 
-/** Reports a 401 answered WITHOUT a verified Jack-Auth header: only the status and the code/message parsed from the (untrusted) body are surfaced, mirroring Go's fields; `message` is the raw body message (spec 01 sections 4 and 5). */
+/** Reports a 401 answered WITHOUT a verified Jack-Auth header: only the status is surfaced, the body is untrusted and never parsed (spec 01 section 5). */
 export class UnauthenticatedResponseError extends Error {
   readonly status: number;
-  readonly code: string;
 
-  constructor(status: number, code: string, message: string) {
-    super(message);
+  constructor(status: number) {
+    super(`jack client: unauthenticated ${status} response`);
     this.status = status;
-    this.code = code;
     this.name = "UnauthenticatedResponseError";
   }
 }
@@ -223,8 +220,7 @@ async function cancelBody(resp: Response): Promise<void> {
  * verifies each response (port of Go Transport.RoundTrip). Response mapping:
  * - verification passes -> the verified bytes are returned as a fresh Response;
  * - JackError missing_auth with status 401 (an unsigned 401) -> the body is
- *   parsed as an UNTRUSTED hint and UnauthenticatedResponseError{status, code,
- *   message} is thrown;
+ *   ignored and UnauthenticatedResponseError{status} is thrown;
  * - every other verification failure (malformed_auth, unsupported_version,
  *   unknown_server_key, timestamp_out_of_window, bad_signature — all with
  *   httpStatus 0 per spec 01 section 5, where Go wrongly kept 401) and every
@@ -285,10 +281,8 @@ export function createSigningFetch(config: SigningFetchConfig, fetchImpl: typeof
       verifyResponse(config.serverKey, resp.status, jackAuthHeaderValues(resp.headers), requestSig, respBody, verifyNow, config.windowSeconds ?? 0);
     } catch (err) {
       if (err instanceof JackError && err.code === Code.MISSING_AUTH && resp.status === 401) {
-        // The unsigned 401 body is a hint only: surface status+code, never
-        // trust the content (spec 01 sections 4 and 5).
-        const { code, message } = parseErrorBody(respBody);
-        throw new UnauthenticatedResponseError(resp.status, code, message);
+        // The unsigned 401 body is never trusted: status only (spec 01 section 5).
+        throw new UnauthenticatedResponseError(resp.status);
       }
       throw err;
     }

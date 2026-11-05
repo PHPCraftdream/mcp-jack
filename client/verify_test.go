@@ -58,6 +58,9 @@ func TestVerifyResponseVectors(t *testing.T) {
 					t.Errorf("case %s: got error %v, not a *jack.Error", tc.ID, err)
 				} else if je.Code != tc.Expect.Code {
 					t.Errorf("case %s: got code %q, want code %q", tc.ID, je.Code, tc.Expect.Code)
+				} else if je.HTTPStatus != 0 {
+					// Spec 01 section 5 assigns no HTTP status to client-side verification failures.
+					t.Errorf("case %s: HTTPStatus = %d, want 0", tc.ID, je.HTTPStatus)
 				}
 			default:
 				t.Errorf("case %s: unknown expect result %q", tc.ID, tc.Expect.Result)

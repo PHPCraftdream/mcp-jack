@@ -252,11 +252,22 @@ function kidOf(e: Env, name: string): string {
   return entry.kid;
 }
 
+// Body of the latest 401 wire response. The SDK reports an unsigned 401 by
+// status only, but the harness must still report the wire code (README
+// section 5); the value is used for reporting, never for trust decisions.
+let lastWireBody: Uint8Array = new Uint8Array(0);
+
+const stashingFetch: typeof fetch = async (input, init) => {
+  const resp = await globalThis.fetch(input, init);
+  if (resp.status === 401) lastWireBody = new Uint8Array(await resp.clone().arrayBuffer());
+  return resp;
+};
+
 // Memoized SDK client per identity; typed calls use these.
 function typedClient(e: Env, name: string): Client {
   const memo = e.clients.get(name);
   if (memo !== undefined) return memo;
-  const client = new Client({ baseUrl: e.baseURL + "/mcp", aud: e.aud, signer: signerFor(e, name), serverKey: e.serverKey });
+  const client = new Client({ baseUrl: e.baseURL + "/mcp", aud: e.aud, signer: signerFor(e, name), serverKey: e.serverKey, fetchImpl: stashingFetch });
   e.clients.set(name, client);
   return client;
 }
@@ -412,8 +423,9 @@ async function typedRawCall(e: Env, signer: InMemorySigner, tool: string, args?:
 // client_error. Everything else is a harness-level failure.
 function classifyTransportError(err: unknown): StepResult {
   if (err instanceof UnauthenticatedResponseError) {
-    if (AUTH_FAILURE_CODES.has(err.code)) {
-      return { kind: "rejected", status: err.status, hasStatus: true, code: err.code };
+    const code = parseErrorBody(lastWireBody).code;
+    if (AUTH_FAILURE_CODES.has(code)) {
+      return { kind: "rejected", status: err.status, hasStatus: true, code };
     }
     return { kind: "client_error", status: 0, hasStatus: false, code: Code.MISSING_AUTH };
   }
@@ -435,11 +447,13 @@ async function sdkStep<T>(p: Promise<T>): Promise<{ step: StepResult; value?: T 
 function classifySdkError(err: unknown): StepResult {
   if (err instanceof HTTPError) return { kind: "rejected", status: err.status, hasStatus: true, code: err.code };
   // The SDK transport maps only an unsigned (missing_auth) 401 to
-  // UnauthenticatedResponseError, carrying the UNTRUSTED body code: a 401
+  // UnauthenticatedResponseError (status only); the code comes from the
+  // harness wire stash, UNTRUSTED and used for reporting only: a 401
   // with an auth-failure code is a wire rejection; any other unsigned 401 is
   // a client-side anomaly (spec 01 section 5).
   if (err instanceof UnauthenticatedResponseError) {
-    if (AUTH_FAILURE_CODES.has(err.code)) return { kind: "rejected", status: err.status, hasStatus: true, code: err.code };
+    const code = parseErrorBody(lastWireBody).code;
+    if (AUTH_FAILURE_CODES.has(code)) return { kind: "rejected", status: err.status, hasStatus: true, code };
     return { kind: "client_error", status: 0, hasStatus: false, code: Code.MISSING_AUTH };
   }
   if (err instanceof RPCError) return { kind: "rejected", status: 200, hasStatus: true, code: String(err.code) };
@@ -658,7 +672,7 @@ function main(): void {
     primaryName,
     // One shared signed transport; per-request signer overrides (jackSigner)
     // apply on top of the default primary.
-    typedFetch: createSigningFetch({ aud: flags.aud, signer: primary, serverKey }, globalThis.fetch),
+    typedFetch: createSigningFetch({ aud: flags.aud, signer: primary, serverKey }, stashingFetch),
     clients: new Map<string, Client>(),
     signers: new Map<string, InMemorySigner>(),
   };

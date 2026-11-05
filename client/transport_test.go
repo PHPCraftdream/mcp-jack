@@ -136,24 +136,35 @@ func TestTransportSigned401PassesThrough(t *testing.T) {
 }
 
 func TestTransportRefusesStreamingResponse(t *testing.T) {
-	srv := newTestServer(t)
-	tr := newTransport(t, srv)
-	srv.Handle = func(w http.ResponseWriter, _ jack.RequestAuth, _ []byte) {
-		// Streams cannot be body-hashed so they are refused per spec 01
-		// section 5 / README Q1 — signed or not; an unsigned stream suffices
-		// here because the streaming guard fires before verification.
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("data: x\n\n"))
-	}
+	// The media type is the part before the first ';', trimmed and
+	// case-insensitive; a malformed parameter list must not defeat the refusal.
+	for _, contentType := range []string{
+		"text/event-stream",
+		"Text/Event-Stream; charset=utf-8",
+		"text/event-stream ;;; =bad",
+		" text/event-stream;",
+	} {
+		t.Run(contentType, func(t *testing.T) {
+			srv := newTestServer(t)
+			tr := newTransport(t, srv)
+			srv.Handle = func(w http.ResponseWriter, _ jack.RequestAuth, _ []byte) {
+				// Streams cannot be body-hashed so they are refused per spec 01
+				// section 5 / README Q1 — signed or not; an unsigned stream suffices
+				// here because the streaming guard fires before verification.
+				w.Header().Set("Content-Type", contentType)
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte("data: x\n\n"))
+			}
 
-	httpc := NewHTTPClient(tr)
-	resp, err := postMCP(t, httpc, srv.URL, []byte(`{"ping":1}`))
-	if !errors.Is(err, ErrStreamingUnsupported) {
-		t.Fatalf("err = %v, want ErrStreamingUnsupported", err)
-	}
-	if resp != nil {
-		t.Fatalf("resp = %+v, want nil", resp)
+			httpc := NewHTTPClient(tr)
+			resp, err := postMCP(t, httpc, srv.URL, []byte(`{"ping":1}`))
+			if !errors.Is(err, ErrStreamingUnsupported) {
+				t.Fatalf("err = %v, want ErrStreamingUnsupported", err)
+			}
+			if resp != nil {
+				t.Fatalf("resp = %+v, want nil", resp)
+			}
+		})
 	}
 }
 

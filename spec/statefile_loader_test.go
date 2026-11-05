@@ -56,8 +56,15 @@ func TestLoadVectorsRegistriesThroughFileState(t *testing.T) {
 				if err := json.Unmarshal(doc["keys"], &keys); err != nil {
 					t.Fatalf("case %s: keys member: %v", tc.ID, err)
 				}
-				if got := len(store.View().Keys); got != len(keys) {
-					t.Fatalf("case %s: loaded %d keys, want %d: a valid registry must load completely", tc.ID, got, len(keys))
+				loaded := store.View().Keys
+				if len(loaded) != len(keys) {
+					t.Fatalf("case %s: loaded %d keys, want %d: a valid registry must load completely", tc.ID, len(loaded), len(keys))
+				}
+				// An omitted or null kind must come out as human (spec 02 section 1).
+				for i, k := range keys {
+					if kind, present := k["kind"]; (!present || kind == nil) && loaded[i].Kind != server.KindHuman {
+						t.Fatalf("case %s: key %d has no kind but loaded as %q, want human", tc.ID, i, loaded[i].Kind)
+					}
 				}
 			case "invalid":
 				if _, err := server.OpenFileState(path); err == nil {
@@ -70,4 +77,46 @@ func TestLoadVectorsRegistriesThroughFileState(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestFileStateRejectsEmptyKind: only an omitted or null kind defaults to
+// human; an explicit empty string is an invalid kind and must be rejected.
+func TestFileStateRejectsEmptyKind(t *testing.T) {
+	vectors, err := spec.LoadLoadVectors()
+	if err != nil {
+		t.Fatalf("spec.LoadLoadVectors: %v", err)
+	}
+	for _, tc := range vectors.Registries {
+		if tc.ID != "valid-kind-omitted" {
+			continue
+		}
+		var doc map[string]json.RawMessage
+		if err := json.Unmarshal(tc.Document, &doc); err != nil {
+			t.Fatalf("document does not decode: %v", err)
+		}
+		delete(doc, "aud")
+		doc["invites"] = json.RawMessage("[]")
+		var keys []map[string]any
+		if err := json.Unmarshal(doc["keys"], &keys); err != nil || len(keys) == 0 {
+			t.Fatalf("keys member: %v (%d keys)", err, len(keys))
+		}
+		keys[0]["kind"] = ""
+		doc["keys"], err = json.Marshal(keys)
+		if err != nil {
+			t.Fatalf("marshal keys: %v", err)
+		}
+		data, err := json.Marshal(doc)
+		if err != nil {
+			t.Fatalf("marshal document: %v", err)
+		}
+		path := filepath.Join(t.TempDir(), "state.json")
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatalf("write state file: %v", err)
+		}
+		if _, err := server.OpenFileState(path); !errors.Is(err, server.ErrStateCorrupt) {
+			t.Fatalf("OpenFileState with kind \"\": err = %v, want ErrStateCorrupt", err)
+		}
+		return
+	}
+	t.Fatalf("registry case valid-kind-omitted not found")
 }

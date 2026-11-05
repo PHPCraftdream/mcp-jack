@@ -59,7 +59,7 @@ test("unsigned 401 surfaces UnauthenticatedResponseError", async () => {
   await assert.rejects(
     call,
     (err: unknown) =>
-      err instanceof UnauthenticatedResponseError && err.status === 401 && err.code === "unknown_key" && err.message === "nope",
+      err instanceof UnauthenticatedResponseError && err.status === 401 && !("code" in err),
   );
 });
 
@@ -158,10 +158,10 @@ test("response verification mapping table", async () => {
     readonly expect: (err: unknown) => boolean;
   }[] = [
     {
-      name: "unsigned 401 -> UnauthenticatedResponseError (body as untrusted hint)",
+      name: "unsigned 401 -> UnauthenticatedResponseError (status only)",
       status: 401,
       headers: { "content-type": "application/json" },
-      expect: (err) => err instanceof UnauthenticatedResponseError && err.status === 401 && err.code === "hint_code" && err.message === "hint message",
+      expect: (err) => err instanceof UnauthenticatedResponseError && err.status === 401 && !("code" in err),
     },
     {
       name: "unsigned 200 -> missing_auth",
