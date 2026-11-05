@@ -41,6 +41,7 @@ node spec/tools/gen-fixtures.mjs --check  # fail if files on disk are stale
 | D10 | Enrollment is the single exception to "unknown key is rejected": the request is signed by the new key, which proves possession, and carries a single-use invite. | An invite is a bearer secret for exactly one purpose, so it is single-use, short-lived and limited to the scopes it names; proof of possession stops anyone registering a key they do not control. |
 | D11 | No privilege escalation (grant only scopes you hold), the last administrator cannot be removed, and `agent` keys can never hold `admin`. | Limits the blast radius of a compromised or prompt-injected agent; the first administrator is created out of band. |
 | D12 | Strict Ed25519: canonical prime-order-subgroup public keys only, and signatures with S >= L are invalid. | Verifiers in Go, Rust and JS otherwise disagree on edge cases, and a small-order key can verify for many messages. |
+| D13 | Duplicate member names inside one JSON object of a request body keep the **last** occurrence: the parsed object has one member per distinct name, holding the last occurrence's value in document order — the occurrences are **not** merged. It applies to the JSON-RPC body (and so to `params` and `params.arguments`) and to protocol-native tool argument objects; authentication still covers the exact original body bytes. Registry, policy and state-file documents are **not** covered by this rule. | Go, `serde_json` and `JSON.parse` all keep the last value, so one normative sentence buys identical behavior in every SDK; rejecting duplicates would break pass-through of ordinary MCP traffic. The scope stays narrow so the operator-facing document formats keep their own load-time rules. |
 
 ## Open questions
 
@@ -54,4 +55,3 @@ node spec/tools/gen-fixtures.mjs --check  # fail if files on disk are stale
 - **Q8.** Human approval for destructive operations and the two-step change flow.
 - **Q9.** Licence.
 - **Q10.** Policy matching beyond methods and tool names (resource URIs, prompt names, argument conditions).
-- **Q11.** Duplicate keys inside one JSON object (in a JSON-RPC body or in native tool arguments): Go, `serde_json` and `JSON.parse` all keep the last value today, but the behaviour is unspecified and the fixtures deliberately contain no case for it. Either reject duplicates in all SDKs or specify last-wins.

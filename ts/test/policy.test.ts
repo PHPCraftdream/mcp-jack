@@ -100,8 +100,8 @@ test("missing scope vs null scope (raw JSON text)", () => {
   expectDecision(policy, "ping", undefined, { allowed: true, scope: null }, "null scope ping");
 });
 
-// JSON.parse keeps the last duplicate key; the loader does not detect duplicates (spec README Q11).
-test("duplicate object keys keep the last (spec README Q11)", () => {
+// JSON.parse keeps the last duplicate key; the loader does not detect duplicates. D13 scopes last-member-wins to request bodies only — a policy document's duplicate handling is implementation-defined.
+test("duplicate object keys keep the last (implementation-defined for policy documents)", () => {
   const policy = parsePolicy(
     '{"version":1,"rules":[{"match":{"method":"ping","method":"tools/list"},"scope":null}]}',
   );

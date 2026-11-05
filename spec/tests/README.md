@@ -18,6 +18,7 @@ An implementation (Go, Rust, TypeScript) conforms to spec v0.1 when its test run
 - **Inject the clock.** `state.now` is the current time in every case. Never read the wall clock.
 - **Cases are independent.** Rebuild state for every case. Within a sequence the steps share state in order.
 - **Bytes are exact.** `body_b64u` is the request body, unpadded base64url. `body_text` and `debug` are informative only.
+- **Duplicate members are normative.** Some bodies repeat a member name (the `dup-*` and `invite-create-*-dup-*` and `invite-create-arguments-*` cases). The expected outcome assumes the last occurrence wins and the occurrences are not merged (02 section 4); a first-wins or merging parser fails them. The signature still covers the duplicate-bearing bytes exactly as sent.
 - **Header names are case-insensitive**; `headers` is a list of `[name, value]` pairs so repeated headers are representable.
 
 ## Request vectors

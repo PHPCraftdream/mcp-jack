@@ -92,6 +92,8 @@ After authentication succeeds:
    - otherwise the operation is authorized.
 5. `tools/list` results SHOULD be filtered to the tools whose matching rule the calling key satisfies, plus the `jack.` tools the key may call.
 
+**Duplicate members.** Within one JSON object of the body, a member name MAY occur more than once. The object then has exactly one member per distinct name, and that member's value is the value of the **last** occurrence in document order; the occurrences are not merged, so a member that only an earlier occurrence carried is lost. Names are compared after unescaping (`"m\u0065thod"` and `"method"` are the same name). Resolution is per object: a duplicate inside `params` never changes an object nested within it, and the other way around. This rule applies to the body and, through it, to `params` and `params.arguments` (03 section 3); it does not apply to the registry and policy documents of sections 1 and 3 or to the state file, whose loaders are operator-facing and have their own rules. Authentication is unaffected: the signature covers the exact request bytes (01 section 3.1), so a body with duplicate members is verified exactly as sent, never as parsed and re-serialized.
+
 Every authorization rejection still counts as having consumed the request's nonce.
 
 | Status | `code` | Meaning |

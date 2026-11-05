@@ -13280,6 +13280,374 @@
           }
         }
       ]
+    },
+    {
+      "id": "invite-create-ttl-dup-invalid-then-valid",
+      "description": "a duplicated ttl_seconds member keeps the last occurrence: 1.5 then 60",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ],
+        "invites": [],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU,ts=1767225600,nonce=Fa0Ywc51VCULZLYBYiNF9w,sig=AUN3JukpqLaUapfmJli5t0sWcNZmjpzRLNqtdKaL1BGsKLeuU4SvxoFGBJZLB_dnyhbSoZS_rxetOOQ8G7KUDA"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suYWRtaW4uaW52aXRlLmNyZWF0ZSIsImFyZ3VtZW50cyI6eyJzY29wZXMiOlsicmVhZCJdLCJ0dGxfc2Vjb25kcyI6MS41LCJ0dGxfc2Vjb25kcyI6NjB9fX0",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.admin.invite.create\",\"arguments\":{\"scopes\":[\"read\"],\"ttl_seconds\":1.5,\"ttl_seconds\":60}}}"
+          },
+          "expect": {
+            "result": "accept",
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "structured": {
+              "invite_id": "<b64u43>",
+              "code": "<b64u43>",
+              "expires_at": 1767225660
+            },
+            "audit": {
+              "tool": "jack.admin.invite.create",
+              "outcome": "success",
+              "code": null,
+              "actor_kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU"
+            },
+            "nonce_recorded": true,
+            "after": {
+              "users": [
+                {
+                  "name": "root",
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "kind": "human",
+                  "scopes": [
+                    "admin",
+                    "config:write",
+                    "lifecycle",
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": 1
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+              "1767225600",
+              "Fa0Ywc51VCULZLYBYiNF9w",
+              "d3fxdKveOTeN9Ek37eZr7UDBxSZn8s4hqQWZRr7QvKA"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "invite-create-ttl-dup-valid-then-invalid",
+      "description": "the same duplicated pair in the other order: 60 then 1.5",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ],
+        "invites": [],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU,ts=1767225600,nonce=MS-j9vN4ZUya5RVB7mtEGA,sig=kIcB2X_mnAQjSWtDGR99tqv8L2NUKRpUi4ubKcAKI4rkg1tOZVhxAwNZ79k0PyToxVUTpQhE5VG5cX101jzbBQ"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suYWRtaW4uaW52aXRlLmNyZWF0ZSIsImFyZ3VtZW50cyI6eyJzY29wZXMiOlsicmVhZCJdLCJ0dGxfc2Vjb25kcyI6NjAsInR0bF9zZWNvbmRzIjoxLjV9fX0",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.admin.invite.create\",\"arguments\":{\"scopes\":[\"read\"],\"ttl_seconds\":60,\"ttl_seconds\":1.5}}}"
+          },
+          "expect": {
+            "result": "reject",
+            "http_status": 400,
+            "code": "invalid_params",
+            "audit": {
+              "tool": "jack.admin.invite.create",
+              "outcome": "failure",
+              "code": "invalid_params",
+              "actor_kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU"
+            },
+            "nonce_recorded": true,
+            "after": {
+              "users": [
+                {
+                  "name": "root",
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "kind": "human",
+                  "scopes": [
+                    "admin",
+                    "config:write",
+                    "lifecycle",
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": 0
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+              "1767225600",
+              "MS-j9vN4ZUya5RVB7mtEGA",
+              "-2tI5OvU7olKmEzmjCsO84ITz1FEJBNmq-X4rV1Ry8Y"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "invite-create-arguments-dup-invalid-then-valid",
+      "description": "a duplicated arguments object keeps the last one: invalid scopes then valid scopes",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ],
+        "invites": [],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU,ts=1767225600,nonce=WKeCL4DXih5MFf2U7LTmRQ,sig=5lfsHCAUDxOOSTVlWqKmNkAk1XPp1_HKTku2FChu5aKEclYiBVqFxTIsUvKT__tHDBbTjVpfb2wCzBWahxDiBQ"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suYWRtaW4uaW52aXRlLmNyZWF0ZSIsImFyZ3VtZW50cyI6eyJzY29wZXMiOiJyZWFkIn0sImFyZ3VtZW50cyI6eyJzY29wZXMiOlsicmVhZCJdfX19",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.admin.invite.create\",\"arguments\":{\"scopes\":\"read\"},\"arguments\":{\"scopes\":[\"read\"]}}}"
+          },
+          "expect": {
+            "result": "accept",
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "structured": {
+              "invite_id": "<b64u43>",
+              "code": "<b64u43>",
+              "expires_at": 1767229200
+            },
+            "audit": {
+              "tool": "jack.admin.invite.create",
+              "outcome": "success",
+              "code": null,
+              "actor_kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU"
+            },
+            "nonce_recorded": true,
+            "after": {
+              "users": [
+                {
+                  "name": "root",
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "kind": "human",
+                  "scopes": [
+                    "admin",
+                    "config:write",
+                    "lifecycle",
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": 1
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+              "1767225600",
+              "WKeCL4DXih5MFf2U7LTmRQ",
+              "7YIoG6M7AMa-_u1umUyrRUZCfbznVK968NCz-hjIMNY"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "invite-create-arguments-sibling-members-not-merged",
+      "description": "duplicate arguments are not merged: the last object alone cannot borrow the earlier scopes",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ],
+        "invites": [],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU,ts=1767225600,nonce=poiPNnwmO6WzL-bekCXxtA,sig=6woKi7BZ7WjmsOx4fPakWz5K62YU07YM7Lq7UZKdEBY-mHnkKpdBHvHI_XFn-8ZM1TcvvK156TjqMk111wfLDg"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suYWRtaW4uaW52aXRlLmNyZWF0ZSIsImFyZ3VtZW50cyI6eyJzY29wZXMiOlsicmVhZCJdfSwiYXJndW1lbnRzIjp7InR0bF9zZWNvbmRzIjo2MH19fQ",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.admin.invite.create\",\"arguments\":{\"scopes\":[\"read\"]},\"arguments\":{\"ttl_seconds\":60}}}"
+          },
+          "expect": {
+            "result": "reject",
+            "http_status": 400,
+            "code": "invalid_params",
+            "audit": {
+              "tool": "jack.admin.invite.create",
+              "outcome": "failure",
+              "code": "invalid_params",
+              "actor_kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU"
+            },
+            "nonce_recorded": true,
+            "after": {
+              "users": [
+                {
+                  "name": "root",
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "kind": "human",
+                  "scopes": [
+                    "admin",
+                    "config:write",
+                    "lifecycle",
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": 0
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+              "1767225600",
+              "poiPNnwmO6WzL-bekCXxtA",
+              "T_9DniI9mqRz3rgJ8gYS5oPNEFTwpwliCdvnFzSJccg"
+            ]
+          }
+        }
+      ]
     }
   ]
 }
