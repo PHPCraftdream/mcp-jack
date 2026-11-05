@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
@@ -85,4 +86,28 @@ func SaveProfile(w io.Writer, p Profile) error {
 // ServerKeyBytes returns the decoded 32-byte server public key.
 func (p Profile) ServerKeyBytes() ([]byte, error) {
 	return jack.DecodeBase64URLFixed(p.ServerPublicKey, 32)
+}
+
+// NewClientFromProfile validates p and builds a Client for it. httpc is the
+// optional caller-supplied HTTP client (Config.HTTP); it MUST itself use a
+// configured signed *Transport, and nil selects the built-in one. The Rust
+// and TS SDKs expose the same constructor (Client::from_profile /
+// clientFromProfile).
+func NewClientFromProfile(p Profile, signer Signer, httpc *http.Client) (*Client, error) {
+	if err := validateProfile(p); err != nil {
+		return nil, err
+	}
+	serverKey, err := p.ServerKeyBytes()
+	if err != nil {
+		// validateProfile already accepted this key, so this is unreachable
+		// in practice; kept so a decode failure can never pass a short key on.
+		return nil, fmt.Errorf("jack client: profile server_public_key: %w", err)
+	}
+	return NewClient(Config{
+		BaseURL:   p.URL,
+		Aud:       p.Aud,
+		Signer:    signer,
+		ServerKey: serverKey,
+		HTTP:      httpc,
+	})
 }

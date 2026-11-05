@@ -183,12 +183,13 @@ func main() {
 		primary:     primary,
 		primaryName: primaryName,
 		rawHTTP:     &http.Client{Timeout: 15 * time.Second},
+		typedStash:  &wireStash{inner: http.DefaultTransport},
 		clients:     map[string]*client.Client{},
 	}
-	// One shared signed transport; per-request signer overrides in the SDK
-	// call path (enroll/rotate) still apply on top of the default primary.
+	// One shared signed transport; the base is the stashing wire transport
+	// so raw 401 bodies land in the stash without reaching the SDK.
 	e.typedHTTP = &http.Client{
-		Transport: client.NewTransport(nil, aud, primary, serverKey),
+		Transport: client.NewTransport(e.typedStash, aud, primary, serverKey),
 		Timeout:   15 * time.Second,
 	}
 

@@ -64,8 +64,9 @@ func fixtureBody(t *testing.T, step spec.Step) []byte {
 }
 
 // newFixtureClient builds a Client pinned to srv with the given signer and
-// fixture nonce, clocked at fixtureNow.
-func newFixtureClient(t *testing.T, srv *testServer, signer Signer, nonceB64 string) *Client {
+// one queued nonce per call (variadic: a test making N calls queues N
+// nonces), clocked at fixtureNow.
+func newFixtureClient(t *testing.T, srv *testServer, signer Signer, nonceB64 ...string) *Client {
 	t.Helper()
 	u, err := url.Parse(srv.URL)
 	if err != nil {
@@ -79,7 +80,7 @@ func newFixtureClient(t *testing.T, srv *testServer, signer Signer, nonceB64 str
 		ServerKey: srv.Pub,
 		Now:       fixedClock(fixtureNow),
 		Window:    30 * time.Second,
-		Nonce:     queuedNonce(t, nonceB64),
+		Nonce:     queuedNonce(t, nonceB64...),
 	})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -267,7 +268,7 @@ func TestAdminListDecodesWrappers(t *testing.T) {
 			`{"invites":[{"invite_id":"iv1","scopes":["read"],"kind":"human","created_by":"k1","created_at":1767225500,"expires_at":1767228600}]}`)))
 	}
 
-	client := newFixtureClient(t, srv, seedSignerByName(t, "alice"), "assryd677-uYrqD4v-7HYw")
+	client := newFixtureClient(t, srv, seedSignerByName(t, "alice"), "assryd677-uYrqD4v-7HYw", "assryd677-uYrqD4v-7HYw")
 
 	users, err := client.AdminUserList(context.Background())
 	if err != nil {

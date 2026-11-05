@@ -98,6 +98,25 @@ func decodeState(data []byte) (*stateDocument, error) {
 			return nil, fmt.Errorf("%w: invite %s has no scopes array", ErrStateCorrupt, v.InviteID)
 		}
 	}
+	// spec 02 section 1: kind defaults to human. A plain string field decodes
+	// an omitted, an explicit-null and an explicit-"" kind all as "", so a
+	// pointer-typed shadow pass tells them apart: only omitted and null
+	// normalize to human; an explicit "" stays and validateKeys rejects it.
+	// Stored-registry rule only: a null kind in tool arguments stays
+	// invalid_params (spec 03).
+	var shadow struct {
+		Keys []struct {
+			Kind *string `json:"kind"`
+		} `json:"keys"`
+	}
+	if err := json.Unmarshal(data, &shadow); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrStateCorrupt, err)
+	}
+	for i := range doc.Keys {
+		if doc.Keys[i].Kind == "" && (i >= len(shadow.Keys) || shadow.Keys[i].Kind == nil) {
+			doc.Keys[i].Kind = KindHuman
+		}
+	}
 	if err := validateKeys(doc.Keys); err != nil {
 		return nil, err
 	}
@@ -108,6 +127,8 @@ func decodeState(data []byte) (*stateDocument, error) {
 // section 1: name shape and uniqueness, kind, scope shape and distinctness,
 // the agent/admin exclusion, validity intervals, kid = base64url(SHA-256(
 // public_key)), and the public-key validity rules of 03 section 2.
+// A missing or null kind never reaches this check: decodeState defaults it to
+// human (spec 02 section 1).
 func validateKeys(keys []RegistryEntry) error {
 	seenNames := make(map[string]bool, len(keys))
 	for i := range keys {

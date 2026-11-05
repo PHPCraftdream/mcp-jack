@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime"
 	"net/http"
+	"strings"
 	"time"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
@@ -20,17 +20,15 @@ import (
 var ErrStreamingUnsupported = errors.New("jack client: streaming responses cannot be verified and are refused (spec 01 section 5, open question Q1)")
 
 // UnauthenticatedResponseError reports a 401 answered WITHOUT a verified
-// Jack-Auth header: only the HTTP status and the error code/message parsed
-// from the JSON body are surfaced, and the body itself is not trusted
-// (spec 01 section 4 rules and section 5).
+// Jack-Auth header. Per spec 01 section 5 a client MUST NOT act on an
+// unsigned response beyond reporting its status, so only the status is
+// surfaced and the body is never parsed (the Rust client does the same).
 type UnauthenticatedResponseError struct {
-	Status  int
-	Code    string
-	Message string
+	Status int
 }
 
 func (e *UnauthenticatedResponseError) Error() string {
-	return fmt.Sprintf("jack client: unauthenticated response: status %d, code %s: %s", e.Status, e.Code, e.Message)
+	return fmt.Sprintf("jack client: unauthenticated response: status %d", e.Status)
 }
 
 type signerKeyType struct{}
@@ -161,11 +159,9 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	// Streaming guard BEFORE buffering: a stream cannot be verified (spec 01
 	// section 5, open question Q1).
-	if ct := resp.Header.Get("Content-Type"); ct != "" {
-		if mediaType, _, pErr := mime.ParseMediaType(ct); pErr == nil && mediaType == "text/event-stream" {
-			_ = resp.Body.Close()
-			return nil, ErrStreamingUnsupported
-		}
+	if isEventStream(resp.Header.Get("Content-Type")) {
+		_ = resp.Body.Close()
+		return nil, ErrStreamingUnsupported
 	}
 
 	respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
@@ -181,10 +177,9 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if vErr := VerifyResponse(t.ServerKey, resp.StatusCode, resp.Header.Values("Jack-Auth"), auth.Sig, respBody, now(), window); vErr != nil {
 		var jErr *jack.Error
 		if errors.As(vErr, &jErr) && jErr.Code == jack.CodeMissingAuth && resp.StatusCode == http.StatusUnauthorized {
-			// The unsigned 401 body is a hint only: surface status+code,
-			// never trust the content (spec 01 sections 4 and 5).
-			code, message := parseErrorBody(respBody)
-			return nil, &UnauthenticatedResponseError{Status: resp.StatusCode, Code: code, Message: message}
+			// Spec 01 section 5: an unsigned answer is acted on only up to
+			// its status — the body is never parsed or trusted.
+			return nil, &UnauthenticatedResponseError{Status: resp.StatusCode}
 		}
 		return nil, vErr
 	}
@@ -192,4 +187,28 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp.Body = io.NopCloser(bytes.NewReader(respBody))
 	resp.ContentLength = int64(len(respBody))
 	return resp, nil
+}
+
+// isEventStream reports whether a Content-Type value declares the media type
+// text/event-stream: the part before the first ';', trimmed, ASCII-lowercased.
+// mime.ParseMediaType is deliberately not used: a malformed parameter list
+// must not stop the refusal of an unverifiable stream (spec 01 section 5,
+// open question Q1; same rule as the server-side check in server/middleware.go).
+func isEventStream(contentType string) bool {
+	if i := strings.IndexByte(contentType, ';'); i >= 0 {
+		contentType = contentType[:i]
+	}
+	return asciiLower(strings.TrimSpace(contentType)) == "text/event-stream"
+}
+
+// asciiLower maps ASCII uppercase letters to lowercase, leaving all other
+// bytes unchanged.
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i := range b {
+		if b[i] >= 'A' && b[i] <= 'Z' {
+			b[i] += 'a' - 'A'
+		}
+	}
+	return string(b)
 }

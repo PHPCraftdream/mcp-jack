@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
@@ -39,7 +40,66 @@ type env struct {
 	primaryName string
 	typedHTTP   *http.Client
 	rawHTTP     *http.Client
+	typedStash  *wireStash
 	clients     map[string]*client.Client
+}
+
+// wireStash is the raw wire transport under the shared signed client. The
+// SDK never exposes the body of an unsigned 401 (spec 01 section 5), but
+// interop outcomes must still report that response's wire code, so the raw
+// body bytes are captured here — the Go mirror of the Rust interop client's
+// TcpTransport response stash (rust/src/bin/interop/net.rs).
+type wireStash struct {
+	inner http.RoundTripper
+
+	mu   sync.Mutex
+	last []byte
+}
+
+func (s *wireStash) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := s.inner.RoundTrip(req)
+	if err != nil || resp == nil {
+		return resp, err
+	}
+	buf := &bytes.Buffer{}
+	resp.Body = &stashBody{rc: resp.Body, buf: buf, stash: s.record}
+	return resp, nil
+}
+
+func (s *wireStash) record(body []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.last = body
+}
+
+// lastBody returns the body bytes of the most recent wire response.
+func (s *wireStash) lastBody() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.last
+}
+
+// stashBody tees every read into buf and hands the captured bytes to stash on
+// Close. The signed transport fully reads and closes every body before it
+// classifies the response, so the stash is populated before any outcome that
+// consults it.
+type stashBody struct {
+	rc    io.ReadCloser
+	buf   *bytes.Buffer
+	stash func([]byte)
+}
+
+func (b *stashBody) Read(p []byte) (int, error) {
+	n, err := b.rc.Read(p)
+	if n > 0 {
+		b.buf.Write(p[:n])
+	}
+	return n, err
+}
+
+func (b *stashBody) Close() error {
+	b.stash(b.buf.Bytes())
+	return b.rc.Close()
 }
 
 // authFailureCodes: the only responses that may be unsigned (spec 01
@@ -268,7 +328,7 @@ func (e *env) typedRawCall(signer client.Signer, tool string, args map[string]an
 	if err != nil {
 		// Verification failures surface as transport errors; a returned
 		// response is already signature-verified by the transport.
-		return classifyTransportError(err)
+		return e.classifyTransportError(err)
 	}
 	respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20+1))
 	_ = resp.Body.Close()
@@ -282,18 +342,20 @@ func (e *env) typedRawCall(signer client.Signer, tool string, args map[string]an
 }
 
 // classifyTransportError maps an error returned by the shared signed
-// transport: an unsigned 401 whose body code is one of the auth-failure
+// transport: an unsigned 401 whose wire body code is one of the auth-failure
 // codes is a wire rejection; any other unsigned 401 must not be acted on
 // beyond its status (spec 01 section 5: absent header is missing_auth), and
 // any other verification failure is client_error. Everything else is a
-// harness-level failure.
-func classifyTransportError(err error) stepResult {
+// harness-level failure. The wire code comes from the typedStash: the SDK
+// deliberately never parses an unsigned 401 body.
+func (e *env) classifyTransportError(err error) stepResult {
 	var uErr *client.UnauthenticatedResponseError
 	var jErr *jack.Error
 	switch {
 	case errors.As(err, &uErr):
-		if authFailureCodes[uErr.Code] {
-			return stepResult{kind: "rejected", status: uErr.Status, hasStatus: true, code: uErr.Code}
+		wireCode := parseErrorBody(e.typedStash.lastBody())
+		if authFailureCodes[wireCode] {
+			return stepResult{kind: "rejected", status: uErr.Status, hasStatus: true, code: wireCode}
 		}
 		return stepResult{kind: "client_error", code: jack.CodeMissingAuth}
 	case errors.As(err, &jErr):
@@ -305,7 +367,7 @@ func classifyTransportError(err error) stepResult {
 }
 
 // sdkStep classifies one SDK typed call.
-func sdkStep(data any, err error) stepResult {
+func (e *env) sdkStep(data any, err error) stepResult {
 	var hErr *client.HTTPError
 	var uErr *client.UnauthenticatedResponseError
 	var rErr *client.RPCError
@@ -317,10 +379,13 @@ func sdkStep(data any, err error) stepResult {
 		return stepResult{kind: "rejected", status: hErr.Status, hasStatus: true, code: hErr.Code}
 	case errors.As(err, &uErr):
 		// The transport only maps an unsigned (missing_auth) 401 to this
-		// type: a 401 with an auth-failure code is a wire rejection; any
-		// other unsigned 401 is a client-side anomaly (spec 01 section 5).
-		if authFailureCodes[uErr.Code] {
-			return stepResult{kind: "rejected", status: uErr.Status, hasStatus: true, code: uErr.Code}
+		// type: a 401 with an auth-failure wire body code is a wire
+		// rejection; any other unsigned 401 is a client-side anomaly
+		// (spec 01 section 5). The wire code comes from the typedStash —
+		// the SDK never parses the unsigned body itself.
+		wireCode := parseErrorBody(e.typedStash.lastBody())
+		if authFailureCodes[wireCode] {
+			return stepResult{kind: "rejected", status: uErr.Status, hasStatus: true, code: wireCode}
 		}
 		return stepResult{kind: "client_error", code: jack.CodeMissingAuth}
 	case errors.As(err, &rErr):
@@ -452,11 +517,11 @@ var scenarios = map[string]func(*env) stepResult{
 	"enroll": func(e *env) stepResult {
 		ctx := context.Background()
 		inv, err := e.typed("root").AdminInviteCreate(ctx, client.InviteCreateParams{Scopes: []string{"read"}})
-		if out, ok := requireIntermediate(0, false, 0, "", sdkStep(nil, err)); !ok {
+		if out, ok := requireIntermediate(0, false, 0, "", e.sdkStep(nil, err)); !ok {
 			return out
 		}
 		_, err = e.typed(e.primaryName).Enroll(ctx, inv.Code, "newbie", e.signer(e.primaryName))
-		if out, ok := requireIntermediate(1, false, 0, "", sdkStep(nil, err)); !ok {
+		if out, ok := requireIntermediate(1, false, 0, "", e.sdkStep(nil, err)); !ok {
 			return out
 		}
 		return e.typedRawCall(e.signer(e.primaryName), client.ToolWhoAmI, nil)
@@ -464,11 +529,11 @@ var scenarios = map[string]func(*env) stepResult{
 	"enroll-used-invite": func(e *env) stepResult {
 		ctx := context.Background()
 		inv, err := e.typed("root").AdminInviteCreate(ctx, client.InviteCreateParams{Scopes: []string{"read"}})
-		if out, ok := requireIntermediate(0, false, 0, "", sdkStep(nil, err)); !ok {
+		if out, ok := requireIntermediate(0, false, 0, "", e.sdkStep(nil, err)); !ok {
 			return out
 		}
 		_, err = e.typed("newbie").Enroll(ctx, inv.Code, "newbie", e.signer("newbie"))
-		if out, ok := requireIntermediate(1, false, 0, "", sdkStep(nil, err)); !ok {
+		if out, ok := requireIntermediate(1, false, 0, "", e.sdkStep(nil, err)); !ok {
 			return out
 		}
 		return e.typedRawCall(e.signer(e.primaryName), client.ToolEnroll, map[string]any{
@@ -480,12 +545,12 @@ var scenarios = map[string]func(*env) stepResult{
 	"rotate": func(e *env) stepResult {
 		ctx := context.Background()
 		_, err := e.typed(e.primaryName).RotateKey(ctx, e.signer("newbie"))
-		if out, ok := requireIntermediate(0, false, 0, "", sdkStep(nil, err)); !ok {
+		if out, ok := requireIntermediate(0, false, 0, "", e.sdkStep(nil, err)); !ok {
 			return out
 		}
 		// The old alice key must now be dead (unsigned 401 unknown_key).
 		_, err = e.typed(e.primaryName).WhoAmI(ctx)
-		if out, ok := requireIntermediate(1, true, http.StatusUnauthorized, "unknown_key", sdkStep(nil, err)); !ok {
+		if out, ok := requireIntermediate(1, true, http.StatusUnauthorized, "unknown_key", e.sdkStep(nil, err)); !ok {
 			return out
 		}
 		return e.typedRawCall(e.signer("newbie"), client.ToolWhoAmI, nil)
@@ -493,7 +558,7 @@ var scenarios = map[string]func(*env) stepResult{
 	"admin-create": func(e *env) stepResult {
 		ctx := context.Background()
 		inv, err := e.typed("root").AdminInviteCreate(ctx, client.InviteCreateParams{Scopes: []string{"read"}})
-		if out, ok := requireIntermediate(0, false, 0, "", sdkStep(nil, err)); !ok {
+		if out, ok := requireIntermediate(0, false, 0, "", e.sdkStep(nil, err)); !ok {
 			return out
 		}
 		_, err = e.typed("root").AdminUserCreate(ctx, client.UserCreateParams{
@@ -501,11 +566,11 @@ var scenarios = map[string]func(*env) stepResult{
 			PublicKey: jack.EncodeBase64URL(e.signer(e.primaryName).PublicKey()),
 			Scopes:    []string{"read"},
 		})
-		if out, ok := requireIntermediate(1, false, 0, "", sdkStep(nil, err)); !ok {
+		if out, ok := requireIntermediate(1, false, 0, "", e.sdkStep(nil, err)); !ok {
 			return out
 		}
 		_, err = e.typed("newbie").Enroll(ctx, inv.Code, "newbie", e.signer("newbie"))
-		if out, ok := requireIntermediate(2, false, 0, "", sdkStep(nil, err)); !ok {
+		if out, ok := requireIntermediate(2, false, 0, "", e.sdkStep(nil, err)); !ok {
 			return out
 		}
 		return e.typedRawCall(e.signer(e.primaryName), client.ToolWhoAmI, nil)
@@ -513,7 +578,7 @@ var scenarios = map[string]func(*env) stepResult{
 	"revoke-key": func(e *env) stepResult {
 		ctx := context.Background()
 		_, err := e.typed("root").AdminUserRevoke(ctx, e.kid("bob"))
-		if out, ok := requireIntermediate(0, false, 0, "", sdkStep(nil, err)); !ok {
+		if out, ok := requireIntermediate(0, false, 0, "", e.sdkStep(nil, err)); !ok {
 			return out
 		}
 		return e.typedRawCall(e.signer(e.primaryName), client.ToolWhoAmI, nil)

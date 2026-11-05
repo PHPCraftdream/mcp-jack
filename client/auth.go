@@ -2,6 +2,7 @@ package client
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"time"
 
@@ -83,6 +84,14 @@ func VerifyResponse(serverKey []byte, status int, headerValues []string, request
 
 	auth, err := jack.ParseResponseAuth(headerValues)
 	if err != nil {
+		// Spec 01 section 5: client-side verification failures never become
+		// HTTP responses, so they carry no status. The shared parser assigns
+		// its wire 401 for the server-side path, so remap it to 0 here
+		// (mirror of the Rust verify_response remap).
+		var jErr *jack.Error
+		if errors.As(err, &jErr) {
+			return &jack.Error{HTTPStatus: 0, Code: jErr.Code, Message: jErr.Message}
+		}
 		return err
 	}
 	if auth.Kid != jack.KeyID(serverKey) {

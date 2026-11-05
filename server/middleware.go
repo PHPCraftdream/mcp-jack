@@ -6,9 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"mime"
 	"net/http"
 	"strconv"
+	"strings"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
 )
@@ -164,7 +164,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, body []byte, r
 	bw := &bufferedWriter{header: http.Header{}}
 	h.next.ServeHTTP(bw, inner)
 
-	if mediaType, _, err := mime.ParseMediaType(bw.header.Get("Content-Type")); err == nil && mediaType == "text/event-stream" {
+	if isEventStream(bw.header.Get("Content-Type")) {
 		header := http.Header{}
 		header.Set("Content-Type", "application/json")
 		h.writeSigned(w, http.StatusNotImplemented, header, errorBody("streaming_unsupported", "streaming responses cannot be signed in v0.1"), res.RequestSig)
@@ -244,4 +244,28 @@ func (b *bufferedWriter) Write(p []byte) (int, error) {
 		b.status = http.StatusOK
 	}
 	return b.body.Write(p)
+}
+
+// isEventStream reports whether a Content-Type value declares the media type
+// text/event-stream: the part before the first ';', trimmed, ASCII-lowercased.
+// mime.ParseMediaType is deliberately not used: a malformed parameter list
+// must not stop the refusal of an unsignable stream (spec README Q1; same
+// rule as the client-side check in client/transport.go).
+func isEventStream(contentType string) bool {
+	if i := strings.IndexByte(contentType, ';'); i >= 0 {
+		contentType = contentType[:i]
+	}
+	return asciiLower(strings.TrimSpace(contentType)) == "text/event-stream"
+}
+
+// asciiLower maps ASCII uppercase letters to lowercase, leaving all other
+// bytes unchanged.
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i := range b {
+		if b[i] >= 'A' && b[i] <= 'Z' {
+			b[i] += 'a' - 'A'
+		}
+	}
+	return string(b)
 }

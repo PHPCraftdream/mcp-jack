@@ -107,12 +107,6 @@ func TestTransportUnsigned401SurfacesError(t *testing.T) {
 	if ue.Status != http.StatusUnauthorized {
 		t.Fatalf("Status = %d, want 401", ue.Status)
 	}
-	if ue.Code != "unknown_key" {
-		t.Fatalf("Code = %q, want unknown_key", ue.Code)
-	}
-	if ue.Message != "nope" {
-		t.Fatalf("Message = %q, want nope", ue.Message)
-	}
 }
 
 func TestTransportSigned401PassesThrough(t *testing.T) {
