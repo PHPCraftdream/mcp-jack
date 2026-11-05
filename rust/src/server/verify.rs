@@ -159,6 +159,12 @@ impl Verifier {
         }
     }
 
+    /// Verifier clock, Unix seconds (Go: cfg.Now); the HTTP adapter reads it
+    /// so response signing uses exactly the verifier's time source.
+    pub fn now(&self) -> i64 {
+        (self.cfg.now)()
+    }
+
     /// Runs the pipeline of spec 01 section 4 and spec 02 section 4 on one
     /// request. Stops at the first failing step; a rejection never reveals
     /// more than its code.
