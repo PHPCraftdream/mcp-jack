@@ -1,0 +1,47 @@
+{
+  "note": "TEST ONLY. Seeds are sha256(\"mcp-jack test key: <name>\"). Never use these keys outside tests.",
+  "keys": [
+    {
+      "name": "alice",
+      "seed_hex": "15949421ee8241acde219c4cff93cc346a0488e049deff61da312798b758d28f",
+      "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+      "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs"
+    },
+    {
+      "name": "bob",
+      "seed_hex": "7eb4f89033dfe79db5a8fdaa667361b768722d619b62f531fba0cae9714a351b",
+      "public_key": "27O5sjd6_PRkCVbNLwEbIwxpfh0DZCURwFI9lWF-UHE",
+      "kid": "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns"
+    },
+    {
+      "name": "carol",
+      "seed_hex": "50d2c03eab0770775c84772e131000ba021d8a1716629b068a85b273cca17fbb",
+      "public_key": "r1DLsXDIaAY-rmPFCzV9dgAxes6dpdXkOrJNHiFkQl4",
+      "kid": "bu9N_ld9z81i0mvxfKO0bgHdiYjZx7jBF8sd8DTo9gc"
+    },
+    {
+      "name": "erin",
+      "seed_hex": "8e1f127a749e6caa8bec33e8fe1d685b1327e35a38307f31b8960f5a5db85aa6",
+      "public_key": "axZb1B_q1F6s3zc6V0glCNJMJJSHy-nrRRRJwPFU3rY",
+      "kid": "EO02KVTMv4Y2l4PhmwUsLHNMcdRTCoMClOs-tP6TO68"
+    },
+    {
+      "name": "frank",
+      "seed_hex": "49686a056bda82669d988aaf1a70bb4c8240b91d340aea641295fa72b05884c2",
+      "public_key": "aCS3Iwv_1ZGPZRsGtUKK-5yJx5Q8jk8q0FveD4kLO1Q",
+      "kid": "RqSoWowFxe1uB6c58AVUAxxlAgGufdo1pwXxaZkqEjA"
+    },
+    {
+      "name": "mallory",
+      "seed_hex": "d21cc781e50666f47925cf9b57bcd9912a8d51f016176a9459c7ff3cb1778775",
+      "public_key": "QYZ7EHNZ_bwWbIPSTIXFRtggHD7_HXFqYSqmj1_xEPU",
+      "kid": "nhm6mvruffGPDQX7NHE8mbh7yD4Z_AndUTr_AOgYiLQ"
+    },
+    {
+      "name": "svc",
+      "seed_hex": "cc9e39e830a43e09c6372b14852ef80a2bb8e7b1aa4c04bf076f33e0aad2c901",
+      "public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+      "kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88"
+    }
+  ]
+}

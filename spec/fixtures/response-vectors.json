@@ -1,0 +1,358 @@
+{
+  "cases": [
+    {
+      "id": "res-accept",
+      "description": "valid response",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "pinned_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+        "pinned_server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+        "request_sig": "073wXcn4T4qXT5Npvsty5VXWhmAuDGCZOFZYalOTgE0i7Voqwh_U8aIy5knbM6XBUp3Ds2LuaPKdtVDf7fbzBw"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88,ts=1767225600,sig=yAAvddRdbPKdE30BW-KF-iteYLd1SpB8V_dNl6UcUdAxQgwl_vvLhuwzbVlnnwl_5auXTk6DcXHZfvNffvo2Ag"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsInJlc3VsdCI6eyJvayI6dHJ1ZX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}"
+      },
+      "expect": {
+        "result": "accept"
+      }
+    },
+    {
+      "id": "res-accept-empty-body",
+      "description": "204 with empty body",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "pinned_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+        "pinned_server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+        "request_sig": "073wXcn4T4qXT5Npvsty5VXWhmAuDGCZOFZYalOTgE0i7Voqwh_U8aIy5knbM6XBUp3Ds2LuaPKdtVDf7fbzBw"
+      },
+      "response": {
+        "status": 204,
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88,ts=1767225600,sig=2_Lp4Y33sfZaG6p6qG169lmIfOCCrsa7HfTPzzEY8Y63udcFvB-0G3dMitOxYPtJzlM_nOtxUX0pCCWCee-4Bg"
+          ]
+        ],
+        "body_b64u": ""
+      },
+      "expect": {
+        "result": "accept"
+      }
+    },
+    {
+      "id": "res-accept-ts-boundary-past",
+      "description": "ts = now - window",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "pinned_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+        "pinned_server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+        "request_sig": "073wXcn4T4qXT5Npvsty5VXWhmAuDGCZOFZYalOTgE0i7Voqwh_U8aIy5knbM6XBUp3Ds2LuaPKdtVDf7fbzBw"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88,ts=1767225570,sig=vM1gc6pM6F5VOk2wpwJYCSNu6HBhlfpCzqs5z33AhLiv5n2fdgK2t_qWfmefyjZyYAufH28iPtxMUupgvNpJAQ"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsInJlc3VsdCI6eyJvayI6dHJ1ZX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}"
+      },
+      "expect": {
+        "result": "accept"
+      }
+    },
+    {
+      "id": "res-accept-ts-boundary-future",
+      "description": "ts = now + window",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "pinned_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+        "pinned_server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+        "request_sig": "073wXcn4T4qXT5Npvsty5VXWhmAuDGCZOFZYalOTgE0i7Voqwh_U8aIy5knbM6XBUp3Ds2LuaPKdtVDf7fbzBw"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88,ts=1767225630,sig=_le61c9U-ouyv7dKsr6E_s4A-MN76ziaKByAdaC5rR-gmYnmSsNT8GGZeHYruopuA4DtYmtcFYfX_QkDwPDjCg"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsInJlc3VsdCI6eyJvayI6dHJ1ZX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}"
+      },
+      "expect": {
+        "result": "accept"
+      }
+    },
+    {
+      "id": "res-missing-header",
+      "description": "no Jack-Auth header",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "pinned_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+        "pinned_server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+        "request_sig": "073wXcn4T4qXT5Npvsty5VXWhmAuDGCZOFZYalOTgE0i7Voqwh_U8aIy5knbM6XBUp3Ds2LuaPKdtVDf7fbzBw"
+      },
+      "response": {
+        "status": 200,
+        "headers": [],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsInJlc3VsdCI6eyJvayI6dHJ1ZX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}"
+      },
+      "expect": {
+        "result": "reject",
+        "code": "missing_auth"
+      }
+    },
+    {
+      "id": "res-unsupported-version",
+      "description": "version v2",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "pinned_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+        "pinned_server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+        "request_sig": "073wXcn4T4qXT5Npvsty5VXWhmAuDGCZOFZYalOTgE0i7Voqwh_U8aIy5knbM6XBUp3Ds2LuaPKdtVDf7fbzBw"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "Jack-Auth",
+            "v2 kid=wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88,ts=1767225600,sig=yAAvddRdbPKdE30BW-KF-iteYLd1SpB8V_dNl6UcUdAxQgwl_vvLhuwzbVlnnwl_5auXTk6DcXHZfvNffvo2Ag"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsInJlc3VsdCI6eyJvayI6dHJ1ZX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}"
+      },
+      "expect": {
+        "result": "reject",
+        "code": "unsupported_version"
+      }
+    },
+    {
+      "id": "res-malformed-nonce-param",
+      "description": "nonce is not a response parameter",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "pinned_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+        "pinned_server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+        "request_sig": "073wXcn4T4qXT5Npvsty5VXWhmAuDGCZOFZYalOTgE0i7Voqwh_U8aIy5knbM6XBUp3Ds2LuaPKdtVDf7fbzBw"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88,ts=1767225600,sig=yAAvddRdbPKdE30BW-KF-iteYLd1SpB8V_dNl6UcUdAxQgwl_vvLhuwzbVlnnwl_5auXTk6DcXHZfvNffvo2Ag,nonce=JmoaFxuPkss53rAMQIARCQ"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsInJlc3VsdCI6eyJvayI6dHJ1ZX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}"
+      },
+      "expect": {
+        "result": "reject",
+        "code": "malformed_auth"
+      }
+    },
+    {
+      "id": "res-unknown-server-key",
+      "description": "kid is not the pinned server key",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "pinned_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+        "pinned_server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+        "request_sig": "073wXcn4T4qXT5Npvsty5VXWhmAuDGCZOFZYalOTgE0i7Voqwh_U8aIy5knbM6XBUp3Ds2LuaPKdtVDf7fbzBw"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=nhm6mvruffGPDQX7NHE8mbh7yD4Z_AndUTr_AOgYiLQ,ts=1767225600,sig=Ck7UN-Jj0OsQAb13l17kwRKTDIqDYMoZj4fg1mHIafJD_LLaZWtuBSm1_Vg0bNySHZ_yEshma-QQfvdHAhOFCA"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsInJlc3VsdCI6eyJvayI6dHJ1ZX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}"
+      },
+      "expect": {
+        "result": "reject",
+        "code": "unknown_server_key"
+      }
+    },
+    {
+      "id": "res-ts-too-old",
+      "description": "ts = now - window - 1",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "pinned_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+        "pinned_server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+        "request_sig": "073wXcn4T4qXT5Npvsty5VXWhmAuDGCZOFZYalOTgE0i7Voqwh_U8aIy5knbM6XBUp3Ds2LuaPKdtVDf7fbzBw"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88,ts=1767225569,sig=60NL2VB2kwWcCmGOrbrR6Gq5aRjh9cL4L9tlch2S96tyvsemV24i4OiY_g3iSkRQEBh08B2RmkcXIZRCm9mJBA"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsInJlc3VsdCI6eyJvayI6dHJ1ZX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}"
+      },
+      "expect": {
+        "result": "reject",
+        "code": "timestamp_out_of_window"
+      }
+    },
+    {
+      "id": "res-ts-too-new",
+      "description": "ts = now + window + 1",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "pinned_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+        "pinned_server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+        "request_sig": "073wXcn4T4qXT5Npvsty5VXWhmAuDGCZOFZYalOTgE0i7Voqwh_U8aIy5knbM6XBUp3Ds2LuaPKdtVDf7fbzBw"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88,ts=1767225631,sig=ge91cxO1W6Fe0jci4DjplfO9MolFmyGy22FCAzqgNNzXDr40pCalwr2RXd1NcMbjJbwCkBqbzq8E-Zh4i8nVDQ"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsInJlc3VsdCI6eyJvayI6dHJ1ZX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}"
+      },
+      "expect": {
+        "result": "reject",
+        "code": "timestamp_out_of_window"
+      }
+    },
+    {
+      "id": "res-tampered-body",
+      "description": "body changed after signing",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "pinned_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+        "pinned_server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+        "request_sig": "073wXcn4T4qXT5Npvsty5VXWhmAuDGCZOFZYalOTgE0i7Voqwh_U8aIy5knbM6XBUp3Ds2LuaPKdtVDf7fbzBw"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88,ts=1767225600,sig=yAAvddRdbPKdE30BW-KF-iteYLd1SpB8V_dNl6UcUdAxQgwl_vvLhuwzbVlnnwl_5auXTk6DcXHZfvNffvo2Ag"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsInJlc3VsdCI6eyJvayI6ZmFsc2V9fQ",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":false}}"
+      },
+      "expect": {
+        "result": "reject",
+        "code": "bad_signature"
+      }
+    },
+    {
+      "id": "res-tampered-status",
+      "description": "status changed after signing",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "pinned_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+        "pinned_server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+        "request_sig": "073wXcn4T4qXT5Npvsty5VXWhmAuDGCZOFZYalOTgE0i7Voqwh_U8aIy5knbM6XBUp3Ds2LuaPKdtVDf7fbzBw"
+      },
+      "response": {
+        "status": 500,
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88,ts=1767225600,sig=yAAvddRdbPKdE30BW-KF-iteYLd1SpB8V_dNl6UcUdAxQgwl_vvLhuwzbVlnnwl_5auXTk6DcXHZfvNffvo2Ag"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsInJlc3VsdCI6eyJvayI6dHJ1ZX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}"
+      },
+      "expect": {
+        "result": "reject",
+        "code": "bad_signature"
+      }
+    },
+    {
+      "id": "res-wrong-request-binding",
+      "description": "signed over a different request signature",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "pinned_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+        "pinned_server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+        "request_sig": "073wXcn4T4qXT5Npvsty5VXWhmAuDGCZOFZYalOTgE0i7Voqwh_U8aIy5knbM6XBUp3Ds2LuaPKdtVDf7fbzBw"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88,ts=1767225600,sig=SjLyRZirHQdRzUfTLaHDXPdDu7C2xhBuF_x38SKbja0ZvzL2YpcCOmkah_0UEQlR4egQPJB42_i9s5sfidBpAw"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsInJlc3VsdCI6eyJvayI6dHJ1ZX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}"
+      },
+      "expect": {
+        "result": "reject",
+        "code": "bad_signature"
+      }
+    },
+    {
+      "id": "res-wrong-key-with-pinned-kid",
+      "description": "pinned kid, signed by another key",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "pinned_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+        "pinned_server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+        "request_sig": "073wXcn4T4qXT5Npvsty5VXWhmAuDGCZOFZYalOTgE0i7Voqwh_U8aIy5knbM6XBUp3Ds2LuaPKdtVDf7fbzBw"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88,ts=1767225600,sig=Ck7UN-Jj0OsQAb13l17kwRKTDIqDYMoZj4fg1mHIafJD_LLaZWtuBSm1_Vg0bNySHZ_yEshma-QQfvdHAhOFCA"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsInJlc3VsdCI6eyJvayI6dHJ1ZX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}"
+      },
+      "expect": {
+        "result": "reject",
+        "code": "bad_signature"
+      }
+    }
+  ]
+}

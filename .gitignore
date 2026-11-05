@@ -1,0 +1,5 @@
+# task worktrees created by /wrush
+/worktrees/
+
+# rush runtime state
+/.rush/

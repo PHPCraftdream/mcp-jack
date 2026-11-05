@@ -1,0 +1,2731 @@
+{
+  "registry": "registry.json",
+  "cases": [
+    {
+      "id": "accept-read-status",
+      "description": "read key calls a read tool",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=qyLu21LcaPozMDCt-LZ8AQ,sig=073wXcn4T4qXT5Npvsty5VXWhmAuDGCZOFZYalOTgE0i7Voqwh_U8aIy5knbM6XBUp3Ds2LuaPKdtVDf7fbzBw"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "accept",
+        "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "qyLu21LcaPozMDCt-LZ8AQ",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "accept-lifecycle-restart",
+      "description": "lifecycle key restarts",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns,ts=1767225600,nonce=VoajilUeCa5VwYScIbAyLg,sig=HXj3KoFk1H93ofu3CmcgMXi_7Y24eS7-19vSCnjEM8ftdBD0KMi2oZql_9zFdfLtTfYeReh5pNOq_WtXvIVNBg"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2sucmVzdGFydCIsImFyZ3VtZW50cyI6e319fQ",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.restart\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "accept",
+        "kid": "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
+          "1767225600",
+          "VoajilUeCa5VwYScIbAyLg",
+          "MPJLRhTBsnLAuTrJoUeMSN1sSaE-Ml1G60G6Rgj60H0"
+        ]
+      }
+    },
+    {
+      "id": "accept-reload",
+      "description": "lifecycle key reloads",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns,ts=1767225600,nonce=XKZoXSnXU54R_h3XhNNDSw,sig=kNo5rc-jUNgpgJ0cxPvVjTtd4j_jEZOTof-9dMBtOQ5PXU_8gKc-naa-CkhiBv7SJoFGvxVaWR0b6OmWuf11BQ"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2sucmVsb2FkIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.reload\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "accept",
+        "kid": "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
+          "1767225600",
+          "XKZoXSnXU54R_h3XhNNDSw",
+          "0F7dKkupY7IATwYBmk-AIEthL3PDxAJiIw_qntq53FA"
+        ]
+      }
+    },
+    {
+      "id": "accept-config-set",
+      "description": "config:write key sets config",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=bu9N_ld9z81i0mvxfKO0bgHdiYjZx7jBF8sd8DTo9gc,ts=1767225600,nonce=MBTY1-GlS4MfN6SC1W7W7Q,sig=ui4OIsamjdoNHBfbT2l7IGCEWbNtzqPtPQfWCOOGAh4FoaT4PZzqjOfrTh1h7uwR1cIJGZrNrZEc9Cj-ZM3QDg"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suY29uZmlnLnNldCIsImFyZ3VtZW50cyI6eyJrIjoidiJ9fX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.config.set\",\"arguments\":{\"k\":\"v\"}}}"
+      },
+      "expect": {
+        "result": "accept",
+        "kid": "bu9N_ld9z81i0mvxfKO0bgHdiYjZx7jBF8sd8DTo9gc",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "bu9N_ld9z81i0mvxfKO0bgHdiYjZx7jBF8sd8DTo9gc",
+          "1767225600",
+          "MBTY1-GlS4MfN6SC1W7W7Q",
+          "P3J2iZL3n_QyEYFGkWvwspJkqiqhrvlCkKYKGeMW4vg"
+        ]
+      }
+    },
+    {
+      "id": "accept-tools-list-any-key",
+      "description": "tools/list needs authentication only",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=bu9N_ld9z81i0mvxfKO0bgHdiYjZx7jBF8sd8DTo9gc,ts=1767225600,nonce=8hlL1Pg5pTN0bNy-Ui3JGQ,sig=DUJHwNHCy6aeX95VFYZkr05DOT4FbU6RppaTeLx_vaMvqjd7VvqjyFniwMIogkFx4dLmLzRN7Rm_ptu1Gou7Dg"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2xpc3QifQ",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}"
+      },
+      "expect": {
+        "result": "accept",
+        "kid": "bu9N_ld9z81i0mvxfKO0bgHdiYjZx7jBF8sd8DTo9gc",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "bu9N_ld9z81i0mvxfKO0bgHdiYjZx7jBF8sd8DTo9gc",
+          "1767225600",
+          "8hlL1Pg5pTN0bNy-Ui3JGQ",
+          "uendAwx8IfeVG-LGfE90zy73aWDnNViHtq-jPAdN9VM"
+        ]
+      }
+    },
+    {
+      "id": "accept-ping",
+      "description": "ping needs authentication only",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=yB0PZeEmfEhGYGMEWfgK-Q,sig=BJSs_mHKx_XRROUxMmD_zY-XssAz2FG1Io6k1Agye-JrGbX4oCD0e5JS18D8afU5vYZf3dxSw9Y0eelVaAEhDA"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InBpbmcifQ",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"
+      },
+      "expect": {
+        "result": "accept",
+        "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "yB0PZeEmfEhGYGMEWfgK-Q",
+          "mOCWGnwSMvCNLyGH0TxKGiKgZB4A5d7A7KZF1kYHf6s"
+        ]
+      }
+    },
+    {
+      "id": "accept-query-string",
+      "description": "query string is part of the signed target",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp?x=1&y=%2F",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=LuCEZ9FAEEmCg6xVUaJ84g,sig=NzpTi5ttOc-wIBk_3bZUV3zMdL4O5TvGwsBnMm3Yru-tuRqs1n7caAmVdmInDyFQd5k51z3m7uDX9_FcaHooCQ"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "accept",
+        "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp?x=1&y=%2F",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "LuCEZ9FAEEmCg6xVUaJ84g",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "accept-get-empty-body",
+      "description": "GET carries no JSON-RPC, authentication only",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=r9SAnpI_j3jZjJXRpWDlSg,sig=v_xDnuosvFwvkBJSdrg3rT-c9z9uy1CZRDxwOVKKw_cauEN4kqaX2XiFB7gMwb0fx7F90uCIY2NPRj9cWHoWDg"
+          ]
+        ],
+        "body_b64u": ""
+      },
+      "expect": {
+        "result": "accept",
+        "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "GET",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "r9SAnpI_j3jZjJXRpWDlSg",
+          "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU"
+        ]
+      }
+    },
+    {
+      "id": "accept-utf8-body",
+      "description": "body hash is over exact bytes (non-ASCII)",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=atj18jYWfRTjZUV4ATkz-Q,sig=Fqhfsjp2KZ8JWhNL4_ZmI3Nzir7A0yPRgSoOhARFgH-sneKE7EpdZdLH032RWvWMXm9RCMuRQxOG0_G6ZnQ9DA"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2subG9ncy5xdWVyeSIsImFyZ3VtZW50cyI6eyJxIjoi0LvQvtCzINC-0YjQuNCx0L7QuiJ9fX0"
+      },
+      "expect": {
+        "result": "accept",
+        "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "atj18jYWfRTjZUV4ATkz-Q",
+          "zBpp6lttUGLDQOWo3s-7rcU2u9M8RfPi75wp_cs4-q8"
+        ]
+      }
+    },
+    {
+      "id": "accept-ts-boundary-past",
+      "description": "ts = now - window is accepted",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225570,nonce=YRv07ITEsH4L4IsDkkw5kg,sig=w-VBecNX51SGfen4tWJnQPxFzH6spcRHhTmOveZFogmBeHuP4h17VPDI7nr1D7xZ7-wnFgEMFc9YYZ6f0dKVBg"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "accept",
+        "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225570",
+          "YRv07ITEsH4L4IsDkkw5kg",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "accept-ts-boundary-future",
+      "description": "ts = now + window is accepted",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225630,nonce=-mdRe5H35ssPyQlI58Pz7g,sig=NIulVIveyi28LV5K2wsI5gKnkCF3WggICmouQHRiMtdGrjtyYIS_RitBij0XfwKQI_eVYEuN6dJx_gAbUal2CQ"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "accept",
+        "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225630",
+          "-mdRe5H35ssPyQlI58Pz7g",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "accept-same-nonce-other-key",
+      "description": "nonce cache is keyed by (kid, nonce)",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "nonce": "aTqC_43o4mfH1AahpGDDrw",
+            "retain_until": 1767225610
+          }
+        ]
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns,ts=1767225600,nonce=aTqC_43o4mfH1AahpGDDrw,sig=PsiSrG5mDvlcvqNjUd5U_NQuvmklPdJ5oOe8h2tlE2Kyj2nGjM-uYY5w0U6cLzPA67s9bfIkbwsdrYGOY58SCA"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "accept",
+        "kid": "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
+          "1767225600",
+          "aTqC_43o4mfH1AahpGDDrw",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "accept-expired-cache-entry",
+      "description": "cache entry past retain_until no longer blocks",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "nonce": "QcZtWwkHFp6hTkuM7JL07A",
+            "retain_until": 1767225599
+          }
+        ]
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=QcZtWwkHFp6hTkuM7JL07A,sig=ctgMGJYb0jTnizFdOu8hP24gxah66PzpBf2_rxRlAtjpv78G2Gp7Ct6lFKM4vDs09eD0JCfusLhc3u76ICY0Dg"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "accept",
+        "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "QcZtWwkHFp6hTkuM7JL07A",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "malformed-missing-header",
+      "description": "no Jack-Auth header",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "missing_auth",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "0omvfEwrZqRNx5SWnyVurA",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "malformed-duplicate-header",
+      "description": "two Jack-Auth headers",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=sX_J8kg4ER_08C1_CwQkoA,sig=kE6CsqMHAQhRoPXfrGG20zjIOasIvi6uKaAwEM3-t2QTO-in79FHx7rRTpP6BhZEABgC-uiW6TIGsvclV_0KAQ"
+          ],
+          [
+            "jack-auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=sX_J8kg4ER_08C1_CwQkoA,sig=kE6CsqMHAQhRoPXfrGG20zjIOasIvi6uKaAwEM3-t2QTO-in79FHx7rRTpP6BhZEABgC-uiW6TIGsvclV_0KAQ"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "malformed_auth",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "sX_J8kg4ER_08C1_CwQkoA",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "malformed-duplicate-param",
+      "description": "repeated parameter",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=2hdY3E_h9vUjEepcUGa69A,sig=oufmWPBacV-DRmvtkg5J6uSQRCNhc2Kt_VrOvHqpPNgwvSBLrdLXTGz3FoPWG0vy5_ojcQ291A66txuysHq5DQ,ts=1767225600"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "malformed_auth",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "2hdY3E_h9vUjEepcUGa69A",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "malformed-unknown-param",
+      "description": "unknown parameter",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=MOgGSldxgBh0mIOmup9lGw,sig=NQZh7ZaIfnIBps-IgxX7EnGc3DDKM8CHbyfnyt6fJt880CTq2OGRmpLopGnDloIzQItFQXuldXx3eYxmzsSHDQ,extra=abc"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "malformed_auth",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "MOgGSldxgBh0mIOmup9lGw",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "malformed-missing-nonce",
+      "description": "required parameter absent",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,sig=8g5F0WS5lo6DKod2Ubm9eu8sHgyCS9Tz1OmSVn51T4ctTjJ3ovZUG5SNPYM5ZBwYoqTUeKO6LLZkBD0gcoRcAQ"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "malformed_auth",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "yhFPfzJNUa_VjIlfmNgzYQ",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "malformed-padded-sig",
+      "description": "base64url with padding",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=CGpohrpjatxEY3FwsO0g1Q,sig=qJB5eMpY937y3QVD-gC3Mcb-SlOmgSMWhCqEOqMPgkv7mUeTySkFL0YxIJTamVotG8MPK74XQ3FGxP0fRdliCg="
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "malformed_auth",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "CGpohrpjatxEY3FwsO0g1Q",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "malformed-noncanonical-sig",
+      "description": "unused trailing bits set in signature",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=hI9uDssBWZY3-fFNbt6U5A,sig=f9tx2767ktDKfKy_mZEv0nlk6GeRYc_z0YsR1iJ3Tb75SeKMMBBH3hy5FMGkq_NwBBoAVFYj9fHnCzH9Q_8HDB"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "malformed_auth",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "hI9uDssBWZY3-fFNbt6U5A",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "malformed-short-nonce",
+      "description": "nonce is 15 bytes",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=lwdJWGCcvOXpB8bOYbs4,sig=Q6Sk8zLQG2QU2jgB8yz6NmqUdcn5QlgvdBQis8TCm9DI2THe04Sx4F5PnYuy30Kh3HaWDgGTBkiIySebJHEcCA"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "malformed_auth",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "lwdJWGCcvOXpB8bOYbs4rw",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "malformed-short-sig",
+      "description": "signature is 60 bytes",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=8SybVJFqCX28Lf3JNuw86w,sig=JB2MylEtqTFn_t3IAu4HRF1-Ynjht26sPhRuXxFeaVTFyy-tmlFvGAv0vyVp7RA3Dbgxqf7IH49Gq1Pp"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "malformed_auth",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "8SybVJFqCX28Lf3JNuw86w",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "malformed-ts-leading-zero",
+      "description": "ts with leading zero",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=01767225600,nonce=u1t4m7vDuNhWe8Ypp-Ja6g,sig=mA_sg5aZksZ_5lUIXECrIWhMhGDgDM5ycKjqs2A9GOSy5z5bAjft41PXrcoPLzA-gugk_10SB7k_Gjijun48Cw"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "malformed_auth",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "u1t4m7vDuNhWe8Ypp-Ja6g",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "malformed-ts-negative",
+      "description": "negative ts",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=-1,nonce=Pw_DNuV8mJofR-TsjPDngQ,sig=ZP4YOukBCJvTuEzzKObQ4MWH71Q6jgDazNQABGO2EnaJrnO3jKbZPY83QI8Lw7Tm305dRsweODykVHfZ2Mx7BA"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "malformed_auth",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "Pw_DNuV8mJofR-TsjPDngQ",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "malformed-ts-fraction",
+      "description": "fractional ts",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600.5,nonce=Rsn_qC2I-TxCCJYI8kix9g,sig=Ji7gI54bBJmV-SRJf9ExeYhTtD4IdKPwDHwGgFpw9nqLl3xq9yFCYvWgjlWzYy9F33Tbkdkaik5o0uDCLCpzAw"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "malformed_auth",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "Rsn_qC2I-TxCCJYI8kix9g",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "malformed-space-after-comma",
+      "description": "whitespace between parameters",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs, ts=1767225600,nonce=-zSox4USuJ6TK5tybpAisA,sig=fgQrLMPpUwv44nkv2lq_xOovJ83ViVUBg-UCsrioX-GyQ4YU-yIR8l6CSpVefi2-33lrEJauofGQjdBBWIruCg"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "malformed_auth",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "-zSox4USuJ6TK5tybpAisA",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "malformed-uppercase-param",
+      "description": "parameter names are case-sensitive",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 KID=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=r9WOi-tSbyBZ2gpRH07mOw,sig=Jlyf4JiXCMfd67LrOlgliZkA8zlw89QOv7e466DICqDfDuGXbY3RbbfYlIzwG69XKLtPpqp20P9lfO0vhK_-BA"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "malformed_auth",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "r9WOi-tSbyBZ2gpRH07mOw",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "malformed-wrong-scheme",
+      "description": "Bearer scheme",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "Bearer abcdef"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "malformed_auth",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "BBTK40xybDjPL6dNgJQu_g",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "malformed-uppercase-scheme",
+      "description": "scheme is case-sensitive",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "V1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=H-j6bhTcrRJl7HNbaNXTdA,sig=EGaxAIFQDDuyTGs_K0AdWuKROSbaL4KrCpMFGDBYxTp_Hx7o7fd10K5FKTR5e78WHBJH_wzE_EZyA8ytx7Z3Cw"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "malformed_auth",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "H-j6bhTcrRJl7HNbaNXTdA",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "malformed-scheme-only",
+      "description": "version without parameters",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "malformed_auth",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "x91SjCyqRPP6Yu8Euz34dA",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "unsupported-version",
+      "description": "version v2",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v2 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=dC5imuV8kQnA3q4Z5NUcpA,sig=vqVagawEXDfu6lcDqc09YsREZEYqLd4TcZ1jCn36tJiBP4DEaIDAdtbwAAmqq5otP3CFeY6wQJyQY35HRMAcBA"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "unsupported_version",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "dC5imuV8kQnA3q4Z5NUcpA",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "unknown-key",
+      "description": "valid signature from a key not in the registry",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=nhm6mvruffGPDQX7NHE8mbh7yD4Z_AndUTr_AOgYiLQ,ts=1767225600,nonce=qfbDra9H0GcSLR8qN6Q8iQ,sig=3uHM8IMv94Ty0WHnNhDYEb3I9nlYLY9Wr-qeSflzCyVyndHggJp3RV5OhqgcwCkoqeQKAc-kktUbH6lIZ-xQAA"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "unknown_key",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "nhm6mvruffGPDQX7NHE8mbh7yD4Z_AndUTr_AOgYiLQ",
+          "1767225600",
+          "qfbDra9H0GcSLR8qN6Q8iQ",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "key-not-yet-valid",
+      "description": "key before not_before",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=EO02KVTMv4Y2l4PhmwUsLHNMcdRTCoMClOs-tP6TO68,ts=1767225600,nonce=tIcoNeKYMwkduN7LMMYdUw,sig=unpKR0wTnwpj4TRLBn8r7aMazRPlz3bTNVbivmvqJjI64o5al4nwt5geqVyJrtUAl2A-6_e3b5y63K0xC5WjAA"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "key_inactive",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "EO02KVTMv4Y2l4PhmwUsLHNMcdRTCoMClOs-tP6TO68",
+          "1767225600",
+          "tIcoNeKYMwkduN7LMMYdUw",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "key-expired",
+      "description": "key at or after not_after",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=RqSoWowFxe1uB6c58AVUAxxlAgGufdo1pwXxaZkqEjA,ts=1767225600,nonce=iUEqW_Zm4FDil24KAWEswA,sig=dOmkg3qNTzN-xMUE1oZ3HLLr371fUCUHAGhECwbxdirQz74ZlJhYY0h8zhvo06cpG0RS9PtPSujcd6tYC48kAw"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "key_inactive",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "RqSoWowFxe1uB6c58AVUAxxlAgGufdo1pwXxaZkqEjA",
+          "1767225600",
+          "iUEqW_Zm4FDil24KAWEswA",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "ts-too-old",
+      "description": "ts = now - window - 1",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225569,nonce=nq4kuNFmukDE8kuvQ4E4NQ,sig=1Nts467vaEG6SaldNZZiEIBkAAoDf6QI1RS3S1b_rY64rJRRDvW9o5FFlrR6fOKWNXWtLVS09mBZmDRQ9YvoAg"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "timestamp_out_of_window",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225569",
+          "nq4kuNFmukDE8kuvQ4E4NQ",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "ts-too-new",
+      "description": "ts = now + window + 1",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225631,nonce=KledoYmhS9cbJv8NyvyZ5A,sig=vVuxVXXjHnwd49K3gLVmxDW1-bqdmg9pgwIdU39wJNAdFlvyfqDS-JY8mwO4bKxsPhtTGJK054S3fOKu6MN9Dg"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "timestamp_out_of_window",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225631",
+          "KledoYmhS9cbJv8NyvyZ5A",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "ts-checked-before-signature",
+      "description": "stale ts and bad signature: window error wins",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225100,nonce=eIJG_qk6ETSXODj9qxwhKg,sig=06pCeYzB9wyUiCk_5Gt_PrO4AsSyUuZRLgamN_NVC81Sn5bfYlddjzKhYIKzDO3ovMXeRBp69_VzM8NQgVBAAg"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "timestamp_out_of_window",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225100",
+          "eIJG_qk6ETSXODj9qxwhKg",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "sig-tampered-body",
+      "description": "body changed after signing",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=8w3oCwYsrkLgasOScuYdnA,sig=q2hoJItpyomkWosF7otlgay5IJWV6W-jO8S8zQsPDyPSAuK2oHkRfLdBLelySpnxFlNuHzifGBKrgoIGlJCWAQ"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2sucmVzdGFydCIsImFyZ3VtZW50cyI6e319fQ",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.restart\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "bad_signature",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "8w3oCwYsrkLgasOScuYdnA",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "sig-tampered-target",
+      "description": "target changed after signing",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp?admin=1",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=vuhwfmDN9ZA45ThtUCjPZg,sig=yhEct2LQZa1KBBWCOkzdCvH7BaYOQwQXC-EHaSBCL1gH-v40x-DpztgLwpKsIS_lpFyaDZN9oO9cA5KdbvesCA"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "bad_signature",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "vuhwfmDN9ZA45ThtUCjPZg",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "sig-tampered-method",
+      "description": "method changed after signing",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=a9NuFPd7eZj5GK_0v9KmZg,sig=4eMq7x5BWXuASRkDJXCqf_I-9RJIn9TEZEvK2GjenfZKt8C0QV7Foy9JpNeti6kw4wODhLBeW_Bm6l1KSw4bBQ"
+          ]
+        ],
+        "body_b64u": ""
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "bad_signature",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "a9NuFPd7eZj5GK_0v9KmZg",
+          "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU"
+        ]
+      }
+    },
+    {
+      "id": "sig-wrong-aud",
+      "description": "signed for another server",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=AkHp3OCDNfdwPRFa_710-Q,sig=icGig16L2orEgNek9K3S6bOEkwDUQ3mJ40c0vWMmpF3nOxLegQyGebArrx_jEDCfRwwdGgi9YFQM-BnF-BhhBQ"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "bad_signature",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://other.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "AkHp3OCDNfdwPRFa_710-Q",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "sig-wrong-key",
+      "description": "signed by bob, kid of alice",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=ss_-OrJ_STCJe19_YkiHJg,sig=kJpjxzU0iSnYsvsG0BYYOr_MMdpsrq6lk0PPAQ6uRDl7YoL7xdFmRPU1hgOf_p06l03aVSZSKB-g7_5KvPapAA"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "bad_signature",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "ss_-OrJ_STCJe19_YkiHJg",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "sig-flipped-bit",
+      "description": "one signature bit flipped",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=6B2_wq7RqlxL5wnw_YmSTg,sig=8I9CkuD_D2szajdV5xV1DgGMl3H7Ckj_VRC8abOEZhxF4sx7DVTEzEFEpLaQqo5aAuAZAHu6qgNAhHDPwxtKBA"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "bad_signature",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "6B2_wq7RqlxL5wnw_YmSTg",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "sig-swapped-nonce",
+      "description": "nonce in header differs from signed nonce",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=bSCZgJ_AIs0qVd85L1ej4g,sig=2OCUxtJtDBKZgz5hTsJIW51qaNo-5Evr9AA_LvxWs7Vrrz_lJunMvzcpaSGLJx14t5tDy8BQf6OUKNQicnrCCA"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "bad_signature",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "L-C17seD7szTnjo2ekCjfQ",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "sig-swapped-ts",
+      "description": "ts in header differs from signed ts",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225599,nonce=8-hETv640e_3rJlPexqeKw,sig=yIWz0eaCFmXlfK_eV6s6cxJq1R6OcOI7WPkG4XtD1P7xnS05bDvrNwcVYzZWs58_W6LNFozQYWaN1T-BP3c2Ag"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "bad_signature",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "8-hETv640e_3rJlPexqeKw",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "replay-live-entry",
+      "description": "same (kid, nonce) within the window",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "nonce": "u-ZvoqWVeyCp6dDlf5kl7Q",
+            "retain_until": 1767225610
+          }
+        ]
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=u-ZvoqWVeyCp6dDlf5kl7Q,sig=OdGpKfC70eEQyod8D_ok7-QSqIrLKQRbZp4lrO9IBoumbVqQAVxqX_RROeSKaOxcTXCSRRIjKzpV6p-XmqkqBw"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "replayed_nonce",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "u-ZvoqWVeyCp6dDlf5kl7Q",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "replay-at-retain-boundary",
+      "description": "entry with retain_until = now still blocks",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "nonce": "lN-sUzuLkQs5QsNrtbdxJA",
+            "retain_until": 1767225600
+          }
+        ]
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=lN-sUzuLkQs5QsNrtbdxJA,sig=eBuob7W0mXuSUPCdt_AO9Jc8AIq10VGKvOn9CZpJlWi_Fj8V77sJj5rqk1I22HfIlegWDd5onVlfWUY8CNBFAA"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "replayed_nonce",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "lN-sUzuLkQs5QsNrtbdxJA",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "replay-not-recorded-on-bad-sig",
+      "description": "bad signature does not consume the nonce",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=kjyMozKW5J8b5trk4BwOiw,sig=OepBVoloU-xkGLq7OMx1-ralnMsE9Eq7qlWX-NcUm9rQ_B3lwF6pEyX0L0ql95lysTSqes_QN3QyCFN5knMBDw"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suc3RhdHVzIiwiYXJndW1lbnRzIjp7fX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 401,
+        "code": "bad_signature",
+        "nonce_recorded": false
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "kjyMozKW5J8b5trk4BwOiw",
+          "iTnxQehhwpLZ8Uc8c0QsdDvEcyiHhENRplgiyktzhtg"
+        ]
+      }
+    },
+    {
+      "id": "authz-read-key-restart",
+      "description": "read key may not restart",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=bwmvvQqAF9MYxnBp8zLdxQ,sig=QYzPeETG_PqT7-A1X3Iry3kwiz8tQbLoAHXs9EXCJJWdzEO19tT1mcKFm39Gh5Ug2zez2dgWaCPIG6tKUOIvBA"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2sucmVzdGFydCIsImFyZ3VtZW50cyI6e319fQ",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.restart\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 403,
+        "code": "insufficient_scope",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "bwmvvQqAF9MYxnBp8zLdxQ",
+          "MPJLRhTBsnLAuTrJoUeMSN1sSaE-Ml1G60G6Rgj60H0"
+        ]
+      }
+    },
+    {
+      "id": "authz-read-key-config-set",
+      "description": "read key may not write config",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=QMhXc6KimrfRVQZ8dPDhDA,sig=ui1Rpknwv_Y01TgsVUQLTBCyMH5jEVGcdsYHGTopGTRdpsvAITx9XO2LKmrvvJnJ5Ffx-MH0lBaSaUnJaPpeCg"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suY29uZmlnLnNldCIsImFyZ3VtZW50cyI6e319fQ",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.config.set\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 403,
+        "code": "insufficient_scope",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "QMhXc6KimrfRVQZ8dPDhDA",
+          "3Q_Yi2cWR9urVWF-Eeg1Nbs1ZCg18zcYhh9-Zh_FQmE"
+        ]
+      }
+    },
+    {
+      "id": "authz-config-write-no-read",
+      "description": "config:write does not imply read",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=bu9N_ld9z81i0mvxfKO0bgHdiYjZx7jBF8sd8DTo9gc,ts=1767225600,nonce=zqH4zyYbSnUmAWS0rfE0OA,sig=yDLfY0nv1rVx_4RaSVbKB7uJgbT3zr3fwtWdCATN6tCvFnHUgyM6yVqfDtqui7HDKaRGBBDadWf7WlQ2OPvYCg"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suY29uZmlnLmdldCIsImFyZ3VtZW50cyI6e319fQ",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.config.get\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 403,
+        "code": "insufficient_scope",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "bu9N_ld9z81i0mvxfKO0bgHdiYjZx7jBF8sd8DTo9gc",
+          "1767225600",
+          "zqH4zyYbSnUmAWS0rfE0OA",
+          "hsOQVZQzOO0pMSNaYmeEAQx9Ybc0osxqJB0ylXNGuko"
+        ]
+      }
+    },
+    {
+      "id": "authz-lifecycle-no-config-write",
+      "description": "lifecycle does not imply config:write",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns,ts=1767225600,nonce=Mq9zkZ1N1Ltinegxb4lb-Q,sig=JYCNARHb_RSm__IqQ-XsH5EopQ7V5kNTkmT_qZpzKCMPWj2rPCfTF7F81BtMwLrl6iz25ZfdrFTbCEs3XPySDQ"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suY29uZmlnLnNldCIsImFyZ3VtZW50cyI6e319fQ",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.config.set\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 403,
+        "code": "insufficient_scope",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
+          "1767225600",
+          "Mq9zkZ1N1Ltinegxb4lb-Q",
+          "3Q_Yi2cWR9urVWF-Eeg1Nbs1ZCg18zcYhh9-Zh_FQmE"
+        ]
+      }
+    },
+    {
+      "id": "authz-unmapped-tool",
+      "description": "unknown tool is denied",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=hib362HqBGylBv7GeHJ_Dw,sig=N8bmyvKfoUCLLlf-1_7eSFJUXC2ELhesQPZe9IoQbeGJr9D9gbk5u3lnfJ96Y33-WlVOxaUIlsvIYo4NkMasCw"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2sudW5rbm93biIsImFyZ3VtZW50cyI6e319fQ",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.unknown\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 403,
+        "code": "unmapped_operation",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "hib362HqBGylBv7GeHJ_Dw",
+          "cLj3KxL5bvNipgJZuBJH7Z6QarlmG67UmHvQeFqEDvY"
+        ]
+      }
+    },
+    {
+      "id": "authz-proto-tool-name",
+      "description": "prototype property names are not tools",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=S9LVjq8XxVzZ91F1UpNMzA,sig=3wflpdQjLQa16EALZe-s6SiK3jUclJ_fy7IOf0yBVc8dfeSMzaa3UV-ZtmXQQ1_6AXxhrf8XSjwvhft47Pq9DQ"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6Il9fcHJvdG9fXyIsImFyZ3VtZW50cyI6e319fQ",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"__proto__\",\"arguments\":{}}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 403,
+        "code": "unmapped_operation",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "S9LVjq8XxVzZ91F1UpNMzA",
+          "Y1j8LJqGbkeZpdrm0w00toGAxrU1BqgIB9abaj2DKD4"
+        ]
+      }
+    },
+    {
+      "id": "authz-unmapped-method",
+      "description": "unlisted MCP method is denied",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=7T5BVQkKkA91lNywF3sOKA,sig=dMWsatAEfmNv9L2rzP4MpBOeG4mTflC0XA6V8_-58GtLop03knFpV5kWu_BXGHRnvbf7ZUUHPTcrLqvb_IBVAg"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InJlc291cmNlcy9yZWFkIn0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"resources/read\"}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 403,
+        "code": "unmapped_operation",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "7T5BVQkKkA91lNywF3sOKA",
+          "uYMdzAjU-v-35-FW_-XVxqXhU-kiUk9BIK9H53ySIsk"
+        ]
+      }
+    },
+    {
+      "id": "request-tool-name-missing",
+      "description": "tools/call without params.name",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=6yhwGmFdkrHlsXbF139s1Q,sig=Lfc04aylRR2nw9l3ci86lrNLmrK069H4f2tQprJJjd3dZTE9HUCrAm4Vg7InIf-YlGaG_1KkDZIPOdo869alAA"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnt9fQ",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 400,
+        "code": "invalid_request",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "6yhwGmFdkrHlsXbF139s1Q",
+          "BnnWRZUFBF6Ci7bH6wkPshFitD8OBYWwzFzq0lrRWZg"
+        ]
+      }
+    },
+    {
+      "id": "request-tool-name-not-string",
+      "description": "params.name is not a string",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=fFlW8e0qiFVJfewb03U19g,sig=ZF5XoI1qmz-4_FkwmZEnZ9dXR0SvfQ3YiNl06b2wR1sWweBlq4kUYT8BWEyORzS5C1ZuFA7LJ5sY7Scho17CCA"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6N319",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":7}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 400,
+        "code": "invalid_request",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "fFlW8e0qiFVJfewb03U19g",
+          "80fnWh4taEjkO1oLpIErHkwv_8wuT-OxZpGfemPUR5U"
+        ]
+      }
+    },
+    {
+      "id": "request-invalid-json",
+      "description": "signed body is not JSON",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=Uw_Po3IkqSZKk-uhouAaPA,sig=weXkVTmws2EMrJvnkzR1lW06bIwg0VlfaSmy3pEWtnpUoVsg2GTj74lhb2FJv8tXFQ0r8wND4DqUy0n6bM7nDQ"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "e25vdCBqc29u",
+        "body_text": "{not json"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 400,
+        "code": "invalid_request",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "Uw_Po3IkqSZKk-uhouAaPA",
+          "kgct85nLdHA_job0UNVSvAuwHu65ipCYWht3csj9ABY"
+        ]
+      }
+    },
+    {
+      "id": "request-invalid-utf8",
+      "description": "signed body is not UTF-8",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=3L3MJZPVDdHu3UXpfrOoWA,sig=q6OEekbFhzN_In50Dms-ayu-G1tBiBDDn4V6uOThruunU967yO_wSnYFQwSARf4zNbZuCJI5aMFzOG2f282fDQ"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "__57"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 400,
+        "code": "invalid_request",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "3L3MJZPVDdHu3UXpfrOoWA",
+          "X44_NX7KNmT8B8qns9ZfYBpZQfFDwRo0FtVHWoBdY9c"
+        ]
+      }
+    },
+    {
+      "id": "request-batch",
+      "description": "JSON-RPC batch is rejected",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=snKSLfoXYRnW_RINEBfuCg,sig=tjJytKTqZmsKMyWbNRxai9QKANDa4uThXEG6Fn8BkzJMn4gWNOp97AQ_dbVylP02CCgmn3qEzmWKEIsT4F4zCA"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "W3sianNvbnJwYyI6IjIuMCIsImlkIjoxLCJtZXRob2QiOiJ0b29scy9jYWxsIiwicGFyYW1zIjp7Im5hbWUiOiJqYWNrLnN0YXR1cyIsImFyZ3VtZW50cyI6e319fV0",
+        "body_text": "[{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.status\",\"arguments\":{}}}]"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 400,
+        "code": "invalid_request",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "snKSLfoXYRnW_RINEBfuCg",
+          "ZP_X8jBYO-R-KJFscquObTjyQKPzYjnt_Hae5pmY-sk"
+        ]
+      }
+    },
+    {
+      "id": "request-empty-post",
+      "description": "POST with empty body",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=T7ZdG2cEhtuxE777pw_D8Q,sig=wGaX9N7YN7S3pGM1gdv-1Hx-9aJxzaV3Ybexyu_vGt2P5GQIyMmHUedAnAuO4CZJUeTGyvi2uhre9Rzpz76RCw"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": ""
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 400,
+        "code": "invalid_request",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "T7ZdG2cEhtuxE777pw_D8Q",
+          "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU"
+        ]
+      }
+    },
+    {
+      "id": "request-missing-jsonrpc",
+      "description": "object without jsonrpc \"2.0\"",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=e8oJKlA5NV3ClIahc9d_jw,sig=A4fGHQK_LzxBhK8q7nKdJ0SX5yoAartyljYK-Os_T2ZaIDetInRQAy9TjIzZ5CXF5BlUHSE2Z44WODmGrm9zCg"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJpZCI6MSwibWV0aG9kIjoicGluZyJ9",
+        "body_text": "{\"id\":1,\"method\":\"ping\"}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 400,
+        "code": "invalid_request",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "e8oJKlA5NV3ClIahc9d_jw",
+          "MYeTRnqF5Raw3yK-rM68c_o0reUwxGAjD45po5CwnAA"
+        ]
+      }
+    }
+  ]
+}
