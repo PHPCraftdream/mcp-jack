@@ -73,8 +73,9 @@ export function serveNode(
         if (over) return;
         total += chunk.length;
         if (total > limit) {
+          // Stay in flowing mode and discard the rest so the client can finish
+          // writing while the answer goes out.
           over = true;
-          req.pause();
           finish({ kind: "too-large" });
           return;
         }
@@ -102,8 +103,7 @@ export function serveNode(
 
     const read = await readBody(req);
     if (read.kind === "too-large") {
-      // Drain so the client can finish writing and read the answer.
-      req.resume();
+      // The data listener keeps draining, so the client can finish writing.
       writeError(res, 413, "invalid_request", "request body is too large");
       return;
     }
