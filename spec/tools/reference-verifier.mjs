@@ -319,13 +319,13 @@ function activeAdmins(entries, now) {
 
 function nativeCall(tool, rawArgs, ctx) {
   const { state, caller, kid, ts, hooks } = ctx;
-  const args = argObject(rawArgs);
   const entries = state.registry.keys;
   const heldByCaller = (s) => caller.scopes.includes(s);
   const find = (k) => entries.find((e) => e.kid === k);
 
   if (tool === 'jack.enroll') {
     if (caller) throw new Rej(409, 'key_exists');
+    const args = argObject(rawArgs);
     if (typeof args.code !== 'string' || typeof args.name !== 'string' || !NAME_RE.test(args.name)) throw bad();
     const rawCode = strictB64u(args.code, 32);
     const inviteId = rawCode ? b64u(sha256(rawCode)) : null;
@@ -342,11 +342,13 @@ function nativeCall(tool, rawArgs, ctx) {
   }
 
   if (tool === 'jack.whoami') {
+    argObject(rawArgs);
     const { public_key, ...rest } = view(caller);
     return rest;
   }
 
   if (tool === 'jack.key.rotate') {
+    const args = argObject(rawArgs);
     if (typeof args.public_key !== 'string' || typeof args.proof !== 'string') throw bad();
     const raw = argKey(args.public_key);
     const newKid = kidOf(raw);
@@ -361,6 +363,7 @@ function nativeCall(tool, rawArgs, ctx) {
 
   // administration: scope check, then argument validation (spec 03 section 4)
   if (!heldByCaller('admin')) throw new Rej(403, 'insufficient_scope');
+  const args = argObject(rawArgs);
 
   switch (tool) {
     case 'jack.admin.user.list':
