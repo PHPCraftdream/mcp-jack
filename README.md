@@ -1,6 +1,6 @@
 # mcp-jack
 
-Status: early draft. The specification and test fixtures exist; SDKs are in progress (Go first, then Rust and JavaScript).
+Status: early draft. The specification, the normative test fixtures and a first Go SDK exist. The Go code has been written and reviewed but **has not been compiled or run yet**: the first `go test ./...` happens in CI (or locally by whoever picks this up). Expect to fix compile errors and test failures before trusting it. Rust and JavaScript SDKs are planned.
 
 ## Intent
 
@@ -40,15 +40,32 @@ Operations such as restart or a configuration change need more than "whoever rea
 
 | Language | Package | Status |
 |---|---|---|
-| Go | module at the repository root | first, in progress |
+| Go | module at the repository root | written, not yet compiled or run |
 | Rust | crate | planned |
 | JavaScript | npm package | planned |
 
 All implementations are checked against the same normative test vectors so they cannot drift apart.
 
+### Go layout
+
+| Package | Content |
+|---|---|
+| `jack` (repository root) | Shared primitives: strict base64url, key ids, signing strings, `Jack-Auth` parsing, strict Ed25519 verification, public-key validation, scope and pattern matching, protocol errors |
+| `spec` | The embedded fixtures and strict typed loaders; conformance tests import it |
+| `server` | Request verifier, policy engine, `net/http` middleware, native tools (enrollment, key rotation, user and invite administration), `BootstrapAdmin`, and the nonce, state and audit stores |
+| `client` | Signer abstraction, signing and verifying `http.RoundTripper`, connection profile, typed calls for the native tools |
+
+Run the checks (CI does the same):
+
+```
+go vet ./...
+go test -race ./...
+node spec/tools/gen-fixtures.mjs --check
+```
+
 ## Specification
 
-The draft lives in [spec/](spec/README.md): authentication, authorization, test fixtures and a reference verifier.
+The draft lives in [spec/](spec/README.md): authentication, authorization, user management, an optional service-management profile, test fixtures and a reference verifier.
 
 ## Open questions
 
