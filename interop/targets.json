@@ -1,0 +1,14 @@
+{
+  "go": {
+    "server": ["interop/bin/go-server"],
+    "client": ["interop/bin/go-client"]
+  },
+  "rust": {
+    "server": ["rust/target/release/interop-server"],
+    "client": ["rust/target/release/interop-client"]
+  },
+  "typescript": {
+    "server": ["node", "ts/dist/interop/server.js"],
+    "client": ["node", "ts/dist/interop/client.js"]
+  }
+}
