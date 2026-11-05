@@ -71,7 +71,7 @@ These are the places where three independent implementations drift. Each gets a 
 
 ## 5. Rust design
 
-- Package `mcp-jack`, library name `mcp_jack`, edition 2021, MSRV 1.75 (recorded in `rust-version`).
+- Package `mcp-jack`, library name `mcp_jack`, edition 2021, MSRV 1.85 (recorded in `rust-version`; `ed25519-dalek` 2.2 needs 1.81).
 - Dependencies (runtime): `ed25519-dalek` (features `std`), `curve25519-dalek`, `sha2`, `base64`, `serde` (derive), `serde_json`, `getrandom`. Feature `http` adds `http` 1.x, `bytes`, `http-body-util` and `tower-service`/`tower-layer` for the adapter. Dev: `tokio` (rt, macros), `tower` (util) for adapter tests. No `axum` dependency; a `tower::Layer` works under axum, hyper and tonic alike.
   - Tradeoff: `tower` is the de-facto Rust middleware abstraction; avoiding it would mean an adapter per framework. It stays behind a feature so the core has no async dependency.
 - Core is synchronous: `Verifier::verify(&self, &Request) -> VerifyResult`. Types are `Send + Sync`; the stores use `std::sync::Mutex`.

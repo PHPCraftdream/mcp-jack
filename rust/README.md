@@ -1,0 +1,1 @@
+This crate is the server-side Rust SDK for mcp-jack, the secure transport protocol wrapping MCP with authentication, authorization and audit. It mirrors the Go SDK and is checked against the same conformance vectors in spec/fixtures. Its fixture-loading tests read ../spec/fixtures in place rather than embedding copies.
