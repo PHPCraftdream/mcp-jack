@@ -154,7 +154,7 @@
       "server_public_key": "server",
       "args": {},
       "steps": [
-        "step 0: alice signs POST /mcp tools/call of svc.status and must be accepted (intermediate step)",
+        "step 0: alice signs POST /mcp with the JSON-RPC request {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"} (policy allows ping; the fixed handler answers it) and must be accepted (intermediate step)",
         "step 1: the client re-sends the exact same request bytes and reports the second response"
       ],
       "expected": {
