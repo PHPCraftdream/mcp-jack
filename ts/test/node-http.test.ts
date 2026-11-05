@@ -86,6 +86,9 @@ function rawRequest(port: number, method: string, path: string, headers: Record<
       method,
       path,
       headers,
+      // A fresh connection per request: E8 leaves a connection whose declared
+      // body was never sent, and a pooled reuse would feed E9 into it.
+      agent: false,
       // A server that never answers (e.g. a regression that lost the early
       // content-length rejection) must fail after 2s instead of hanging.
       signal: AbortSignal.timeout(2000),
