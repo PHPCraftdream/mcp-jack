@@ -17,6 +17,7 @@ The server holds a registry of keys it trusts:
       "kid": "<kid>",
       "public_key": "<base64url 32 bytes>",
       "name": "alice-laptop",
+      "kind": "human",
       "scopes": ["read"],
       "not_before": null,
       "not_after": null
@@ -27,7 +28,8 @@ The server holds a registry of keys it trusts:
 
 - `kid` MUST equal `base64url(SHA-256(public_key))`; a registry entry where it does not MUST be rejected at load time.
 - `not_before` / `not_after` are Unix seconds or `null`. A key is active when `not_before <= now < not_after` (`not_after` is exclusive; `null` means unbounded).
-- `name` is a free-form label used in audit records.
+- `name` is a label, unique across the registry, used in audit records.
+- `kind` is `"human"` (default) or `"agent"`; an `agent` key cannot hold `admin` (see 03).
 - `scopes` lists the scopes the key holds. Revocation is removal of the entry (or a past `not_after`). Rotation is adding the new key before removing the old one.
 - Users and keys are created, changed and revoked through the protocol itself; see [03-user-management.md](03-user-management.md).
 

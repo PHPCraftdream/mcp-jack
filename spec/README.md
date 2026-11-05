@@ -1,6 +1,6 @@
 # mcp-jack specification
 
-Status: draft v0.1. Authentication, authorization and (next) user management are specified; streaming and delegation come later.
+Status: draft v0.1. Authentication, authorization and user management are specified; streaming and delegation come later.
 
 ## Layout
 
@@ -8,7 +8,7 @@ Status: draft v0.1. Authentication, authorization and (next) user management are
 |---|---|
 | [01-authentication.md](01-authentication.md) | Keys, signed requests and responses, verification order, replay protection |
 | [02-authorization.md](02-authorization.md) | Key registry, scopes, server policy, deny-by-default evaluation |
-| 03-user-management.md | Protocol-native tools for users, invites and enrollment (in progress) |
+| [03-user-management.md](03-user-management.md) | Protocol-native tools for users, invites, enrollment and key rotation |
 | [04-service-management-profile.md](04-service-management-profile.md) | Optional profile: ordinary MCP tools for operating a service |
 | `fixtures/` | Deterministic test keys, registry and request/response vectors (normative) |
 | `tests/` | Conformance runner contract and the generated case index |
@@ -37,6 +37,10 @@ node spec/tools/gen-fixtures.mjs --check  # fail if files on disk are stale
 | D6 | Authorization is a **server-owned policy** (method/tool pattern to scope, first match wins, deny by default); scopes are flat. | The wrapper cannot know the tools of the server it protects, so no tool table is hardcoded in the protocol. A read-only agent is never upgraded implicitly. |
 | D7 | The `jack.` tool-name prefix is reserved for protocol-native tools and never reaches the policy. | A misconfigured policy cannot open or close user management. |
 | D8 | Service operation tools (`svc.*`) are an optional profile, not part of the transport. | Keeps the protocol small and generic. |
+| D9 | Users, invites, enrollment and key rotation are protocol-native MCP tools (`jack.*`), so administrators, SDKs and agents manage keys over the same authenticated channel. | Any party can generate a key pair; the server only ever sees public keys. |
+| D10 | Enrollment is the single exception to "unknown key is rejected": the request is signed by the new key, which proves possession, and carries a single-use invite. | An invite is a bearer secret for exactly one purpose, so it is single-use, short-lived and limited to the scopes it names; proof of possession stops anyone registering a key they do not control. |
+| D11 | No privilege escalation (grant only scopes you hold), the last administrator cannot be removed, and `agent` keys can never hold `admin`. | Limits the blast radius of a compromised or prompt-injected agent; the first administrator is created out of band. |
+| D12 | Strict Ed25519: canonical prime-order-subgroup public keys only, and signatures with S >= L are invalid. | Verifiers in Go, Rust and JS otherwise disagree on edge cases, and a small-order key can verify for many messages. |
 
 ## Open questions
 

@@ -13,7 +13,8 @@ Confidentiality and server-certificate validation are delegated to TLS. Implemen
 ## 2. Keys and encodings
 
 - Signature algorithm: Ed25519 (pure EdDSA, RFC 8032). There is no algorithm negotiation.
-- A public key is its 32-byte raw encoding.
+- A public key is its 32-byte raw encoding. A key is only acceptable if it is a canonical encoding of a point in the prime-order subgroup that is not the identity ([03-user-management.md](03-user-management.md) section 2). Registries MUST reject other keys at load time.
+- Signature verification MUST be strict: a signature whose scalar S is not below the group order L is invalid, even if the verification equation holds. This rules out malleated signatures and makes all implementations agree.
 - `kid` (key id) = `base64url(SHA-256(public_key_bytes))`.
 - `base64url` is RFC 4648 section 5, **unpadded and canonical**: a decoder MUST reject padding, characters outside `A-Za-z0-9_-`, and encodings whose unused trailing bits are not zero (the decode-then-encode round trip must reproduce the input).
 - Sizes: `kid` 32 bytes (43 chars), `nonce` 16 bytes (22 chars), `sig` 64 bytes (86 chars).
@@ -71,7 +72,7 @@ A server MUST perform these steps in order and stop at the first failure. Failur
 | 1 | Header absent | 401 | `missing_auth` |
 | 2 | Header present more than once, or violates section 3 grammar | 401 | `malformed_auth` |
 | 3 | Version is not `v1` | 401 | `unsupported_version` |
-| 4 | `kid` is not in the key registry | 401 | `unknown_key` |
+| 4 | `kid` is not in the key registry (the single exception is enrollment, below) | 401 | `unknown_key` |
 | 5 | Key not active: `now < not_before` or `now >= not_after` | 401 | `key_inactive` |
 | 6 | `abs(now - ts) > window` (default 30 s, SHOULD NOT exceed 120 s) | 401 | `timestamp_out_of_window` |
 | 7 | Signature does not verify over the recomputed signing string | 401 | `bad_signature` |
@@ -80,6 +81,7 @@ A server MUST perform these steps in order and stop at the first failure. Failur
 
 Rules:
 
+- **Enrollment exception.** A `kid` that is not registered is accepted at step 4 only for a `POST` `tools/call` of `jack.enroll`, whose arguments carry the public key whose hash is `kid`. Steps 5-8 then run against that submitted key (step 5 is skipped because the key has no registry interval yet). The full procedure and its errors are in [03-user-management.md](03-user-management.md) section 3.2.
 - Cheap checks run first (steps 1-6), so unauthenticated traffic costs a map lookup, not a signature verification.
 - **Nonce recording.** The `(kid, nonce)` pair is recorded only after the signature has verified (step 7), so unauthenticated requests cannot fill the cache. The check in step 8 and the insertion MUST be one atomic operation. The entry is retained while `now <= ts + window`; after that no message with this `ts` can be accepted anyway.
 - A request rejected at step 9 has still consumed its nonce.
