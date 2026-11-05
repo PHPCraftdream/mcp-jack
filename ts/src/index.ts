@@ -14,4 +14,5 @@ export * from "./server/policy.js";
 export * from "./server/state-file.js";
 export * from "./server/state.js";
 export * from "./server/verify.js";
-export * from "./client/index.js";
+// Namespaced: the client re-declares JsonValue and the TOOL_* names of the server modules.
+export * as client from "./client/index.js";

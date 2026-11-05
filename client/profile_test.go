@@ -86,7 +86,13 @@ func TestProfileJSONHasNoPrivateKey(t *testing.T) {
 
 func TestLoadProfileRejects(t *testing.T) {
 	shortKey := jack.EncodeBase64URL(make([]byte, 16))
-	_, pub := newValidTestProfile(t)
+	p, pub := newValidTestProfile(t)
+	raw, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("marshal profile: %v", err)
+	}
+	// One key for every case: the Replace calls below must find it in base.
+	base := string(raw)
 	paddedKey := jack.EncodeBase64URL(pub) + "="
 	cases := []struct {
 		name string
@@ -94,31 +100,31 @@ func TestLoadProfileRejects(t *testing.T) {
 	}{
 		{
 			name: "unknown field",
-			doc:  strings.TrimSuffix(newValidProfileDoc(t), "}") + `,"extra":1}`,
+			doc:  strings.TrimSuffix(base, "}") + `,"extra":1}`,
 		},
 		{
 			name: "server key wrong length",
-			doc:  strings.Replace(newValidProfileDoc(t), jack.EncodeBase64URL(pub), shortKey, 1),
+			doc:  strings.Replace(base, jack.EncodeBase64URL(pub), shortKey, 1),
 		},
 		{
 			name: "padded server key",
-			doc:  strings.Replace(newValidProfileDoc(t), jack.EncodeBase64URL(pub), paddedKey, 1),
+			doc:  strings.Replace(base, jack.EncodeBase64URL(pub), paddedKey, 1),
 		},
 		{
 			name: "kid not 32-byte base64url",
-			doc:  strings.Replace(newValidProfileDoc(t), `"kid":"`+jack.KeyID(pub)+`"`, `"kid":"short"`, 1),
+			doc:  strings.Replace(base, `"kid":"`+jack.KeyID(pub)+`"`, `"kid":"short"`, 1),
 		},
 		{
 			name: "url missing host",
-			doc:  strings.Replace(newValidProfileDoc(t), `"url":"https://svc.example.test/mcp"`, `"url":"https:///mcp"`, 1),
+			doc:  strings.Replace(base, `"url":"https://svc.example.test/mcp"`, `"url":"https:///mcp"`, 1),
 		},
 		{
 			name: "aud empty",
-			doc:  strings.Replace(newValidProfileDoc(t), `"aud":"https://svc.example.test"`, `"aud":""`, 1),
+			doc:  strings.Replace(base, `"aud":"https://svc.example.test"`, `"aud":""`, 1),
 		},
 		{
 			name: "trailing data",
-			doc:  newValidProfileDoc(t) + " {}",
+			doc:  base + " {}",
 		},
 	}
 	for _, tc := range cases {

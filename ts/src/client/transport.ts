@@ -6,6 +6,14 @@ import type { Clock, NonceSource } from "./auth.js";
 import { parseErrorBody } from "./errors.js";
 import type { Signer } from "./signer.js";
 
+// The lib is ES2022 without DOM: derive the fetch types from the Node globals.
+type HeadersInit = NonNullable<RequestInit["headers"]>;
+type BodyInit = NonNullable<RequestInit["body"]>;
+type ReferrerPolicy = NonNullable<RequestInit["referrerPolicy"]>;
+type RequestMode = NonNullable<RequestInit["mode"]>;
+type RequestCredentials = NonNullable<RequestInit["credentials"]>;
+type RequestInfo = Parameters<typeof fetch>[0];
+
 /** Returned when the server answers with a text/event-stream body: a stream cannot be read in full and therefore cannot be signature-verified (spec 01 section 5, open question Q1). */
 export class StreamingUnsupportedError extends Error {
   constructor() {

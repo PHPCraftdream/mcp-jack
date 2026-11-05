@@ -83,7 +83,7 @@ func TestSignRequestReproducesFixtureHeaders(t *testing.T) {
 	for i, tc := range cases {
 		mc := matched[i]
 		t.Run(tc.ID, func(t *testing.T) {
-			header, err := SignRequest(mc.Signer, tc.State.Aud, tc.Request.Method, tc.Request.Target, mc.Body, mc.Nonce, time.Unix(tc.State.Now, 0))
+			header, err := SignRequest(mc.Signer, tc.State.Aud, tc.Request.Method, tc.Request.Target, mc.Body, mc.Nonce, time.Unix(mc.Auth.TS, 0))
 			if err != nil {
 				t.Fatalf("SignRequest: %v", err)
 			}
@@ -142,11 +142,11 @@ func TestSignRequestTamperDetection(t *testing.T) {
 		body2 := make([]byte, len(mc.Body))
 		copy(body2, mc.Body)
 		body2[len(body2)-1] ^= 0x01
-		header, err := SignRequest(mc.Signer, tc.State.Aud, tc.Request.Method, tc.Request.Target, mc.Body, mc.Nonce, time.Unix(tc.State.Now, 0))
+		header, err := SignRequest(mc.Signer, tc.State.Aud, tc.Request.Method, tc.Request.Target, mc.Body, mc.Nonce, time.Unix(mc.Auth.TS, 0))
 		if err != nil {
 			t.Fatalf("%s: SignRequest: %v", tc.ID, err)
 		}
-		header2, err := SignRequest(mc.Signer, tc.State.Aud, tc.Request.Method, tc.Request.Target, body2, mc.Nonce, time.Unix(tc.State.Now, 0))
+		header2, err := SignRequest(mc.Signer, tc.State.Aud, tc.Request.Method, tc.Request.Target, body2, mc.Nonce, time.Unix(mc.Auth.TS, 0))
 		if err != nil {
 			t.Fatalf("%s: SignRequest tampered: %v", tc.ID, err)
 		}
@@ -161,7 +161,9 @@ func TestSignRequestTamperDetection(t *testing.T) {
 	}
 	keys, _ := fixtureKeys(t)
 	for _, tc := range vecs.Cases {
-		if tc.Expect.Result != "reject" {
+		// Only signature rejections: a header-form rejection (for example a
+		// duplicate header) still carries a valid signature.
+		if tc.Expect.Result != "reject" || tc.Expect.Code != "bad_signature" {
 			continue
 		}
 		hv := fixtureHeader(tc.Request)
@@ -184,7 +186,7 @@ func TestSignRequestTamperDetection(t *testing.T) {
 			continue
 		}
 		signer := seedSignerByKid(t, auth.Kid)
-		header, err := SignRequest(signer, tc.State.Aud, tc.Request.Method, tc.Request.Target, body, nonce, time.Unix(tc.State.Now, 0))
+		header, err := SignRequest(signer, tc.State.Aud, tc.Request.Method, tc.Request.Target, body, nonce, time.Unix(auth.TS, 0))
 		if err != nil {
 			t.Fatalf("%s: SignRequest: %v", tc.ID, err)
 		}
