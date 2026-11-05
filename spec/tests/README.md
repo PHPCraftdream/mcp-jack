@@ -1,6 +1,6 @@
 # Conformance tests
 
-An implementation (Go, Rust, JS) conforms to spec v0.1 when its test runner passes every case in the files below. [CASES.md](CASES.md) is the generated index of all cases.
+An implementation (Go, Rust, TypeScript) conforms to spec v0.1 when its test runner passes every case in the files below. [CASES.md](CASES.md) is the generated index of all cases.
 
 | File | What it checks |
 |---|---|
@@ -70,8 +70,18 @@ Each case has `state` (`now`, `window_seconds`, `pinned_server_kid`, `pinned_ser
 
 For every key in `keys.json` a runner MUST confirm that the Ed25519 public key derived from `seed_hex` equals `public_key` and that `kid` equals `base64url(SHA-256(public_key))`.
 
-Ed25519 signatures are deterministic (RFC 8032), so a runner SHOULD also re-sign `debug.signing_string_lines` (joined with LF) of every `accept-*` request case with the key named by the header `kid` and compare with the `sig` in the header. Byte-identical signatures across Go, Rust and JS are the strongest interoperability check.
+Ed25519 signatures are deterministic (RFC 8032), so a runner SHOULD also re-sign `debug.signing_string_lines` (joined with LF) of every `accept-*` request case with the key named by the header `kid` and compare with the `sig` in the header. Byte-identical signatures across Go, Rust and TypeScript are the strongest interoperability check.
 
 ## Adding a case
 
 Add it to `tools/gen-fixtures.mjs` with the expected outcome. The generator refuses to write fixtures when the reference verifier disagrees with the stated expectation. Regenerate, run `node tools/gen-fixtures.mjs --check`, and commit all generated files together.
+
+## Where the runners live
+
+| Language | Runners |
+|---|---|
+| Go | `spec/*_test.go` and the package tests in `server/` and `client/` |
+| Rust | `rust/tests/*conformance.rs`, `rust/tests/state_file.rs` (load vectors), `rust/tests/client_*.rs` |
+| TypeScript | `ts/test/*.test.ts` (fixtures are read from `spec/fixtures`) |
+
+Cross-language behavior (every client against every server) is covered separately by [../../interop/README.md](../../interop/README.md).

@@ -1,6 +1,6 @@
 # mcp-jack
 
-Status: early draft. The specification, the normative test fixtures and a first Go SDK exist. The Go code has been written and reviewed but **has not been compiled or run yet**: the first `go test ./...` happens in CI (or locally by whoever picks this up). Expect to fix compile errors and test failures before trusting it. Rust and JavaScript SDKs are planned.
+Status: early draft. The specification, the normative test fixtures and SDKs for Go, Rust and TypeScript exist. None of the SDK code has been compiled or run end to end yet: it was written and reviewed, and Rust additionally passes `cargo fmt`, `cargo clippy` and `cargo check`. The first full test and interop run happens in CI. Expect to fix compile errors and test failures before trusting it.
 
 ## Intent
 
@@ -38,13 +38,13 @@ Operations such as restart or a configuration change need more than "whoever rea
 
 ## Implementations
 
-| Language | Package | Status |
-|---|---|---|
-| Go | module at the repository root | written, not yet compiled or run |
-| Rust | crate | planned |
-| JavaScript | npm package | planned |
+| Language | Location | Content | Status |
+|---|---|---|---|
+| Go | module at the repository root (`server/`, `client/`) | server middleware, client, native tools | written, not yet compiled or run |
+| Rust | [rust/](rust/README.md), crate `mcp-jack` (MSRV 1.85) | server verifier and tower layer, client, native tools | written; `fmt`, `clippy` and `check` pass, tests not yet run |
+| TypeScript | [ts/](ts/README.md), npm package (Node 20+, no runtime dependencies) | server verifier with Fetch and `node:http` adapters, client, native tools | written, not yet type-checked or run |
 
-All implementations are checked against the same normative test vectors so they cannot drift apart.
+All implementations are checked against the same normative test vectors so they cannot drift apart. [interop/](interop/README.md) adds cross-language tests: a Node harness starts one server and one client executable per language and runs every scenario for all 3 × 3 server and client pairs, plus byte-exact signing checks.
 
 ### Go layout
 
@@ -55,12 +55,13 @@ All implementations are checked against the same normative test vectors so they 
 | `server` | Request verifier, policy engine, `net/http` middleware, native tools (enrollment, key rotation, user and invite administration), `BootstrapAdmin`, and the nonce, state and audit stores |
 | `client` | Signer abstraction, signing and verifying `http.RoundTripper`, connection profile, typed calls for the native tools |
 
-Run the checks (CI does the same):
+Run the checks (CI does the same; the Rust, TypeScript and interop commands are in their READMEs):
 
 ```
 go vet ./...
 go test -race ./...
 node spec/tools/gen-fixtures.mjs --check
+node interop/run.mjs --self-test
 ```
 
 ## Specification
