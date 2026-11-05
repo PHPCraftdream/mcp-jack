@@ -223,7 +223,7 @@ async function cancelBody(resp: Response): Promise<void> {
  *   ignored and UnauthenticatedResponseError{status} is thrown;
  * - every other verification failure (malformed_auth, unsupported_version,
  *   unknown_server_key, timestamp_out_of_window, bad_signature — all with
- *   httpStatus 0 per spec 01 section 5, where Go wrongly kept 401) and every
+ *   httpStatus 0 per spec 01 section 5, as Go's RoundTrip does too) and every
  *   configuration error propagates unchanged.
  */
 export function createSigningFetch(config: SigningFetchConfig, fetchImpl: typeof fetch = globalThis.fetch): SigningFetch {

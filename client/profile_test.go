@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -153,4 +154,53 @@ func TestNewClientFromProfile(t *testing.T) {
 	}, seedSignerByName(t, "alice"), nil); err == nil {
 		t.Fatal("expected error for invalid server public key")
 	}
+}
+
+func TestLocalKeyValidationHasNoHTTPStatus(t *testing.T) {
+	// The identity-point encoding {1,0,...,0} decodes to exactly 32 bytes but
+	// fails the spec 03 section 2 key rules, exercising the local pinned-key
+	// rejection path of LoadProfile, NewClientFromProfile and NewClient.
+	identity := make([]byte, 32)
+	identity[0] = 1
+
+	// assertClientSide requires err to be a *jack.Error coded key_rejected
+	// with HTTPStatus 0: a client-side code never becomes an HTTP response
+	// (Error.HTTPStatus contract), so the validator's wire 400 must not leak.
+	assertClientSide := func(t *testing.T, err error) {
+		t.Helper()
+		var je *jack.Error
+		if !errors.As(err, &je) {
+			t.Fatalf("got error %v, not a *jack.Error", err)
+		}
+		if je.Code != jack.CodeKeyRejected {
+			t.Fatalf("got code %q, want %q", je.Code, jack.CodeKeyRejected)
+		}
+		if je.HTTPStatus != 0 {
+			t.Fatalf("HTTPStatus = %d, want 0", je.HTTPStatus)
+		}
+	}
+
+	p := Profile{
+		URL:             "https://svc.example.test/mcp",
+		Aud:             "https://svc.example.test",
+		ServerPublicKey: jack.EncodeBase64URL(identity),
+	}
+	doc, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("marshal profile: %v", err)
+	}
+
+	_, err = LoadProfile(bytes.NewReader(doc))
+	assertClientSide(t, err)
+
+	_, err = NewClientFromProfile(p, seedSignerByName(t, "alice"), nil)
+	assertClientSide(t, err)
+
+	_, err = NewClient(Config{
+		BaseURL:   p.URL,
+		Aud:       p.Aud,
+		Signer:    seedSignerByName(t, "alice"),
+		ServerKey: identity,
+	})
+	assertClientSide(t, err)
 }

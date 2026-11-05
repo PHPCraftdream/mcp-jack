@@ -1,6 +1,7 @@
 /** Client profile: a configuration file holding ONLY public data (port of Go client/profile.go). */
 import { BadBase64UrlError, decodeBase64URLFixed } from "../encoding.js";
 import { validatePublicKey } from "../ed25519.js";
+import { JackError } from "../errors.js";
 import { Client } from "./rpc.js";
 import type { Clock, NonceSource } from "./auth.js";
 import type { Signer } from "./signer.js";
@@ -69,7 +70,10 @@ export function validateProfile(p: Profile): void {
   }
   const keyErr = validatePublicKey(serverKey);
   if (keyErr !== null) {
-    throw keyErr;
+    // Local validation never becomes an HTTP response: zero the validator's
+    // wire admission status (httpStatus 0 = never an HTTP response, the
+    // JackError contract), matching verifyResponse's client-side remap.
+    throw new JackError(0, keyErr.code, keyErr.message);
   }
   if (p.kid !== undefined && p.kid !== "") {
     try {

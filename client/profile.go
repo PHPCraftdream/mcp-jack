@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -59,6 +60,13 @@ func validateProfile(p Profile) error {
 		return fmt.Errorf("jack client: profile server_public_key: %w", jack.ErrBadBase64URL)
 	}
 	if err := jack.ValidatePublicKey(serverKey); err != nil {
+		// Local validation never becomes an HTTP response: zero the
+		// validator's wire admission status (400) per the Error.HTTPStatus
+		// contract, matching VerifyResponse's client-side remap.
+		var jErr *jack.Error
+		if errors.As(err, &jErr) {
+			return &jack.Error{HTTPStatus: 0, Code: jErr.Code, Message: jErr.Message}
+		}
 		return err
 	}
 	if p.KID != "" {

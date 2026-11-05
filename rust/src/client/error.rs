@@ -64,9 +64,8 @@ impl std::error::Error for ToolError {}
 /// A 401 answered WITHOUT a verified Jack-Auth header. Per spec 01 section 5
 /// ("A client MUST NOT act on an unsigned or unverified response beyond
 /// reporting its status") the unsigned body is never parsed, so this carries
-/// the HTTP status and nothing else. Go additionally surfaces the untrusted
-/// body code/message (client/transport.go runs parseErrorBody on the unsigned
-/// 401) — a reported Go/spec divergence.
+/// the HTTP status and nothing else. Go's Transport.RoundTrip behaves the
+/// same (client/transport.go).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnauthenticatedResponseError {
     pub status: u16,
