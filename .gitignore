@@ -6,3 +6,6 @@
 
 # interop executables built by CI
 interop/bin/
+
+# agent session handoffs, not project documentation
+/docs/checkpoints/
