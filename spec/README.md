@@ -54,3 +54,4 @@ node spec/tools/gen-fixtures.mjs --check  # fail if files on disk are stale
 - **Q8.** Human approval for destructive operations and the two-step change flow.
 - **Q9.** Licence.
 - **Q10.** Policy matching beyond methods and tool names (resource URIs, prompt names, argument conditions).
+- **Q11.** Duplicate keys inside one JSON object (in a JSON-RPC body or in native tool arguments): Go, `serde_json` and `JSON.parse` all keep the last value today, but the behaviour is unspecified and the fixtures deliberately contain no case for it. Either reject duplicates in all SDKs or specify last-wins.

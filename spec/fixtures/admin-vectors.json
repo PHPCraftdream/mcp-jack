@@ -11251,6 +11251,2035 @@
           }
         }
       ]
+    },
+    {
+      "id": "enroll-key-standard-alphabet",
+      "description": "a public key using + and / is rejected",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ],
+        "invites": [
+          {
+            "invite_id": "IX2S2pb1XvdRuMuE1FKY9MOXLmEUEH6PHGa7K510BtQ",
+            "scopes": [
+              "read"
+            ],
+            "kind": "human",
+            "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "created_at": 1767225500,
+            "expires_at": 1767228600,
+            "key_ttl_seconds": null
+          }
+        ],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg,ts=1767225600,nonce=PnKrPsJ3ucRORu8x1_zMDQ,sig=u-MA1VbSIlm0-FKMmj9e55mPSlQbdr9JgxazUe-KdeOAQudtM83cW3ETIbYRrg448hZrTJLMPgmj9l2ghMrwCQ"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suZW5yb2xsIiwiYXJndW1lbnRzIjp7ImNvZGUiOiJOVHBvUEFGWXdWa0FkajhrcHNfeF9RX3BnamthV1AtcHZkYmFWMGVRYXU0IiwibmFtZSI6Im5ld2JpZSIsInB1YmxpY19rZXkiOiIrMUpNQ05zMTh0N0U1SXlzRk1aRUtzbmxyOUN3MGthaENfaDVGa0RXcmQvIn19fQ",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.enroll\",\"arguments\":{\"code\":\"NTpoPAFYwVkAdj8kps_x_Q_pgjkaWP-pvdbaV0eQau4\",\"name\":\"newbie\",\"public_key\":\"+1JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrd/\"}}}"
+          },
+          "expect": {
+            "result": "reject",
+            "http_status": 400,
+            "code": "key_rejected",
+            "nonce_recorded": false,
+            "after": {
+              "users": [
+                {
+                  "name": "root",
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "kind": "human",
+                  "scopes": [
+                    "admin",
+                    "config:write",
+                    "lifecycle",
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": 1
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg",
+              "1767225600",
+              "PnKrPsJ3ucRORu8x1_zMDQ",
+              "gPNYufJsG23BfF4pDnYIQ9HQxlj9NTr1rS7EbsRb-IU"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "enroll-key-trailing-bits",
+      "description": "a public key differing only in unused trailing bits is rejected",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ],
+        "invites": [
+          {
+            "invite_id": "IX2S2pb1XvdRuMuE1FKY9MOXLmEUEH6PHGa7K510BtQ",
+            "scopes": [
+              "read"
+            ],
+            "kind": "human",
+            "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "created_at": 1767225500,
+            "expires_at": 1767228600,
+            "key_ttl_seconds": null
+          }
+        ],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg,ts=1767225600,nonce=nAv7Ro1_sJGNVZEsXZBbMA,sig=ahYWO2TFbgH8tzOBcJ-duynL31vg2-jVQwiUqyNbh4N823I_oWC1Fqykb0dOnjNAIR_qJjYWinl6VUVQGDTIAw"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suZW5yb2xsIiwiYXJndW1lbnRzIjp7ImNvZGUiOiJOVHBvUEFGWXdWa0FkajhrcHNfeF9RX3BnamthV1AtcHZkYmFWMGVRYXU0IiwibmFtZSI6Im5ld2JpZSIsInB1YmxpY19rZXkiOiI3MUpNQ05zMTh0N0U1SXlzRk1aRUtzbmxyOUN3MGthaENfaDVGa0RXcmRSIn19fQ",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.enroll\",\"arguments\":{\"code\":\"NTpoPAFYwVkAdj8kps_x_Q_pgjkaWP-pvdbaV0eQau4\",\"name\":\"newbie\",\"public_key\":\"71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdR\"}}}"
+          },
+          "expect": {
+            "result": "reject",
+            "http_status": 400,
+            "code": "key_rejected",
+            "nonce_recorded": false,
+            "after": {
+              "users": [
+                {
+                  "name": "root",
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "kind": "human",
+                  "scopes": [
+                    "admin",
+                    "config:write",
+                    "lifecycle",
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": 1
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg",
+              "1767225600",
+              "nAv7Ro1_sJGNVZEsXZBbMA",
+              "32w2d_O94zGoMrlxbH2HwFm1BdUKxtVHuHEeddqj4wA"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "enroll-key-whitespace",
+      "description": "a public key with embedded whitespace is rejected",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ],
+        "invites": [
+          {
+            "invite_id": "IX2S2pb1XvdRuMuE1FKY9MOXLmEUEH6PHGa7K510BtQ",
+            "scopes": [
+              "read"
+            ],
+            "kind": "human",
+            "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "created_at": 1767225500,
+            "expires_at": 1767228600,
+            "key_ttl_seconds": null
+          }
+        ],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg,ts=1767225600,nonce=ldsLGxU7bYu-G4K4qTuzpQ,sig=qa163aBPCEUT1X72J-D57fbpR6Du31YMnISkXXGOujWq8cyWRhqVoheUKpjaJDCRV4Z38lEJrH3Ett6DSwy-Dg"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suZW5yb2xsIiwiYXJndW1lbnRzIjp7ImNvZGUiOiJOVHBvUEFGWXdWa0FkajhrcHNfeF9RX3BnamthV1AtcHZkYmFWMGVRYXU0IiwibmFtZSI6Im5ld2JpZSIsInB1YmxpY19rZXkiOiI3MUpNQ05zMTh0N0U1SXlzRk1aRUsgc25scjlDdzBrYWhDX2g1RmtEV3JkUSJ9fX0",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.enroll\",\"arguments\":{\"code\":\"NTpoPAFYwVkAdj8kps_x_Q_pgjkaWP-pvdbaV0eQau4\",\"name\":\"newbie\",\"public_key\":\"71JMCNs18t7E5IysFMZEK snlr9Cw0kahC_h5FkDWrdQ\"}}}"
+          },
+          "expect": {
+            "result": "reject",
+            "http_status": 400,
+            "code": "key_rejected",
+            "nonce_recorded": false,
+            "after": {
+              "users": [
+                {
+                  "name": "root",
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "kind": "human",
+                  "scopes": [
+                    "admin",
+                    "config:write",
+                    "lifecycle",
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": 1
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg",
+              "1767225600",
+              "ldsLGxU7bYu-G4K4qTuzpQ",
+              "bDjiWJDvHLVvWqJey90ORau9vrSXdpSKfqrxJYPctjg"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "rotate-key-padded-encoding",
+      "description": "a padded rotation public_key is rejected",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          },
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice",
+            "kind": "human",
+            "scopes": [
+              "read"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ],
+        "invites": [],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=GZtGNPDqfvLSsiijDU57Ew,sig=CYV_6zaLKz4NPv2_CSVOSJ9-iEDmXPY5EkFc97nuejmgm73z9lC1Cs_snjKxwgRvdH0Y3XfXiRyDGO8JMCVQAg"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2sua2V5LnJvdGF0ZSIsImFyZ3VtZW50cyI6eyJwdWJsaWNfa2V5IjoiNzFKTUNOczE4dDdFNUl5c0ZNWkVLc25scjlDdzBrYWhDX2g1RmtEV3JkUT0iLCJwcm9vZiI6IktpOWR0UFpzcHFiTnVtSVdWZ01uVGNHTkFKR2hsYlhuX2x4Yy1VcDE5QWhpTzBzNUtOSkRhLTVaR3VoTVRsZEx0aHdzelhWSm9aMEFlcXFLZHotOUJRIn19fQ",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.key.rotate\",\"arguments\":{\"public_key\":\"71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ=\",\"proof\":\"Ki9dtPZspqbNumIWVgMnTcGNAJGhlbXn_lxc-Up19AhiO0s5KNJDa-5ZGuhMTldLthwszXVJoZ0AeqqKdz-9BQ\"}}}"
+          },
+          "expect": {
+            "result": "reject",
+            "http_status": 400,
+            "code": "key_rejected",
+            "audit": {
+              "tool": "jack.key.rotate",
+              "outcome": "failure",
+              "code": "key_rejected",
+              "actor_kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs"
+            },
+            "nonce_recorded": true,
+            "after": {
+              "users": [
+                {
+                  "name": "alice",
+                  "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+                  "kind": "human",
+                  "scopes": [
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                },
+                {
+                  "name": "root",
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "kind": "human",
+                  "scopes": [
+                    "admin",
+                    "config:write",
+                    "lifecycle",
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": 0
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+              "1767225600",
+              "GZtGNPDqfvLSsiijDU57Ew",
+              "kDXZCC_hP-480IyMKTsR2RudKpLyS6i-fza5_l_4fuM"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "rotate-key-standard-alphabet",
+      "description": "a rotation public_key using + and / is rejected",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          },
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice",
+            "kind": "human",
+            "scopes": [
+              "read"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ],
+        "invites": [],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=wEnVki98QHO7Cwzig-H1Ig,sig=jdlZRxPsqf96VgS0C5fh8ZrLUhXYQJkJXurHsMje3OQ8dAwvyjq5CLYM3sMra-ofJXp-tvw5-9qvcHtpnBmPAw"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2sua2V5LnJvdGF0ZSIsImFyZ3VtZW50cyI6eyJwdWJsaWNfa2V5IjoiKzFKTUNOczE4dDdFNUl5c0ZNWkVLc25scjlDdzBrYWhDX2g1RmtEV3JkLyIsInByb29mIjoiS2k5ZHRQWnNwcWJOdW1JV1ZnTW5UY0dOQUpHaGxiWG5fbHhjLVVwMTlBaGlPMHM1S05KRGEtNVpHdWhNVGxkTHRod3N6WFZKb1owQWVxcUtkei05QlEifX19",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.key.rotate\",\"arguments\":{\"public_key\":\"+1JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrd/\",\"proof\":\"Ki9dtPZspqbNumIWVgMnTcGNAJGhlbXn_lxc-Up19AhiO0s5KNJDa-5ZGuhMTldLthwszXVJoZ0AeqqKdz-9BQ\"}}}"
+          },
+          "expect": {
+            "result": "reject",
+            "http_status": 400,
+            "code": "key_rejected",
+            "audit": {
+              "tool": "jack.key.rotate",
+              "outcome": "failure",
+              "code": "key_rejected",
+              "actor_kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs"
+            },
+            "nonce_recorded": true,
+            "after": {
+              "users": [
+                {
+                  "name": "alice",
+                  "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+                  "kind": "human",
+                  "scopes": [
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                },
+                {
+                  "name": "root",
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "kind": "human",
+                  "scopes": [
+                    "admin",
+                    "config:write",
+                    "lifecycle",
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": 0
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+              "1767225600",
+              "wEnVki98QHO7Cwzig-H1Ig",
+              "NRQW9tjjCkWzMi1P4-UuqXO2hPHdP5o8jpiLP-87CGI"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "rotate-key-trailing-bits",
+      "description": "a rotation public_key with non-zero unused trailing bits is rejected",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          },
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice",
+            "kind": "human",
+            "scopes": [
+              "read"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ],
+        "invites": [],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=7tW2hg_5Xe5Ngu1seC1V1w,sig=_wGuQ0-fXQzqAsgxOp8LjqJGfJ-uR4IbT5EnZ1NWGztR4SlpzauLHeBWmS9wyOlWLJl0HDeKzSdQDAAxnBIeDQ"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2sua2V5LnJvdGF0ZSIsImFyZ3VtZW50cyI6eyJwdWJsaWNfa2V5IjoiNzFKTUNOczE4dDdFNUl5c0ZNWkVLc25scjlDdzBrYWhDX2g1RmtEV3JkUiIsInByb29mIjoiS2k5ZHRQWnNwcWJOdW1JV1ZnTW5UY0dOQUpHaGxiWG5fbHhjLVVwMTlBaGlPMHM1S05KRGEtNVpHdWhNVGxkTHRod3N6WFZKb1owQWVxcUtkei05QlEifX19",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.key.rotate\",\"arguments\":{\"public_key\":\"71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdR\",\"proof\":\"Ki9dtPZspqbNumIWVgMnTcGNAJGhlbXn_lxc-Up19AhiO0s5KNJDa-5ZGuhMTldLthwszXVJoZ0AeqqKdz-9BQ\"}}}"
+          },
+          "expect": {
+            "result": "reject",
+            "http_status": 400,
+            "code": "key_rejected",
+            "audit": {
+              "tool": "jack.key.rotate",
+              "outcome": "failure",
+              "code": "key_rejected",
+              "actor_kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs"
+            },
+            "nonce_recorded": true,
+            "after": {
+              "users": [
+                {
+                  "name": "alice",
+                  "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+                  "kind": "human",
+                  "scopes": [
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                },
+                {
+                  "name": "root",
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "kind": "human",
+                  "scopes": [
+                    "admin",
+                    "config:write",
+                    "lifecycle",
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": 0
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+              "1767225600",
+              "7tW2hg_5Xe5Ngu1seC1V1w",
+              "n4qnNtxWk_lHggP6ti9yDADkOiy461RaaF9ySonKf4A"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "rotate-key-whitespace",
+      "description": "a rotation public_key with embedded whitespace is rejected",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          },
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice",
+            "kind": "human",
+            "scopes": [
+              "read"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ],
+        "invites": [],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=fNSomI79oPb-Z8ATBpuw2A,sig=NsJCdqhCPlvDDipoxF864opbxbkOgBNaBAFaLVUGvQkuwLakDOPKy0ehYWUm9WldJbB8xGXoVayHzpDkbQbPCQ"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2sua2V5LnJvdGF0ZSIsImFyZ3VtZW50cyI6eyJwdWJsaWNfa2V5IjoiNzFKTUNOczE4dDdFNUl5c0ZNWkVLIHNubHI5Q3cwa2FoQ19oNUZrRFdyZFEiLCJwcm9vZiI6IktpOWR0UFpzcHFiTnVtSVdWZ01uVGNHTkFKR2hsYlhuX2x4Yy1VcDE5QWhpTzBzNUtOSkRhLTVaR3VoTVRsZEx0aHdzelhWSm9aMEFlcXFLZHotOUJRIn19fQ",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.key.rotate\",\"arguments\":{\"public_key\":\"71JMCNs18t7E5IysFMZEK snlr9Cw0kahC_h5FkDWrdQ\",\"proof\":\"Ki9dtPZspqbNumIWVgMnTcGNAJGhlbXn_lxc-Up19AhiO0s5KNJDa-5ZGuhMTldLthwszXVJoZ0AeqqKdz-9BQ\"}}}"
+          },
+          "expect": {
+            "result": "reject",
+            "http_status": 400,
+            "code": "key_rejected",
+            "audit": {
+              "tool": "jack.key.rotate",
+              "outcome": "failure",
+              "code": "key_rejected",
+              "actor_kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs"
+            },
+            "nonce_recorded": true,
+            "after": {
+              "users": [
+                {
+                  "name": "alice",
+                  "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+                  "kind": "human",
+                  "scopes": [
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                },
+                {
+                  "name": "root",
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "kind": "human",
+                  "scopes": [
+                    "admin",
+                    "config:write",
+                    "lifecycle",
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": 0
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+              "1767225600",
+              "fNSomI79oPb-Z8ATBpuw2A",
+              "U03akiWfMU1FKAwmoUBr5GaMHX_A4I6JuCv_xWEcID0"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "rotate-key-wrong-length",
+      "description": "a 31-byte rotation public_key is rejected",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          },
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice",
+            "kind": "human",
+            "scopes": [
+              "read"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ],
+        "invites": [],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=DjGMVZqxwOrQKbJjHiO6Rg,sig=kdxNkr9jBqNwBbiPPhxIv53ldterfLv8im_FroSkXKRqgwPY-31ZG96lJUjfNbK-T_53QsTAP6Nk5317FUsMCw"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2sua2V5LnJvdGF0ZSIsImFyZ3VtZW50cyI6eyJwdWJsaWNfa2V5IjoiNzFKTUNOczE4dDdFNUl5c0ZNWkVLc25scjlDdzBrYWhDX2g1RmtEV3JRIiwicHJvb2YiOiJLaTlkdFBac3BxYk51bUlXVmdNblRjR05BSkdobGJYbl9seGMtVXAxOUFoaU8wczVLTkpEYS01Wkd1aE1UbGRMdGh3c3pYVkpvWjBBZXFxS2R6LTlCUSJ9fX0",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.key.rotate\",\"arguments\":{\"public_key\":\"71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrQ\",\"proof\":\"Ki9dtPZspqbNumIWVgMnTcGNAJGhlbXn_lxc-Up19AhiO0s5KNJDa-5ZGuhMTldLthwszXVJoZ0AeqqKdz-9BQ\"}}}"
+          },
+          "expect": {
+            "result": "reject",
+            "http_status": 400,
+            "code": "key_rejected",
+            "audit": {
+              "tool": "jack.key.rotate",
+              "outcome": "failure",
+              "code": "key_rejected",
+              "actor_kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs"
+            },
+            "nonce_recorded": true,
+            "after": {
+              "users": [
+                {
+                  "name": "alice",
+                  "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+                  "kind": "human",
+                  "scopes": [
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                },
+                {
+                  "name": "root",
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "kind": "human",
+                  "scopes": [
+                    "admin",
+                    "config:write",
+                    "lifecycle",
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": 0
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+              "1767225600",
+              "DjGMVZqxwOrQKbJjHiO6Rg",
+              "-bR87PTDpwg4mcMeAFAdgm1esYaq_mUw1C_Hbf1HVI8"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "admin-create-not-after-fraction",
+      "description": "a not_after of 1.5 is not an integer",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ],
+        "invites": [],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU,ts=1767225600,nonce=qIiOu-Aot3qQaGNNNKmldw,sig=GcWdG8QRhJVjLplBC25ek5VYSW8iR4rlm_V5d0-2Tv77-jnRCoAZ2yw54ic3i2NPamIZVqNgys1Sl_FSAM0YAg"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suYWRtaW4udXNlci5jcmVhdGUiLCJhcmd1bWVudHMiOnsibmFtZSI6ImRhdmUiLCJwdWJsaWNfa2V5IjoiNzFKTUNOczE4dDdFNUl5c0ZNWkVLc25scjlDdzBrYWhDX2g1RmtEV3JkUSIsInNjb3BlcyI6WyJyZWFkIl0sIm5vdF9hZnRlciI6MS41fX19",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.admin.user.create\",\"arguments\":{\"name\":\"dave\",\"public_key\":\"71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ\",\"scopes\":[\"read\"],\"not_after\":1.5}}}"
+          },
+          "expect": {
+            "result": "reject",
+            "http_status": 400,
+            "code": "invalid_params",
+            "audit": {
+              "tool": "jack.admin.user.create",
+              "outcome": "failure",
+              "code": "invalid_params",
+              "actor_kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU"
+            },
+            "nonce_recorded": true,
+            "after": {
+              "users": [
+                {
+                  "name": "root",
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "kind": "human",
+                  "scopes": [
+                    "admin",
+                    "config:write",
+                    "lifecycle",
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": 0
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+              "1767225600",
+              "qIiOu-Aot3qQaGNNNKmldw",
+              "xFNgm2jwmijYPWXxg32QYNUTgdy_i09OJwhknhnQbhU"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "admin-create-not-after-exponent",
+      "description": "a not_after of 1e3 is not an integer",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ],
+        "invites": [],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU,ts=1767225600,nonce=VvrztcUyOGanbLayLt9JyQ,sig=EpH_WOpAWeWIUxvnrUS01mRI1msTnUvLp4_2l1VlEnn0LEzxAGtbADsuE1u1Fj4Yv9kwUQHNhkRA96N5ypDpBg"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suYWRtaW4udXNlci5jcmVhdGUiLCJhcmd1bWVudHMiOnsibmFtZSI6ImRhdmUiLCJwdWJsaWNfa2V5IjoiNzFKTUNOczE4dDdFNUl5c0ZNWkVLc25scjlDdzBrYWhDX2g1RmtEV3JkUSIsInNjb3BlcyI6WyJyZWFkIl0sIm5vdF9hZnRlciI6MWUzfX19",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.admin.user.create\",\"arguments\":{\"name\":\"dave\",\"public_key\":\"71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ\",\"scopes\":[\"read\"],\"not_after\":1e3}}}"
+          },
+          "expect": {
+            "result": "reject",
+            "http_status": 400,
+            "code": "invalid_params",
+            "audit": {
+              "tool": "jack.admin.user.create",
+              "outcome": "failure",
+              "code": "invalid_params",
+              "actor_kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU"
+            },
+            "nonce_recorded": true,
+            "after": {
+              "users": [
+                {
+                  "name": "root",
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "kind": "human",
+                  "scopes": [
+                    "admin",
+                    "config:write",
+                    "lifecycle",
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": 0
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+              "1767225600",
+              "VvrztcUyOGanbLayLt9JyQ",
+              "elxdaso8EZs8-8g3gcKS3fnQOlUjLknqQgz2Dc4Z4hw"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "admin-create-not-after-negative",
+      "description": "a negative not_after is out of range",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ],
+        "invites": [],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU,ts=1767225600,nonce=oGxFq8FhHxly9IwlSorwwA,sig=oOfiB-7OZeKSvYUQZsAD4qI9LFp9AfDhEsl_06CgRDnw05RsUlEnb-JhM2iWjh_xEfXAMQdSEXBkZHlRovCVCQ"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suYWRtaW4udXNlci5jcmVhdGUiLCJhcmd1bWVudHMiOnsibmFtZSI6ImRhdmUiLCJwdWJsaWNfa2V5IjoiNzFKTUNOczE4dDdFNUl5c0ZNWkVLc25scjlDdzBrYWhDX2g1RmtEV3JkUSIsInNjb3BlcyI6WyJyZWFkIl0sIm5vdF9hZnRlciI6LTF9fX0",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.admin.user.create\",\"arguments\":{\"name\":\"dave\",\"public_key\":\"71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ\",\"scopes\":[\"read\"],\"not_after\":-1}}}"
+          },
+          "expect": {
+            "result": "reject",
+            "http_status": 400,
+            "code": "invalid_params",
+            "audit": {
+              "tool": "jack.admin.user.create",
+              "outcome": "failure",
+              "code": "invalid_params",
+              "actor_kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU"
+            },
+            "nonce_recorded": true,
+            "after": {
+              "users": [
+                {
+                  "name": "root",
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "kind": "human",
+                  "scopes": [
+                    "admin",
+                    "config:write",
+                    "lifecycle",
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": 0
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+              "1767225600",
+              "oGxFq8FhHxly9IwlSorwwA",
+              "kn2d3DMxoK0MMcLu6KHkWdn-6IbQb2n8sjz-Ecr2b-o"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "admin-create-not-after-above-max",
+      "description": "a not_after above 999999999999 is out of range",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ],
+        "invites": [],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU,ts=1767225600,nonce=9EW4zFve7P1n-Nhy45tcBg,sig=rOeGozC0HUVkO64q3Sj3JGD39kBC36dtu99JMpkoZyEG2DTBVAbVuIOAAvnOQTm9ekVPG23Uo8HvsYj4Y2jJCw"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suYWRtaW4udXNlci5jcmVhdGUiLCJhcmd1bWVudHMiOnsibmFtZSI6ImRhdmUiLCJwdWJsaWNfa2V5IjoiNzFKTUNOczE4dDdFNUl5c0ZNWkVLc25scjlDdzBrYWhDX2g1RmtEV3JkUSIsInNjb3BlcyI6WyJyZWFkIl0sIm5vdF9hZnRlciI6MTAwMDAwMDAwMDAwMH19fQ",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.admin.user.create\",\"arguments\":{\"name\":\"dave\",\"public_key\":\"71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ\",\"scopes\":[\"read\"],\"not_after\":1000000000000}}}"
+          },
+          "expect": {
+            "result": "reject",
+            "http_status": 400,
+            "code": "invalid_params",
+            "audit": {
+              "tool": "jack.admin.user.create",
+              "outcome": "failure",
+              "code": "invalid_params",
+              "actor_kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU"
+            },
+            "nonce_recorded": true,
+            "after": {
+              "users": [
+                {
+                  "name": "root",
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "kind": "human",
+                  "scopes": [
+                    "admin",
+                    "config:write",
+                    "lifecycle",
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": 0
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+              "1767225600",
+              "9EW4zFve7P1n-Nhy45tcBg",
+              "j82OMdQc6GUjQXuM4rJkJw6rTB7_Ow1nfVuAS8syzaU"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "admin-create-not-after-huge",
+      "description": "a not_after beyond float64 precision is out of range",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ],
+        "invites": [],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU,ts=1767225600,nonce=8ENV9YkvlaDkCngCg_Rplw,sig=q3M2VkUYkgANHY6fyEeslcfqssBk2XmL9E9VsXhG46xN3VUVhCdDRUQi6FQ0K6_vWDbuHNSzboKcO5-a5ELwDA"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suYWRtaW4udXNlci5jcmVhdGUiLCJhcmd1bWVudHMiOnsibmFtZSI6ImRhdmUiLCJwdWJsaWNfa2V5IjoiNzFKTUNOczE4dDdFNUl5c0ZNWkVLc25scjlDdzBrYWhDX2g1RmtEV3JkUSIsInNjb3BlcyI6WyJyZWFkIl0sIm5vdF9hZnRlciI6OTAwNzE5OTI1NDc0MDk5M319fQ",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.admin.user.create\",\"arguments\":{\"name\":\"dave\",\"public_key\":\"71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ\",\"scopes\":[\"read\"],\"not_after\":9007199254740993}}}"
+          },
+          "expect": {
+            "result": "reject",
+            "http_status": 400,
+            "code": "invalid_params",
+            "audit": {
+              "tool": "jack.admin.user.create",
+              "outcome": "failure",
+              "code": "invalid_params",
+              "actor_kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU"
+            },
+            "nonce_recorded": true,
+            "after": {
+              "users": [
+                {
+                  "name": "root",
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "kind": "human",
+                  "scopes": [
+                    "admin",
+                    "config:write",
+                    "lifecycle",
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": 0
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+              "1767225600",
+              "8ENV9YkvlaDkCngCg_Rplw",
+              "OUXZD9IQk7YaeqPYdrRqJYGIidq9w50tn0trtHoxLEI"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "admin-create-not-after-negative-zero",
+      "description": "a not_after of -0 is the integer 0 and accepted",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ],
+        "invites": [],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU,ts=1767225600,nonce=FqEgS0svwhRQZfycSTyLvg,sig=hGyFSJ_MZLITN2M9Ze-VnLgO6EHrMAwU0XxkLXj3Y8TO0HekZQnN3ooH6xKovxJ0LsmZbF-PEx5S9XEz-f1ZBQ"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suYWRtaW4udXNlci5jcmVhdGUiLCJhcmd1bWVudHMiOnsibmFtZSI6ImRhdmUiLCJwdWJsaWNfa2V5IjoiNzFKTUNOczE4dDdFNUl5c0ZNWkVLc25scjlDdzBrYWhDX2g1RmtEV3JkUSIsInNjb3BlcyI6WyJyZWFkIl0sIm5vdF9hZnRlciI6LTB9fX0",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.admin.user.create\",\"arguments\":{\"name\":\"dave\",\"public_key\":\"71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ\",\"scopes\":[\"read\"],\"not_after\":-0}}}"
+          },
+          "expect": {
+            "result": "accept",
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "structured": {
+              "kid": "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg"
+            },
+            "audit": {
+              "tool": "jack.admin.user.create",
+              "outcome": "success",
+              "code": null,
+              "actor_kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU"
+            },
+            "nonce_recorded": true,
+            "after": {
+              "users": [
+                {
+                  "name": "dave",
+                  "kid": "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg",
+                  "kind": "human",
+                  "scopes": [
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": 0
+                },
+                {
+                  "name": "root",
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "kind": "human",
+                  "scopes": [
+                    "admin",
+                    "config:write",
+                    "lifecycle",
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": 0
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+              "1767225600",
+              "FqEgS0svwhRQZfycSTyLvg",
+              "X-iOF3INMlvOgeaM8vVSlUoVS_sjuFeIBzLC7LQPfTI"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "invite-create-ttl-fraction",
+      "description": "a ttl_seconds of 1.0 is not an integer",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ],
+        "invites": [],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU,ts=1767225600,nonce=37OZ0Iib4CwMhPrvf2TNIQ,sig=maNleD2WEepaUBWkBMDhjlW3sj55-6RINNVqqg3f1fNw8fTkD9_S9Azp0XRIh4YHJQ_ju-ViVmbUUOcGjXUNDw"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suYWRtaW4uaW52aXRlLmNyZWF0ZSIsImFyZ3VtZW50cyI6eyJzY29wZXMiOlsicmVhZCJdLCJ0dGxfc2Vjb25kcyI6MS4wfX19",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.admin.invite.create\",\"arguments\":{\"scopes\":[\"read\"],\"ttl_seconds\":1.0}}}"
+          },
+          "expect": {
+            "result": "reject",
+            "http_status": 400,
+            "code": "invalid_params",
+            "audit": {
+              "tool": "jack.admin.invite.create",
+              "outcome": "failure",
+              "code": "invalid_params",
+              "actor_kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU"
+            },
+            "nonce_recorded": true,
+            "after": {
+              "users": [
+                {
+                  "name": "root",
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "kind": "human",
+                  "scopes": [
+                    "admin",
+                    "config:write",
+                    "lifecycle",
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": 0
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+              "1767225600",
+              "37OZ0Iib4CwMhPrvf2TNIQ",
+              "R2QGtovL-pegtuVcC_YJV6abqYcktoXxwJdBHwjOAlk"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "invite-create-ttl-exponent",
+      "description": "a ttl_seconds of 1e3 is not an integer",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ],
+        "invites": [],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU,ts=1767225600,nonce=ApRVQaHkG6Qu4_wtB1jo7Q,sig=KZcSwFCm8Pyv6seNhdXe-ecqo0_RtWadIHr7_EcUKEWTanUcjFtZAFGtWMkb0YsbN2T6mQWvJUkzuWLgcjD9Bw"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suYWRtaW4uaW52aXRlLmNyZWF0ZSIsImFyZ3VtZW50cyI6eyJzY29wZXMiOlsicmVhZCJdLCJ0dGxfc2Vjb25kcyI6MWUzfX19",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.admin.invite.create\",\"arguments\":{\"scopes\":[\"read\"],\"ttl_seconds\":1e3}}}"
+          },
+          "expect": {
+            "result": "reject",
+            "http_status": 400,
+            "code": "invalid_params",
+            "audit": {
+              "tool": "jack.admin.invite.create",
+              "outcome": "failure",
+              "code": "invalid_params",
+              "actor_kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU"
+            },
+            "nonce_recorded": true,
+            "after": {
+              "users": [
+                {
+                  "name": "root",
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "kind": "human",
+                  "scopes": [
+                    "admin",
+                    "config:write",
+                    "lifecycle",
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": 0
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+              "1767225600",
+              "ApRVQaHkG6Qu4_wtB1jo7Q",
+              "5_beOuQsQ_rRYZO5Z59hVIebx2J723u8M6To3VannXM"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "invite-create-ttl-negative-zero",
+      "description": "a ttl_seconds of -0 is the integer 0, below the minimum",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ],
+        "invites": [],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU,ts=1767225600,nonce=R7lVMnu8na-JV0EtXGXGUg,sig=yMMYfySbbic4LRFJDbjXryAt0a6B65vlXNGjKQJoRqmLkgWdbyBlX3PtskXTBtCN2QWERjJZT2LU41MJK4PDDw"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suYWRtaW4uaW52aXRlLmNyZWF0ZSIsImFyZ3VtZW50cyI6eyJzY29wZXMiOlsicmVhZCJdLCJ0dGxfc2Vjb25kcyI6LTB9fX0",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.admin.invite.create\",\"arguments\":{\"scopes\":[\"read\"],\"ttl_seconds\":-0}}}"
+          },
+          "expect": {
+            "result": "reject",
+            "http_status": 400,
+            "code": "invalid_params",
+            "audit": {
+              "tool": "jack.admin.invite.create",
+              "outcome": "failure",
+              "code": "invalid_params",
+              "actor_kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU"
+            },
+            "nonce_recorded": true,
+            "after": {
+              "users": [
+                {
+                  "name": "root",
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "kind": "human",
+                  "scopes": [
+                    "admin",
+                    "config:write",
+                    "lifecycle",
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": 0
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+              "1767225600",
+              "R7lVMnu8na-JV0EtXGXGUg",
+              "0sCPmiD8Fa4PRgfKGqCF2g7lOEtzMhKU9tof3IvBFP0"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "invite-create-ttl-string",
+      "description": "a ttl_seconds in a JSON string is not a number",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ],
+        "invites": [],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU,ts=1767225600,nonce=dw5WEYUxgaBF7cFZBd3bHg,sig=96vgWCKv-CnaNz56qoJRV67tb8b2JiqrIODQ9--wbEcZU9LHsQX-bGnco7tYaTtTJzhIGpoclDE6zIn_CcNlCw"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suYWRtaW4uaW52aXRlLmNyZWF0ZSIsImFyZ3VtZW50cyI6eyJzY29wZXMiOlsicmVhZCJdLCJ0dGxfc2Vjb25kcyI6IjYwIn19fQ",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.admin.invite.create\",\"arguments\":{\"scopes\":[\"read\"],\"ttl_seconds\":\"60\"}}}"
+          },
+          "expect": {
+            "result": "reject",
+            "http_status": 400,
+            "code": "invalid_params",
+            "audit": {
+              "tool": "jack.admin.invite.create",
+              "outcome": "failure",
+              "code": "invalid_params",
+              "actor_kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU"
+            },
+            "nonce_recorded": true,
+            "after": {
+              "users": [
+                {
+                  "name": "root",
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "kind": "human",
+                  "scopes": [
+                    "admin",
+                    "config:write",
+                    "lifecycle",
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": 0
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+              "1767225600",
+              "dw5WEYUxgaBF7cFZBd3bHg",
+              "C4XbCKVQpBDCgkr8PW6ZNMUKCt-kj-N5zvjUiq5aLT4"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "invite-create-ttl-boolean",
+      "description": "a boolean ttl_seconds is not a number",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ],
+        "invites": [],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU,ts=1767225600,nonce=gJnvWhp-SLdn6AIGIEsXHg,sig=EPu0fqLmmxBqZxXXwdCk1HcghXc7kYPTrmVzxOcsl_GaxtchmfJjcJEyl2y-G5kx5awJEWIEFdoEZsAYSD7vCA"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suYWRtaW4uaW52aXRlLmNyZWF0ZSIsImFyZ3VtZW50cyI6eyJzY29wZXMiOlsicmVhZCJdLCJ0dGxfc2Vjb25kcyI6dHJ1ZX19fQ",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.admin.invite.create\",\"arguments\":{\"scopes\":[\"read\"],\"ttl_seconds\":true}}}"
+          },
+          "expect": {
+            "result": "reject",
+            "http_status": 400,
+            "code": "invalid_params",
+            "audit": {
+              "tool": "jack.admin.invite.create",
+              "outcome": "failure",
+              "code": "invalid_params",
+              "actor_kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU"
+            },
+            "nonce_recorded": true,
+            "after": {
+              "users": [
+                {
+                  "name": "root",
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "kind": "human",
+                  "scopes": [
+                    "admin",
+                    "config:write",
+                    "lifecycle",
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": 0
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+              "1767225600",
+              "gJnvWhp-SLdn6AIGIEsXHg",
+              "E3RW6rHUN7JvRQcxLZujlKzy7uO2jr0DNlEZ9HqYJZg"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "invite-create-ttl-huge",
+      "description": "a ttl_seconds beyond float64 precision is out of range",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ],
+        "invites": [],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU,ts=1767225600,nonce=thOLT5O5td8d8e8yw8NEAQ,sig=vlhuvW2it8QveNxL70gYFzKPGou5pU_Y_l34HLO1BOPhrpOJxw4xu_uwmri8ouxhq5eJqI8qsL1anK9F91bNBg"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suYWRtaW4uaW52aXRlLmNyZWF0ZSIsImFyZ3VtZW50cyI6eyJzY29wZXMiOlsicmVhZCJdLCJ0dGxfc2Vjb25kcyI6OTAwNzE5OTI1NDc0MDk5M319fQ",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.admin.invite.create\",\"arguments\":{\"scopes\":[\"read\"],\"ttl_seconds\":9007199254740993}}}"
+          },
+          "expect": {
+            "result": "reject",
+            "http_status": 400,
+            "code": "invalid_params",
+            "audit": {
+              "tool": "jack.admin.invite.create",
+              "outcome": "failure",
+              "code": "invalid_params",
+              "actor_kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU"
+            },
+            "nonce_recorded": true,
+            "after": {
+              "users": [
+                {
+                  "name": "root",
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "kind": "human",
+                  "scopes": [
+                    "admin",
+                    "config:write",
+                    "lifecycle",
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": 0
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+              "1767225600",
+              "thOLT5O5td8d8e8yw8NEAQ",
+              "czuMqOZ-TzBbpwYzFXhvIqSFc38N5NjT-RpRhc6q3yg"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "invite-create-ttl-decoy-member",
+      "description": "a decoy member cannot override the ttl_seconds number text",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "kind": "human",
+            "scopes": [
+              "admin",
+              "read",
+              "lifecycle",
+              "config:write"
+            ],
+            "not_before": null,
+            "not_after": null
+          }
+        ],
+        "invites": [],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU,ts=1767225600,nonce=SaTVdTMeHHFplHu8SrFRWg,sig=M0w_F5f3mC1IN_ZrNkqNXVbhCtwCV72trKtNcpjk7SZbXszkmWwPDFII8U4a3Cpy6PJJt7gb83-17WxyoCxJDw"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suYWRtaW4uaW52aXRlLmNyZWF0ZSIsImFyZ3VtZW50cyI6eyJzY29wZXMiOlsicmVhZCJdLCJ0dGxfc2Vjb25kcyI6NjB9fSwicGFyYW1zXHUwMDAwYXJndW1lbnRzXHUwMDAwdHRsX3NlY29uZHMiOjEuMH0",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.admin.invite.create\",\"arguments\":{\"scopes\":[\"read\"],\"ttl_seconds\":60}},\"params\\u0000arguments\\u0000ttl_seconds\":1.0}"
+          },
+          "expect": {
+            "result": "accept",
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "structured": {
+              "invite_id": "<b64u43>",
+              "code": "<b64u43>",
+              "expires_at": 1767225660
+            },
+            "audit": {
+              "tool": "jack.admin.invite.create",
+              "outcome": "success",
+              "code": null,
+              "actor_kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU"
+            },
+            "nonce_recorded": true,
+            "after": {
+              "users": [
+                {
+                  "name": "root",
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "kind": "human",
+                  "scopes": [
+                    "admin",
+                    "config:write",
+                    "lifecycle",
+                    "read"
+                  ],
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": 1
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+              "1767225600",
+              "SaTVdTMeHHFplHu8SrFRWg",
+              "3HgFQKXEfaxFiF8iq3jmJUzO6UTLSg6Ch5THBzQaTcQ"
+            ]
+          }
+        }
+      ]
     }
   ]
 }

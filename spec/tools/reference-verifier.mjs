@@ -237,16 +237,136 @@ export function validateRegistry(doc) {
 }
 
 // ---- body classification (spec 02 section 4) ----
+// Strict JSON parser that keeps each number literal's source text, because the
+// integer rule of spec 03 section 3 reads the JSON text, which JSON.parse
+// cannot recover. `sources` mirrors the parsed tree with one node per value; a
+// number's node carries its source text in `.text`. Keys are exact member
+// names, so no member name can alias another member's path.
+function parseJSONRaw(src) {
+  let i = 0;
+  const fail = () => { throw new Error('invalid JSON'); };
+  const ws = () => { while (i < src.length && ' \t\n\r'.includes(src[i])) i++; };
+  const digit = (c) => c >= '0' && c <= '9';
+  // An own property even for the key "__proto__", which plain assignment would turn into a prototype change.
+  const member = (obj, key, value) => {
+    if (key === '__proto__') Object.defineProperty(obj, key, { value, writable: true, enumerable: true, configurable: true });
+    else obj[key] = value;
+  };
+  function string() {
+    i += 1; // opening quote
+    let out = '';
+    for (;;) {
+      if (i >= src.length) fail();
+      const c = src[i];
+      if (c === '"') { i += 1; return out; }
+      if (c === '\\') {
+        const e = src[i + 1];
+        i += 2;
+        if (e === 'u') {
+          const hex = src.slice(i, i + 4);
+          if (!/^[0-9a-fA-F]{4}$/.test(hex)) fail();
+          out += String.fromCharCode(parseInt(hex, 16));
+          i += 4;
+        } else if (e === '"') out += '"';
+        else if (e === '\\') out += '\\';
+        else if (e === '/') out += '/';
+        else if (e === 'b') out += '\b';
+        else if (e === 'f') out += '\f';
+        else if (e === 'n') out += '\n';
+        else if (e === 'r') out += '\r';
+        else if (e === 't') out += '\t';
+        else fail();
+      } else {
+        if (src.charCodeAt(i) < 0x20) fail();
+        out += c;
+        i += 1;
+      }
+    }
+  }
+  function number(node) {
+    const start = i;
+    if (src[i] === '-') i += 1;
+    if (src[i] === '0') i += 1;
+    else if (digit(src[i])) { while (i < src.length && digit(src[i])) i += 1; }
+    else fail();
+    if (src[i] === '.') {
+      i += 1;
+      if (!digit(src[i])) fail();
+      while (i < src.length && digit(src[i])) i += 1;
+    }
+    if (src[i] === 'e' || src[i] === 'E') {
+      i += 1;
+      if (src[i] === '+' || src[i] === '-') i += 1;
+      if (!digit(src[i])) fail();
+      while (i < src.length && digit(src[i])) i += 1;
+    }
+    node.text = src.slice(start, i);
+    return Number(node.text);
+  }
+  // value(node) parses one value; `node` is its parallel sources node.
+  function value(node) {
+    ws();
+    const c = src[i];
+    if (c === '{') {
+      i += 1;
+      ws();
+      const obj = {};
+      if (src[i] === '}') { i += 1; return obj; }
+      for (;;) {
+        if (src[i] !== '"') fail();
+        const key = string();
+        ws();
+        if (src[i] !== ':') fail();
+        i += 1;
+        const child = {};
+        member(node, key, child);
+        member(obj, key, value(child));
+        ws();
+        if (src[i] === ',') { i += 1; ws(); continue; }
+        if (src[i] === '}') { i += 1; return obj; }
+        fail();
+      }
+    }
+    if (c === '[') {
+      i += 1;
+      ws();
+      const arr = [];
+      if (src[i] === ']') { i += 1; return arr; }
+      for (;;) {
+        const child = {};
+        node[arr.length] = child;
+        arr.push(value(child));
+        ws();
+        if (src[i] === ',') { i += 1; ws(); continue; }
+        if (src[i] === ']') { i += 1; return arr; }
+        fail();
+      }
+    }
+    if (c === '"') return string();
+    if (src.startsWith('true', i)) { i += 4; return true; }
+    if (src.startsWith('false', i)) { i += 6; return false; }
+    if (src.startsWith('null', i)) { i += 4; return null; }
+    return number(node);
+  }
+  const root = {};
+  const v = value(root);
+  ws();
+  if (i !== src.length) fail();
+  return { value: v, sources: root };
+}
+
 function classify(body) {
-  let msg;
+  let parsed;
   try {
-    msg = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body));
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(body);
+    parsed = parseJSONRaw(text);
   } catch {
     return null;
   }
+  const msg = parsed.value;
   if (!msg || typeof msg !== 'object' || Array.isArray(msg) || msg.jsonrpc !== '2.0') return null;
-  if (typeof msg.method === 'string') return { kind: 'request', msg };
-  if (!('method' in msg) && 'id' in msg && ('result' in msg) !== ('error' in msg)) return { kind: 'response', msg };
+  if (typeof msg.method === 'string') return { kind: 'request', msg, sources: parsed.sources };
+  if (!('method' in msg) && 'id' in msg && ('result' in msg) !== ('error' in msg)) return { kind: 'response', msg, sources: null };
   return null;
 }
 
@@ -288,14 +408,16 @@ function argKind(v) {
   return v;
 }
 
-function argInt(v, min, max) {
-  if (!Number.isInteger(v) || v < min || v > max) throw bad();
+function argInt(v, min, max, rawText) {
+  // An integer only when the JSON text has no fraction and no exponent (spec 03
+  // section 3); rawText is null when the value was not a JSON number.
+  if (rawText === null || /[.eE]/.test(rawText) || !Number.isInteger(v) || v < min || v > max) throw bad();
   return v;
 }
 
-function argTime(v) {
+function argTime(v, rawText) {
   if (v === undefined || v === null) return null;
-  return argInt(v, 0, 999999999999);
+  return argInt(v, 0, 999999999999, rawText);
 }
 
 function argKey(v) {
@@ -318,7 +440,7 @@ function activeAdmins(entries, now) {
 }
 
 function nativeCall(tool, rawArgs, ctx) {
-  const { state, caller, kid, ts, hooks } = ctx;
+  const { state, caller, kid, ts, hooks, rawNumberText } = ctx;
   const entries = state.registry.keys;
   const heldByCaller = (s) => caller.scopes.includes(s);
   const find = (k) => entries.find((e) => e.kid === k);
@@ -380,8 +502,8 @@ function nativeCall(tool, rawArgs, ctx) {
       if (typeof args.name !== 'string' || !NAME_RE.test(args.name)) throw bad();
       const scopes = argScopes(args.scopes);
       const kind = argKind(args.kind);
-      const not_before = argTime(args.not_before);
-      const not_after = argTime(args.not_after);
+      const not_before = argTime(args.not_before, rawNumberText('not_before'));
+      const not_after = argTime(args.not_after, rawNumberText('not_after'));
       if (not_before !== null && not_after !== null && not_before >= not_after) throw bad();
       const raw = argKey(args.public_key);
       if (!scopes.every(heldByCaller)) throw new Rej(403, 'scope_escalation');
@@ -420,8 +542,8 @@ function nativeCall(tool, rawArgs, ctx) {
     case 'jack.admin.invite.create': {
       const scopes = argScopes(args.scopes);
       const kind = argKind(args.kind);
-      const ttl = args.ttl_seconds === undefined ? 3600 : argInt(args.ttl_seconds, 1, 604800);
-      const keyTtl = args.key_ttl_seconds === undefined ? null : argInt(args.key_ttl_seconds, 1, 31536000);
+      const ttl = args.ttl_seconds === undefined ? 3600 : argInt(args.ttl_seconds, 1, 604800, rawNumberText('ttl_seconds'));
+      const keyTtl = args.key_ttl_seconds === undefined ? null : argInt(args.key_ttl_seconds, 1, 31536000, rawNumberText('key_ttl_seconds'));
       if (!scopes.every(heldByCaller)) throw new Rej(403, 'scope_escalation');
       if (kind === 'agent' && scopes.includes('admin')) throw new Rej(403, 'agent_admin_forbidden');
       const code = hooks.newCode(state);
@@ -523,7 +645,11 @@ export function verifyRequest(req, state, hooks = defaultHooks) {
     if (!NATIVE_TOOLS.has(tool)) return fail(403, 'operation_denied');
     const audit = (outcome, code) => (AUDITED(tool) ? { tool, outcome, code, actor_kid: p.kid } : undefined);
     try {
-      const structured = nativeCall(tool, msg.params.arguments, { state, caller, kid: p.kid, ts: p.ts, hooks });
+      const rawNumberText = (key) => {
+        const node = parsed.sources?.params?.arguments?.[key];
+        return typeof node?.text === 'string' ? node.text : null;
+      };
+      const structured = nativeCall(tool, msg.params.arguments, { state, caller, kid: p.kid, ts: p.ts, hooks, rawNumberText });
       return done({ result: 'accept', kid: p.kid, structured, ...(AUDITED(tool) ? { audit: audit('success', null) } : {}) });
     } catch (e) {
       if (!(e instanceof Rej)) throw e;

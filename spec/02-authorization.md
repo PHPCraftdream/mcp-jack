@@ -81,7 +81,7 @@ Tool names beginning with `jack.` belong to the protocol (see 03). Requests for 
 After authentication succeeds:
 
 1. An HTTP `GET` carries no JSON-RPC and is accepted (it opens a stream or fetches a resource; individual streams are scoped when they are defined). HTTP methods other than `GET` and `POST` are not defined by v0.1; a server SHOULD answer them with `405`.
-2. For `POST` the body MUST be a single UTF-8 JSON-RPC 2.0 object, otherwise `400 invalid_request`. That covers: invalid UTF-8, non-JSON, a non-object (including a batch array), a missing or wrong `jsonrpc` member, and an empty body. The object is one of:
+2. For `POST` the body MUST be a single UTF-8 JSON-RPC 2.0 object, otherwise `400 invalid_request`. That covers: invalid UTF-8, non-JSON, a non-object (including a batch array), a missing or wrong `jsonrpc` member, and an empty body. UTF-8 is RFC 3629: overlong encodings, encodings of surrogate code points and truncated multibyte sequences are invalid before any JSON parsing. The object is one of:
    - a request or notification: a string `method`;
    - a response (the client answering a server-initiated request): no `method`, an `id`, and exactly one of `result` or `error`.
 3. A response object is authorized by authentication alone.

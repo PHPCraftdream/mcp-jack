@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"math"
 	"sort"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
@@ -85,16 +84,19 @@ func parseArgs(raw json.RawMessage) (argMap, *jack.Error) {
 
 func (a argMap) str(key string) (string, bool) { return jsonString(a[key]) }
 
-// intFrom decodes a JSON number that holds an integer within [min, max].
+// intFrom decodes a JSON number that holds an integer within [min, max]. The
+// JSON text must be an integer literal with no fraction and no exponent
+// (spec 03 section 3): decoding into int64 rejects 1.0 and 1e3, reads -0 as 0
+// and avoids float64 rounding above 2^53.
 func intFrom(raw json.RawMessage, min, max int64) (int64, bool) {
 	if len(raw) == 0 || isJSONNull(raw) {
 		return 0, false
 	}
-	var f float64
-	if err := json.Unmarshal(raw, &f); err != nil || f != math.Trunc(f) || f < float64(min) || f > float64(max) {
+	var v int64
+	if err := json.Unmarshal(raw, &v); err != nil || v < min || v > max {
 		return 0, false
 	}
-	return int64(f), true
+	return v, true
 }
 
 // timeFrom decodes an optional validity bound: absent or null is unbounded.

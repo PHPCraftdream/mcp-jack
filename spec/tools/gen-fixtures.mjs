@@ -87,6 +87,12 @@ const nonceOf = (label) => b64u(sha256(`nonce:${label}`).subarray(0, 16));
 const sigOf = (name, msg) => b64u(sign(null, Buffer.from(msg, 'utf8'), K[name].priv));
 const call = (name, args) => JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, ...(args === undefined ? {} : { arguments: args }) } });
 const rpc = (method) => JSON.stringify({ jsonrpc: '2.0', id: 1, method });
+// tools/call with raw JSON text for params.arguments, so a case can send
+// number literals JSON.stringify cannot express (1.0, 1e3, -0).
+const callRaw = (name, argsText) => `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${name}","arguments":${argsText}}}`;
+// arguments with one member replaced by raw JSON text
+const rawArg = (args, key, literal) =>
+  JSON.stringify({ ...args, [key]: `@@${key}@@` }).replace(JSON.stringify(`@@${key}@@`), literal);
 const codeOf = (label) => b64u(sha256(`seeded invite ${label}`));
 const inviteIdOf = (code) => b64u(sha256(Buffer.from(code, 'base64url')));
 const rotateProof = (newName, oldName, signer = newName, ts = NOW) =>
@@ -177,6 +183,13 @@ function agree(id, got, want) {
 // ---- single-request cases: [id, description, build options, nonce cache, expected, policy] ----
 const STATUS = call('svc.status');
 const lastChar = (v) => `${v.slice(0, -1)}B`; // sets unused trailing bits of the 64-byte signature
+// A ping request whose string argument carries raw invalid UTF-8 bytes: lossy
+// decoding yields valid JSON, so only the UTF-8 check itself can reject it.
+const pingBody = (bad) => Buffer.concat([
+  Buffer.from('{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"', 'utf8'),
+  bad,
+  Buffer.from('"}}', 'utf8'),
+]);
 const REQUEST_CASES = [
   // accept
   ['accept-read-status', 'read key calls a read tool', { body: STATUS }, [], ['accept']],
@@ -272,6 +285,15 @@ const REQUEST_CASES = [
   ['native-admin-not-opened-by-policy', 'a wildcard policy does not open jack.admin.*', { body: call('jack.admin.user.list') }, [], ['reject', 403, 'insufficient_scope'], 'wildcard'],
   ['native-unknown-tool-not-opened-by-policy', 'an undefined jack.* tool is denied even under a wildcard policy', { body: call('jack.nope') }, [], ['reject', 403, 'operation_denied'], 'wildcard'],
   ['native-wildcard-policy-other-tool', 'the wildcard policy still allows ordinary tools', { body: call('other.tool') }, [], ['accept'], 'wildcard'],
+
+  // cross-language edge cases. Kept at the end so the ids and vector positions
+  // of the core cases above stay stable and fixture diffs stay additions-only.
+  ['malformed-sig-standard-alphabet', 'signature using + and / instead of - and _', { mutate: (v) => v.replace(/sig=[A-Za-z0-9_-]{2}/, 'sig=+/'), body: STATUS }, [], ['reject', 401, 'malformed_auth']],
+  ['malformed-space-in-param-value', 'whitespace inside a parameter value', { mutate: (v) => v.replace('kid=', 'kid= '), body: STATUS }, [], ['reject', 401, 'malformed_auth']],
+  ['malformed-short-kid', 'kid is 31 bytes', { mutate: (v) => v.replace(/kid=([A-Za-z0-9_-]+)/, (_, x) => `kid=${x.slice(0, 42)}`), body: STATUS }, [], ['reject', 401, 'malformed_auth']],
+  ['request-utf8-overlong', 'an overlong UTF-8 encoding is rejected although lossy decoding yields valid JSON', { body: pingBody(Buffer.from([0xc0, 0xaf])) }, [], ['reject', 400, 'invalid_request']],
+  ['request-utf8-lone-surrogate', 'a UTF-8-encoded surrogate code point is rejected although lossy decoding yields valid JSON', { body: pingBody(Buffer.from([0xed, 0xa0, 0x80])) }, [], ['reject', 400, 'invalid_request']],
+  ['request-utf8-truncated', 'a truncated multibyte sequence is rejected although lossy decoding yields valid JSON', { body: pingBody(Buffer.from([0xe2, 0x82])) }, [], ['reject', 400, 'invalid_request']],
 ];
 
 const requestVectors = REQUEST_CASES.map(([id, description, opts, cache, want, policy = 'default']) => {
@@ -552,6 +574,86 @@ seq('admin-unknown-native-tool', 'an undefined jack.* tool is denied and not aud
   step('root', 'jack.admin.nuke', {}, A('reject', 403, 'operation_denied')),
 ]);
 
+// ---- cross-language edge cases. Kept at the end so the ids and vector
+// positions of the core cases above stay stable and fixture diffs stay
+// additions-only when new cases are added here. ----
+const B64U_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+// A copy of a canonical base64url string that differs only in the two unused
+// trailing bits of its last character: a lenient decoder yields the same bytes,
+// a strict decoder rejects the encoding. Asserted here so the vector cannot rot.
+const withTrailingBits = (canonical) => {
+  const idx = B64U_ALPHABET.indexOf(canonical[canonical.length - 1]);
+  const variant = canonical.slice(0, -1) + B64U_ALPHABET[(idx + 1) % 64];
+  if (!Buffer.from(variant, 'base64url').equals(Buffer.from(canonical, 'base64url'))) {
+    throw new Error('trailing-bit variant must decode to the same bytes');
+  }
+  return variant;
+};
+const withStandardAlphabet = (canonical) => `+${canonical.slice(1, 42)}/${canonical.slice(43)}`;
+const createRaw = (literal) => rawArg({ name: 'dave', public_key: pk('newbie'), scopes: ['read'] }, 'not_after', literal);
+// A body with a root member whose name embeds the escaped path of the real
+// argument; exact-key lookup must ignore it (a joined-path key would alias).
+const decoyBody = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.invite.create","arguments":{"scopes":["read"],"ttl_seconds":60}},"params\\u0000arguments\\u0000ttl_seconds":1.0}';
+
+// enrollment public_key encodings
+seq('enroll-key-standard-alphabet', 'a public key using + and / is rejected', init(['root'], { invites: [inv('i1')] }), [
+  step('newbie', 'jack.enroll', enrollArgs('i1', 'newbie', withStandardAlphabet(pk('newbie'))), A('reject', 400, 'key_rejected')),
+]);
+seq('enroll-key-trailing-bits', 'a public key differing only in unused trailing bits is rejected', init(['root'], { invites: [inv('i1')] }), [
+  step('newbie', 'jack.enroll', enrollArgs('i1', 'newbie', withTrailingBits(pk('newbie'))), A('reject', 400, 'key_rejected')),
+]);
+seq('enroll-key-whitespace', 'a public key with embedded whitespace is rejected', init(['root'], { invites: [inv('i1')] }), [
+  step('newbie', 'jack.enroll', enrollArgs('i1', 'newbie', `${pk('newbie').slice(0, 21)} ${pk('newbie').slice(21)}`), A('reject', 400, 'key_rejected')),
+]);
+
+// rotation new-key argument encodings (spec 03 section 3.1)
+seq('rotate-key-padded-encoding', 'a padded rotation public_key is rejected', init(['root', 'alice']), [
+  step('alice', 'jack.key.rotate', { public_key: `${pk('newbie')}=`, proof: rotateProof('newbie', 'alice') }, A('reject', 400, 'key_rejected')),
+]);
+seq('rotate-key-standard-alphabet', 'a rotation public_key using + and / is rejected', init(['root', 'alice']), [
+  step('alice', 'jack.key.rotate', { public_key: withStandardAlphabet(pk('newbie')), proof: rotateProof('newbie', 'alice') }, A('reject', 400, 'key_rejected')),
+]);
+seq('rotate-key-trailing-bits', 'a rotation public_key with non-zero unused trailing bits is rejected', init(['root', 'alice']), [
+  step('alice', 'jack.key.rotate', { public_key: withTrailingBits(pk('newbie')), proof: rotateProof('newbie', 'alice') }, A('reject', 400, 'key_rejected')),
+]);
+seq('rotate-key-whitespace', 'a rotation public_key with embedded whitespace is rejected', init(['root', 'alice']), [
+  step('alice', 'jack.key.rotate', { public_key: `${pk('newbie').slice(0, 21)} ${pk('newbie').slice(21)}`, proof: rotateProof('newbie', 'alice') }, A('reject', 400, 'key_rejected')),
+]);
+seq('rotate-key-wrong-length', 'a 31-byte rotation public_key is rejected', init(['root', 'alice']), [
+  step('alice', 'jack.key.rotate', { public_key: b64u(K.newbie.pub.subarray(0, 31)), proof: rotateProof('newbie', 'alice') }, A('reject', 400, 'key_rejected')),
+]);
+
+// integer argument classes (spec 03 section 3)
+for (const [id, description, literal] of [
+  ['admin-create-not-after-fraction', 'a not_after of 1.5 is not an integer', '1.5'],
+  ['admin-create-not-after-exponent', 'a not_after of 1e3 is not an integer', '1e3'],
+  ['admin-create-not-after-negative', 'a negative not_after is out of range', '-1'],
+  ['admin-create-not-after-above-max', 'a not_after above 999999999999 is out of range', '1000000000000'],
+  ['admin-create-not-after-huge', 'a not_after beyond float64 precision is out of range', '9007199254740993'],
+]) {
+  seq(id, description, init(['root']), [
+    step('root', 'jack.admin.user.create', createRaw(literal), A('reject', 400, 'invalid_params')),
+  ]);
+}
+seq('admin-create-not-after-negative-zero', 'a not_after of -0 is the integer 0 and accepted', init(['root']), [
+  step('root', 'jack.admin.user.create', createRaw('-0'), A('accept')),
+]);
+for (const [id, description, literal] of [
+  ['invite-create-ttl-fraction', 'a ttl_seconds of 1.0 is not an integer', '1.0'],
+  ['invite-create-ttl-exponent', 'a ttl_seconds of 1e3 is not an integer', '1e3'],
+  ['invite-create-ttl-negative-zero', 'a ttl_seconds of -0 is the integer 0, below the minimum', '-0'],
+  ['invite-create-ttl-string', 'a ttl_seconds in a JSON string is not a number', '"60"'],
+  ['invite-create-ttl-boolean', 'a boolean ttl_seconds is not a number', 'true'],
+  ['invite-create-ttl-huge', 'a ttl_seconds beyond float64 precision is out of range', '9007199254740993'],
+]) {
+  seq(id, description, init(['root']), [
+    step('root', 'jack.admin.invite.create', rawArg({ scopes: ['read'] }, 'ttl_seconds', literal), A('reject', 400, 'invalid_params')),
+  ]);
+}
+seq('invite-create-ttl-decoy-member', 'a decoy member cannot override the ttl_seconds number text', init(['root']), [
+  step('root', 'jack.admin.invite.create', undefined, A('accept'), { body: decoyBody }),
+]);
+
 // Run every sequence against the reference verifier, recording expectations after each step.
 const sequenceVectors = SEQUENCES.map(({ id, description, init: ini, steps }) => {
   const registry = ini.names.map((n) => entryOf(n));
@@ -574,7 +676,7 @@ const sequenceVectors = SEQUENCES.map(({ id, description, init: ini, steps }) =>
     if (s.repeat !== undefined) {
       ({ request, signing } = built[s.repeat]);
     } else {
-      const body = s.method === 'GET' ? '' : call(s.tool, s.args);
+      const body = s.method === 'GET' ? '' : typeof s.body === 'string' ? s.body : typeof s.args === 'string' ? callRaw(s.tool, s.args) : call(s.tool, s.args);
       const r = buildRequest(`${id}#${i}`, {
         key: s.key, method: s.method, body, ts: s.ts, signKey: s.signKey, hdr: s.hdr, sign: s.sign,
       });
