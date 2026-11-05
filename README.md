@@ -1,6 +1,8 @@
 # mcp-jack
 
-Status: early draft. The specification, the normative test fixtures and SDKs for Go, Rust and TypeScript exist. None of the SDK code has been compiled or run end to end yet: it was written and reviewed, and Rust additionally passes `cargo fmt`, `cargo clippy` and `cargo check`. The first full test and interop run happens in CI. Expect to fix compile errors and test failures before trusting it.
+[![ci](https://github.com/PHPCraftdream/mcp-jack/actions/workflows/ci.yml/badge.svg)](https://github.com/PHPCraftdream/mcp-jack/actions/workflows/ci.yml)
+
+Status: early draft. The specification, the normative test fixtures and SDKs for Go, Rust and TypeScript exist. CI runs the unit and conformance tests of all three on Linux and Windows and a cross-language interop matrix of every client against every server (3 × 3). No release has been made and nothing has been audited.
 
 ## Intent
 
@@ -40,9 +42,9 @@ Operations such as restart or a configuration change need more than "whoever rea
 
 | Language | Location | Content | Status |
 |---|---|---|---|
-| Go | module at the repository root (`server/`, `client/`) | server middleware, client, native tools | written, not yet compiled or run |
-| Rust | [rust/](rust/README.md), crate `mcp-jack` (MSRV 1.85) | server verifier and tower layer, client, native tools | written; `fmt`, `clippy` and `check` pass, tests not yet run |
-| TypeScript | [ts/](ts/README.md), npm package (Node 20+, no runtime dependencies) | server verifier with Fetch and `node:http` adapters, client, native tools | written, not yet type-checked or run |
+| Go | module at the repository root (`server/`, `client/`) | server middleware, client, native tools | tests and interop green in CI |
+| Rust | [rust/](rust/README.md), crate `mcp-jack` (MSRV 1.85) | server verifier and tower layer, client, native tools | tests and interop green in CI; builds on Rust 1.85 |
+| TypeScript | [ts/](ts/README.md), npm package (Node 20+, no runtime dependencies) | server verifier with Fetch and `node:http` adapters, client, native tools | tests and interop green in CI (Node 20 and 22) |
 
 All implementations are checked against the same normative test vectors so they cannot drift apart. [interop/](interop/README.md) adds cross-language tests: a Node harness starts one server and one client executable per language and runs every scenario for all 3 × 3 server and client pairs, plus byte-exact signing checks.
 
