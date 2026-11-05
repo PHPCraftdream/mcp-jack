@@ -2,7 +2,7 @@
 
 Status: draft v0.1. Normative unless marked *informative*.
 
-Authorization runs after authentication has succeeded (step 9 of [01-authentication.md](01-authentication.md)). It is deny-by-default.
+mcp-jack wraps unmodified MCP, so it cannot know which tools a service exposes. Authorization is therefore a **server-configured policy** that maps MCP operations to scopes. It runs after authentication has succeeded (step 9 of [01-authentication.md](01-authentication.md)) and is deny-by-default.
 
 ## 1. Key registry
 
@@ -28,56 +28,81 @@ The server holds a registry of keys it trusts:
 - `kid` MUST equal `base64url(SHA-256(public_key))`; a registry entry where it does not MUST be rejected at load time.
 - `not_before` / `not_after` are Unix seconds or `null`. A key is active when `not_before <= now < not_after` (`not_after` is exclusive; `null` means unbounded).
 - `name` is a free-form label used in audit records.
-- Revocation is removal of the entry (or a past `not_after`). Rotation is adding the new key before removing the old one.
-
-How the registry is distributed and reloaded is outside v0.1 (open question Q4).
+- `scopes` lists the scopes the key holds. Revocation is removal of the entry (or a past `not_after`). Rotation is adding the new key before removing the old one.
+- Users and keys are created, changed and revoked through the protocol itself; see [03-user-management.md](03-user-management.md).
 
 ## 2. Scopes
 
-| Scope | Meaning |
+A scope is a string matching `^[a-z][a-z0-9_]*(:[a-z0-9_]+)*$` (for example `read`, `config:write`, `lifecycle`).
+
+- Scopes are **flat**: holding one scope never implies another.
+- `admin` is reserved for the user-management tools of the protocol (see 03). Policy rules cannot grant it.
+- Which other scopes exist, and what they protect, is up to the deployment's policy.
+
+## 3. Policy
+
+The policy is a document owned by the server operator:
+
+```json
+{
+  "version": 1,
+  "rules": [
+    { "match": { "method": "ping" }, "scope": null },
+    { "match": { "method": "tools/list" }, "scope": null },
+    { "match": { "method": "tools/call", "tool": "svc.config.set" }, "scope": "config:write" },
+    { "match": { "method": "tools/call", "tool": "svc.*" }, "scope": "read" }
+  ]
+}
+```
+
+Rule fields:
+
+| Field | Meaning |
 |---|---|
-| `read` | Observe: status, logs, metrics, read and validate configuration. |
-| `config:write` | Change configuration. |
-| `lifecycle` | `reload` and `restart`. |
+| `match.method` | An MCP method name, exact or a pattern (below). |
+| `match.tool` | Only with `method` equal to `tools/call`: the tool name, exact or a pattern. Omitted means any tool. |
+| `scope` | The scope the key must hold, or `null` for "any authenticated key". |
+| `effect` | Optional. `"allow"` (default) or `"deny"`. A `deny` rule has no `scope` and rejects the operation for every key. |
 
-Scopes are **not hierarchical**: `config:write` does not imply `read`, and `lifecycle` implies nothing. A key that needs several capabilities lists several scopes.
+Patterns: `*` matches zero or more characters of any kind; every other character matches itself, case-sensitively. There are no other metacharacters.
 
-## 3. Operations and required scopes
+Evaluation is **first match wins**, in document order, so exceptions go before the general rule. If no rule matches, the operation is denied.
 
-Required scope per MCP tool (`tools/call`, selected by `params.name`):
+A policy MUST be rejected at load time if a rule has an unknown field, a malformed scope, a `scope` together with `effect: "deny"`, or `match.tool` with a `method` other than `tools/call`.
 
-| Tool | Scope |
-|---|---|
-| `jack.status` | `read` |
-| `jack.logs.query` | `read` |
-| `jack.metrics.get` | `read` |
-| `jack.config.get` | `read` |
-| `jack.config.validate` | `read` |
-| `jack.config.set` | `config:write` |
-| `jack.reload` | `lifecycle` |
-| `jack.restart` | `lifecycle` |
+### 3.1 Protocol-native tools
 
-MCP methods that need authentication only (any active key): `tools/list`, `ping`. A server SHOULD filter the `tools/list` result to the tools whose scope the calling key holds.
-
-The tool names and their argument schemas are defined in a later document; this table fixes only the scope mapping.
+Tool names beginning with `jack.` belong to the protocol (see 03). Requests for them are dispatched to the protocol layer and **never reach the policy**, so a policy can neither open nor close them. A server SHOULD warn at load time when a pattern could match a `jack.`-prefixed name.
 
 ## 4. Evaluation
 
 After authentication succeeds:
 
-1. A `GET` request carries no JSON-RPC and is accepted (it opens a stream or fetches a resource; individual streams are scoped when they are defined).
-2. For any other method, the body MUST be one JSON-RPC 2.0 object, valid UTF-8. A non-JSON body, a non-object (including a batch array), an object without `"jsonrpc": "2.0"` and a string `method`, or an empty body is rejected: `400 invalid_request`.
-3. If `method` is `tools/call`:
-   - `params.name` MUST be a string, otherwise `400 invalid_request`;
-   - the name is looked up as an **own** key of the tool table (names such as `__proto__` or `constructor` are not tools); a name that is not in the table is `403 unmapped_operation`;
-   - if the key's `scopes` does not contain the required scope: `403 insufficient_scope`.
-4. If `method` is in the authentication-only set, the request is authorized.
-5. Any other method is `403 unmapped_operation`.
+1. An HTTP `GET` carries no JSON-RPC and is accepted (it opens a stream or fetches a resource; individual streams are scoped when they are defined). HTTP methods other than `GET` and `POST` are not defined by v0.1; a server SHOULD answer them with `405`.
+2. For `POST` the body MUST be a single UTF-8 JSON-RPC 2.0 object, otherwise `400 invalid_request`. That covers: invalid UTF-8, non-JSON, a non-object (including a batch array), a missing or wrong `jsonrpc` member, and an empty body. The object is one of:
+   - a request or notification: a string `method`;
+   - a response (the client answering a server-initiated request): no `method`, an `id`, and exactly one of `result` or `error`.
+3. A response object is authorized by authentication alone.
+4. For a request or notification:
+   - if `method` is `tools/call`, `params.name` MUST be a string, otherwise `400 invalid_request`; a name with the `jack.` prefix goes to the protocol layer (see 03);
+   - the policy is evaluated for `(method, tool)`; no matching rule or a matching `deny` rule is `403 operation_denied`;
+   - a rule with a `scope` that the key does not hold is `403 insufficient_scope`;
+   - otherwise the operation is authorized.
+5. `tools/list` results SHOULD be filtered to the tools whose matching rule the calling key satisfies, plus the `jack.` tools the key may call.
 
-Rejections use the same JSON body as in 01-authentication section 4. Every authorization rejection still counts as having consumed the request's nonce.
+Every authorization rejection still counts as having consumed the request's nonce.
+
+| Status | `code` | Meaning |
+|---|---|---|
+| 400 | `invalid_request` | The body is not an acceptable JSON-RPC object, or `params.name` is not a string. |
+| 403 | `operation_denied` | No rule allows the operation, or a `deny` rule matched. |
+| 403 | `insufficient_scope` | A rule matched but the key lacks its scope. |
+
+Rejections use the JSON body defined in 01-authentication section 4.
 
 ## 5. Out of scope for v0.1
 
-- Delegation: a human key issuing short-lived, narrower credentials to an agent key (planned as short-lived certificates signed by a registry key).
-- Per-resource scopes (for example per-service or per-file).
-- Human approval and two-step changes (`config.validate`, then `config.set` with confirmation).
+- Matching on resource URIs and prompt names (the policy currently matches methods and tool names only).
+- Per-argument conditions.
+- Delegation: a human key issuing short-lived, narrower credentials to an agent key.
+- Human approval and two-step changes for destructive operations.
