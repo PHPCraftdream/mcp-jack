@@ -27,3 +27,13 @@ const handle = jackFetchHandler({ verifier, serverKey: seed, maxBodyBytes: 1 << 
 // Node: serve the same handler from a real socket.
 createServer(serveNode(handle)).listen(8080);
 ```
+
+## Interop executables
+
+`tsconfig.json` has `include: ["src"]` and `rootDir: "src"`, so `npm run build` compiles the two interop executables to `dist/interop/` alongside the library. Run the build in `ts/`, the executables from the repo root (that is where `interop/targets.json` resolves the paths):
+
+```
+npm run build
+node ts/dist/interop/server.js --aud <aud> --policy <file> --state <file> --server-seed-hex <64 hex> [--bootstrap-ttl <seconds>] [--verify-only]
+node ts/dist/interop/client.js --url <base-url> --seed-hex <64 hex> --server-public-key <b64u> --aud <aud> --scenario <name> [--seeds <file>] [--ts <n>] [--nonce <b64u>] [--arg k=v]...
+```
