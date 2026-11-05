@@ -86,4 +86,16 @@ expect_refusal "$here/testdata/npm-allow-mit-only.txt" license-fixture-dep-unkno
 materialize license-fixture-dep-array
 expect_refusal "$here/testdata/npm-allow-mit-only.txt" license-fixture-dep-array ambiguous
 
+# Private packages: the checker rewrites every private-marked package's
+# licence to UNLICENSED and tooling/reconcile-licenses.mjs restores declared
+# licences from the installed manifests, so a valid private root must pass,
+# and private-marked dependencies must still be evaluated (disallowed or
+# missing licences refuse with evidence).
+materialize
+expect_pass "$here/npm-allowed-licenses.txt"
+materialize license-fixture-dep-private-gpl
+expect_refusal "$here/npm-allowed-licenses.txt" license-fixture-dep-private-gpl GPL-3.0-only
+materialize license-fixture-dep-private-unlicensed
+expect_refusal "$here/npm-allowed-licenses.txt" license-fixture-dep-private-unlicensed UNLICENSED
+
 echo "npm SPDX controls behaved as expected."
