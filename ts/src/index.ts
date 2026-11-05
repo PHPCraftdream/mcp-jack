@@ -14,3 +14,4 @@ export * from "./server/policy.js";
 export * from "./server/state-file.js";
 export * from "./server/state.js";
 export * from "./server/verify.js";
+export * from "./client/index.js";
