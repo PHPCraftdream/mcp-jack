@@ -12,6 +12,17 @@ pub struct JackError {
     pub message: String,
 }
 
+impl JackError {
+    /// Builds a rejection with its spec-assigned HTTP status and code (Go: newError).
+    pub fn new(http_status: u16, code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            http_status,
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+}
+
 impl fmt::Display for JackError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.message.is_empty() {
@@ -72,4 +83,21 @@ pub mod codes {
     pub const KEY_EXISTS: &str = "key_exists";
     /// The change would leave no active admin entry (HTTP 409, spec 03 section 4 rule 4).
     pub const LAST_ADMIN: &str = "last_admin";
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_empty_message_is_code_only() {
+        let e = JackError::new(401, codes::MISSING_AUTH, "");
+        assert_eq!(e.to_string(), "jack: missing_auth");
+    }
+
+    #[test]
+    fn display_with_message() {
+        let e = JackError::new(400, codes::KEY_REJECTED, "bad key length");
+        assert_eq!(e.to_string(), "jack: key_rejected: bad key length");
+    }
 }
