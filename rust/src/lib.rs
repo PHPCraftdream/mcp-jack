@@ -6,6 +6,7 @@
 //! the Go jack + server packages.
 
 pub mod auth_header;
+pub mod client;
 pub mod ed25519;
 pub mod encoding;
 pub mod error;
