@@ -12,7 +12,7 @@ and every pull request.
 |---|---|---|
 | Go | go-licenses v2.0.1 (`go install github.com/google/go-licenses/v2@v2.0.1`) | The module and all dependencies, including test-only imports (`--include_tests`). The Go module currently has no third-party dependencies; the job is the guard for future additions and validates the module's own dual licence. go-licenses evaluates no SPDX expressions: every licence file it detects must be on the allowlist (see OR and AND semantics). |
 | Rust | cargo-deny 0.20.2 (pinned binary via `taiki-e/install-action@v2`, SHA256 verified) | The entire `Cargo.lock` graph: transitive and optional dependencies (`http`, `interop` features), dev-dependencies (`include-dev = true`), build-dependencies (on by default), and target-specific dependencies for every platform present in the lock (no target filtering). Policy: `rust/deny.toml`. Expression handling is proven by CI-only fixtures (`testdata/cargo-*`). |
-| TypeScript | license-checker-rseidelsohn 5.0.1 (metadata only, exact version via `npx`) + SPDX evaluator (tooling/package-lock.json: spdx-satisfies 6.0.0, spdx-expression-parse 5.0.0, spdx-license-ids 3.0.24) | The installed tree after `npm ci`, dev dependencies included (the package itself has no runtime dependencies). Needs Node >= 24 (upstream `engines`). The checker only collects metadata; the policy decision evaluates full SPDX expressions (`tooling/eval.mjs`, installed by `npm ci` in `tools/license/tooling` from the committed lockfile). Private packages are excluded; this repository's own manifests are covered by `check-own-license.mjs`. Allowlist: `npm-allowed-licenses.txt` via `check-ts-licenses.sh`. |
+| TypeScript | license-checker-rseidelsohn 5.0.1 (metadata only, exact version via `npx`) + SPDX evaluator (tooling/package-lock.json: spdx-satisfies 6.0.0, spdx-expression-parse 5.0.0, spdx-license-ids 3.0.24) | The installed tree after `npm ci`, dev dependencies included (the package itself has no runtime dependencies). Needs Node >= 24 (upstream `engines`). The checker only collects metadata; the policy decision evaluates full SPDX expressions (`tooling/eval.mjs`, installed by `npm ci` in `tools/license/tooling` from the committed lockfile; the JSON import attribute in `eval.mjs` requires Node >= 22, and the job pins 24). No packages are excluded: the old `--excludePrivatePackages` invocation silently skipped ANY package marked private, including third-party published packages, which fails open; every installed package is now evaluated, including this repository's own private roots, whose manifests declare `MIT OR Apache-2.0`. The licence tooling tree itself (`tools/license/tooling`) is scanned separately with the tooling-only allowlist `npm-tooling-allowed-licenses.txt` so its data licences never enter the product allowlist. Allowlist: `npm-allowed-licenses.txt` via `check-ts-licenses.sh`. |
 | This repository | `check-own-license.mjs` (Node, no dependencies) | `rust/Cargo.toml` and `ts/package.json` must declare exactly `MIT OR Apache-2.0`; the root must contain exactly `LICENSE-APACHE` and `LICENSE-MIT`; the README must link both. Go modules have no licence field by design; the root licence files cover the Go module. |
 
 Holding two licence files is the correct shape for a dual licence: recipients
@@ -31,10 +31,20 @@ file as a likely accident.
 | ISC | Functionally equivalent to MIT. | Notice preservation. |
 | Unlicense | Public-domain dedication; used by `memchr` (as `Unlicense OR MIT`). | None. |
 | Unicode-3.0 | Required by the AND term of `unicode-ident` (`(MIT OR Apache-2.0) AND Unicode-3.0`). | Notice preservation. |
+| CC0-1.0 | Only in the CI-only licence tooling tree: `spdx-license-ids` is the SPDX identifier list dedicated to the public domain. | None; the data is not redistributed by this repository. |
+| CC-BY-3.0 | Only in the CI-only licence tooling tree: `spdx-exceptions`, and the CC-BY-3.0 branch of `spdx-ranges` (`(MIT AND CC-BY-3.0)`). | Attribution is owed if the data is ever redistributed; CI-only use redistributes nothing. These are SPDX data lists, not MIT-licensed code — the tooling-only allowlist records the declared expressions instead of rebranding them. |
 
 Everything else is denied, including unknown, unlicensed, or non-SPDX
 declarations, and all copyleft families (GPL, LGPL, AGPL, MPL, ...). A copyleft
 licence may only enter through the exception process below.
+
+### Tooling-only policy
+
+The checker tooling's own dependency tree is covered by
+`npm-tooling-allowed-licenses.txt`, scanned with the same fail-closed
+evaluator. Its entries (MIT, Apache-2.0, CC0-1.0, CC-BY-3.0) apply ONLY to
+`tools/license/tooling` and never widen the product npm allowlist; the
+CC-BY-3.0/CC0-1.0 packages are SPDX data used at CI time and not shipped.
 
 ## OR and AND semantics
 
@@ -78,7 +88,9 @@ Default is deny everywhere.
   set of single SPDX licence identifiers (entries that are not one valid
   identifier fail the run), every identifier of every package expression is
   checked against the SPDX list, and unknown, undetermined, guessed,
-  array-valued, or invalid declarations fail closed.
+  array-valued, or invalid declarations fail closed. The tooling-only
+  allowlist (`npm-tooling-allowed-licenses.txt`) is a separate policy file
+  for a separate tree, not a per-package exception mechanism.
 - Go: no per-package exception mechanism exists. The allowlist is a set of
   global licence names and `check-go.sh` ignores comments; a commented entry
   has no effect. A narrow exception therefore requires an explicit, reviewed
@@ -118,6 +130,12 @@ as enforcement:
 
 - go-licenses v2.0.1 - https://github.com/google/go-licenses (installed
   through the Go module proxy; the checksum database verifies the download).
+  The licence-only job pins a dedicated modern local toolchain
+  (`go-version: 1.25.x`, `GOTOOLCHAIN: local`) because go-licenses v2.0.1
+  requires go >= 1.23.0 to build, and under GOTOOLCHAIN=auto the mismatch
+  between the toolchain that built go-licenses and the `go` used for package
+  listing makes go-licenses miss stdlib packages ("does not have module
+  info", upstream #302/#335/#193, PR #364 unfixed in v2.0.1).
 - cargo-deny 0.20.2 - https://github.com/EmbarkStudios/cargo-deny,
   configuration docs https://embarkstudios.github.io/cargo-deny/ (installed by
   taiki-e/install-action with SHA256 checksum verification).
@@ -155,6 +173,7 @@ bash tools/license/cargo-expression-controls.sh
 (cd ts && npm ci --no-audit --no-fund)
 (cd tools/license/tooling && npm ci --no-audit --no-fund)
 bash tools/license/check-ts-licenses.sh ts tools/license/npm-allowed-licenses.txt
+bash tools/license/check-ts-licenses.sh tools/license/tooling tools/license/npm-tooling-allowed-licenses.txt
 bash tools/license/npm-expression-controls.sh
 
 node tools/license/check-own-license.mjs

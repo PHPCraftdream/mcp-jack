@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Collect npm dependency licence metadata (dev dependencies included, private
-# packages excluded) and decide against the allowlist with full SPDX
+# Collect npm dependency licence metadata (dev dependencies included, every
+# installed package evaluated) and decide against the allowlist with full SPDX
 # expression semantics via tooling/eval.mjs (spdx-satisfies, pinned by
 # tooling/package-lock.json).
 # Usage: check-ts-licenses.sh <start-dir> <allowlist-file>
@@ -21,8 +21,12 @@ fi
 echo "checking licence metadata in $start_dir against $policy"
 json="$(mktemp)"
 status=0
+# --excludePrivatePackages is deliberately not used: it silently skips ANY
+# package marked private, including third-party published packages, which
+# would fail open; this repo's own private roots declare MIT OR Apache-2.0 and
+# are evaluated like every other package.
 npx --yes license-checker-rseidelsohn@5.0.1 --start "$start_dir" \
-  --excludePrivatePackages --json --out "$json" || status=$?
+  --json --out "$json" || status=$?
 if [ "$status" -ne 0 ]; then
   rm -f "$json"
   exit "$status"

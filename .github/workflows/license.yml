@@ -15,15 +15,25 @@ permissions:
 
 jobs:
   go-license:
+    # go-licenses v2.0.1 needs go >= 1.23.0 to build (its go.mod), so under
+    # GOTOOLCHAIN=auto with only the go.mod-pinned 1.22 toolchain, `go install`
+    # silently builds it with a newer downloaded toolchain. go-licenses then
+    # recognises stdlib packages by the GOROOT baked into its own binary, which
+    # no longer matches the PATH `go list` toolchain, so every stdlib package
+    # fails with "does not have module info" (upstream google/go-licenses
+    # #302/#335, PR #364 unfixed in v2.0.1). One modern local toolchain for
+    # this licence-only job keeps build, `go list` and GOROOT aligned, with no
+    # hidden toolchain downloads; the product go.mod and the ci.yml test
+    # matrix are untouched.
     name: go licences
     runs-on: ubuntu-latest
     env:
-      GOTOOLCHAIN: auto
+      GOTOOLCHAIN: local
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: 1.25.x
       - name: Install go-licenses (pinned)
         run: |
           go install github.com/google/go-licenses/v2@v2.0.1
@@ -82,6 +92,8 @@ jobs:
         working-directory: tools/license/tooling
       - name: Check licences incl. dev dependencies against the allowlist
         run: bash ../tools/license/check-ts-licenses.sh . ../tools/license/npm-allowed-licenses.txt
+      - name: Check licence tooling dependencies (tooling-only policy)
+        run: bash ../tools/license/check-ts-licenses.sh ../tools/license/tooling ../tools/license/npm-tooling-allowed-licenses.txt
       - name: "Refusal control: Apache-2.0-only list must refuse MIT packages"
         run: |
           output="$(bash ../tools/license/check-ts-licenses.sh . ../tools/license/testdata/npm-allow-apache-only.txt 2>&1)" && status=0 || status=$?

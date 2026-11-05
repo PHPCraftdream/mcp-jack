@@ -1,0 +1,15 @@
+# Allowlist for the isolated licence-tooling tree (tools/license/tooling),
+# scanned separately from the product tree so these data licences never enter
+# the product npm allowlist. Single SPDX licence identifiers, one per line;
+# '#' starts a comment. Rationale in tools/license/README.md.
+# MIT: spdx-expression-parse, spdx-satisfies, spdx-compare, array-find-index,
+#      and the MIT branch of the tooling package's own dual licence.
+# Apache-2.0: the Apache branch of the tooling package's own dual licence.
+# CC0-1.0: spdx-license-ids (the SPDX identifier list, dedicated to the
+#          public domain).
+# CC-BY-3.0: spdx-exceptions, and the CC-BY-3.0 branch of spdx-ranges
+#            ((MIT AND CC-BY-3.0)).
+MIT
+Apache-2.0
+CC0-1.0
+CC-BY-3.0

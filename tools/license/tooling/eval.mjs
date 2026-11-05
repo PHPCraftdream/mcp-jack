@@ -7,7 +7,10 @@
 import { readFileSync } from "node:fs";
 import spdxParse from "spdx-expression-parse";
 import spdxSatisfies from "spdx-satisfies";
-import spdxLicenseIds from "spdx-license-ids";
+// Upstream ships the identifier list as index.json only (no main/exports
+// entry), so the bare import resolves to a JSON module; Node needs the
+// explicit import attribute for it.
+import spdxLicenseIds from "spdx-license-ids/index.json" with { type: "json" };
 
 const [jsonPath, policyPath] = process.argv.slice(2);
 let allowlist;
