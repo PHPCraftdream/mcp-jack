@@ -3,3 +3,6 @@
 
 # rush runtime state
 /.rush/
+
+# interop executables built by CI
+interop/bin/

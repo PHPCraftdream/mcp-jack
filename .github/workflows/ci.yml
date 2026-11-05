@@ -109,3 +109,35 @@ jobs:
       - run: npm install --no-audit --no-fund
       - run: npm run typecheck
       - run: npm test
+
+  interop:
+    name: interop matrix (3x3)
+    runs-on: ubuntu-latest
+    needs: [go, rust, ts, fixtures]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build Go executables
+        run: |
+          go build -o interop/bin/go-server ./interop/go/server
+          go build -o interop/bin/go-client ./interop/go/client
+      - name: Build Rust executables
+        working-directory: rust
+        run: cargo build --locked --release --features interop
+      - name: Build TypeScript executables
+        working-directory: ts
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+      - run: node interop/run.mjs --self-test
+      - name: Run the matrix
+        run: node interop/run.mjs
