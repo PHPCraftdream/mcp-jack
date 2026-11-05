@@ -148,7 +148,7 @@ export function newTestServer(): TestServer {
   const writeUnsignedJSON = (status: number, body: Uint8Array): Response =>
     new Response(body, { status, headers: { "content-type": "application/json" } });
 
-  const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  const fetchImpl = async (input: string | Request | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
     const method = init?.method ?? "GET";
     const headers = new Headers(init?.headers);

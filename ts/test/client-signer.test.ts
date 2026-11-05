@@ -39,8 +39,8 @@ test("generateSigner produces distinct valid keys", () => {
 
 test("new InMemorySigner rejects bad seeds", () => {
   // The constructor throws, so no instance exists; Go's non-nil-signer check is subsumed.
-  assert.throws(() => new InMemorySigner(new Uint8Array(0)), undefined, "zero-length seed");
-  assert.throws(() => new InMemorySigner(new Uint8Array(31)), undefined, "31-byte seed");
+  assert.throws(() => new InMemorySigner(new Uint8Array(0)), () => true, "zero-length seed");
+  assert.throws(() => new InMemorySigner(new Uint8Array(31)), () => true, "31-byte seed");
 });
 
 test("sign round trip with tamper detection and key-copy semantics", () => {

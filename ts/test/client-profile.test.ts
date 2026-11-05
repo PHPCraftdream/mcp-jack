@@ -69,7 +69,7 @@ test("loadProfile rejects invalid documents", () => {
     { name: "trailing data", doc: doc + " {}", why: "JSON.parse rejects trailing non-whitespace, covering Go's io.EOF check" },
   ];
   for (const tc of cases) {
-    assert.throws(() => loadProfile(tc.doc), undefined, `case ${tc.name}: accepted invalid document (${tc.why})`);
+    assert.throws(() => loadProfile(tc.doc), () => true, `case ${tc.name}: accepted invalid document (${tc.why})`);
   }
 });
 
@@ -86,7 +86,7 @@ test("clientFromProfile", () => {
         },
         seedSignerByName("alice"),
       ),
-    undefined,
+    () => true,
     "expected error for invalid server public key",
   );
 });

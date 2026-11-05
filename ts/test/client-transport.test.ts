@@ -220,7 +220,7 @@ test("forwards signal and forces redirect to error", async () => {
   const calls: RequestInit[] = [];
   const base = server.fetch;
   // Observe exactly what the signing fetch passes to the underlying fetch.
-  server.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  server.fetch = async (input: string | Request | URL, init?: RequestInit): Promise<Response> => {
     calls.push(init ?? {});
     return base(input, init);
   };
@@ -243,7 +243,7 @@ test("an explicit null signal overrides a Request signal", async () => {
   server.handle = (auth) => server.writeSignedJSON(auth, 200, rpcResultBody('{"ok":true}'));
   const calls: RequestInit[] = [];
   const base = server.fetch;
-  server.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  server.fetch = async (input: string | Request | URL, init?: RequestInit): Promise<Response> => {
     calls.push(init ?? {});
     return base(input, init);
   };
