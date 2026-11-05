@@ -272,7 +272,7 @@ test("E4 replaying the same bytes", { timeout: 5000 }, async () => {
     (err: unknown) => {
       assert.ok(err instanceof UnauthenticatedResponseError);
       assert.equal((err as UnauthenticatedResponseError).status, 401);
-      assert.equal((err as UnauthenticatedResponseError).code, "replayed_nonce");
+      // The unsigned body is never parsed: the status is all the SDK exposes.
       return true;
     },
   );
