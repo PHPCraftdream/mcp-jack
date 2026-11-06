@@ -83,9 +83,9 @@ export class Client {
     this.aud = config.aud;
     this.signer = config.signer;
     this.clock = config.clock ?? (() => Math.floor(Date.now() / 1000));
-    // Unlike Go, an injected fetchImpl is wrapped by OUR signing layer instead
-    // of requiring the caller to pre-wrap it: Go's Config.HTTP footgun (an
-    // unsigned client silently accepted) is gone.
+    // Like Go's Config.HTTP, an injected fetchImpl is wrapped by OUR signing
+    // layer instead of requiring the caller to pre-wrap it, so an unsigned
+    // client is never silently accepted.
     this.#fetch = createSigningFetch(
       {
         aud: config.aud,

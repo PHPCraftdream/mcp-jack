@@ -25,4 +25,7 @@
 // Transport.Base) is outside the SDK's control: it must use TLS for https
 // URLs, connect to exactly the URL it is given and not follow redirects. The
 // SDK cannot police it; the policy is applied before a request reaches it.
+// Signing and response verification are mandatory regardless: NewClient always
+// wraps Config.HTTP's base round tripper in its own signing/verifying
+// Transport (a prewrapped *Transport is collapsed, never mutated).
 package client

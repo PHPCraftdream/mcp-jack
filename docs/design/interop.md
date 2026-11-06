@@ -140,7 +140,7 @@ The policy is a pure function of the raw URL string. It is applied before any UR
 
 ### 9.3 Remaining boundary
 
-A caller-injected transport (Rust `Transport` trait, TypeScript `fetchImpl`, Go `Config.HTTP` or a base `RoundTripper`) is outside the SDK's control. It must use TLS for `https` URLs, connect to exactly the URL it is given, and not follow redirects. The SDKs cannot police arbitrary custom transport behaviour. In Go, `Config.HTTP` currently bypasses the signing wrapper entirely; a follow-up task will address general transport injection.
+A caller-injected transport (Rust `Transport` trait, TypeScript `fetchImpl`, Go `Config.HTTP` or a base `RoundTripper`) is outside the SDK's control. It must use TLS for `https` URLs, connect to exactly the URL it is given, and not follow redirects. The SDKs cannot police arbitrary custom transport behaviour. In Go, `Config.HTTP` is always wrapped by the SDK signing/verifying transport; the caller's transport remains responsible for TLS and not following redirects.
 
 ### 9.4 Fixture contract
 
