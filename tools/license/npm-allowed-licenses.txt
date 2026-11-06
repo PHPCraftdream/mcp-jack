@@ -1,0 +1,10 @@
+# Allowlist for npm dependencies, dev dependencies included. Single SPDX
+# licence identifiers, one per line; '#' starts a comment. Evaluated with
+# full SPDX expression semantics by tooling/eval.mjs via
+# tools/license/check-ts-licenses.sh; rationale in tools/license/README.md.
+MIT
+Apache-2.0
+BSD-2-Clause
+BSD-3-Clause
+ISC
+Unlicense

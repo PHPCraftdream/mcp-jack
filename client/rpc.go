@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -66,6 +67,13 @@ func NewClient(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("jack client: server key must be exactly 32 bytes, got %d", len(cfg.ServerKey))
 	}
 	if err := jack.ValidatePublicKey(cfg.ServerKey); err != nil {
+		// Local validation never becomes an HTTP response: zero the
+		// validator's wire admission status (400) per the Error.HTTPStatus
+		// contract, matching VerifyResponse's client-side remap.
+		var jErr *jack.Error
+		if errors.As(err, &jErr) {
+			return nil, &jack.Error{HTTPStatus: 0, Code: jErr.Code, Message: jErr.Message}
+		}
 		return nil, err
 	}
 	hc := cfg.HTTP

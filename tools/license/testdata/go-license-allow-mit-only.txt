@@ -1,0 +1,4 @@
+# Rejection control only: deliberately narrower than
+# go-allowed-licenses.txt. The fixture's only dependency
+# (github.com/google/go-cmp v0.6.0, BSD-3-Clause) must fail this list. See tools/license/README.md.
+MIT

@@ -3937,6 +3937,318 @@
           "Av1AdWk5qiBDVtoifMzyJtGibdwSn1N0ZpH1Fl39HPw"
         ]
       }
+    },
+    {
+      "id": "dup-method-first-deny-last-allow",
+      "description": "a duplicated method member keeps the last occurrence: unmapped method then ping",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=sZ5yub-dbxKo-eGUV0-I6g,sig=B39agCy_UKQV_01Zb7QBJbB6R-Kpg1PHiZXLfiVQRHY6AdEk2-mw7l8onZlgs-lJ76CbBUpNFOZnNQvJT8LSDQ"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InJlc291cmNlcy9yZWFkIiwibWV0aG9kIjoicGluZyJ9",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"resources/read\",\"method\":\"ping\"}"
+      },
+      "expect": {
+        "result": "accept",
+        "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "sZ5yub-dbxKo-eGUV0-I6g",
+          "p5r4B74O47X3bnDMCSFAf1vUduWy5D0CRoqvCfzK960"
+        ]
+      }
+    },
+    {
+      "id": "dup-method-first-allow-last-deny",
+      "description": "the same duplicated pair in the other order: ping then an unmapped method",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=PIh5q8X39uL7MJV3xkw1rg,sig=A9sFi0IJg3lyEgGv5U1U871pVuaVB_7K4fSUFX6yuuCfpq9HQ5zMAyyukuOy7sib-nNphmQCnUieI6WGl5sWBg"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InBpbmciLCJtZXRob2QiOiJyZXNvdXJjZXMvcmVhZCJ9",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\",\"method\":\"resources/read\"}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 403,
+        "code": "operation_denied",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "PIh5q8X39uL7MJV3xkw1rg",
+          "W1s_d0GbJ8OTGKXN7fawbhVfANaipY3d1vjhDbQn6yc"
+        ]
+      }
+    },
+    {
+      "id": "dup-tool-name-first-deny-last-allow",
+      "description": "a duplicated params.name keeps the last occurrence: deny-rule tool then svc.status",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=mmj-BAH_0JX2JXbAvjVNog,sig=AikJ9W72I-F7TBXI713kLCwqNCgMmq7dGcMXhkruDtAV3Lcs4N2qE-IuvN0JG7JGAdIseFY6TNLbsMu4Byb3Bw"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5kYW5nZXIud2lwZSIsIm5hbWUiOiJzdmMuc3RhdHVzIn19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.danger.wipe\",\"name\":\"svc.status\"}}"
+      },
+      "expect": {
+        "result": "accept",
+        "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "mmj-BAH_0JX2JXbAvjVNog",
+          "-KzN6XoQBCwrmmkiGGvsJ4YVq_e8zhuEea44kiOgCHo"
+        ]
+      }
+    },
+    {
+      "id": "dup-tool-name-first-allow-last-deny",
+      "description": "the same duplicated params.name in the other order: svc.status then the deny-rule tool",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=voR2K3dJ0FgGLd8A0kPJog,sig=iaFHy38nqCWuG2v5JGXeFQkee6E6cgOMs0EVL2yD04z6KGPwO9xvioYh3jZ_jCE_GUyqWgVfsIf0ZfqGrsrpDg"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMiLCJuYW1lIjoic3ZjLmRhbmdlci53aXBlIn19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\",\"name\":\"svc.danger.wipe\"}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 403,
+        "code": "operation_denied",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "voR2K3dJ0FgGLd8A0kPJog",
+          "B6RQLAQzF2zCrowyimofsnAAvhIW-RsIW1ccwo0RgeA"
+        ]
+      }
+    },
+    {
+      "id": "dup-jsonrpc-first-wrong-last-right",
+      "description": "a duplicated jsonrpc member keeps the last occurrence",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=GQ9pqUw00AWO6fq0Fn5uHQ,sig=ZObDfNG2lOfgv_yCFOM18dJFfNyoZ10AWXc_0Mfr48QSYyjJQnsr1AWQ5qV2CK7hD1WmRZe7ruJqZONadfB2BA"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMS4wIiwianNvbnJwYyI6IjIuMCIsImlkIjoxLCJtZXRob2QiOiJwaW5nIn0",
+        "body_text": "{\"jsonrpc\":\"1.0\",\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"
+      },
+      "expect": {
+        "result": "accept",
+        "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "GQ9pqUw00AWO6fq0Fn5uHQ",
+          "VQFvteHkaa-XHP-Et8t7gq8X7wvPedREocmdIlGwDm0"
+        ]
+      }
+    },
+    {
+      "id": "dup-member-escaped-name-last-wins",
+      "description": "a member whose name unescapes to an earlier name is its duplicate and keeps the last value",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=AwuJbf-z8zpkftkF082V3A,sig=mJoPRCPkgep73AoLnRdwFAv_ChPJ_mokw7kUEHvxinridA0a4y62NGowQ-DUo5JmVjiA5tgx5vpvc73gXTuBCA"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InBpbmciLCJtZXRoXHUwMDZmZCI6InJlc291cmNlcy9yZWFkIn0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\",\"meth\\u006fd\":\"resources/read\"}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 403,
+        "code": "operation_denied",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "AwuJbf-z8zpkftkF082V3A",
+          "XgDTxnYybXd5inr529g-8XfofKwQipt_V2MfhQuPdSg"
+        ]
+      }
+    },
+    {
+      "id": "dup-params-object-last-without-name",
+      "description": "a duplicated params object keeps the last one whole: no member union, so the earlier name does not survive",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "policy": "default",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=k86zV2mbbsDpkSw_pAWrVg,sig=8DHVTkTGLuUcRhyAOMaKfDHlDfgcj7E0fkvP-ghtGa5m-YTV3Uyqm1f_Pm9TIU9iODuU7Ygwqp90iDKJ8eJWAA"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6InN2Yy5zdGF0dXMifSwicGFyYW1zIjp7Im90aGVyIjoxfX0",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.status\"},\"params\":{\"other\":1}}"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 400,
+        "code": "invalid_request",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "k86zV2mbbsDpkSw_pAWrVg",
+          "T72okZxmRsBslcdnHiwoYaO9hT6oVWV3u-3DyrbPzvc"
+        ]
+      }
     }
   ]
 }

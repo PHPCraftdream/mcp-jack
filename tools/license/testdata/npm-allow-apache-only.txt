@@ -1,0 +1,4 @@
+# Rejection control only: deliberately narrower than
+# npm-allowed-licenses.txt. The MIT-licensed installed packages
+# (@types/node, undici-types) must fail this list. See tools/license/README.md.
+Apache-2.0

@@ -1,0 +1,6 @@
+{
+  "name": "license-fixture-dep-or",
+  "version": "1.0.0",
+  "description": "CI-only licence fixture: copyleft OR permissive.",
+  "license": "GPL-3.0-only OR MIT"
+}

@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { keyId, encodeBase64URL } from "../src/encoding.js";
+import { Code, JackError } from "../src/errors.js";
 import { Client, clientFromProfile, loadProfile, profileServerKeyBytes, profileToJSON, saveProfile } from "../src/client/index.js";
 import type { Profile } from "../src/client/index.js";
 import { seedSignerByName } from "./client-harness.js";
@@ -89,4 +90,28 @@ test("clientFromProfile", () => {
     () => true,
     "expected error for invalid server public key",
   );
+});
+
+test("client-side server-key rejection carries no HTTP status", () => {
+  // The identity-point encoding decodes to exactly 32 bytes and fails the
+  // spec 03 section 2 key rules: the local admission is key_rejected with
+  // httpStatus 0 — the shared validator's wire 400 must not leak into the
+  // client error (httpStatus 0 = never an HTTP response, per JackError).
+  const identity = new Uint8Array(32);
+  identity[0] = 1;
+  const signer = seedSignerByName("alice");
+  const badProfile: Profile = { ...newValidTestProfile(), serverPublicKey: encodeBase64URL(identity) };
+  const badDoc = JSON.stringify(profileToJSON(badProfile));
+  const cases: readonly (() => unknown)[] = [
+    () => loadProfile(badDoc),
+    () => clientFromProfile(badProfile, signer),
+    () => new Client({ baseUrl: badProfile.url, aud: badProfile.aud, signer, serverKey: identity }),
+  ];
+  for (const run of cases) {
+    assert.throws(
+      run,
+      (err: unknown) => err instanceof JackError && err.code === Code.KEY_REJECTED && err.httpStatus === 0,
+      "expected JackError key_rejected with httpStatus 0",
+    );
+  }
 });

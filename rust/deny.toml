@@ -1,0 +1,23 @@
+# Dependency licence policy for this workspace, checked by cargo-deny
+# (version pinned in .github/workflows/license.yml; see tools/license/README.md).
+# Fail closed: a crate passes only if its SPDX expression can be satisfied from
+# the allow list below; unknown or missing licence metadata fails.
+[licenses]
+# Dev-only crates (e.g. tower for tests) are part of the resolved graph; check them too.
+include-dev = true
+allow = [
+    "Apache-2.0",   # branch of most dual-licensed crates; sole licence of sync_wrapper
+    "MIT",          # tokio, hyper, tower, bytes, zmij, getrandom, ...
+    "BSD-3-Clause", # subtle
+    "Unlicense",    # memchr: Unlicense OR MIT
+    "Unicode-3.0",  # unicode-ident: (MIT OR Apache-2.0) AND Unicode-3.0
+]
+
+# Narrow, per-crate exceptions go here, each bounded to a version range and
+# justified in the pull request that adds it. Keep this empty unless a crate
+# cannot satisfy the allow list. Package specs use the `crate` key, e.g.
+# "name" or version-bounded "name@1.2" (the old name/version table keys are
+# deprecated by cargo-deny).
+# [[licenses.exceptions]]
+# crate = "example@1.2"
+# allow = ["Example-License-1.0"]

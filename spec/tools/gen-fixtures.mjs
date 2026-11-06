@@ -190,6 +190,14 @@ const pingBody = (bad) => Buffer.concat([
   bad,
   Buffer.from('"}}', 'utf8'),
 ]);
+// Bodies with one duplicated member name for the last-member-wins rule
+// (spec README D13, 02 section 4): the duplicate pair sits adjacent so the
+// fixture bytes show both occurrences and their order. A first-wins parser
+// fails each order-sensitive pair; a merging parser fails the disjoint case.
+const dupMethodBody = (first, last) =>
+  `{"jsonrpc":"2.0","id":1,"method":"${first}","method":"${last}"}`;
+const dupToolBody = (first, last) =>
+  `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${first}","name":"${last}"}}`;
 const REQUEST_CASES = [
   // accept
   ['accept-read-status', 'read key calls a read tool', { body: STATUS }, [], ['accept']],
@@ -294,6 +302,13 @@ const REQUEST_CASES = [
   ['request-utf8-overlong', 'an overlong UTF-8 encoding is rejected although lossy decoding yields valid JSON', { body: pingBody(Buffer.from([0xc0, 0xaf])) }, [], ['reject', 400, 'invalid_request']],
   ['request-utf8-lone-surrogate', 'a UTF-8-encoded surrogate code point is rejected although lossy decoding yields valid JSON', { body: pingBody(Buffer.from([0xed, 0xa0, 0x80])) }, [], ['reject', 400, 'invalid_request']],
   ['request-utf8-truncated', 'a truncated multibyte sequence is rejected although lossy decoding yields valid JSON', { body: pingBody(Buffer.from([0xe2, 0x82])) }, [], ['reject', 400, 'invalid_request']],
+  ['dup-method-first-deny-last-allow', 'a duplicated method member keeps the last occurrence: unmapped method then ping', { body: dupMethodBody('resources/read', 'ping') }, [], ['accept']],
+  ['dup-method-first-allow-last-deny', 'the same duplicated pair in the other order: ping then an unmapped method', { body: dupMethodBody('ping', 'resources/read') }, [], ['reject', 403, 'operation_denied']],
+  ['dup-tool-name-first-deny-last-allow', 'a duplicated params.name keeps the last occurrence: deny-rule tool then svc.status', { body: dupToolBody('svc.danger.wipe', 'svc.status') }, [], ['accept']],
+  ['dup-tool-name-first-allow-last-deny', 'the same duplicated params.name in the other order: svc.status then the deny-rule tool', { body: dupToolBody('svc.status', 'svc.danger.wipe') }, [], ['reject', 403, 'operation_denied']],
+  ['dup-jsonrpc-first-wrong-last-right', 'a duplicated jsonrpc member keeps the last occurrence', { body: '{"jsonrpc":"1.0","jsonrpc":"2.0","id":1,"method":"ping"}' }, [], ['accept']],
+  ['dup-member-escaped-name-last-wins', 'a member whose name unescapes to an earlier name is its duplicate and keeps the last value', { body: '{"jsonrpc":"2.0","id":1,"method":"ping","meth\\u006fd":"resources/read"}' }, [], ['reject', 403, 'operation_denied']],
+  ['dup-params-object-last-without-name', 'a duplicated params object keeps the last one whole: no member union, so the earlier name does not survive', { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"svc.status"},"params":{"other":1}}' }, [], ['reject', 400, 'invalid_request']],
 ];
 
 const requestVectors = REQUEST_CASES.map(([id, description, opts, cache, want, policy = 'default']) => {
@@ -652,6 +667,18 @@ for (const [id, description, literal] of [
 }
 seq('invite-create-ttl-decoy-member', 'a decoy member cannot override the ttl_seconds number text', init(['root']), [
   step('root', 'jack.admin.invite.create', undefined, A('accept'), { body: decoyBody }),
+]);
+seq('invite-create-ttl-dup-invalid-then-valid', 'a duplicated ttl_seconds member keeps the last occurrence: 1.5 then 60', init(['root']), [
+  step('root', 'jack.admin.invite.create', undefined, A('accept'), { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.invite.create","arguments":{"scopes":["read"],"ttl_seconds":1.5,"ttl_seconds":60}}}' }),
+]);
+seq('invite-create-ttl-dup-valid-then-invalid', 'the same duplicated pair in the other order: 60 then 1.5', init(['root']), [
+  step('root', 'jack.admin.invite.create', undefined, A('reject', 400, 'invalid_params'), { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.invite.create","arguments":{"scopes":["read"],"ttl_seconds":60,"ttl_seconds":1.5}}}' }),
+]);
+seq('invite-create-arguments-dup-invalid-then-valid', 'a duplicated arguments object keeps the last one: invalid scopes then valid scopes', init(['root']), [
+  step('root', 'jack.admin.invite.create', undefined, A('accept'), { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.invite.create","arguments":{"scopes":"read"},"arguments":{"scopes":["read"]}}}' }),
+]);
+seq('invite-create-arguments-sibling-members-not-merged', 'duplicate arguments are not merged: the last object alone cannot borrow the earlier scopes', init(['root']), [
+  step('root', 'jack.admin.invite.create', undefined, A('reject', 400, 'invalid_params'), { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.invite.create","arguments":{"scopes":["read"]},"arguments":{"ttl_seconds":60}}}' }),
 ]);
 
 // Run every sequence against the reference verifier, recording expectations after each step.

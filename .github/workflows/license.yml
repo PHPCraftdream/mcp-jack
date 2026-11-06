@@ -1,0 +1,130 @@
+# Dependency licence compatibility checks (policy: tools/license/README.md).
+# Fail closed: unknown or unlisted licences fail. Every job also runs
+# rejection controls that must fail; a refusal only counts when the output
+# names the offending package/crate and licence, so crashes or usage errors
+# are never mistaken for successful policy enforcement.
+name: license
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go-license:
+    # go-licenses v2.0.1 needs go >= 1.23.0 to build (its go.mod), so under
+    # GOTOOLCHAIN=auto with only the go.mod-pinned 1.22 toolchain, `go install`
+    # silently builds it with a newer downloaded toolchain. go-licenses then
+    # recognises stdlib packages by the GOROOT baked into its own binary, which
+    # no longer matches the PATH `go list` toolchain, so every stdlib package
+    # fails with "does not have module info" (upstream google/go-licenses
+    # #302/#335, PR #364 unfixed in v2.0.1). One modern local toolchain for
+    # this licence-only job keeps build, `go list` and GOROOT aligned, with no
+    # hidden toolchain downloads; the product go.mod and the ci.yml test
+    # matrix are untouched.
+    name: go licences
+    runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.25.x
+      - name: Install go-licenses (pinned)
+        run: |
+          go install github.com/google/go-licenses/v2@v2.0.1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Check licences against the allowlist
+        run: bash tools/license/check-go.sh . tools/license/go-allowed-licenses.txt
+      - name: Fixture controls (pass real allowlist, then refusal with evidence)
+        run: bash tools/license/go-fixture-controls.sh
+
+  rust-license:
+    name: rust licences
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+      - name: Check workspace licences against the policy (rust/deny.toml)
+        run: cargo deny --locked --all-features --config deny.toml check licenses
+      - name: "Refusal control: MIT-only config must refuse named crates"
+        run: |
+          output="$(cargo deny --locked --all-features --config ../tools/license/testdata/deny-mit-only.toml check licenses 2>&1)" && status=0 || status=$?
+          printf '%s\n' "$output"
+          if [ "$status" -eq 0 ]; then
+            echo "::error title=license/rust::MIT-only configuration passed the workspace" >&2
+            exit 1
+          fi
+          for evidence in sync_wrapper subtle Apache-2.0 BSD-3-Clause; do
+            if ! grep -qF -- "$evidence" <<<"$output"; then
+              echo "::error title=license/rust::refusal output missing evidence: $evidence" >&2
+              exit 1
+            fi
+          done
+          echo "Refusal control behaved as expected: workspace refused with named crates and licences."
+      - name: "Expression controls: OR passes, AND and unlicensed are refused"
+        run: bash ../tools/license/cargo-expression-controls.sh
+
+  ts-license:
+    name: ts licences
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci --no-audit --no-fund
+      - name: Install licence tooling (pinned lockfile)
+        run: npm ci --no-audit --no-fund
+        working-directory: tools/license/tooling
+      - name: Check licences incl. dev dependencies against the allowlist
+        run: bash ../tools/license/check-ts-licenses.sh . ../tools/license/npm-allowed-licenses.txt
+      - name: Check licence tooling dependencies (tooling-only policy)
+        run: bash ../tools/license/check-ts-licenses.sh ../tools/license/tooling ../tools/license/npm-tooling-allowed-licenses.txt
+      - name: "Refusal control: Apache-2.0-only list must refuse MIT packages"
+        run: |
+          output="$(bash ../tools/license/check-ts-licenses.sh . ../tools/license/testdata/npm-allow-apache-only.txt 2>&1)" && status=0 || status=$?
+          printf '%s\n' "$output"
+          if [ "$status" -eq 0 ]; then
+            echo "::error title=license/ts::MIT dependencies passed an Apache-2.0-only allowlist" >&2
+            exit 1
+          fi
+          for evidence in '@types/node' 'MIT'; do
+            if ! grep -qF -- "$evidence" <<<"$output"; then
+              echo "::error title=license/ts::refusal output missing evidence: $evidence" >&2
+              exit 1
+            fi
+          done
+          echo "Refusal control behaved as expected: refused @types/node (MIT)."
+      - name: "Expression controls: OR passes, AND and unknown are refused"
+        run: bash ../tools/license/npm-expression-controls.sh
+
+  self-license:
+    name: dual-licence manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node tools/license/check-own-license.mjs
+      - name: "Refusal control: inconsistent fixture must fail"
+        run: |
+          if node tools/license/check-own-license.mjs --root tools/license/testdata/own-license-bad; then
+            echo "::error title=license/self::inconsistent fixture passed the manifest check" >&2
+            exit 1
+          fi
+          echo "Refusal control behaved as expected: the fixture failed."

@@ -1,6 +1,6 @@
 # Design: cross-language interoperability tests
 
-Status: draft, not implemented. Scope: Go, Rust and TypeScript, client and server.
+Status: implemented; kept as the design record, with the decisions as built pinned in [../../interop/README.md](../../interop/README.md). Scope: Go, Rust and TypeScript, client and server.
 
 ## 1. Goal and acceptance
 
@@ -16,7 +16,7 @@ Non-goals: performance, long-running soak tests, interop with third-party MCP cl
 
 ## 2. What is needed first
 
-Only a Go client exists today. The matrix needs a Rust client SDK and a TypeScript client SDK, both mirroring `client/` (signer, request signing, response verification, typed native-tool calls, connection profile). They are separate tasks and use the same fixtures for conformance. Client SDK scope is the Go client's: no stdio bridge, no gateway.
+Design-time note: when this was written only a Go client existed; the Rust and TypeScript client SDKs have since been built (see `rust/README.md` and `ts/README.md`). The matrix needed a Rust client SDK and a TypeScript client SDK, both mirroring `client/` (signer, request signing, response verification, typed native-tool calls, connection profile). Client SDK scope is the Go client's: no stdio bridge, no gateway.
 
 ## 3. Contract between the harness and the SDKs
 
@@ -101,7 +101,7 @@ Go: `interop/go/server/main.go`, `interop/go/client/main.go` inside the existing
 
 ## 7. CI
 
-One job `interop` on ubuntu: build the Go executables, `cargo build --release --features interop,http`, `npm install` + build the TypeScript package, then `node interop/run.mjs`. Before building the SDKs, CI (and any implementer) can run the harness's dependency-free self-test: `node interop/run.mjs --self-test`. It needs the Go, Rust and TypeScript jobs' sources only; it runs after them (`needs`) so a unit-test failure is reported first.
+One job `interop` on ubuntu, as built in `.github/workflows/ci.yml`: build the Go executables, `cargo build --locked --release --features interop` (`interop` enables `http`), `npm ci --no-audit --no-fund` + `npm run build` for the TypeScript package, then `node interop/run.mjs`. Before building the SDKs, CI (and any implementer) can run the harness's dependency-free self-test: `node interop/run.mjs --self-test`. The job declares `needs: [go, rust, ts, fixtures]`, so a unit-test or fixture failure is reported first.
 
 ## 8. Risks and decisions
 

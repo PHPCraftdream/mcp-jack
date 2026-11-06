@@ -1,0 +1,9 @@
+# CI-only licence-expression fixture: a copyleft OR branch with a permissive
+# branch must pass an MIT-only allowlist. Never built by product jobs.
+# See tools/license/README.md.
+[package]
+name = "license-fixture-or"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "GPL-3.0-only OR MIT"

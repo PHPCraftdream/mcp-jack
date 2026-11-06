@@ -63,7 +63,8 @@ export interface RawJsonNode {
  * " \t\n\r"; raw control chars (< 0x20) in strings violate; escapes are
  * \" \\ \/ \b \f \n \r \t \uXXXX (4 hex digits, any other escape violates).
  * Duplicate object keys keep the LAST (value object and members map alike) —
- * accepted behavior, spec tests README Q11. A member named "__proto__" is
+ * normative since D13: last occurrence wins, no member merging (spec 02
+ * section 4). A member named "__proto__" is
  * defined with Object.defineProperty so it becomes an own property instead of
  * a prototype change (JSON.parse parity; the reference verifier does the
  * same); all other keys by plain assignment. The members Map needs no such

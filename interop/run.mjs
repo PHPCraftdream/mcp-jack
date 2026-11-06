@@ -142,10 +142,15 @@ function firstStdoutLine(child, label, timeoutMs) {
   });
 }
 
-function waitExit(child, timeoutMs, label, onSpawnError) {
+// Wait until the child has exited AND its stdio pipes have been fully
+// drained. 'exit' only signals the process: data written right before exit
+// may still be in flight, so reading captured stdout after 'exit' races the
+// final writes (observed as a spurious "produced no output" in CI). 'close'
+// fires once every stdio pipe is closed, i.e. all output is captured.
+function waitClose(child, timeoutMs, label, onSpawnError) {
   return new Promise((res, rej) => {
     const timer = setTimeout(() => { killTree(child); rej(new Error(`${label}: timeout after ${timeoutMs}ms`)); }, timeoutMs);
-    child.on('exit', (code) => { clearTimeout(timer); res(code); });
+    child.on('close', (code) => { clearTimeout(timer); res(code); });
     child.on('error', (e) => { clearTimeout(timer); if (onSpawnError) onSpawnError(e); rej(e); });
   });
 }
@@ -272,7 +277,7 @@ async function runMatrix(opts) {
     allChildren.add(child);
     let code;
     try {
-      code = await waitExit(child, timeoutMs, `client ${label}`, (e) => fail(`cannot spawn client for ${pairLabel}: ${argv.display} (${e.message})`));
+      code = await waitClose(child, timeoutMs, `client ${label}`, (e) => fail(`cannot spawn client for ${pairLabel}: ${argv.display} (${e.message})`));
     } catch (e) {
       return { failed: true, reason: e.message, exitCode: null, stderr: child._stderrTail(), result: null };
     }
@@ -427,7 +432,7 @@ async function runMatrix(opts) {
           child.stdin.end();
           let run;
           try {
-            const code = await waitExit(child, 10000, label, (e) => fail(`cannot spawn server for verify phase (${verifyLang}): ${t.display} (${e.message})`));
+            const code = await waitClose(child, 10000, label, (e) => fail(`cannot spawn server for verify phase (${verifyLang}): ${t.display} (${e.message})`));
             const out = child._stdoutText();
             const lines = out.split('\n').filter((l) => l.trim() !== '');
             const verdict = lines.length ? JSON.parse(lines[lines.length - 1]) : null;
@@ -515,7 +520,9 @@ async function selfTest() {
     });
     let out = '';
     child.stdout.on('data', (d) => { out += d; });
-    child.on('exit', (c) => res2({ code: c, out }));
+    // Drain-aware capture: read `out` only after the child's stdio pipes are
+    // closed ('close'), never on bare 'exit'.
+    child.on('close', (c) => res2({ code: c, out }));
   });
   try {
     const code = await runChild(['--targets', targetsPath, '--servers', 'fake', '--clients', 'fake', '--scenario', 'ping'], { JACK_SELFTEST_DEVIATE: 'ping' });
@@ -543,6 +550,16 @@ async function selfTest() {
     const blank = await runChild(['--targets', targetsPath, '--servers', 'fake', '--clients', 'fake', '--scenario', 'ping'], { JACK_READY_MODE: 'blank' });
     ok(blank.code === 0, `blank-ready control exits 0 (got ${blank.code})`);
     ok(blank.out.includes('PASS ping'), 'blank-ready control prints PASS ping');
+
+    // 7. Exit-before-drain regression: with JACK_SELFTEST_PIPE_HOLDER the
+    // fake client keeps its stdout pipe open from a grandchild process,
+    // writes nothing itself, and exits; the grandchild emits the canonical
+    // ping result ~300ms later. A capture resolving on 'exit' would
+    // deterministically see an empty stream (the exact CI flake); only a
+    // drain-aware capture passes.
+    const drained = await runChild(['--targets', targetsPath, '--servers', 'fake', '--clients', 'fake', '--scenario', 'ping'], { JACK_SELFTEST_PIPE_HOLDER: 'ping' });
+    ok(drained.code === 0, `exit-before-drain control exits 0 (got ${drained.code})`);
+    ok(drained.out.includes('PASS ping'), 'exit-before-drain control prints PASS ping');
   } finally {
     try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ }
   }

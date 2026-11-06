@@ -56,7 +56,7 @@ export function signRequest(signer: Signer, aud: string, method: string, target:
  * VerifyResponse is the client-side mirror of spec 01 section 5: it checks
  * that the response was signed by the pinned server key, over the request
  * signature, within the window. Client-side failures carry httpStatus 0
- * (these codes are never sent over HTTP; Go wrongly keeps 401).
+ * (these codes are never sent over HTTP; Go's VerifyResponse remaps them to 0 the same way).
  */
 export function verifyResponse(serverKey: Uint8Array, status: number, headerValues: readonly string[], requestSig: string, body: Uint8Array, now: number, windowSeconds: number): void {
   if (serverKey.length !== 32) {

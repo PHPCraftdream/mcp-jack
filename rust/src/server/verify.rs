@@ -564,7 +564,7 @@ struct RpcMessage {
 /// Body members as sent: a map type only accepts a JSON object (spec 02
 /// section 4: the body "MUST be a single UTF-8 JSON-RPC 2.0 object"; arrays,
 /// including batch arrays and positional representations, and scalars are
-/// invalid) and keeps the LAST value of a duplicated key (spec README Q11).
+/// invalid) and keeps the LAST value of a duplicated key (spec 02 section 4, README D13).
 /// A derived struct would instead also deserialize from arrays positionally
 /// and reject duplicates with `duplicate_field`.
 type RawMembers = std::collections::HashMap<String, Box<RawValue>>;
@@ -1347,7 +1347,7 @@ mod tests {
         none("5");
         none(r#""hi""#);
 
-        // Duplicate members keep the LAST value (spec README Q11); a derived
+        // Duplicate members keep the LAST value (spec 02 section 4, README D13); a derived
         // struct would instead reject them with duplicate_field.
         let dup = classify_body(
             r#"{"jsonrpc":"2.0","id":1,"method":"ping","method":"resources/read"}"#.as_bytes(),

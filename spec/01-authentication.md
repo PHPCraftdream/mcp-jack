@@ -61,7 +61,7 @@ mcp-jack/v1/request
 
 `sig` = `base64url(Ed25519_sign(private_key, signing_string))`.
 
-The body is hashed and verified before it is parsed. Servers SHOULD enforce a maximum body size before hashing.
+The body is hashed and verified before it is parsed, and the hash always covers the bytes exactly as sent: a body is never re-serialized, for example after resolving duplicate member names (02 section 4), before verification. Servers SHOULD enforce a maximum body size before hashing.
 
 ## 4. Request verification
 

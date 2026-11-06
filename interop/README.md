@@ -36,7 +36,7 @@ The six executables come from CI builds:
 | Language | Server | Client | Built with |
 |---|---|---|---|
 | Go | `interop/bin/go-server` | `interop/bin/go-client` | `interop/go/server/main.go`, `interop/go/client/main.go` |
-| Rust | `rust/target/release/interop-server` | `rust/target/release/interop-client` | `cargo build --release --features interop,http` |
+| Rust | `rust/target/release/interop-server` | `rust/target/release/interop-client` | `cargo build --locked --release --features interop` (`interop` enables `http`; as in CI) |
 | TypeScript | `node ts/dist/interop/server.js` | `node ts/dist/interop/client.js` | the package's build (`ts/src/interop/*.ts`) |
 
 On Windows the harness appends `.exe` to a plain binary path automatically when
@@ -322,7 +322,7 @@ node interop/run.mjs --self-test
 
 Validates the harness without any SDK, using `tools/fake-server.mjs` and
 `tools/fake-client.mjs` as a pseudo-language `fake`. It prints one
-`self-test: <what>` line per check, then `self-test: ok (16 checks)`, and
+`self-test: <what>` line per check, then `self-test: ok (18 checks)`, and
 exits 0:
 
 1. `self-test: matrix+sign+verify phases pass with fakes (0 failures)`
@@ -341,6 +341,8 @@ exits 0:
 14. `self-test: unsigned-403 control reports missing_auth`
 15. `self-test: blank-ready control exits 0 (got 0)`
 16. `self-test: blank-ready control prints PASS ping`
+17. `self-test: exit-before-drain control exits 0 (got 0)`
+18. `self-test: exit-before-drain control prints PASS ping`
 
 Checks 6–16 are negative controls run in subprocesses: the deviating fake
 client (check 6–7) and the exit-2 client (8–9, a matching JSON result with a
@@ -348,7 +350,11 @@ nonzero exit must still be a harness failure) are driven by env hooks, as is
 the verify-only server that prints a correct verdict but exits 2 (10–11) and
 the unsigned authenticated 403 (12–14: an authenticated 403 without a
 signature must surface as `client_error`/`missing_auth` and fail the pair).
-Checks 15–16 feed the ready line through the blank-line mode.
+Checks 15–16 feed the ready line through the blank-line mode. The
+exit-before-drain control (17–18) uses a fake-client env hook that holds the
+client's stdout pipe open from a grandchild and writes nothing itself, so the
+harness only passes because capture waits for the drained-pipes `close` event
+rather than the bare `exit` event.
 
 The fakes implement a deliberate subset (fake-client: real signed round trips
 for `ping`, `denied-tool` and `key-not-yet-valid` — the latter's outcome

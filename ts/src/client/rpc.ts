@@ -1,5 +1,6 @@
 /** JSON-RPC MCP client performing signed, response-verified tool calls (port of Go client/rpc.go). */
 import { validatePublicKey } from "../ed25519.js";
+import { JackError } from "../errors.js";
 import { MAX_BODY_BYTES, createSigningFetch, readBodyCapped } from "./transport.js";
 import type { SigningFetch } from "./transport.js";
 import { HTTPError, RPCError, ToolError, parseErrorBody } from "./errors.js";
@@ -61,7 +62,10 @@ export class Client {
     }
     const keyErr = validatePublicKey(config.serverKey);
     if (keyErr !== null) {
-      throw keyErr;
+      // Local validation never becomes an HTTP response: zero the validator's
+      // wire admission status (httpStatus 0 = never an HTTP response, the
+      // JackError contract), matching verifyResponse's client-side remap.
+      throw new JackError(0, keyErr.code, keyErr.message);
     }
     this.#base = base;
     this.aud = config.aud;

@@ -1,0 +1,12 @@
+{
+  "name": "mcp-jack-license-tooling",
+  "private": true,
+  "type": "module",
+  "description": "Pinned SPDX evaluation tooling for the licence CI; never imported by product code.",
+  "license": "MIT OR Apache-2.0",
+  "dependencies": {
+    "spdx-expression-parse": "5.0.0",
+    "spdx-license-ids": "3.0.24",
+    "spdx-satisfies": "6.0.0"
+  }
+}

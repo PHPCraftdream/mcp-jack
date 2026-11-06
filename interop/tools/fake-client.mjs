@@ -2,6 +2,7 @@
 // implementation. Usage:
 //   node fake-client.mjs --url <u> --seed-hex <hex> --server-public-key <b64u>
 //     --aud <aud> --scenario <name> [--seeds <f>] [--ts <n>] [--nonce <b64u>] [--arg k=v]...
+import { spawn } from 'node:child_process';
 import http from 'node:http';
 import { createHash, createPrivateKey, createPublicKey, randomBytes, sign, verify } from 'node:crypto';
 
@@ -115,6 +116,16 @@ function main() {
     // harness must treat any nonzero client exit as a harness-level failure.
     if (s === 'ping') emit(s, 'ok', 200, null, {}, 2);
     else emit(s, 'rejected', 403, null, null, 2);
+  }
+  if (process.env.JACK_SELFTEST_PIPE_HOLDER === s) {
+    // Exit-before-drain control: hold this process's stdout pipe open from a
+    // grandchild, exit without writing anything, and let the grandchild emit
+    // the canonical ping result ~300ms after this process is gone. The
+    // harness must capture on 'close' (drained pipes), not 'exit'.
+    const result = JSON.stringify({ scenario: s, outcome: 'ok', http_status: 200, code: null, data: {} });
+    const holder = spawn(process.execPath, ['-e', `setTimeout(() => { process.stdout.write(${JSON.stringify(result)} + '\\n'); }, 300);`], { stdio: ['ignore', 'inherit', 'ignore'] });
+    holder.unref();
+    process.exit(0);
   }
   if (s === 'sign-only') {
     const body = Buffer.from(a.args['body-b64u'], 'base64url');

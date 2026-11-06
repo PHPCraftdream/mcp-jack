@@ -1,0 +1,7 @@
+{
+  "name": "license-fixture-dep-private-gpl",
+  "version": "1.0.0",
+  "description": "CI-only licence fixture: private-marked dependency with a disallowed licence.",
+  "private": true,
+  "license": "GPL-3.0-only"
+}
