@@ -5,4 +5,24 @@
 // returned (spec 01 sections 4 and 5). The package speaks the protocol-native
 // jack.* tools for user management, including enrollment and key rotation
 // (spec 03 sections 3.1-3.3).
+//
+// # Destination policy
+//
+// Spec 01 section 1 requires HTTPS for non-loopback connections. The raw
+// destination URL string is checked (docs/design/interop.md section 9) by
+// NewClient, by profile loading and validation, and by every Transport
+// request before signing: https is accepted for any host, http only for a
+// literal canonical 127.x.y.z or [::1]; localhost aliases, userinfo and
+// percent escapes in the authority (zone IDs included), and backslashes are
+// refused; percent-encoded path/query is accepted and signed as given.
+// Nothing is resolved. SDK-built HTTP clients never follow redirects and a
+// 301, 302, 303, 307 or 308 answer to a signed request is refused before
+// verification (ErrRedirectRefused); its Location is never surfaced. This is
+// a no-follow/no-downgrade guard, not TLS enforcement. Other 3xx statuses
+// (e.g. a signed 304) are verified normally.
+//
+// A caller-supplied http.Client or base http.RoundTripper (Config.HTTP,
+// Transport.Base) is outside the SDK's control: it must use TLS for https
+// URLs, connect to exactly the URL it is given and not follow redirects. The
+// SDK cannot police it; the policy is applied before a request reaches it.
 package client

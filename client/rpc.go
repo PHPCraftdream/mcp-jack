@@ -17,7 +17,12 @@ import (
 
 // Config carries everything NewClient needs to reach and trust one server.
 type Config struct {
-	// BaseURL is the absolute http/https MCP endpoint.
+	// BaseURL is the absolute MCP endpoint. It must satisfy the client URL
+	// policy (docs/design/interop.md section 9), checked on the raw string:
+	// https for any host; http only for a literal canonical 127.x.y.z or
+	// [::1] (no localhost aliases); no userinfo or percent escapes in the
+	// authority (zone IDs included), no backslashes or non-ASCII/control
+	// bytes; percent-encoded path/query is accepted and signed as given. Nothing is resolved or rewritten.
 	BaseURL string
 	// Aud is the audience bound into the signing string.
 	Aud string
@@ -27,7 +32,14 @@ type Config struct {
 	ServerKey []byte
 	// HTTP is an optional caller-supplied client; it MUST itself use a
 	// configured *Transport, otherwise requests are unsigned and responses
-	// unverified.
+	// unverified. Its transport must use TLS for https URLs, connect to
+	// exactly the URL it is given and not follow redirects; the SDK cannot
+	// police that. NewClient checks BaseURL once at construction, and a
+	// *Transport re-checks every request, but a custom transport is outside
+	// that control. The caller's client is never mutated: when its
+	// CheckRedirect is nil the Client uses a shallow copy that does not follow
+	// redirects, and a 301/302/303/307/308 answer is refused with
+	// ErrRedirectRefused (a no-follow guard, not TLS enforcement).
 	HTTP *http.Client
 	// Now, Nonce and Window are optional tuning fields carried onto the
 	// built-in Transport when HTTP is nil.
@@ -53,6 +65,9 @@ type Client struct {
 
 // NewClient validates cfg and returns a Client.
 func NewClient(cfg Config) (*Client, error) {
+	if err := checkDestination(cfg.BaseURL); err != nil {
+		return nil, err
+	}
 	u, err := url.Parse(cfg.BaseURL)
 	if err != nil || !u.IsAbs() || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return nil, fmt.Errorf("jack client: base url must be an absolute http/https URL with a host")
@@ -85,6 +100,11 @@ func NewClient(cfg Config) (*Client, error) {
 		tr.Nonce = cfg.Nonce
 		tr.Window = cfg.Window
 		hc = NewHTTPClient(tr)
+	} else if hc.CheckRedirect == nil {
+		// Shallow copy: the caller's client is left untouched.
+		cp := *hc
+		cp.CheckRedirect = noFollowRedirects
+		hc = &cp
 	}
 	now := cfg.Now
 	if now == nil {
@@ -184,6 +204,10 @@ func (c *Client) call(ctx context.Context, signer Signer, tool string, arguments
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	if isRedirectStatus(resp.StatusCode) {
+		return &RedirectRefusedError{Status: resp.StatusCode}
+	}
 
 	raw, err := readCapped(resp.Body, maxBodyBytes)
 	if err != nil {

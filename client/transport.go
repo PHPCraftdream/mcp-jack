@@ -91,9 +91,30 @@ func (t *Transport) base() http.RoundTripper {
 	return http.DefaultTransport
 }
 
-// NewHTTPClient wraps t in an http.Client.
+// NewHTTPClient wraps t in an http.Client that never follows redirects: a
+// redirect status (301, 302, 303, 307, 308) is refused by the Transport itself
+// (ErrRedirectRefused). This is a no-follow guard, not TLS enforcement.
 func NewHTTPClient(t *Transport) *http.Client {
-	return &http.Client{Transport: t}
+	return &http.Client{Transport: t, CheckRedirect: noFollowRedirects}
+}
+
+// checkRequestDestination applies the client URL policy to the destination of
+// req, rebuilt as scheme://host plus the exact path and query bytes that will
+// be sent. It refuses a nil URL, an opaque URL and any userinfo.
+func checkRequestDestination(req *http.Request) error {
+	u := req.URL
+	if u == nil || u.Opaque != "" || u.User != nil {
+		return errMalformedDestination
+	}
+	path := u.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	raw := u.Scheme + "://" + u.Host + path
+	if u.ForceQuery || u.RawQuery != "" {
+		raw += "?" + u.RawQuery
+	}
+	return checkDestination(raw)
 }
 
 // maxBodyBytes caps response buffering so a hostile body cannot exhaust memory.
@@ -101,7 +122,23 @@ const maxBodyBytes = 1 << 20
 
 // RoundTrip signs req, sends it, and returns a response whose body has been
 // fully read and signature-verified against the pinned server key.
+//
+// The destination is checked against the client URL policy (urlpolicy.go)
+// before anything else: a refused destination produces no signature, no body
+// read and no call to the base RoundTripper. An answer with status 301, 302,
+// 303, 307 or 308 is refused locally, before verification, with a
+// *RedirectRefusedError; it is never followed and its Location is never
+// surfaced. Other 3xx statuses (e.g. a signed 304) are verified normally.
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req == nil {
+		return nil, errMalformedDestination
+	}
+	if err := checkRequestDestination(req); err != nil {
+		if req.Body != nil {
+			_ = req.Body.Close()
+		}
+		return nil, err
+	}
 	signer := signerFrom(req.Context())
 	if signer == nil {
 		signer = t.Signer
@@ -157,6 +194,15 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := t.base().RoundTrip(clone)
 	if err != nil {
 		return nil, err
+	}
+
+	// Redirect statuses (301/302/303/307/308) are refused before anything
+	// else: never followed, Location never surfaced, signature not meaningful.
+	// A no-follow guard so a signed request is not replayed or verified
+	// against a different target; not TLS enforcement.
+	if isRedirectStatus(resp.StatusCode) {
+		_ = resp.Body.Close()
+		return nil, &RedirectRefusedError{Status: resp.StatusCode}
 	}
 
 	// Streaming guard BEFORE buffering: a stream cannot be verified (spec 01

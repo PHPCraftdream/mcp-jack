@@ -35,6 +35,20 @@ let service = layer.layer(tower::service_fn(
 ));
 ```
 
+## Client (`mcp_jack::client`)
+
+### Client URL policy
+
+Spec 01 section 1 requires HTTPS for any non-loopback connection. `Client::new`, `load_profile`, `Client::from_profile` and `SigningTransport` (`round_trip` / `round_trip_as`) apply one literal-only policy to the raw destination URL string, locally, before signing and before the injected `Transport` is called (normative table: `spec/fixtures/client-url-policy.json`; prose: `docs/design/interop.md` section 9):
+
+- `https` is accepted for any host with valid syntax (no DNS is done).
+- `http` is accepted only for a literal canonical `127.x.y.z` (four decimal octets, no leading zeros) or `[::1]`. `localhost` and its aliases, `127.1`, hex/octal/integer IPv4, `[::ffff:127.0.0.1]` and every other spelling are refused over `http`.
+- Userinfo (`@` in the authority), percent escapes in the authority (so no zone IDs), backslashes, spaces, control and non-ASCII bytes, bad ports (valid: 1..=65535) and other schemes are refused.
+- Path, query and fragment are not inspected beyond the byte rule; percent-encoded path/query bytes are accepted and the signed target stays byte-for-byte as configured (e.g. `/a%20b?x=%2F`).
+- Redirects are never followed: `SigningTransport` refuses exactly the statuses 301, 302, 303, 307 and 308 with an error and does not verify them against the old target. This is a no-follow guard (a signed request must not be verified against another target), not TLS enforcement. Other statuses, including 300 and a signed 304, are verified as usual.
+
+Transport obligations: the SDK ships no HTTP implementation and cannot police a custom `Transport`. An implementation must use TLS with certificate validation for `https` URLs, connect to exactly the URL in `HttpRequest::url` (the wire URL must equal the signed one), not follow redirects (301/302/303/307/308: return them as is) and not downgrade or rewrite the URL. There is no insecure or skip-verify option.
+
 ## Interop executables (feature `interop`)
 
 `cargo build --release --features interop` builds the harness executables `interop-server` and `interop-client` (`--features interop,http` also works, since `interop` enables `http`); the feature gates the optional HTTP dependencies (hyper/tokio) so the default library build is unaffected. The interop harness (`interop/targets.json`) expects the release paths below, with `.exe` appended automatically on Windows by the harness (interop/README.md section 2). Run `node interop/run.mjs` to drive them, or `node interop/run.mjs --clients rust --servers rust` for just the Rust pair (interop/README.md section 3); the `--verify-only` and `--bootstrap-ttl` contract lives in interop/README.md section 4.

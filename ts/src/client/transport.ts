@@ -4,6 +4,8 @@ import { Code, JackError } from "../errors.js";
 import { randomNonce, signRequest, verifyResponse } from "./auth.js";
 import type { Clock, NonceSource } from "./auth.js";
 import type { Signer } from "./signer.js";
+import { checkDestination } from "./url-policy.js";
+import { RedirectRefusedError } from "./errors.js";
 
 // The lib is ES2022 without DOM: derive the fetch types from the Node globals.
 type HeadersInit = NonNullable<RequestInit["headers"]>;
@@ -215,9 +217,78 @@ async function cancelBody(resp: Response): Promise<void> {
   }
 }
 
+/** The raw string form of a fetch input, as the URL policy sees it: a string as given, a URL by its serialised href, a Request by its (already normalised) url. */
+function rawDestination(input: RequestInfo | URL): string {
+  if (input instanceof Request) {
+    return input.url;
+  }
+  if (input instanceof URL) {
+    return input.href;
+  }
+  return String(input);
+}
+
+/** The exact redirect statuses; 300 and 304 are not redirects and go through normal verification. */
+const REDIRECT_STATUSES: ReadonlySet<number> = new Set([301, 302, 303, 307, 308]);
+
+/** The network destination of a URL string: its href without the fragment (a fragment is never sent and never appears in a real Response.url). Works on a parsed copy; the request URL and the signed target are untouched. */
+function networkDestination(raw: string): string {
+  const u = new URL(raw);
+  u.hash = "";
+  return u.href;
+}
+
+/**
+ * Refuses any answer that is, or followed, a redirect, discarding its body
+ * unverified. A no-follow guard so a signed request is never verified against
+ * another target; not TLS enforcement. Redirect statuses are exactly 301, 302,
+ * 303, 307 and 308 (plus type "opaqueredirect" and `redirected`). An injected
+ * fetchImpl may leave `url` empty, so a final url is only compared when
+ * non-empty, and the comparison ignores the fragment.
+ */
+async function refuseRedirected(resp: Response, requested: string): Promise<void> {
+  let reason: string | undefined;
+  if (resp.redirected) {
+    reason = "the transport followed a redirect";
+  } else if (resp.type === "opaqueredirect" || REDIRECT_STATUSES.has(resp.status)) {
+    reason = `redirect answer (status ${resp.status})`;
+  } else if (resp.url !== "") {
+    try {
+      if (networkDestination(resp.url) !== networkDestination(requested)) {
+        reason = "the response url differs from the requested url";
+      }
+    } catch {
+      reason = "the response url is not a valid url";
+    }
+  }
+  if (reason !== undefined) {
+    await cancelBody(resp);
+    throw new RedirectRefusedError(reason);
+  }
+}
+
 /**
  * createSigningFetch returns a fetch-like function that signs each request and
- * verifies each response (port of Go Transport.RoundTrip). Response mapping:
+ * verifies each response (port of Go Transport.RoundTrip).
+ *
+ * Client URL policy: before anything else (before the body is read and before
+ * any signer, nonce or fetchImpl is touched) the destination is checked by
+ * checkDestination: https for any host, http only for a literal 127.x.y.z or
+ * [::1]; otherwise DestinationRefusedError is thrown. Percent escapes are
+ * refused in the authority only (which also refuses zone IDs); percent-encoded
+ * path and query bytes are accepted and signed as given. The policy sees a string
+ * input as given; a URL input is checked on its serialised `.href` and a
+ * Request on its `.url` (both already WHATWG-normalised, and strictly
+ * validated again by the policy). Redirects are never followed
+ * (`redirect: "error"` is forced); an answer from an injected fetchImpl with
+ * status 301, 302, 303, 307 or 308, type "opaqueredirect", `redirected` set or
+ * a final url that differs (fragment ignored) is refused with
+ * RedirectRefusedError. Other 3xx statuses (300, 304) are not redirects and
+ * are verified normally. This is a no-follow guard so a signed request is
+ * never verified against another target, not TLS enforcement. There is
+ * no insecure opt-out. A caller-supplied fetchImpl must use TLS for https,
+ * connect to exactly the URL it is given and not follow redirects; the SDK
+ * cannot police an arbitrary custom fetch. Response mapping:
  * - verification passes -> the verified bytes are returned as a fresh Response;
  * - JackError missing_auth with status 401 (an unsigned 401) -> the body is
  *   ignored and UnauthenticatedResponseError{status} is thrown;
@@ -228,6 +299,7 @@ async function cancelBody(resp: Response): Promise<void> {
  */
 export function createSigningFetch(config: SigningFetchConfig, fetchImpl: typeof fetch = globalThis.fetch): SigningFetch {
   return async (input: RequestInfo | URL, init?: SigningFetchInit): Promise<Response> => {
+    checkDestination(rawDestination(input));
     const normalized = await normalizeInput(input, init);
     const signer = init?.jackSigner ?? config.signer;
     const now = init?.jackFixedNow ?? (config.clock ?? defaultClock)();
@@ -260,6 +332,9 @@ export function createSigningFetch(config: SigningFetchConfig, fetchImpl: typeof
       ...(normalized.forwarded.keepalive !== undefined ? { keepalive: normalized.forwarded.keepalive } : {}),
       ...(normalized.body.length > 0 ? { body: normalized.body } : {}),
     });
+
+    // Refuse redirect answers before anything is read or verified.
+    await refuseRedirected(resp, normalized.url);
 
     // Streaming guard BEFORE buffering: a stream cannot be body-hashed, so it
     // cannot be verified (spec 01 section 5, open question Q1).

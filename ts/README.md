@@ -28,6 +28,14 @@ const handle = jackFetchHandler({ verifier, serverKey: seed, maxBodyBytes: 1 << 
 createServer(serveNode(handle)).listen(8080);
 ```
 
+## Client
+
+### Client URL policy
+
+The client (`Client`, `clientFromProfile`/`loadProfile`/`validateProfile` and `createSigningFetch`) judges the destination as a raw string, before any URL parsing, locally and before signing or any `fetchImpl` call (spec 01 section 1; `docs/design/interop.md` section 9; table `spec/fixtures/client-url-policy.json`). `https` is accepted for any well-formed host. `http` is accepted only for a literal canonical `127.x.y.z` or `[::1]`. `localhost` and its aliases, non-canonical IPs (`127.1`, `0x7f.0.0.1`, `2130706433`, ...), userinfo, percent escapes in the authority (which also refuses zone IDs), backslashes, whitespace/control/non-ASCII bytes and bad ports are refused with `DestinationRefusedError`; percent-encoded path and query bytes stay accepted and are signed as given; there is no DNS and no insecure opt-out. `checkDestination(raw)` is exported. For `URL` and `Request` inputs of `createSigningFetch` the check runs on the serialised `.href` / `.url`.
+
+Redirects are never followed: `redirect: "error"` is always passed to the fetch, and an answer from an injected fetch with status 301, 302, 303, 307 or 308, type `opaqueredirect`, `redirected` set, or a url that is non-empty and different (the fragment is ignored in this comparison) is refused with `RedirectRefusedError` and its body cancelled. Other 3xx statuses (300, 304) are not redirects and are verified normally. This is a no-follow guard so a signed request is never verified against another target; it is not TLS enforcement. A caller-supplied `fetchImpl` must use TLS for `https` URLs, connect to exactly the URL it is given and not follow redirects; the SDK cannot police an arbitrary custom fetch.
+
 ## Interop executables
 
 `tsconfig.json` has `include: ["src"]` and `rootDir: "src"`, so `npm run build` compiles the two interop executables to `dist/interop/` alongside the library. Run the build in `ts/`, the executables from the repo root (that is where `interop/targets.json` resolves the paths):

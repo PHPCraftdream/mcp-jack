@@ -73,3 +73,19 @@ export function parseErrorBody(body: Uint8Array): { code: string; message: strin
     message: isString(message) ? message : "",
   };
 }
+
+/** DestinationRefusedError reports a destination URL refused locally by the client URL policy (spec 01 section 1; docs/design/interop.md section 9). Nothing was signed or sent. */
+export class DestinationRefusedError extends Error {
+  constructor(reason: string) {
+    super(`jack client: destination refused: ${reason}`);
+    this.name = "DestinationRefusedError";
+  }
+}
+
+/** RedirectRefusedError reports a redirect answer (status 301, 302, 303, 307 or 308, type "opaqueredirect", `redirected`, or a final URL that differs from the requested one, ignoring the fragment) refused locally; the response is discarded unverified. Other 3xx statuses (300, 304) are verified normally. A no-follow guard so a signed request is never verified against another target, not TLS enforcement. */
+export class RedirectRefusedError extends Error {
+  constructor(reason: string) {
+    super(`jack client: redirect refused: ${reason}`);
+    this.name = "RedirectRefusedError";
+  }
+}
