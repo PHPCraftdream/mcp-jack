@@ -4,6 +4,20 @@
 //! jack.* tools itself, forwards everything else to the wrapped service and
 //! signs every verified answer. Because responses are buffered before signing,
 //! streaming responses are refused with 501 (v0.1, spec README Q1).
+//!
+//! Both buffers are bounded: requests by [`HandlerConfig::max_body_bytes`]
+//! (413 on overflow) and inner responses by
+//! [`HandlerConfig::max_response_bytes`] (signed 502 `response_too_large` on
+//! overflow). Limits of the response cap: it bounds bytes read, not time, and
+//! the body is dropped on overflow. A body that never yields a frame, or yields
+//! only empty frames, is not stopped by it (empty frames add no bytes and are
+//! not retained, but the loop keeps awaiting). A deadline on the inner service
+//! covers only obtaining the response (headers + body handle); body consumption
+//! happens in this adapter's future, so a deadline for it must wrap the whole
+//! `JackService` produced by `JackLayer` (e.g. tower timeout or
+//! `tokio::time::timeout` around the call). That is the caller's
+//! responsibility; this crate has no timeout option. The inner service's own
+//! allocations before it returns its response are not bounded either.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -31,6 +45,11 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 /// (Go: defaultMaxBodyBytes).
 const DEFAULT_MAX_BODY_BYTES: usize = 1 << 20;
 
+/// Default inner-response limit applied when
+/// [`HandlerConfig::max_response_bytes`] is zero; matches the client buffer
+/// default.
+const DEFAULT_MAX_RESPONSE_BYTES: usize = 1 << 20;
+
 /// Configures [`JackLayer::new`] (Go: HandlerConfig). Infallible in Rust: the
 /// Go nil/length checks are unrepresentable (Arc, typed key).
 pub struct HandlerConfig {
@@ -41,6 +60,16 @@ pub struct HandlerConfig {
     /// Bounds the request body; zero means 1 MiB (Go: limit <= 0). The body
     /// must be read in full to be hashed, so the limit is a DoS guard.
     pub max_body_bytes: usize,
+    /// Bounds the buffered inner response, independently of
+    /// `max_body_bytes`; zero means 1 MiB. Exactly this many bytes pass; one
+    /// more is answered with a signed 502 `response_too_large` and the inner
+    /// body is dropped. It bounds bytes read, not time: a body that never
+    /// yields a frame (or only empty frames) is not stopped by it. A timeout on
+    /// the inner service covers only obtaining the response; a deadline
+    /// including body consumption must wrap the whole `JackService` produced by
+    /// `JackLayer` (caller's responsibility; no timeout option here). The inner
+    /// service's own pre-return allocations are not bounded (see module docs).
+    pub max_response_bytes: usize,
 }
 
 /// Tower layer wrapping an unmodified MCP server (Go: `handler` + NewHandler).
@@ -54,7 +83,12 @@ pub struct HandlerConfig {
 /// use tower::Layer as _;
 /// use mcp_jack::server::http::{HandlerConfig, JackLayer};
 ///
-/// let layer = JackLayer::new(HandlerConfig { verifier, server_key, max_body_bytes: 0 });
+/// let layer = JackLayer::new(HandlerConfig {
+///     verifier,
+///     server_key,
+///     max_body_bytes: 0,
+///     max_response_bytes: 0,
+/// });
 /// let service = layer.layer(tower::service_fn(|req: http::Request<Full<Bytes>>| async move {
 ///     Ok::<_, std::convert::Infallible>(http::Response::new(Full::new(Bytes::new())))
 /// }));
@@ -64,6 +98,7 @@ pub struct JackLayer {
     server_key: ed25519_dalek::SigningKey,
     kid: String,
     limit: usize,
+    response_limit: usize,
 }
 
 impl JackLayer {
@@ -77,11 +112,17 @@ impl JackLayer {
         } else {
             cfg.max_body_bytes
         };
+        let response_limit = if cfg.max_response_bytes == 0 {
+            DEFAULT_MAX_RESPONSE_BYTES
+        } else {
+            cfg.max_response_bytes
+        };
         Self {
             kid: key_id(cfg.server_key.verifying_key().as_bytes()),
             verifier: cfg.verifier,
             server_key: cfg.server_key,
             limit,
+            response_limit,
         }
     }
 }
@@ -95,6 +136,7 @@ impl<S> Layer<S> for JackLayer {
             server_key: self.server_key.clone(),
             kid: self.kid.clone(),
             limit: self.limit,
+            response_limit: self.response_limit,
             inner,
         }
     }
@@ -108,6 +150,7 @@ pub struct JackService<S> {
     server_key: ed25519_dalek::SigningKey,
     kid: String,
     limit: usize,
+    response_limit: usize,
     inner: S,
 }
 
@@ -158,6 +201,7 @@ where
             server_key: self.server_key.clone(),
             kid: self.kid.clone(),
             limit: self.limit,
+            response_limit: self.response_limit,
             inner: ready_inner,
         };
         Box::pin(async move { this.serve(req).await })
@@ -263,7 +307,8 @@ where
 
     /// Reads the whole body into memory enforcing `limit` on the fly
     /// (Go: io.ReadAll(http.MaxBytesReader(...))). Trailer frames are ignored;
-    /// data frames carry the body bytes.
+    /// data frames carry the body bytes. The body is owned, so it is dropped
+    /// (and never polled again) as soon as an error is returned.
     async fn buffer_body<B>(body: B, limit: usize) -> Result<Bytes, BodyReadError>
     where
         B: BodyExt,
@@ -409,13 +454,23 @@ where
             );
             return Ok(self.signed(501, res, body.into_bytes().into()));
         }
-        // The inner response has no size limit in Go; only the read-error shape
-        // applies. A read error cannot be mapped into S::Error generically, so
-        // it is answered as a signed 500 instead of propagating (request
-        // binding preserved) — Go cannot hit this path at all.
-        let buffered = match Self::buffer_body(inner_body, usize::MAX).await {
+        // Bounded by response_limit (default 1 MiB): the inner body is moved
+        // into buffer_body, which stops polling and drops it on overflow, and
+        // never appends an oversized frame. Overflow is a signed 502 with a
+        // fresh header set, so no upstream header or partial byte survives.
+        // A read error cannot be mapped into S::Error generically, so it is
+        // answered as a signed 500 instead of propagating (request binding
+        // preserved) — Go cannot hit this path at all.
+        let buffered = match Self::buffer_body(inner_body, self.response_limit).await {
             Ok(bytes) => bytes,
-            Err(_) => return Ok(self.internal(res)),
+            Err(BodyReadError::TooLarge) => {
+                let body = error_body(
+                    "response_too_large",
+                    "upstream response exceeds the configured limit",
+                );
+                return Ok(self.signed(502, res, body.into_bytes().into()));
+            }
+            Err(BodyReadError::Read) => return Ok(self.internal(res)),
         };
 
         // Content-Length: the buffered length decides (Go: header.Del).
@@ -432,8 +487,8 @@ where
         Ok(self.signed_with_headers(status.as_u16(), res, headers, buffered))
     }
 
-    /// Signs a response with empty extra headers (Go: writeSigned over a fresh
-    /// Content-Type-only header).
+    /// Signs a response over a fresh header set holding only its own
+    /// `Content-Type`; `Jack-Auth` is then added (Go: writeSigned).
     fn signed(&self, status: u16, res: &VerifyResult, body: Bytes) -> http::Response<Full<Bytes>> {
         let mut headers = http::HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));

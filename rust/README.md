@@ -2,7 +2,7 @@ This crate is the Rust SDK for mcp-jack, the secure transport protocol wrapping 
 
 ## Tower HTTP adapter (feature `http`)
 
-`JackLayer` (Go: `server.NewHandler`) wraps an existing tower `Service`, buffers each request body up to `max_body_bytes` (default 1 MiB), verifies it and answers protocol-native `jack.*` tools itself. Everything else is forwarded to the inner service; the inner response is buffered in full and signed, so `text/event-stream` responses are refused with 501 (v0.1 cannot sign streams). Inner service errors propagate unchanged. The inner service must accept `http::Request<http_body_util::Full<bytes::Bytes>>` — wrap a hyper/axum-style service accordingly (this crate does not depend on axum).
+`JackLayer` (Go: `server.NewHandler`) wraps an existing tower `Service`, buffers each request body up to `max_body_bytes` (default 1 MiB), verifies it and answers protocol-native `jack.*` tools itself. Everything else is forwarded to the inner service; the inner response is buffered and signed, so `text/event-stream` responses are refused with 501 (v0.1 cannot sign streams). The inner response is buffered up to `max_response_bytes` (default 1 MiB, independent of `max_body_bytes`; exactly the limit passes). Beyond it the answer is a signed 502 `response_too_large`: upstream status, headers and partial body are discarded, and the answer is a fresh JSON response with its own `Content-Type` plus the `Jack-Auth` signature header (no upstream header survives); the inner body is dropped. Limits of the cap: it bounds bytes read, not time. A body that never yields a frame, or yields only empty frames, is not stopped by it (empty frames add no bytes and are not retained, but the adapter keeps awaiting). A deadline on the inner service covers only obtaining the response (headers + body handle), not the later body consumption, which happens in the adapter's future; a deadline covering body consumption must wrap the whole `JackService` produced by `JackLayer` (tower timeout or `tokio::time::timeout` around the call; the caller's responsibility, this crate has no timeout option). The inner service's own allocations before it returns its response are not bounded. Inner service errors propagate unchanged. The inner service must accept `http::Request<http_body_util::Full<bytes::Bytes>>` — wrap a hyper/axum-style service accordingly (this crate does not depend on axum).
 
 ```rust,ignore
 use bytes::Bytes;
@@ -26,6 +26,7 @@ let layer = JackLayer::new(HandlerConfig {
     verifier: Arc::new(verifier),
     server_key,
     max_body_bytes: 0,
+    max_response_bytes: 0,
 });
 let service = layer.layer(tower::service_fn(
     |req: http::Request<Full<Bytes>>| async move {

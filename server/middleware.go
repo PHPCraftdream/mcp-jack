@@ -14,7 +14,11 @@ import (
 	jack "github.com/PHPCraftdream/mcp-jack"
 )
 
-const defaultMaxBodyBytes = 1 << 20
+const (
+	defaultMaxBodyBytes = 1 << 20
+	// defaultMaxResponseBytes matches the client's response buffer default.
+	defaultMaxResponseBytes = 1 << 20
+)
 
 // HandlerConfig configures NewHandler.
 type HandlerConfig struct {
@@ -25,6 +29,18 @@ type HandlerConfig struct {
 	// MaxBodyBytes bounds the request body; zero means 1 MiB. The body must
 	// be read in full to be hashed, so the limit is a denial-of-service guard.
 	MaxBodyBytes int64
+	// MaxResponseBytes bounds the response body buffered from the wrapped
+	// handler before it is signed; zero means 1 MiB and a negative value makes
+	// NewHandler fail. It is distinct from MaxBodyBytes, which bounds only the
+	// request. A body of exactly MaxResponseBytes passes; one more byte
+	// overflows. On overflow the wrapped handler's context is cancelled, its
+	// further writes fail and the client gets a signed 502 with the error code
+	// response_too_large; the upstream status, headers and partial body are
+	// discarded. Go cannot forcibly stop a handler goroutine: a handler that
+	// ignores both context cancellation and write errors, or an idle producer
+	// that never writes, is not stopped by this cap and can still delay the
+	// answer. The adapter never detaches the wrapped handler.
+	MaxResponseBytes int64
 }
 
 type handler struct {
@@ -32,16 +48,27 @@ type handler struct {
 	key   ed25519.PrivateKey
 	kid   string
 	limit int64
-	next  http.Handler
+	// respLimit bounds the buffered upstream response body.
+	respLimit int64
+	next      http.Handler
 }
 
 // NewHandler wraps next, an unmodified MCP server, so that only authenticated
 // and authorized requests reach it and every verified answer is signed.
 // Protocol-native tools are answered here and never reach next.
 //
-// The response of next is buffered in full before it is signed, so streaming
-// (text/event-stream) responses are not supported in v0.1 (spec README Q1):
-// they are answered with 501 instead of being passed through unsigned.
+// The response of next is buffered before it is signed, up to
+// HandlerConfig.MaxResponseBytes (default 1 MiB, distinct from the request
+// cap MaxBodyBytes). A larger body is answered with a signed 502
+// response_too_large; the request context given to next is cancelled and its
+// later writes fail, but Go cannot forcibly stop next: a handler that ignores
+// both context cancellation and write errors, or an idle producer that never
+// writes, is not stopped by the cap and can still delay the answer. A negative
+// MaxResponseBytes is an error.
+//
+// Streaming (text/event-stream) responses are not supported in v0.1 (spec
+// README Q1): they are answered with 501 instead of being passed through
+// unsigned. The 501 takes precedence over the size overflow.
 //
 // A stream is detected early when the Content-Type is text/event-stream at the
 // moment next commits its response headers (first WriteHeader, Write or
@@ -63,13 +90,20 @@ func NewHandler(cfg HandlerConfig, next http.Handler) (http.Handler, error) {
 		return nil, errors.New("server: HandlerConfig.ServerKey must be an Ed25519 private key")
 	case next == nil:
 		return nil, errors.New("server: next handler must be set")
+	case cfg.MaxResponseBytes < 0:
+		// A limit must never silently disable itself.
+		return nil, errors.New("server: HandlerConfig.MaxResponseBytes must not be negative")
 	}
 	limit := cfg.MaxBodyBytes
 	if limit <= 0 {
 		limit = defaultMaxBodyBytes
 	}
+	respLimit := cfg.MaxResponseBytes
+	if respLimit == 0 {
+		respLimit = defaultMaxResponseBytes
+	}
 	pub := cfg.ServerKey.Public().(ed25519.PublicKey)
-	return &handler{v: cfg.Verifier, key: cfg.ServerKey, kid: jack.KeyID(pub), limit: limit, next: next}, nil
+	return &handler{v: cfg.Verifier, key: cfg.ServerKey, kid: jack.KeyID(pub), limit: limit, respLimit: respLimit, next: next}, nil
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -177,7 +211,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, body []byte, r
 	inner.Body = io.NopCloser(bytes.NewReader(body))
 	inner.ContentLength = int64(len(body))
 
-	bw := &bufferedWriter{header: http.Header{}, cancel: cancel}
+	bw := &bufferedWriter{header: http.Header{}, cancel: cancel, limit: h.respLimit}
 	h.next.ServeHTTP(bw, inner)
 
 	// The final header is checked too: header changes after the commit are
@@ -186,6 +220,12 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, body []byte, r
 		header := http.Header{}
 		header.Set("Content-Type", "application/json")
 		h.writeSigned(w, http.StatusNotImplemented, header, errorBody("streaming_unsupported", "streaming responses cannot be signed in v0.1"), res.RequestSig)
+		return
+	}
+	if bw.overflowed {
+		header := http.Header{}
+		header.Set("Content-Type", "application/json")
+		h.writeSigned(w, http.StatusBadGateway, header, errorBody("response_too_large", "upstream response exceeds the configured limit"), res.RequestSig)
 		return
 	}
 	status := bw.status
@@ -245,6 +285,10 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 // text/event-stream; a handler writing in a loop should stop on it.
 var errStreamRefused = errors.New("server: streaming responses are not supported; response refused")
 
+// errResponseTooLarge is returned by writes once the response of the wrapped
+// handler exceeded the buffer limit; a handler writing in a loop should stop.
+var errResponseTooLarge = errors.New("server: response exceeds the configured limit")
+
 // bufferedWriter captures the answer of the wrapped handler so it can be
 // signed before anything is sent. Headers are committed at the first
 // WriteHeader, Write or Flush; the Content-Type seen at that moment decides
@@ -258,6 +302,9 @@ type bufferedWriter struct {
 	cancel    func()
 	committed bool
 	refused   bool
+	// limit is the maximum number of buffered body bytes.
+	limit      int64
+	overflowed bool
 }
 
 func (b *bufferedWriter) Header() http.Header { return b.header }
@@ -291,6 +338,19 @@ func (b *bufferedWriter) Write(p []byte) (int, error) {
 	}
 	if b.refused {
 		return 0, errStreamRefused
+	}
+	if b.overflowed {
+		return 0, errResponseTooLarge
+	}
+	// Compare against the remaining room so the sum cannot overflow int64 and
+	// nothing is allocated before the check.
+	if int64(len(p)) > b.limit-int64(b.body.Len()) {
+		b.overflowed = true
+		b.body = bytes.Buffer{}
+		if b.cancel != nil {
+			b.cancel()
+		}
+		return 0, errResponseTooLarge
 	}
 	return b.body.Write(p)
 }

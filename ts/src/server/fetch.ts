@@ -16,12 +16,37 @@ export interface HandlerConfig {
   verifier: Verifier;
   /** 32-byte Ed25519 seed, or an ed25519 private KeyObject. */
   serverKey: Uint8Array | KeyObject;
-  /** undefined or <= 0 means 1 MiB (Go defaultMaxBodyBytes). */
+  /**
+   * Request body cap. undefined, <= 0 or NaN means 1 MiB (Go defaultMaxBodyBytes);
+   * +Infinity or a value above Number.MAX_SAFE_INTEGER makes jackFetchHandler throw,
+   * because a limit must never silently disable itself.
+   */
   maxBodyBytes?: number;
+  /**
+   * Cap on the upstream response body buffered for signing, independent of
+   * maxBodyBytes. undefined or 0 means 1 MiB. Any other value must be a finite
+   * integer in (0, Number.MAX_SAFE_INTEGER], otherwise jackFetchHandler throws.
+   * A body of exactly this many bytes passes; one more is answered with a signed
+   * 502 response_too_large. The cap bounds bytes pulled, not time. On overflow
+   * the adapter AWAITS reader.cancel() (in try/catch, so an error cannot mask the
+   * 502); an upstream whose cancellation promise never settles is outside the byte
+   * cap and can still delay the 502. A stream that only yields empty chunks, or
+   * never yields, is not stopped by the cap: empty chunks are not retained, so
+   * memory stays bounded, but the read itself continues forever. A deadline on
+   * next covers only obtaining the Response, not the later body reads or the
+   * cancel; a deadline over the whole call, body consumption included, must wrap
+   * the returned handler (e.g. race/abort around handle(req)) and is the caller's
+   * responsibility. This SDK has no timeout option. The cap also cannot bound what
+   * next buffers internally before returning its Response.
+   */
+  maxResponseBytes?: number;
 }
 
 /** Go defaultMaxBodyBytes. The body must be read in full to be hashed, so the limit is a denial-of-service guard. */
 const DEFAULT_MAX_BODY_BYTES = 1 << 20;
+
+/** Default response cap; aligned with the client's response buffer default. */
+export const DEFAULT_MAX_RESPONSE_BYTES = 1 << 20;
 
 /** The fixed Ed25519 PKCS#8 DER prefix; appending the 32-byte seed yields a valid private key (client/signer.ts). */
 const PKCS8_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
@@ -47,7 +72,17 @@ export interface JackRequest extends Request {
  * Go NewHandler/ServeHTTP). Protocol-native tools are answered here and never
  * reach next. Streaming (text/event-stream) responses cannot be signed in
  * v0.1 (spec README Q1): the answer from next is refused on its header,
- * BEFORE the body is read, with a signed 501.
+ * BEFORE the body is read, with a signed 501. Other answers are buffered up to
+ * config.maxResponseBytes (default 1 MiB); a larger body is answered with a
+ * signed 502 response_too_large and the upstream stream is cancelled (the
+ * adapter awaits reader.cancel() inside try/catch, so a cancellation that never
+ * settles can still delay the 502). Invalid limits throw at construction. The
+ * cap bounds bytes pulled, not time: a stream that only yields empty chunks or
+ * never yields is not stopped by it, and a next that never resolves is not
+ * bounded either. A deadline wrapped around next covers only obtaining the
+ * Response; to bound body reads and cancel as well, the caller must wrap the
+ * returned handler (race/abort around the whole handle(req) call). There is no
+ * timeout option.
  */
 export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => Promise<Response>): (req: Request) => Promise<Response> {
   if (config.verifier === undefined) throw new Error("server: HandlerConfig.verifier must be set");
@@ -64,7 +99,16 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     priv = config.serverKey;
   }
   if (next === undefined) throw new Error("server: next handler must be set");
-  const limit = config.maxBodyBytes !== undefined && config.maxBodyBytes > 0 ? config.maxBodyBytes : DEFAULT_MAX_BODY_BYTES;
+  const mb = config.maxBodyBytes;
+  if (mb !== undefined && (mb === Infinity || mb > Number.MAX_SAFE_INTEGER)) {
+    throw new Error("server: HandlerConfig.maxBodyBytes must not be infinite or above Number.MAX_SAFE_INTEGER");
+  }
+  const limit = mb !== undefined && mb > 0 ? mb : DEFAULT_MAX_BODY_BYTES;
+  const mr: unknown = config.maxResponseBytes;
+  if (mr !== undefined && mr !== 0 && !(typeof mr === "number" && Number.isSafeInteger(mr) && mr > 0)) {
+    throw new Error("server: HandlerConfig.maxResponseBytes must be 0 or a positive safe integer");
+  }
+  const respLimit = mr === undefined || mr === 0 ? DEFAULT_MAX_RESPONSE_BYTES : (mr as number);
   // SPKI DER is a fixed 44-byte header followed by the 32-byte raw key (client/signer.ts).
   const der = createPublicKey(priv).export({ type: "spki", format: "der" });
   const pub = new Uint8Array(der.subarray(der.length - 32));
@@ -191,9 +235,65 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
       return out;
     }
 
-    // Only reachable for non-stream answers (Go buffers unboundedly too — a
-    // hostile upstream body is a memory-exhaustion vector; kept for parity).
-    const respBody = new Uint8Array(await resp.arrayBuffer());
+    // Only reachable for non-stream answers. The size is checked BEFORE a chunk
+    // is retained, so a hostile upstream body cannot exhaust memory (same cap
+    // and 502 answer as the Go and Rust adapters). A read error
+    // propagates as a rejection, exactly like arrayBuffer() did.
+    let respBody: Uint8Array;
+    if (resp.body === null) {
+      respBody = new Uint8Array(0);
+    } else {
+      const reader = resp.body.getReader();
+      try {
+        let chunks: Uint8Array[] = [];
+        let total = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk: unknown = value;
+          if (!(chunk instanceof Uint8Array)) {
+            try {
+              await reader.cancel();
+            } catch {
+              /* the TypeError below is the real failure */
+            }
+            throw new TypeError("upstream response body chunk is not a Uint8Array");
+          }
+          // Empty chunks add no bytes; retaining them would grow `chunks` without bound
+          // while `total` (and so the cap) never moves. Retained entries are therefore
+          // non-empty, at most respLimit of them.
+          if (chunk.length === 0) continue;
+          if (total + chunk.length > respLimit) {
+            chunks = [];
+            // Fresh headers only: nothing from the upstream answer survives.
+            const headers = new Headers();
+            headers.set("content-type", "application/json");
+            const out = writeSigned(
+              502,
+              headers,
+              errorBody("response_too_large", "upstream response exceeds the configured limit"),
+              res.requestSig,
+            );
+            try {
+              await reader.cancel();
+            } catch {
+              /* cancellation must not mask the 502 already in hand */
+            }
+            return out;
+          }
+          total += chunk.length;
+          chunks.push(chunk);
+        }
+        respBody = new Uint8Array(total);
+        let offset = 0;
+        for (const c of chunks) {
+          respBody.set(c, offset);
+          offset += c.length;
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    }
 
     const headers = new Headers(resp.headers);
     headers.delete("content-length");

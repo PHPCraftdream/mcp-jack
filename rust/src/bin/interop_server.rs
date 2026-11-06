@@ -304,6 +304,7 @@ async fn run() -> Result<(), String> {
         server_key,
         // 0 means the SDK default 1 MiB body limit.
         max_body_bytes: 0,
+        max_response_bytes: 0,
     });
     let service = layer.layer(mcp::TrivialService);
 

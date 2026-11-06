@@ -655,7 +655,7 @@ func TestBufferedWriterRefusesEventStream(t *testing.T) {
 		for _, via := range []string{"write", "writeheader", "flush"} {
 			t.Run(via+"/"+ct, func(t *testing.T) {
 				var cancels int
-				bw := &bufferedWriter{header: http.Header{}, cancel: func() { cancels++ }}
+				bw := &bufferedWriter{limit: defaultMaxResponseBytes, header: http.Header{}, cancel: func() { cancels++ }}
 				bw.Header().Set("Content-Type", ct)
 				switch via {
 				case "write":
@@ -694,7 +694,7 @@ func TestBufferedWriterKeepsOrdinaryResponses(t *testing.T) {
 	for _, ct := range []string{"text/event-streams", "application/json; x=text/event-stream", "", "application/json"} {
 		t.Run(ct, func(t *testing.T) {
 			var cancels int
-			bw := &bufferedWriter{header: http.Header{}, cancel: func() { cancels++ }}
+			bw := &bufferedWriter{limit: defaultMaxResponseBytes, header: http.Header{}, cancel: func() { cancels++ }}
 			if ct != "" {
 				bw.Header().Set("Content-Type", ct)
 			}
@@ -712,13 +712,13 @@ func TestBufferedWriterKeepsOrdinaryResponses(t *testing.T) {
 }
 
 func TestBufferedWriterImplicitStatusAndFlush(t *testing.T) {
-	bw := &bufferedWriter{header: http.Header{}}
+	bw := &bufferedWriter{limit: defaultMaxResponseBytes, header: http.Header{}}
 	_, _ = bw.Write([]byte("x"))
 	bw.WriteHeader(http.StatusTeapot)
 	if bw.status != http.StatusOK {
 		t.Fatalf("status = %d, want implicit 200", bw.status)
 	}
-	fl := &bufferedWriter{header: http.Header{}}
+	fl := &bufferedWriter{limit: defaultMaxResponseBytes, header: http.Header{}}
 	fl.Flush()
 	if !fl.committed || fl.status != http.StatusOK {
 		t.Fatalf("Flush: committed=%v status=%d", fl.committed, fl.status)
