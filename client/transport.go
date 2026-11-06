@@ -46,8 +46,9 @@ func signerFrom(ctx context.Context) Signer {
 	return s
 }
 
-// withFixedNow pins the signing clock for one request: the rotate proof ts
-// must equal the header ts (spec 03 section 3.1).
+// withFixedNow pins ONLY the signing clock for one request: the rotate proof
+// ts must equal the header ts (spec 03 section 3.1). Response verification
+// never uses it and always samples the transport clock afresh.
 func withFixedNow(ctx context.Context, now time.Time) context.Context {
 	return context.WithValue(ctx, fixedNowKeyType{}, now)
 }
@@ -112,8 +113,9 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if now == nil {
 		now = time.Now
 	}
+	signNow := now
 	if fixed, ok := fixedNowFrom(req.Context()); ok {
-		now = func() time.Time { return fixed }
+		signNow = func() time.Time { return fixed }
 	}
 	nonceFn := t.Nonce
 	if nonceFn == nil {
@@ -138,7 +140,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, fmt.Errorf("jack client: nonce: %w", err)
 	}
-	headerVal, err := SignRequest(signer, t.Aud, req.Method, target, body, nonce, now())
+	headerVal, err := SignRequest(signer, t.Aud, req.Method, target, body, nonce, signNow())
 	if err != nil {
 		return nil, err
 	}
