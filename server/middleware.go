@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
@@ -41,6 +42,19 @@ type handler struct {
 // The response of next is buffered in full before it is signed, so streaming
 // (text/event-stream) responses are not supported in v0.1 (spec README Q1):
 // they are answered with 501 instead of being passed through unsigned.
+//
+// A stream is detected early when the Content-Type is text/event-stream at the
+// moment next commits its response headers (first WriteHeader, Write or
+// Flush). From then on the request context given to next is cancelled, every
+// Write to it fails with an error and its bytes are discarded, so no stream
+// bytes are retained. A text/event-stream Content-Type set after the headers
+// were committed is still refused when next returns, but without early
+// cancellation: earlier writes already succeeded and were buffered, and the
+// handler's own return is the only bound.
+// Go cannot forcibly stop a handler goroutine, so the signed 501 is written
+// only when next returns: a handler that ignores both context cancellation and
+// write errors can still delay the answer. The adapter never detaches or
+// abandons next; panics from next propagate unchanged.
 func NewHandler(cfg HandlerConfig, next http.Handler) (http.Handler, error) {
 	switch {
 	case cfg.Verifier == nil:
@@ -157,14 +171,18 @@ func (h *handler) rejectInternal(w http.ResponseWriter, res Result) {
 // forward hands an authorized request to the wrapped server and signs what it
 // answers.
 func (h *handler) forward(w http.ResponseWriter, r *http.Request, body []byte, res Result) {
-	inner := r.Clone(r.Context())
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	inner := r.Clone(ctx)
 	inner.Body = io.NopCloser(bytes.NewReader(body))
 	inner.ContentLength = int64(len(body))
 
-	bw := &bufferedWriter{header: http.Header{}}
+	bw := &bufferedWriter{header: http.Header{}, cancel: cancel}
 	h.next.ServeHTTP(bw, inner)
 
-	if isEventStream(bw.header.Get("Content-Type")) {
+	// The final header is checked too: header changes after the commit are
+	// not observable by the writer, and the wire result must stay a signed 501.
+	if bw.refused || isEventStream(bw.header.Get("Content-Type")) {
 		header := http.Header{}
 		header.Set("Content-Type", "application/json")
 		h.writeSigned(w, http.StatusNotImplemented, header, errorBody("streaming_unsupported", "streaming responses cannot be signed in v0.1"), res.RequestSig)
@@ -223,27 +241,67 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 	writeRaw(w, status, header, errorBody(code, message))
 }
 
+// errStreamRefused is returned by writes to a response that was refused as a
+// text/event-stream; a handler writing in a loop should stop on it.
+var errStreamRefused = errors.New("server: streaming responses are not supported; response refused")
+
 // bufferedWriter captures the answer of the wrapped handler so it can be
-// signed before anything is sent.
+// signed before anything is sent. Headers are committed at the first
+// WriteHeader, Write or Flush; the Content-Type seen at that moment decides
+// whether the response is a refused event stream. A refused stream cancels the
+// request context of the wrapped handler, fails its writes and retains none of
+// its bytes. It is used by one goroutine, the one running the wrapped handler.
 type bufferedWriter struct {
-	header http.Header
-	status int
-	body   bytes.Buffer
+	header    http.Header
+	status    int
+	body      bytes.Buffer
+	cancel    func()
+	committed bool
+	refused   bool
 }
 
 func (b *bufferedWriter) Header() http.Header { return b.header }
 
-func (b *bufferedWriter) WriteHeader(status int) {
-	if b.status == 0 {
-		b.status = status
+// commit freezes the decision on the Content-Type at the first commit.
+func (b *bufferedWriter) commit() {
+	if b.committed {
+		return
+	}
+	b.committed = true
+	if isEventStream(b.header.Get("Content-Type")) {
+		b.refused = true
+		if b.cancel != nil {
+			b.cancel()
+		}
 	}
 }
 
+func (b *bufferedWriter) WriteHeader(status int) {
+	if b.committed {
+		return
+	}
+	b.status = status
+	b.commit()
+}
+
 func (b *bufferedWriter) Write(p []byte) (int, error) {
-	if b.status == 0 {
+	if !b.committed {
 		b.status = http.StatusOK
+		b.commit()
+	}
+	if b.refused {
+		return 0, errStreamRefused
 	}
 	return b.body.Write(p)
+}
+
+// Flush commits the headers like net/http does; buffered bytes are still held
+// back until the response is signed.
+func (b *bufferedWriter) Flush() {
+	if !b.committed {
+		b.status = http.StatusOK
+		b.commit()
+	}
 }
 
 // isEventStream reports whether a Content-Type value declares the media type
