@@ -83,7 +83,11 @@ interface Harness {
 }
 
 /** Wires the fixture registry/policy verifier (with the REAL native tools) in front of a wrapped next. */
-function newHarness(maxBodyBytes: number | undefined, next: (req: Request) => Promise<Response>): Harness {
+function newHarness(
+  maxBodyBytes: number | undefined,
+  next: (req: Request) => Promise<Response>,
+  maxResponseBytes?: number,
+): Harness {
   const state = newRegistryState();
   const audit = new MemoryAuditSink();
   const svc = seedByName("svc");
@@ -106,6 +110,7 @@ function newHarness(maxBodyBytes: number | undefined, next: (req: Request) => Pr
     verifier,
     serverKey: svc.seed,
     ...(maxBodyBytes !== undefined ? { maxBodyBytes } : {}),
+    ...(maxResponseBytes !== undefined ? { maxResponseBytes } : {}),
   };
   return { handle: jackFetchHandler(config, wrapped), seen, audit, serverPub: svc.signer.publicKey() };
 }
@@ -342,4 +347,267 @@ test("verifier denies native tools without an implementation", () => {
   assert.equal(res.code, "operation_denied");
   assert.equal(res.nonceRecorded, true);
   assert.notEqual(res.requestSig, "");
+});
+
+// ---- upstream response cap (maxResponseBytes) ----
+
+interface Probe {
+  pulls: number;
+  cancelled: boolean;
+}
+
+/** A source that yields one chunk per pull and never reads ahead (highWaterMark 0), so the counters are deterministic. */
+function probeStream(chunks: readonly Uint8Array[], probe: Probe): ReadableStream<Uint8Array> {
+  let i = 0;
+  return new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        probe.pulls += 1;
+        const chunk = chunks[i];
+        i += 1;
+        if (chunk === undefined) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        probe.cancelled = true;
+      },
+    },
+    { highWaterMark: 0 },
+  );
+}
+
+const filled = (n: number): Uint8Array => new Uint8Array(n).fill(0x61);
+
+const UPSTREAM_HEADERS = { "content-type": "text/plain", "x-upstream": "yes", "set-cookie": "a=b" };
+
+/** Runs one authorized GET through a handler whose upstream answers with the given Response. */
+async function answer(
+  maxResponseBytes: number | undefined,
+  upstream: () => Response,
+  maxBodyBytes?: number,
+): Promise<{ response: Response; harness: Harness; sig: string }> {
+  const harness = newHarness(maxBodyBytes, async () => upstream(), maxResponseBytes);
+  const { request, sig } = signedRequest(aliceSigner(), "GET", "/mcp", new Uint8Array(0));
+  return { response: await harness.handle(request), harness, sig };
+}
+
+/** The signed response_too_large 502, bound to the ORIGINAL request signature and free of any upstream data. */
+async function assertOverflow(r: { response: Response; harness: Harness; sig: string }): Promise<void> {
+  const { response, harness, sig } = r;
+  assert.equal(response.status, 502);
+  assert.equal(response.statusText, "");
+  const hv = response.headers.get("jack-auth");
+  assert.ok(hv !== null);
+  const body = new Uint8Array(await response.arrayBuffer());
+  verifyResponse(harness.serverPub, 502, [hv], sig, body, fixtureNow, 30);
+  const other = signedRequest(aliceSigner(), "GET", "/mcp", new Uint8Array(0)).sig;
+  assert.notEqual(other, sig);
+  assert.throws(() => verifyResponse(harness.serverPub, 502, [hv], other, body, fixtureNow, 30));
+  assert.equal(
+    Buffer.from(body).toString("utf-8"),
+    '{"error":{"code":"response_too_large","message":"upstream response exceeds the configured limit"}}',
+  );
+  assert.equal(errorCode(body), "response_too_large");
+  assert.equal(response.headers.get("content-type"), "application/json");
+  assert.equal(response.headers.get("x-upstream"), null);
+  assert.equal(response.headers.get("set-cookie"), null);
+}
+
+test("response cap: single chunk at cap-1, cap and cap+1", async () => {
+  for (const size of [7, 8]) {
+    const r = await answer(8, () => new Response(filled(size), { headers: UPSTREAM_HEADERS }));
+    assert.equal(r.response.status, 200, `size ${size}`);
+    const out = await assertSigned(r.response, r.harness.serverPub, r.sig);
+    assert.deepEqual(out, filled(size));
+  }
+  await assertOverflow(await answer(8, () => new Response(filled(9), { headers: UPSTREAM_HEADERS })));
+});
+
+test("response cap: multi-chunk body crossing the boundary in a later chunk", async () => {
+  const ok = await answer(8, () => new Response(probeStream([filled(3), filled(5)], { pulls: 0, cancelled: false })));
+  assert.equal(ok.response.status, 200);
+  assert.deepEqual(await assertSigned(ok.response, ok.harness.serverPub, ok.sig), filled(8));
+
+  const probe: Probe = { pulls: 0, cancelled: false };
+  const over = await answer(8, () => new Response(probeStream([filled(3), filled(3), filled(3)], probe), { headers: UPSTREAM_HEADERS }));
+  await assertOverflow(over);
+});
+
+test("response cap: exactly-cap answer keeps exact bytes, status, statusText and headers", async () => {
+  const r = await answer(
+    8,
+    () => new Response("abcdefgh", { status: 201, statusText: "Created", headers: { ...UPSTREAM_HEADERS, "content-length": "8" } }),
+  );
+  assert.equal(r.response.status, 201);
+  assert.equal(r.response.statusText, "Created");
+  assert.equal(r.response.headers.get("content-type"), "text/plain");
+  assert.equal(r.response.headers.get("x-upstream"), "yes");
+  assert.equal(r.response.headers.get("set-cookie"), "a=b");
+  assert.equal(r.response.headers.get("content-length"), "8");
+  const out = await assertSigned(r.response, r.harness.serverPub, r.sig);
+  assert.equal(Buffer.from(out).toString("utf-8"), "abcdefgh");
+});
+
+test("response cap: overflow stops reading, cancels the source and never pulls later chunks", async () => {
+  const probe: Probe = { pulls: 0, cancelled: false };
+  const r = await answer(8, () => new Response(probeStream([filled(4), filled(4), filled(4), filled(4), filled(4)], probe), { headers: UPSTREAM_HEADERS }));
+  await assertOverflow(r);
+  // Pulls 1 and 2 fill the cap exactly, pull 3 crosses it; chunks 4 and 5 are never requested.
+  assert.equal(probe.pulls, 3);
+  assert.equal(probe.cancelled, true);
+});
+
+// Finite tests prove only that output bytes and overflow behavior are unchanged by empty
+// chunks. The memory property (empty chunks are never pushed to `chunks`, so retained state
+// is bounded by the number of non-empty chunks, each >= 1 byte, hence at most respLimit
+// entries) comes from the code path (`continue` before `push`), not from these tests.
+// An endless stream of only empty chunks is still read forever; it just no longer grows memory.
+const empty = new Uint8Array(0);
+
+test("response cap: empty chunks interleaved with data at exactly the cap", async () => {
+  const probe: Probe = { pulls: 0, cancelled: false };
+  const r = await answer(8, () => new Response(probeStream([empty, filled(4), empty, empty, filled(4), empty], probe)));
+  assert.equal(r.response.status, 200);
+  assert.deepEqual(await assertSigned(r.response, r.harness.serverPub, r.sig), filled(8));
+});
+
+test("response cap: empty chunks interleaved with data crossing the cap", async () => {
+  const probe: Probe = { pulls: 0, cancelled: false };
+  const r = await answer(8, () => new Response(probeStream([empty, filled(4), empty, filled(5), filled(1)], probe), { headers: UPSTREAM_HEADERS }));
+  await assertOverflow(r);
+  // Pulls: 1 empty, 2 data, 3 empty, 4 crossing chunk; the fifth chunk is never pulled.
+  assert.equal(probe.pulls, 4);
+  assert.equal(probe.cancelled, true);
+});
+
+test("response cap: a body of only empty chunks is a signed empty 200", async () => {
+  const probe: Probe = { pulls: 0, cancelled: false };
+  const r = await answer(8, () => new Response(probeStream([empty, empty, empty], probe)));
+  assert.equal(r.response.status, 200);
+  assert.equal((await assertSigned(r.response, r.harness.serverPub, r.sig)).length, 0);
+});
+
+test("response cap: default limit applies for undefined and 0", async () => {
+  const limit = 1 << 20;
+  for (const cfg of [undefined, 0]) {
+    const ok = await answer(cfg, () => new Response(filled(limit)));
+    assert.equal(ok.response.status, 200, `cfg ${String(cfg)}`);
+    assert.equal((await assertSigned(ok.response, ok.harness.serverPub, ok.sig)).length, limit);
+    await assertOverflow(await answer(cfg, () => new Response(filled(limit + 1), { headers: UPSTREAM_HEADERS })));
+  }
+});
+
+test("response cap and request cap are independent", async () => {
+  // A tiny request cap does not limit a large response.
+  const big = await answer(undefined, () => new Response(filled(100)), 8);
+  assert.equal(big.response.status, 200);
+  assert.equal((await assertSigned(big.response, big.harness.serverPub, big.sig)).length, 100);
+
+  // A tiny response cap does not limit a large request.
+  const body = utf8('{"jsonrpc":"2.0","id":1,"method":"ping","params":{"pad":"' + "x".repeat(200) + '"}}');
+  const small = newHarness(undefined, async () => new Response(filled(8)), 8);
+  const { request, sig } = signedRequest(aliceSigner(), "POST", "/mcp", body);
+  const response = await small.handle(request);
+  assert.equal(response.status, 200);
+  assert.equal((await assertSigned(response, small.serverPub, sig)).length, 8);
+  assert.equal(small.seen.body?.length, body.length);
+});
+
+function validationConfig(): HandlerConfig {
+  const verifier = new Verifier({
+    aud: fixtureAud,
+    state: newRegistryState(),
+    nonces: new NonceStore(),
+    policy: parsePolicy(JSON.stringify(loadDefaultPolicy())),
+    now: () => fixtureNow,
+  });
+  return { verifier, serverKey: seedByName("svc").seed };
+}
+
+test("response cap: invalid maxResponseBytes throws at construction", () => {
+  const next = async (): Promise<Response> => new Response("");
+  for (const bad of [NaN, Infinity, -Infinity, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "8"]) {
+    assert.throws(
+      () => jackFetchHandler({ ...validationConfig(), maxResponseBytes: bad as number }, next),
+      Error,
+      `maxResponseBytes ${String(bad)}`,
+    );
+  }
+  for (const good of [undefined, 0, 1, 8, Number.MAX_SAFE_INTEGER]) {
+    assert.doesNotThrow(() => jackFetchHandler({ ...validationConfig(), ...(good !== undefined ? { maxResponseBytes: good } : {}) }, next));
+  }
+});
+
+test("maxBodyBytes: infinite or unsafe throws, legacy defaults stay", () => {
+  const next = async (): Promise<Response> => new Response("");
+  for (const bad of [Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => jackFetchHandler({ ...validationConfig(), maxBodyBytes: bad }, next), Error, `maxBodyBytes ${String(bad)}`);
+  }
+  for (const ok of [0, -1, NaN, -Infinity, 64, Number.MAX_SAFE_INTEGER]) {
+    assert.doesNotThrow(() => jackFetchHandler({ ...validationConfig(), maxBodyBytes: ok }, next));
+  }
+});
+
+test("response cap: an event stream larger than the cap stays 501 and is cancelled unread", async () => {
+  const probe: Probe = { pulls: 0, cancelled: false };
+  const r = await answer(
+    8,
+    () => new Response(probeStream([filled(64), filled(64)], probe), { headers: { "content-type": "text/event-stream; charset=utf-8" } }),
+  );
+  assert.equal(r.response.status, 501);
+  assert.equal(errorCode(await assertSigned(r.response, r.harness.serverPub, r.sig)), "streaming_unsupported");
+  assert.equal(probe.cancelled, true);
+  assert.equal(probe.pulls, 0);
+});
+
+test("response cap: a read error mid-body still rejects the handler promise", async () => {
+  let pulls = 0;
+  const failing = new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        pulls += 1;
+        if (pulls === 1) {
+          controller.enqueue(filled(2));
+          return;
+        }
+        controller.error(new Error("upstream broke"));
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const harness = newHarness(undefined, async () => new Response(failing), 8);
+  const { request } = signedRequest(aliceSigner(), "GET", "/mcp", new Uint8Array(0));
+  await assert.rejects(harness.handle(request), /upstream broke/);
+});
+
+test("response cap: a non-Uint8Array chunk rejects with TypeError", async () => {
+  const bad = new ReadableStream<unknown>({
+    start(controller) {
+      controller.enqueue("text");
+    },
+  }) as ReadableStream<Uint8Array>;
+  const harness = newHarness(undefined, async () => new Response(bad));
+  const { request } = signedRequest(aliceSigner(), "GET", "/mcp", new Uint8Array(0));
+  await assert.rejects(harness.handle(request), TypeError);
+});
+
+test("response cap: null and empty bodies are signed 200 with no bytes", async () => {
+  for (const make of [() => new Response(null), () => new Response("")]) {
+    const r = await answer(8, make);
+    assert.equal(r.response.status, 200);
+    assert.equal((await assertSigned(r.response, r.harness.serverPub, r.sig)).length, 0);
+  }
+});
+
+test("response cap: a throwing next is still an unsigned 500", async () => {
+  const harness = newHarness(undefined, async () => {
+    throw new Error("boom");
+  }, 8);
+  const { request } = signedRequest(aliceSigner(), "GET", "/mcp", new Uint8Array(0));
+  const response = await harness.handle(request);
+  assert.equal(response.status, 500);
+  assert.equal(response.headers.get("jack-auth"), null);
 });

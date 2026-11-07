@@ -48,6 +48,13 @@ func LoadProfile(r io.Reader) (Profile, error) {
 
 // validateProfile enforces spec 01 sections 3 and 6 field rules.
 func validateProfile(p Profile) error {
+	// The client URL policy decides acceptance on the raw string (percent
+	// escapes are refused in the authority only; percent-encoded path/query
+	// is accepted); the parse checks below are extra and reject only what
+	// net/url cannot parse, with a generic non-policy error.
+	if err := checkDestination(p.URL); err != nil {
+		return err
+	}
 	u, err := url.Parse(p.URL)
 	if err != nil || !u.IsAbs() || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return fmt.Errorf("jack client: profile url must be an absolute http/https URL with a host")
@@ -97,8 +104,9 @@ func (p Profile) ServerKeyBytes() ([]byte, error) {
 }
 
 // NewClientFromProfile validates p and builds a Client for it. httpc is the
-// optional caller-supplied HTTP client (Config.HTTP); it MUST itself use a
-// configured signed *Transport, and nil selects the built-in one. The Rust
+// optional caller-supplied HTTP client (Config.HTTP); it supplies timeout, Jar and
+// the base RoundTripper, while the SDK always adds its own signing and
+// verifying Transport (see Config.HTTP). nil selects the built-in one. The Rust
 // and TS SDKs expose the same constructor (Client::from_profile /
 // clientFromProfile).
 func NewClientFromProfile(p Profile, signer Signer, httpc *http.Client) (*Client, error) {

@@ -4,7 +4,7 @@ The `mcp-jack` npm package is the TypeScript SDK: it wraps an unmodified MCP end
 
 ## Usage
 
-Both adapters share one core: the verifier authenticates and authorizes every request, protocol-native `jack.*` tools are answered directly as MCP CallToolResults, and every other verified answer is signed with the server key (spec 01 sections 4 and 5). The aud check uses the configured audience, never the Host header (reverse-proxy safe); responses are buffered in full so they can be signed, which means `text/event-stream` is refused with 501 `streaming_unsupported` in v0.1, and bodies over `maxBodyBytes` (default 1 MiB) are answered with 413. The package exports both adapters from the root (`src/index.ts` re-exports `server/fetch.js` and `server/node.js`).
+Both adapters share one core: the verifier authenticates and authorizes every request, protocol-native `jack.*` tools are answered directly as MCP CallToolResults, and every other verified answer is signed with the server key (spec 01 sections 4 and 5). The aud check uses the configured audience, never the Host header (reverse-proxy safe); responses are buffered so they can be signed, which means `text/event-stream` is refused with 501 `streaming_unsupported` in v0.1, request bodies over `maxBodyBytes` (default 1 MiB) are answered with 413, and upstream response bodies over `maxResponseBytes` (default 1 MiB; 0 or unset means the default) are answered with a signed 502 `response_too_large` (the overflow answer discards the upstream status text and headers and carries a fresh `application/json` content-type, the mandatory `Jack-Auth` signature header and the `content-length` of its new body). The SSE 501 check takes precedence: it is decided on the declared media type before any body read. `maxResponseBytes` must be a positive safe integer, and `maxBodyBytes` must not be infinite or above `Number.MAX_SAFE_INTEGER`; otherwise `jackFetchHandler` throws at construction. The response cap bounds bytes pulled, not time. On overflow the adapter awaits `reader.cancel()` (inside try/catch, so errors cannot mask the 502), so an upstream whose cancellation promise never settles is outside the byte cap and can still delay the 502. A stream that only yields empty chunks, or never yields, is not stopped by the cap (empty chunks are not retained, so memory stays bounded, but the read continues forever), and the cap cannot bound what `next` buffers before returning its `Response`. A deadline on `next` covers only obtaining the `Response`, not the later body reads or the cancel; a deadline over the whole call including body consumption must wrap the returned handler (e.g. race/abort around the full `handle(req)` call) and is the caller's responsibility, since this SDK has no timeout option. The package exports both adapters from the root (`src/index.ts` re-exports `server/fetch.js` and `server/node.js`).
 
 ```ts
 // Gateway: wrap the upstream MCP server with a verifier in front.
@@ -20,13 +20,21 @@ const next = async (req: Request): Promise<Response> => {
   const body = await req.arrayBuffer(); // the adapter buffered the body; restore the exact bytes
   return fetch(upstream, { method: req.method, headers: req.headers, ...(req.method === "GET" || body.byteLength === 0 ? {} : { body }) });
 };
-const handle = jackFetchHandler({ verifier, serverKey: seed, maxBodyBytes: 1 << 20 }, next);
+const handle = jackFetchHandler({ verifier, serverKey: seed, maxBodyBytes: 1 << 20, maxResponseBytes: 1 << 20 }, next);
 ```
 
 ```ts
 // Node: serve the same handler from a real socket.
 createServer(serveNode(handle)).listen(8080);
 ```
+
+## Client
+
+### Client URL policy
+
+The client (`Client`, `clientFromProfile`/`loadProfile`/`validateProfile` and `createSigningFetch`) judges the destination as a raw string, before any URL parsing, locally and before signing or any `fetchImpl` call (spec 01 section 1; `docs/design/interop.md` section 9; table `spec/fixtures/client-url-policy.json`). `https` is accepted for any well-formed host. `http` is accepted only for a literal canonical `127.x.y.z` or `[::1]`. `localhost` and its aliases, non-canonical IPs (`127.1`, `0x7f.0.0.1`, `2130706433`, ...), userinfo, percent escapes in the authority (which also refuses zone IDs), backslashes, whitespace/control/non-ASCII bytes and bad ports are refused with `DestinationRefusedError`; percent-encoded path and query bytes stay accepted and are signed as given; there is no DNS and no insecure opt-out. `checkDestination(raw)` is exported. For `URL` and `Request` inputs of `createSigningFetch` the check runs on the serialised `.href` / `.url`.
+
+Redirects are never followed: `redirect: "error"` is always passed to the fetch, and an answer from an injected fetch with status 301, 302, 303, 307 or 308, type `opaqueredirect`, `redirected` set, or a url that is non-empty and different (the fragment is ignored in this comparison) is refused with `RedirectRefusedError` and its body cancelled. Other 3xx statuses (300, 304) are not redirects and are verified normally. This is a no-follow guard so a signed request is never verified against another target; it is not TLS enforcement. A caller-supplied `fetchImpl` must use TLS for `https` URLs, connect to exactly the URL it is given and not follow redirects; the SDK cannot police an arbitrary custom fetch.
 
 ## Interop executables
 

@@ -76,7 +76,7 @@ These are the places where three independent implementations drift. Each gets a 
   - Tradeoff: `tower` is the de-facto Rust middleware abstraction; avoiding it would mean an adapter per framework. It stays behind a feature so the core has no async dependency.
 - Core is synchronous: `Verifier::verify(&self, &Request) -> VerifyResult`. Types are `Send + Sync`; the stores use `std::sync::Mutex`.
 - Traits mirror Go interfaces: `StateStore { view, lookup, update }`, `AuditSink { record }`, `NativeTools { call(&self, &mut NativeCall) -> Result<NativeResult, JackError> }`.
-- `JackLayer` / `JackService<S>`: buffers the request body up to `max_body_bytes` (default 1 MiB), runs the verifier, answers native tools itself, forwards accepted requests to the inner service with the body restored, buffers and signs the response, refuses `text/event-stream` with 501.
+- `JackLayer` / `JackService<S>`: buffers the request body up to `max_body_bytes` (default 1 MiB), runs the verifier, answers native tools itself, forwards accepted requests to the inner service with the body restored, buffers and signs the response (bounded by `max_response_bytes`, default 1 MiB; overflow is a signed 502 `response_too_large` and the inner body is dropped; the cap bounds bytes read, not time: a body that never yields a frame, or only empty frames, is not stopped by it; a timeout on the inner service covers only obtaining the response, so a deadline including body consumption must wrap the whole `JackService` from `JackLayer`, the caller's responsibility; the inner service's own pre-return allocations are unbounded), refuses `text/event-stream` with 501.
 - Fixtures: integration tests in `rust/tests/` load `../spec/fixtures/*.json` through `env!("CARGO_MANIFEST_DIR")`. Not embedded in the library, so `cargo package` stays valid.
 - Lints: `#![forbid(unsafe_code)]`, `cargo clippy -- -D warnings`, `cargo fmt --check`.
 
@@ -86,7 +86,7 @@ These are the places where three independent implementations drift. Each gets a 
 - Zero runtime dependencies (only `node:crypto`, `node:fs`, `node:http`). Dev dependencies: `typescript`, `@types/node`. Tests use `node:test` and `node:assert`; no test framework dependency.
 - Core is synchronous where Go is (`Verifier.verify`); stores expose a synchronous `update(fn)` so the atomic-update rule is easy to keep (a JavaScript closure cannot be preempted).
 - HTTP, two thin layers over one core:
-  - `jackFetchHandler(config, next)`: `next` is a Fetch-standard `(Request) => Promise<Response>`; the returned handler has the same shape. This fits Hono, Deno, Bun and the Web-standard transport of the MCP TypeScript SDK.
+  - `jackFetchHandler(config, next)`: `next` is a Fetch-standard `(Request) => Promise<Response>`; the returned handler has the same shape; the buffered upstream response is bounded by `maxResponseBytes` (default 1 MiB, signed 502 `response_too_large` on overflow; the cap bounds bytes, not time, so a deadline must wrap the whole returned handler call, not only `next`). This fits Hono, Deno, Bun and the Web-standard transport of the MCP TypeScript SDK.
   - `serveNode(handler)`: adapts a Fetch handler to `node:http` (`(IncomingMessage, ServerResponse)`), with the same body limit.
   - Gateway use (an MCP server in another process) is `next = (req) => fetch(upstreamUrl, …)`, documented as an example, not a separate API.
 - Fixtures: tests read `../spec/fixtures/*.json` with `node:fs` relative to the test file. Not shipped in the package.

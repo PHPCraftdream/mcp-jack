@@ -13,6 +13,15 @@ use crate::client::signer::Signer;
 use crate::client::url::request_target;
 use crate::error::JackError;
 
+/// The exact redirect statuses `SigningTransport` refuses. 300 (Multiple
+/// Choices) and 304 (Not Modified) are not redirects to follow and go through
+/// the normal guard and verification.
+const REDIRECT_STATUSES: [u16; 5] = [301, 302, 303, 307, 308];
+
+fn is_redirect_status(status: u16) -> bool {
+    REDIRECT_STATUSES.contains(&status)
+}
+
 /// Caps response buffering so a hostile body cannot exhaust memory (Go:
 /// maxBodyBytes = 1<<20).
 pub const MAX_BODY_BYTES: usize = 1 << 20;
@@ -29,6 +38,13 @@ pub type NonceSource = Arc<dyn Fn() -> Result<Vec<u8>, ClientError> + Send + Syn
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpRequest {
     pub method: String,
+    /// The absolute destination URL, already accepted by the client URL policy
+    /// (https for any host; http only for a literal `127.x.y.z` or `[::1]`).
+    /// The `Transport` MUST connect to exactly this URL: the wire URL must be
+    /// the one whose origin-form target was signed. It MUST use TLS with
+    /// certificate validation for `https`, MUST NOT rewrite or downgrade the
+    /// URL, and MUST NOT follow redirects (301, 302, 303, 307, 308): return
+    /// the response as is.
     pub url: String,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
@@ -151,6 +167,24 @@ impl From<TransportError> for ClientError {
 
 /// One raw HTTP round trip (Go: http.RoundTripper). Implementations must
 /// fully buffer the response body before returning it; object-safe, Send+Sync.
+///
+/// Obligations of every implementation (the SDK cannot police arbitrary
+/// custom transport behaviour; it only refuses locally what it can see):
+///
+/// - use TLS with certificate validation for `https` URLs; offer no
+///   insecure or skip-verify mode;
+/// - connect to exactly the URL in [`HttpRequest::url`]; never rewrite it,
+///   downgrade https to http, or resolve it through an alias;
+/// - never follow redirects: return the 301/302/303/307/308 response as is.
+///   `SigningTransport` refuses exactly those statuses with an error, without
+///   following them and without verifying them against the signed target.
+///   This is a no-follow guard (a signed request must not be verified against
+///   another target), NOT TLS enforcement. Other statuses (300, 304, ...) are
+///   verified as usual.
+///
+/// The client URL policy (see `docs/design/interop.md` section 9) is applied
+/// by `SigningTransport` and `Client` before this method is reached; the
+/// SDK never calls a transport for a refused URL.
 pub trait Transport: Send + Sync {
     fn round_trip(&self, req: HttpRequest) -> Result<HttpResponse, TransportError>;
 }
@@ -212,6 +246,11 @@ impl<T: Transport> SigningTransport<T> {
         pinned_ts: Option<i64>,
         req: HttpRequest,
     ) -> Result<HttpResponse, TransportError> {
+        // Client URL policy FIRST: a refused URL produces no nonce, no
+        // signature and no inner transport call.
+        crate::client::url::validate_base_url(&req.url)
+            .map_err(|e| TransportError::Client(e.to_string()))?;
+
         let ts = pinned_ts.unwrap_or_else(|| (self.now)());
         // The pin applies to the REQUEST ts only (rotate proof binding, spec
         // 03 section 3.1); response freshness is checked against a fresh
@@ -247,6 +286,17 @@ impl<T: Transport> SigningTransport<T> {
         // The inner transport already returns TransportError and its value may
         // itself be Streaming/Protocol/etc: pass it through unchanged.
         let resp = self.transport.round_trip(wire_req)?;
+
+        // Redirects are never followed and never verified against the old
+        // target: a 301/302/303/307/308 answer is refused locally (the
+        // Location is ignored). No-follow guard only, not TLS enforcement.
+        // 300 and 304 are not in the set and are verified like any status.
+        if is_redirect_status(resp.status) {
+            return Err(TransportError::Client(format!(
+                "jack client: redirect (status {}) refused: the client never follows redirects (301, 302, 303, 307, 308)",
+                resp.status
+            )));
+        }
 
         // Streaming guard BEFORE verification: a stream cannot be verified
         // (spec 01 section 5, open question Q1).

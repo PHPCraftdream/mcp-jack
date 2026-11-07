@@ -2,7 +2,7 @@ This crate is the Rust SDK for mcp-jack, the secure transport protocol wrapping 
 
 ## Tower HTTP adapter (feature `http`)
 
-`JackLayer` (Go: `server.NewHandler`) wraps an existing tower `Service`, buffers each request body up to `max_body_bytes` (default 1 MiB), verifies it and answers protocol-native `jack.*` tools itself. Everything else is forwarded to the inner service; the inner response is buffered in full and signed, so `text/event-stream` responses are refused with 501 (v0.1 cannot sign streams). Inner service errors propagate unchanged. The inner service must accept `http::Request<http_body_util::Full<bytes::Bytes>>` — wrap a hyper/axum-style service accordingly (this crate does not depend on axum).
+`JackLayer` (Go: `server.NewHandler`) wraps an existing tower `Service`, buffers each request body up to `max_body_bytes` (default 1 MiB), verifies it and answers protocol-native `jack.*` tools itself. Everything else is forwarded to the inner service; the inner response is buffered and signed, so `text/event-stream` responses are refused with 501 (v0.1 cannot sign streams). The inner response is buffered up to `max_response_bytes` (default 1 MiB, independent of `max_body_bytes`; exactly the limit passes). Beyond it the answer is a signed 502 `response_too_large`: upstream status, headers and partial body are discarded, and the answer is a fresh JSON response with its own `Content-Type` plus the `Jack-Auth` signature header (no upstream header survives); the inner body is dropped. Limits of the cap: it bounds bytes read, not time. A body that never yields a frame, or yields only empty frames, is not stopped by it (empty frames add no bytes and are not retained, but the adapter keeps awaiting). A deadline on the inner service covers only obtaining the response (headers + body handle), not the later body consumption, which happens in the adapter's future; a deadline covering body consumption must wrap the whole `JackService` produced by `JackLayer` (tower timeout or `tokio::time::timeout` around the call; the caller's responsibility, this crate has no timeout option). The inner service's own allocations before it returns its response are not bounded. Inner service errors propagate unchanged. The inner service must accept `http::Request<http_body_util::Full<bytes::Bytes>>` — wrap a hyper/axum-style service accordingly (this crate does not depend on axum).
 
 ```rust,ignore
 use bytes::Bytes;
@@ -26,6 +26,7 @@ let layer = JackLayer::new(HandlerConfig {
     verifier: Arc::new(verifier),
     server_key,
     max_body_bytes: 0,
+    max_response_bytes: 0,
 });
 let service = layer.layer(tower::service_fn(
     |req: http::Request<Full<Bytes>>| async move {
@@ -33,6 +34,20 @@ let service = layer.layer(tower::service_fn(
     },
 ));
 ```
+
+## Client (`mcp_jack::client`)
+
+### Client URL policy
+
+Spec 01 section 1 requires HTTPS for any non-loopback connection. `Client::new`, `load_profile`, `Client::from_profile` and `SigningTransport` (`round_trip` / `round_trip_as`) apply one literal-only policy to the raw destination URL string, locally, before signing and before the injected `Transport` is called (normative table: `spec/fixtures/client-url-policy.json`; prose: `docs/design/interop.md` section 9):
+
+- `https` is accepted for any host with valid syntax (no DNS is done).
+- `http` is accepted only for a literal canonical `127.x.y.z` (four decimal octets, no leading zeros) or `[::1]`. `localhost` and its aliases, `127.1`, hex/octal/integer IPv4, `[::ffff:127.0.0.1]` and every other spelling are refused over `http`.
+- Userinfo (`@` in the authority), percent escapes in the authority (so no zone IDs), backslashes, spaces, control and non-ASCII bytes, bad ports (valid: 1..=65535) and other schemes are refused.
+- Path, query and fragment are not inspected beyond the byte rule; percent-encoded path/query bytes are accepted and the signed target stays byte-for-byte as configured (e.g. `/a%20b?x=%2F`).
+- Redirects are never followed: `SigningTransport` refuses exactly the statuses 301, 302, 303, 307 and 308 with an error and does not verify them against the old target. This is a no-follow guard (a signed request must not be verified against another target), not TLS enforcement. Other statuses, including 300 and a signed 304, are verified as usual.
+
+Transport obligations: the SDK ships no HTTP implementation and cannot police a custom `Transport`. An implementation must use TLS with certificate validation for `https` URLs, connect to exactly the URL in `HttpRequest::url` (the wire URL must equal the signed one), not follow redirects (301/302/303/307/308: return them as is) and not downgrade or rewrite the URL. There is no insecure or skip-verify option.
 
 ## Interop executables (feature `interop`)
 

@@ -40,10 +40,14 @@ pub fn load_profile(text: &str) -> Result<Profile, ClientError> {
 /// Enforces spec 01 sections 3 and 6 field rules (Go: validateProfile, in
 /// the same order).
 fn validate_profile(p: &Profile) -> Result<(), ClientError> {
-    crate::client::url::validate_base_url(&p.url).map_err(|_| {
-        ClientError::Client(
+    // Full client URL policy (https for non-loopback hosts) at profile load.
+    crate::client::url::check(&p.url).map_err(|r| match r {
+        crate::client::url::UrlRefusal::Malformed => ClientError::Client(
             "jack client: profile url must be an absolute http/https URL with a host".to_string(),
-        )
+        ),
+        crate::client::url::UrlRefusal::HttpsRequired => {
+            ClientError::Client(format!("jack client: profile url: {}", r.message()))
+        }
     })?;
     if p.aud.is_empty() {
         return Err(ClientError::Client(
@@ -200,6 +204,20 @@ mod tests {
                 doc(&p).replace(
                     &format!("\"url\":\"{url_value}\""),
                     "\"url\":\"https:///mcp\"",
+                ),
+            ),
+            (
+                "url plain http to a remote host",
+                doc(&p).replace(
+                    &format!("\"url\":\"{url_value}\""),
+                    "\"url\":\"http://svc.example.test/mcp\"",
+                ),
+            ),
+            (
+                "url with userinfo",
+                doc(&p).replace(
+                    &format!("\"url\":\"{url_value}\""),
+                    "\"url\":\"https://u@svc.example.test/mcp\"",
                 ),
             ),
             (

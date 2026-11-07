@@ -10,14 +10,14 @@ Status: draft v0.1. Authentication, authorization and user management are specif
 | [02-authorization.md](02-authorization.md) | Key registry, scopes, server policy, deny-by-default evaluation |
 | [03-user-management.md](03-user-management.md) | Protocol-native tools for users, invites, enrollment and key rotation |
 | [04-service-management-profile.md](04-service-management-profile.md) | Optional profile: ordinary MCP tools for operating a service |
-| `fixtures/` | Deterministic test keys, documents and vectors: requests, state-changing sequences, keys, policy/registry loading, pattern matching, responses (normative) |
+| `fixtures/` | Deterministic test keys, documents and vectors: requests, state-changing sequences, keys, policy/registry loading, pattern matching, responses (normative, generated), plus the hand-maintained `client-url-policy.json` (SDK client URL test table, not a protocol vector) |
 | `tests/` | Conformance runner contract and the generated case index |
 | `tools/` | Fixture generator and the reference verifier used to cross-check them |
 
 ## Conventions
 
 - Test vectors are normative: an implementation conforms when it produces the expected result for every vector.
-- Fixtures are generated, not hand-written. Keys are derived from public strings, so they are reproducible and **test only**.
+- All vectors except `fixtures/client-url-policy.json` are generated, not hand-written, and are normative protocol vectors. `fixtures/client-url-policy.json` is a manually maintained SDK client-side destination-policy test table: it is not a protocol vector, is not produced by `gen-fixtures.mjs` and is not covered by `--check`. Edit it by hand and keep the Go, Rust and TS runners in sync. Keys are derived from public strings, so they are reproducible and **test only**.
 - The reference verifier (`tools/reference-verifier.mjs`) exists to validate the spec text and the fixtures. It is not an SDK.
 
 ```

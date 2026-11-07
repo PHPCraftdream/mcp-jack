@@ -8,11 +8,21 @@ import type { Clock, NonceSource } from "./auth.js";
 import { adminInviteCreate, adminInviteList, adminInviteRevoke, adminUserCreate, adminUserGet, adminUserList, adminUserRevoke, adminUserSetScopes, enroll, rotateKey, whoAmI } from "./tools.js";
 import type { EnrollResult, Entry, InviteCreateParams, InviteCreateResult, InviteListEntry, InviteRevokeResult, KidResult, UserCreateParams, WhoAmIResult } from "./tools.js";
 import type { Signer } from "./signer.js";
+import { checkDestination } from "./url-policy.js";
 
 /** Any JSON value, exactly as JSON.parse can produce. */
 export type JsonValue = string | number | boolean | null | JsonValue[] | { readonly [key: string]: JsonValue };
 
-/** Configuration carrying everything the Client needs to reach and trust one server. */
+/**
+ * Configuration carrying everything the Client needs to reach and trust one server.
+ *
+ * `baseUrl` must satisfy the client URL policy (checkDestination, applied to
+ * the raw string): https for any host, http only for a literal 127.x.y.z or
+ * [::1]. Percent escapes are refused in the authority only; percent-encoded
+ * path/query bytes are accepted and signed as given. There is no insecure opt-out. A caller-supplied `fetchImpl` must use
+ * TLS for https, connect to exactly the URL it is given and not follow
+ * redirects; the SDK cannot police an arbitrary custom fetch.
+ */
 export interface ClientConfig {
   baseUrl: string;
   aud: string;
@@ -45,6 +55,8 @@ export class Client {
   #nextID = 1;
 
   constructor(config: ClientConfig) {
+    // Policy on the raw string first, before any URL parsing or normalisation.
+    checkDestination(config.baseUrl);
     let base: URL;
     try {
       base = new URL(config.baseUrl);
@@ -71,9 +83,9 @@ export class Client {
     this.aud = config.aud;
     this.signer = config.signer;
     this.clock = config.clock ?? (() => Math.floor(Date.now() / 1000));
-    // Unlike Go, an injected fetchImpl is wrapped by OUR signing layer instead
-    // of requiring the caller to pre-wrap it: Go's Config.HTTP footgun (an
-    // unsigned client silently accepted) is gone.
+    // Like Go's Config.HTTP, an injected fetchImpl is wrapped by OUR signing
+    // layer instead of requiring the caller to pre-wrap it, so an unsigned
+    // client is never silently accepted.
     this.#fetch = createSigningFetch(
       {
         aud: config.aud,
