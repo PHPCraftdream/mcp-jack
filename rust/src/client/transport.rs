@@ -1,5 +1,6 @@
-//! The Transport trait abstracts one HTTP round trip over plain structs; the
-//! library ships no HTTP implementation (a later feature adds one).
+//! The Transport trait abstracts one HTTP round trip over plain structs; an
+//! optional blocking HTTP/HTTPS implementation ships behind the `client-http`
+//! feature (see [`crate::client::http_transport`]).
 //! SigningTransport wraps any Transport to sign requests and verify responses
 //! (spec 01 sections 4 and 5).
 
@@ -359,7 +360,7 @@ impl<T: Transport> Transport for SigningTransport<T> {
 /// value) and Go then does NOT refuse the stream; this port refuses whenever
 /// the type itself is text/event-stream — a stream cannot be verified (spec 01
 /// section 5, open question Q1) regardless of its parameter list.
-fn media_type(ct: &str) -> String {
+pub(crate) fn media_type(ct: &str) -> String {
     let base = match ct.find(';') {
         Some(i) => &ct[..i],
         None => ct,

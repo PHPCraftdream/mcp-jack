@@ -56,6 +56,7 @@ jobs:
   rust:
     name: rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -77,6 +78,9 @@ jobs:
       - name: Core without the http feature
         if: runner.os == 'Linux'
         run: cargo test --locked --no-default-features
+      - name: Client HTTP feature isolation
+        if: runner.os == 'Linux'
+        run: cargo check --locked --no-default-features --features client-http --lib
 
   rust-msrv:
     name: rust 1.85 check

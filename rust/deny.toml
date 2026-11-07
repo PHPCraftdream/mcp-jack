@@ -13,6 +13,39 @@ allow = [
     "Unicode-3.0",  # unicode-ident: (MIT OR Apache-2.0) AND Unicode-3.0
 ]
 
+# ring 0.17.x upstream relicensed to "Apache-2.0 AND ISC"; ISC is a permissive
+# licence functionally equivalent to MIT/BSD-2. Required by the rustls ring
+# crypto provider pulled in by the optional client-http feature.
+[[licenses.exceptions]]
+crate = "ring@0.17"
+allow = ["ISC"]
+
+# untrusted 0.9 (ring's support crate) is licensed exactly ISC; same rationale
+# as the ring exception above.
+[[licenses.exceptions]]
+crate = "untrusted@0.9"
+allow = ["ISC"]
+
+# rustls-webpki 0.103.x is licensed exactly ISC (verified from crates.io for
+# the resolved version); it is the certificate-chain verification engine of
+# rustls 0.23, required by the optional client-http transport. ISC is
+# permissive, same rationale as the ring/untrusted exceptions above.
+[[licenses.exceptions]]
+crate = "rustls-webpki@0.103"
+allow = ["ISC"]
+
+# webpki-roots 1.0.x is licensed CDLA-Permissive-2.0 (verified from crates.io
+# for the resolved version): a permissive DATA license (not a code license)
+# covering the compiled-in Mozilla root bundle behind the adapter's DEFAULT
+# HTTPS trust roots. Redistributing the bundled roots requires retaining the
+# CDLA-Permissive-2.0 text with them (cargo-deny's license report lists it;
+# primary text: https://cdla.dev/permissive-2-0/). Approved as a narrow
+# version-bounded exception by the project maintainers; the global allow list
+# is unchanged.
+[[licenses.exceptions]]
+crate = "webpki-roots@1.0"
+allow = ["CDLA-Permissive-2.0"]
+
 # Narrow, per-crate exceptions go here, each bounded to a version range and
 # justified in the pull request that adds it. Keep this empty unless a crate
 # cannot satisfy the allow list. Package specs use the `crate` key, e.g.
