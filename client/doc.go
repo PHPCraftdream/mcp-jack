@@ -6,6 +6,22 @@
 // jack.* tools for user management, including enrollment and key rotation
 // (spec 03 sections 3.1-3.3).
 //
+// # Generic tool calls
+//
+// Client.CallTool performs one signed, response-verified tools/call for any
+// tool name and decodes the verified structuredContent into out (a pointer
+// given to json.Unmarshal; nil discards the payload, but a result without
+// structuredContent is still an error). It is a single-request signed tool
+// caller, not a full MCP session client: there is no initialize, tools/list,
+// notification or streaming support, and structuredContent is the only result
+// model. The native helpers are unchanged.
+//
+//	var res struct {
+//		OK bool `json:"ok"`
+//	}
+//	err := c.CallTool(ctx, "svc.restart", map[string]any{"name": "web"}, &res)
+//	// errors: *client.HTTPError, *client.RPCError, *client.ToolError, ...
+//
 // # Destination policy
 //
 // Spec 01 section 1 requires HTTPS for non-loopback connections. The raw

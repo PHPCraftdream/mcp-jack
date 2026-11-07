@@ -321,6 +321,33 @@ func (c *Client) call(ctx context.Context, signer Signer, tool string, arguments
 	return json.Unmarshal(wire.Result.StructuredContent, out)
 }
 
+// CallTool performs one signed, response-verified `tools/call` for the named
+// tool and decodes the verified structuredContent into out. It uses the
+// client's default signer and the verified pinned-key path shared with the
+// native helpers (WhoAmI, Enroll, ...), which are unchanged.
+//
+// arguments is any JSON-serializable value; nil sends `{}`. It should marshal
+// to a JSON object: the server decides validity and the client performs no
+// schema check. out is a pointer passed to json.Unmarshal over the verified
+// structuredContent: use *json.RawMessage for the raw JSON, or a pointer to
+// any typed struct or map otherwise. out == nil verifies and discards the
+// payload; a result lacking structuredContent is still an error, as for the
+// native helpers.
+//
+// Errors: a marshal failure is returned as "jack client: marshal arguments:
+// %w"; a non-2xx answer is a *HTTPError; a JSON-RPC error is a *RPCError; a
+// result with isError is a *ToolError; transport and verification errors pass
+// through for errors.Is / errors.As; decode errors from json.Unmarshal are
+// returned as-is.
+//
+// This is a single-request signed tool caller, NOT a full MCP session client:
+// there is no initialize, tools/list, notification or streaming support, and
+// content-block results are not interpreted; structuredContent is the only
+// result model.
+func (c *Client) CallTool(ctx context.Context, tool string, arguments any, out any) error {
+	return c.call(ctx, nil, tool, arguments, out)
+}
+
 // readCapped reads at most cap bytes, detecting larger bodies.
 func readCapped(r io.Reader, capBytes int) ([]byte, error) {
 	raw, err := io.ReadAll(io.LimitReader(r, int64(capBytes)+1))
