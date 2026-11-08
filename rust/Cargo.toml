@@ -35,7 +35,7 @@ required-features = ["interop"]
 [dependencies]
 ed25519-dalek = { version = "2.2", features = ["std"] }
 curve25519-dalek = "4.1"
-sha2 = "0.10"
+sha2 = "0.11"
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
