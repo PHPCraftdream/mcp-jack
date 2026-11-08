@@ -5,83 +5,40 @@
     {
       "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
       "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
-      "name": "alice",
-      "kind": "human",
-      "scopes": [
-        "read"
-      ],
-      "not_before": null,
-      "not_after": null
+      "name": "alice"
     },
     {
       "kid": "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
       "public_key": "27O5sjd6_PRkCVbNLwEbIwxpfh0DZCURwFI9lWF-UHE",
-      "name": "bob",
-      "kind": "human",
-      "scopes": [
-        "read",
-        "lifecycle"
-      ],
-      "not_before": null,
-      "not_after": null
+      "name": "bob"
     },
     {
       "kid": "bu9N_ld9z81i0mvxfKO0bgHdiYjZx7jBF8sd8DTo9gc",
       "public_key": "r1DLsXDIaAY-rmPFCzV9dgAxes6dpdXkOrJNHiFkQl4",
-      "name": "carol",
-      "kind": "human",
-      "scopes": [
-        "config:write"
-      ],
-      "not_before": null,
-      "not_after": null
+      "name": "carol"
     },
     {
       "kid": "EO02KVTMv4Y2l4PhmwUsLHNMcdRTCoMClOs-tP6TO68",
       "public_key": "axZb1B_q1F6s3zc6V0glCNJMJJSHy-nrRRRJwPFU3rY",
       "name": "erin",
-      "kind": "human",
-      "scopes": [
-        "read"
-      ],
-      "not_before": 1767226600,
-      "not_after": null
+      "not_before": 1767226600
     },
     {
       "kid": "RqSoWowFxe1uB6c58AVUAxxlAgGufdo1pwXxaZkqEjA",
       "public_key": "aCS3Iwv_1ZGPZRsGtUKK-5yJx5Q8jk8q0FveD4kLO1Q",
       "name": "frank",
-      "kind": "human",
-      "scopes": [
-        "read"
-      ],
-      "not_before": null,
       "not_after": 1767224600
     },
     {
       "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
       "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
       "name": "root",
-      "kind": "human",
-      "scopes": [
-        "admin",
-        "read",
-        "lifecycle",
-        "config:write"
-      ],
-      "not_before": null,
-      "not_after": null
+      "admin": true
     },
     {
       "kid": "YxMGvPvuOv27jJMVYE1ONMxjgIQEbXbWiKgoQymoRbM",
       "public_key": "aPGHxh3YJf4B6IBcMkOdLGTPaTqmMBpfitIBcEmnYNs",
-      "name": "agentx",
-      "kind": "agent",
-      "scopes": [
-        "read"
-      ],
-      "not_before": null,
-      "not_after": null
+      "name": "agentx"
     }
   ]
 }
