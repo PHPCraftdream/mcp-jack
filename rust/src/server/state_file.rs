@@ -278,7 +278,7 @@ fn write_locked(path: &Path, edit: &StateEdit) -> Result<(), JackError> {
     // error we retry rather than a silent overwrite.
     for _ in 0..8 {
         let mut suffix = [0u8; 8];
-        getrandom::getrandom(&mut suffix)
+        getrandom::fill(&mut suffix)
             .map_err(|e| JackError::new(500, "internal", format!("getrandom failed: {e}")))?;
         let tmp_path = dir.join(format!(
             ".mcp-jack-state-{}.tmp",

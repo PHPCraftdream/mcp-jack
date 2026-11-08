@@ -92,7 +92,7 @@ pub fn sign_request(
 /// Returns 16 random nonce bytes from the OS RNG (Go: RandomNonce).
 pub fn random_nonce() -> Result<[u8; NONCE_SIZE], ClientError> {
     let mut nonce = [0u8; NONCE_SIZE];
-    getrandom::getrandom(&mut nonce)
+    getrandom::fill(&mut nonce)
         .map_err(|e| ClientError::Client(format!("jack client: random nonce: {e}")))?;
     Ok(nonce)
 }
