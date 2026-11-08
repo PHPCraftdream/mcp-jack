@@ -123,10 +123,12 @@ for (const member of members) {
 // Allow list: exactly what a source package may contain. Cargo.toml.orig is
 // cargo's own backup of a templated manifest and is tolerated when emitted;
 // deny.toml is the crate's cargo-deny configuration and belongs in the
-// package. Dotfiles (rust/.gitignore) are excluded by cargo itself.
-// .cargo_vcs_info.json is cargo's own generated VCS metadata and is the
-// only dotfile allowed here.
-const allowed = /^(?:Cargo\.toml|Cargo\.lock|Cargo\.toml\.orig|deny\.toml|\.cargo_vcs_info\.json|README\.md|LICENSE-MIT|LICENSE-APACHE|src\/.+|tests\/.+)$/u;
+// package. The crate's tracked .gitignore is packaged by cargo (cargo does
+// NOT exclude .gitignore from packages) and is permitted; verify-rust.mjs
+// byte-compares the packaged copy against rust/.gitignore.
+// .cargo_vcs_info.json is cargo's own generated VCS metadata. No other
+// dotfiles are allowed here.
+const allowed = /^(?:Cargo\.toml|Cargo\.lock|Cargo\.toml\.orig|deny\.toml|\.gitignore|\.cargo_vcs_info\.json|README\.md|LICENSE-MIT|LICENSE-APACHE|src\/.+|tests\/.+)$/u;
 for (const member of members) {
   if (!allowed.test(member)) fail(`cargo package included an unexpected member: ${member}`);
 }

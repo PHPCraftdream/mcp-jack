@@ -27,7 +27,7 @@ import type { ExpectedServerIdentity, RegistryEntry } from "mcp-jack";
 
 const AUDIENCE = "https://consumer.example.test";
 const NOW = 1_800_000_000;
-const utf8 = (value: string): Uint8Array => new TextEncoder().encode(value);
+const utf8 = (value: string): Uint8Array<ArrayBuffer> => new TextEncoder().encode(value);
 const boundedFetch: typeof fetch = (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(5000) });
 
 async function listen(server: ReturnType<typeof createServer>): Promise<string> {

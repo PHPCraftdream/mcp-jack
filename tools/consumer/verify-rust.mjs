@@ -31,9 +31,10 @@ if (relativeStage === "" || relativeStage === ".." || relativeStage.startsWith(`
 const artifact = path.join(stageDir, "mcp-jack-0.1.0.crate");
 const inventoryPath = path.join(stageDir, "inventory.json");
 const inventory = JSON.parse(await readFile(inventoryPath, "utf8"));
-// .cargo_vcs_info.json is cargo's own generated VCS metadata and is the
-// only dotfile allowed here.
-const allowed = /^(?:Cargo\.toml|Cargo\.lock|Cargo\.toml\.orig|deny\.toml|\.cargo_vcs_info\.json|README\.md|LICENSE-MIT|LICENSE-APACHE|src\/.+|tests\/.+)$/u;
+// .cargo_vcs_info.json is cargo's own generated VCS metadata; .gitignore is
+// the crate's tracked ignore file that cargo packages (cargo does NOT exclude
+// .gitignore). No other dotfiles are allowed here.
+const allowed = /^(?:Cargo\.toml|Cargo\.lock|Cargo\.toml\.orig|deny\.toml|\.gitignore|\.cargo_vcs_info\.json|README\.md|LICENSE-MIT|LICENSE-APACHE|src\/.+|tests\/.+)$/u;
 const forbidden = /(?:^|\/)(?:target\/|\.git(?:\/|$)|.*\.tgz$|.*\.crate$)/u;
 if (inventory.artifact !== "mcp-jack-0.1.0.crate" || inventory.version !== "0.1.0" || inventory.publish !== false) {
   throw new Error("staged package identity/publish metadata changed");
@@ -77,6 +78,12 @@ for (const member of extractedMembers) {
   if (!allowed.test(member) || forbidden.test(member)) throw new Error(`forbidden extracted archive member: ${member}`);
 }
 if (JSON.stringify(extractedMembers) !== JSON.stringify([...inventory.members].sort())) throw new Error("extracted archive members differ from the saved cargo package inventory");
+if (!extractedMembers.includes(".gitignore")) throw new Error("extracted archive is missing the packaged .gitignore");
+const [packagedGitignore, repoGitignore] = await Promise.all([
+  readFile(path.join(packageRoot, ".gitignore")),
+  readFile(path.join(rustRoot, ".gitignore")),
+]);
+if (!packagedGitignore.equals(repoGitignore)) throw new Error("packaged .gitignore differs byte-wise from rust/.gitignore");
 
 for (const [packagedLicense, rootLicense] of [["LICENSE-MIT", "LICENSE-MIT"], ["LICENSE-APACHE", "LICENSE-APACHE"]]) {
   const [actual, original] = await Promise.all([
