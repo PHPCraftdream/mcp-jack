@@ -287,7 +287,6 @@ export async function runProbe(argv, operations, label, options = {}) {
   const listeners = [];
   const chunks = [];
   let stdoutBytes = 0;
-  let stderrBytes = 0;
   let stdinFinished = false;
   let closed = false;
   let exited = false;
@@ -328,9 +327,7 @@ export async function runProbe(argv, operations, label, options = {}) {
       chunks.push(data);
     }, listeners);
     listen(child.stdout, 'error', () => markFailure('stdout_failed', 'stdout'), listeners);
-    listen(child.stderr, 'data', (chunk) => {
-      stderrBytes += Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk);
-    }, listeners);
+    listen(child.stderr, 'data', () => {}, listeners);
     listen(child.stderr, 'error', () => {}, listeners);
     listen(child.stdin, 'finish', () => { stdinFinished = true; }, listeners);
     listen(child.stdin, 'error', () => markFailure('stdin_failed', 'stdin'), listeners);
@@ -408,8 +405,7 @@ export async function runProbe(argv, operations, label, options = {}) {
       });
     }
     resolveDone();
-    // Keep stderr accounting local only; never surface diagnostic contents.
-    void stderrBytes;
+    // Keep stderr consumption local only; never surface diagnostic contents.
     void closeInfo;
   }
 }

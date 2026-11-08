@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { TransferCheckFailure } from './transfer-checks.mjs';
+import { TransferCheckFailure, validateTargets } from './transfer-checks.mjs';
 import { loadTransferFixtures } from './transfer-fixtures.mjs';
 import { runCredentialPairs } from './transfer-matrix.mjs';
 import { runRefusalPairs } from './transfer-refusals.mjs';
@@ -10,7 +10,6 @@ import { runPublicPairs } from './transfer-public.mjs';
 import { TransferFailure, runProbe, shutdownOwned } from './transfer-process.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const LANGS = Object.freeze(['go', 'rust', 'typescript']);
 const DEFAULT_TARGETS = join(ROOT, 'interop', 'targets.json');
 let interrupted = false;
 
@@ -21,16 +20,6 @@ function requireCheck(condition, label) {
 function readJson(path, label) {
   try { return JSON.parse(readFileSync(path, 'utf8')); }
   catch { throw new TransferCheckFailure(label); }
-}
-
-function validateTargets(value) {
-  requireCheck(value && typeof value === 'object' && !Array.isArray(value), 'targets shape');
-  requireCheck(Object.keys(value).length === LANGS.length && LANGS.every((lang) => Object.hasOwn(value, lang)), 'target languages');
-  for (const lang of LANGS) {
-    const transfer = value[lang]?.transfer;
-    requireCheck(Array.isArray(transfer) && transfer.length > 0 && transfer.every((arg) => typeof arg === 'string' && arg.length > 0), `transfer target ${lang}`);
-  }
-  return value;
 }
 
 export async function runMatrix(targets, f, { invoke = runProbe, report = (line) => process.stdout.write(`${line}\n`) } = {}) {

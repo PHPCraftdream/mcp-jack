@@ -10,6 +10,18 @@ function safeLabel(value) {
   return value.slice(0, 120).replace(SAFE_LABEL_CHARS, '-').trim() || 'transfer check';
 }
 
+const LANGS = Object.freeze(['go', 'rust', 'typescript']);
+
+export function validateTargets(value) {
+  requireCheck(value && typeof value === 'object' && !Array.isArray(value), 'targets shape');
+  requireCheck(Object.keys(value).length === LANGS.length && LANGS.every((lang) => Object.hasOwn(value, lang)), 'target languages');
+  for (const lang of LANGS) {
+    const transfer = value[lang]?.transfer;
+    requireCheck(Array.isArray(transfer) && transfer.length > 0 && transfer.every((arg) => typeof arg === 'string' && arg.length > 0), `transfer target ${lang}`);
+  }
+  return value;
+}
+
 export class TransferCheckFailure extends Error {
   constructor(label = 'transfer check') {
     super(`transfer check failed: ${safeLabel(label)}`);

@@ -4,7 +4,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Verifies the staged Go module snapshot from a fresh standalone Go consumer.
-// CI-only, same stage discipline as verify-rust.mjs.
+// CI-only. Stage discipline here is stricter than verify-rust.mjs/verify-ts.mjs:
+// this script additionally canonicalizes the stage path with realpath and
+// re-checks containment after resolution (scratch-inside-repo + stage-inside-
+// scratch on real paths); verify-rust.mjs performs no realpath canonicalization
+// and verify-ts.mjs realpaths only the installed node_modules tree. All CI
+// callers pass fixed literal paths, so the looser argv handling there is
+// acceptable.
 //
 // RESOLUTION DOCUMENTATION: the consumer's go.mod (tools/consumer/go/go.mod)
 // resolves the module artifact with the documented directive

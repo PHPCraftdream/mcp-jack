@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkErrorResult, checkIssueResult, checkPublicResult, checkSignerResult, TransferCheckFailure, verificationControls } from './transfer-checks.mjs';
+import { checkErrorResult, checkIssueResult, checkPublicResult, checkSignerResult, TransferCheckFailure, validateTargets, verificationControls } from './transfer-checks.mjs';
 import { b64u, loadTransferFixtures } from './transfer-fixtures.mjs';
 import { TransferFailure, ownedCount, runProbe, validateResults } from './transfer-process.mjs';
 import { lifecycleTests } from './transfer-lifecycle-test.mjs';
@@ -26,16 +26,9 @@ export async function selfTest() {
     passed(label, true);
   };
   const rawTargets = JSON.parse(readFileSync(join(ROOT, 'interop/targets.json'), 'utf8'));
-  if (!rawTargets || typeof rawTargets !== 'object' || Array.isArray(rawTargets) ||
-      Object.keys(rawTargets).length !== LANGS.length || !LANGS.every((lang) => Object.hasOwn(rawTargets, lang))) {
-    fail('self-test transfer targets');
-  }
-  for (const lang of LANGS) {
-    const transfer = rawTargets[lang]?.transfer;
-    if (!Array.isArray(transfer) || transfer.length === 0 ||
-        !transfer.every((arg) => typeof arg === 'string' && arg.length > 0)) fail('self-test transfer targets');
-  }
-  const targets = rawTargets;
+  let targets;
+  try { targets = validateTargets(rawTargets); }
+  catch { fail('self-test transfer targets'); }
   const f = loadTransferFixtures(ROOT);
   const fixture = f.credentialCases.find((item) => item.id === 'cred-alice');
   if (!fixture) fail('fixture cred-alice');

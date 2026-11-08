@@ -1,0 +1,35 @@
+# Finite, resource-bounded Go fuzz campaign over the trust/parse/credential
+# boundaries. Every target runs for a fixed fuzztime then fuzzminimizetime;
+# failing inputs are preserved as artifacts. No secrets are involved: every
+# target uses static test keys and never logs generated material.
+name: go-fuzz
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go-fuzz:
+    name: go fuzz (bounded campaign)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Campaign collection self-test
+        run: bash tools/fuzz/campaign-selftest.sh
+      - name: Run the bounded fuzz campaign
+        run: bash tools/fuzz/go-campaign.sh 30s 10s fuzz-artifacts
+      - name: Upload fuzz campaign logs and reproducers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-fuzz-logs
+          path: fuzz-artifacts/
+          if-no-files-found: error

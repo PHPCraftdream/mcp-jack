@@ -33,6 +33,8 @@ function innerPrivateEnvelope(credential, expected, label) {
 }
 
 function checkedResults(operations, response, label) {
+  // runProbe-style callers may already return the results array; raw invoke
+  // adapters commonly return the process response envelope instead.
   return validateResults(operations, Array.isArray(response) ? { results: response } : response, label);
 }
 

@@ -6,7 +6,13 @@ import { fileURLToPath } from "node:url";
 // Packages the Go SDK module (root package + client/ + server/ + userkey/ +
 // spec/) plus the exact root licence texts (LICENSE-MIT, LICENSE-APACHE) as
 // a staged MODULE SNAPSHOT for the standalone Go consumer.
-// CI-only, same stage discipline as package-rust.mjs / package-ts.mjs.
+// CI-only. Stage discipline here matches package-rust.mjs/package-ts.mjs:
+// argv-literal trust plus scratch containment, and it additionally re-checks
+// containment after realpath canonicalization of the repo root, scratch root,
+// and stage directory (scratch-inside-repo + stage-inside-scratch on real
+// paths). package-rust.mjs/package-ts.mjs perform the same realpath pass;
+// CI passes fixed literal paths, so the stricter argv containment here is
+// a superset, not a divergence.
 //
 // NOTE ON RESOLUTION: there is no archive step. The staged module snapshot at
 // <stage>/module IS the module artifact; the consumer's go.mod documents the
