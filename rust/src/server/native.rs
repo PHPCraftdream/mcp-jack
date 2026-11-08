@@ -48,7 +48,7 @@ impl Native {
         let random = opts.random_bytes.unwrap_or_else(|| {
             Arc::new(|n: usize| {
                 let mut b = vec![0u8; n];
-                getrandom::getrandom(&mut b)
+                getrandom::fill(&mut b)
                     .map_err(|_| JackError::new(500, "internal_error", "internal error"))?;
                 Ok(b)
             })

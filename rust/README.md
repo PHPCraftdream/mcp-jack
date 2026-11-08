@@ -107,7 +107,7 @@ The configured absolute deadline is an asynchronous round-trip budget covering D
 
 #### Dependency graph and licence impact
 
-The product graph has 183 exact package/version pairs (182 third-party plus this crate), compared with the prior 104-pair client-http/ureq graph. It retains every original third-party baseline pair unchanged, removes four ureq-only pairs (`ureq@3.4.3`, `ureq-proto@0.6.5`, `utf8-zero@0.8.1`, `base64@0.23.1`), and adds 83 pairs relative to the prior graph. The list below records the added pairs' published Cargo metadata license expression and declared `rust_version`; `UNKNOWN` means undeclared. It is all-target graph metadata, not platform activation or build proof.
+At the client-http transport integration (`f34e25d`), the product graph had 183 exact package/version pairs (182 third-party plus this crate), compared with the prior 104-pair client-http/ureq graph. This paragraph and the table below record that historical comparison, not the current dependency inventory; the current versions are in `Cargo.lock`. It retains every original third-party baseline pair unchanged, removes four ureq-only pairs (`ureq@3.4.3`, `ureq-proto@0.6.5`, `utf8-zero@0.8.1`, `base64@0.23.1`), and adds 83 pairs relative to the prior graph. The list below records the added pairs' published Cargo metadata license expression and declared `rust_version`; `UNKNOWN` means undeclared. It is all-target graph metadata, not platform activation or build proof.
 
 | Package@version | License | MSRV |
 |---|---|---|

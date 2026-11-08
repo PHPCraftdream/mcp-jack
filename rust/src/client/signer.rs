@@ -51,7 +51,7 @@ impl InMemorySigner {
     /// Creates a signer from an OS random seed (Go: GenerateSigner).
     pub fn generate() -> Result<Self, ClientError> {
         let mut seed = [0u8; 32];
-        getrandom::getrandom(&mut seed)
+        getrandom::fill(&mut seed)
             .map_err(|e| ClientError::Client(format!("jack client: generating seed: {e}")))?;
         Ok(Self::from_key(SigningKey::from_bytes(&seed)))
     }

@@ -86,10 +86,6 @@ fn key_rejected(message: &'static str) -> JackError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // BASEPOINT_ORDER is deprecated in curve25519-dalek 4.1.3 (public-API
-    // removal note) but remains the correct way to obtain L here.
-    #[allow(deprecated)]
-    use curve25519_dalek::constants::BASEPOINT_ORDER;
     use ed25519_dalek::{Signer, SigningKey};
 
     fn hex_bytes(s: &str) -> Vec<u8> {
@@ -151,12 +147,21 @@ mod tests {
         assert!(!verify(&pub_bytes, b"other message", &sig_bytes));
 
         // Port of Go TestVerifyRejectsMalleatedSPlusL: S + L must be rejected.
-        // BASEPOINT_ORDER is deprecated in curve25519-dalek 4.1.3 (public-API
-        // removal note) but remains the correct way to obtain L here.
-        #[allow(deprecated)]
-        let l_bytes = BASEPOINT_ORDER.to_bytes();
+        // RFC 8032: L = 2^252 + 27742317777372353535851937790883648493, little-endian.
+        let l_bytes: [u8; 32] =
+            hex_bytes("edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010")
+                .try_into()
+                .expect("32 bytes");
+        let mut below_order = l_bytes;
+        below_order[0] -= 1;
+        assert!(bool::from(
+            Scalar::from_canonical_bytes(below_order).is_some()
+        ));
         // Oracle: L itself is not a canonical scalar (it is not < L).
         assert!(bool::from(Scalar::from_canonical_bytes(l_bytes).is_none()));
+        let mut at_order = sig_bytes;
+        at_order[32..64].copy_from_slice(&l_bytes);
+        assert!(!verify(&pub_bytes, msg, &at_order));
 
         let mut malleated = sig_bytes;
         let mut s_plus_l = <[u8; 32]>::try_from(&malleated[32..64]).expect("32 bytes");

@@ -233,7 +233,7 @@ impl ClientSigningKey {
     /// Creates a key from 32 OS-random bytes.
     pub fn generate() -> Result<Self, UserKeyError> {
         let mut seed = [0u8; SEED_LEN];
-        getrandom::getrandom(&mut seed)
+        getrandom::fill(&mut seed)
             .map_err(|e| UserKeyError::new(format!("generating seed: {e}")))?;
         Ok(Self::from_seed_bytes(seed))
     }
@@ -1382,7 +1382,7 @@ pub mod server {
     pub fn issue_user_key_os(connection: &ConnectionData) -> Result<IssuedUserKey, UserKeyError> {
         issue_user_key(connection, &mut |length| {
             let mut bytes = vec![0u8; length];
-            getrandom::getrandom(&mut bytes).map_err(|_| UserKeyError::random_source_failure())?;
+            getrandom::fill(&mut bytes).map_err(|_| UserKeyError::random_source_failure())?;
             Ok(bytes)
         })
     }
