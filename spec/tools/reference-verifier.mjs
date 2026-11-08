@@ -350,7 +350,7 @@ function parseJSONRaw(src) {
     }
     if (c === '"') return string();
     if (src.startsWith('true', i)) { i += 4; return true; }
-    if (src.startsWith('false', i)) { i += 6; return false; }
+    if (src.startsWith('false', i)) { i += 5; return false; }
     if (src.startsWith('null', i)) { i += 4; return null; }
     return number(node);
   }

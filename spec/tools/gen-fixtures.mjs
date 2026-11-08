@@ -465,6 +465,7 @@ const REQUEST_CASES = [
   ['request-response-with-both', 'response object with result and error', { body: JSON.stringify({ jsonrpc: '2.0', id: 1, result: {}, error: {} }) }, [], ['reject', 400, 'invalid_request']],
   ['request-response-without-id', 'response object without id', { body: JSON.stringify({ jsonrpc: '2.0', result: {} }) }, [], ['reject', 400, 'invalid_request']],
   ['request-invalid-json', 'signed body is not JSON', { body: '{not json' }, [], ['reject', 400, 'invalid_request']],
+  ['request-invalid-json-false-suffix', 'false followed by a digit is not a JSON literal', { body: '{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":false0}}' }, [], ['reject', 400, 'invalid_request']],
   ['request-invalid-utf8', 'signed body is not UTF-8', { body: Buffer.from([0xff, 0xfe, 0x7b]) }, [], ['reject', 400, 'invalid_request']],
   ['request-batch', 'JSON-RPC batch is rejected', { body: `[${STATUS}]` }, [], ['reject', 400, 'invalid_request']],
   ['request-empty-post', 'POST with empty body', { body: '' }, [], ['reject', 400, 'invalid_request']],
