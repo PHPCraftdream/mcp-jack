@@ -6,6 +6,7 @@ export * from "./encoding.js";
 export * from "./signing.js";
 export * from "./syntax.js";
 export * from "./user-key.js";
+export * from "./user-key-transfer.js";
 export * from "./server/audit.js";
 export * from "./server/fetch.js";
 export * from "./server/native.js";

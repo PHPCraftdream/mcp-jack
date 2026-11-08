@@ -1,23 +1,11 @@
 /**
- * Role-opposite software user-key foundation: the CLIENT side imports or
- * generates the private Ed25519 key and exposes ONLY the public identity plus
- * signing — ClientUserKey has NO private export and retains no seed. The
- * SERVER wrapper imports ONLY a validated public identity and has no
- * recovery path from public to private. The ONLY explicit private export is
- * `UserKeyHandoff.exportSeed()` on the issuance result, deliberately separate
- * from the stored server identity. The module is a raw, context-free
- * foundation: no file IO, no serialization format, no versioning (portable
- * key serialization is a separate later contract).
- *
- * This is NOT ready-to-connect authentication: connection credentials
- * (endpoint, audience, server public key and kid — NEVER a server private
- * key) are defined by a forthcoming contract and must be validated against
- * an independently trusted expected pin; an existing pin is never silently
- * replaced, and a server key taken from an untrusted bundle is by itself
- * not MITM protection. There is no automatic rotation and no
- * trust-on-first-use anywhere. The role wrappers are shaped so a forthcoming
- * validated server context can be accepted later without redefining key
- * handling.
+ * Role-opposite software user-key foundation. The original raw-key classes
+ * and entry points remain available: client keys sign without retaining a
+ * seed, server identities are public-only, and the legacy issuance handoff is
+ * separate from the server identity. Strict portable envelopes and bound
+ * client credentials are additive named exports from user-key-transfer.ts;
+ * they do not alter the raw methods or add a private-export method to a client
+ * signer or server identity.
  */
 import { createPrivateKey, createPublicKey, randomBytes, sign } from "node:crypto";
 import type { KeyObject } from "node:crypto";

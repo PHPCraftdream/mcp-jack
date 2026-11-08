@@ -208,3 +208,68 @@ License-policy notes: the existing global allowlist is Apache-2.0, MIT, BSD-3-Cl
 rust/target/release/interop-server
 rust/target/release/interop-client
 ```
+
+## User-key transfer (mcp_jack::user_key)
+
+Role-specific transfer of Ed25519 client keys between the server (issuance) and the client (import). The full conformance table lives in `spec/fixtures/user-key-transfer.json` (shared with the Go and TypeScript lanes; see `docs/design/user-keys.md` sections 11 and 12.2) and is exercised by `tests/user_key_transfer.rs`.
+
+### Server: issue a credential for delivery
+
+```rust,ignore
+use mcp_jack::user_key::{ConnectionData, server};
+
+let connection = ConnectionData::new(
+    "https://svc.example.test",            // validated URL (client URL policy)
+    "https://svc.example.test",            // non-empty audience
+    server_public_key_b64u,                // canonical unpadded base64url
+    server_kid,
+)?;
+// Inject a CSPRNG byte source (production) — issue_user_key_os uses the OS.
+let issued = server::issue_user_key_os(&connection)?;
+let bytes: Vec<u8> = issued.credential_bytes(); // fresh copy per call
+let public: mcp_jack::user_key::UserKeyPublic = issued.public_identity();
+```
+
+`IssuedUserKey` implements `Debug`/`Display` printing only the kid; the credential and the embedded private envelope are returned ONLY through the explicit `credential_bytes()` accessor. The credential and private envelope are UNENCRYPTED SECRET COPIES retained in plaintext with the issuer handle for its whole lifetime: there is no zeroization guarantee, every `credential_bytes()` call hands out a fresh sensitive copy, and the caller owns safe delivery and disposal. The SDK never persists them: no registry, profile or RPC surface of this crate carries credential or private-envelope bytes (those surfaces are public-data only). The secret types deliberately lack dangerous capabilities, and this is proven by compile-fail doc-test guards on the types themselves (`rust/src/user_key.rs`): `IssuedUserKey` cannot `sign` — neither through an inherent-shaped call nor through the real public `Signer` trait route (the guard's compile-fail doctest passes only while no such implementation exists — introducing a forbidden `Signer` impl would make the snippet compile and the doctest FAIL; a matched positive companion proves the trait route genuinely works for the client key the credential carries) — and has no seed accessor and no serde path in either direction; `ClientSigningKey` and `IssuedClientKey` are not serializable, not deserializable and not `Clone` (the client type additionally has no seed export); `ServerPublicKey` is not serializable or deserializable. Each guard has an adjacent positive example (the methods a consumer CAN use — `credential_bytes`/`public_identity`, `from_seed`/`generate`, `from_public_key`), so the guards bind the real API shape, not an accidental absence. These are compile-time capability proofs: a downstream crate that writes `serde_json::to_string(&client_signing_key)`, `serde_json::from_str::<ClientSigningKey>(text)`, or `key.clone()` on a secret type fails to compile.
+
+### Server: validate a delivered credential against a configured identity
+
+```rust,ignore
+use mcp_jack::user_key::{ExpectedIdentity, server};
+
+let configured = ExpectedIdentity { url, aud, server_public_key, server_kid };
+server::validate_issued_credential(&bytes, &configured)?;
+```
+
+Validation runs the full document pipeline first (version, member set, encodings, URL policy, embedded client_key strict import, canonical bytes) and only then compares the identity: an invalid document keeps its pipeline class (`kid_mismatch`, `bad_url`, `wrong_field_type`, `invalid_public_key`, ...), while a valid document whose server identity differs refuses with exactly `server_identity_mismatch`.
+
+### Client: import a credential with an independently trusted tuple
+
+```rust,ignore
+use std::sync::Arc;
+use mcp_jack::user_key::{ExpectedIdentity, client};
+
+// The tuple comes from the caller's own pinning — NEVER from the credential.
+let expected = ExpectedIdentity { url, aud, server_public_key, server_kid };
+let imported = client::import_credential(&bytes, &expected)?;
+let signature = imported.signer.sign(b"payload"); // works like any signer
+// The imported signer itself becomes the client's signer.
+let config = imported.connection.client_config(Arc::new(imported.signer), transport_arc);
+```
+
+The expected tuple must match the credential's decoded url/aud/server key exactly, byte for byte; a mismatch (wrong server, wrong aud, wrong server public key, wrong server kid, incomplete or invalid tuple — including a malformed kid spelling) fails closed with `server_identity_mismatch` AFTER the document itself has validated, and no signer or configuration is returned (the API returns `Result::Err` and nothing else).
+
+Context-free import remains exactly that: importing a raw seed (`ClientSigningKey::from_seed`) or a private envelope (`client::import_private_envelope`) is context-free key material handling — it pins no server, no audience and no URL, and is NOT ready-to-connect authentication. Only `import_credential` plus a caller-pinned `ExpectedIdentity` yields validated connection data usable with the client.
+
+### Public-only flows
+
+```rust,ignore
+let envelope = client::export_public_envelope(&dyn_signer)?;   // canonical bytes
+let identity = client::import_public_envelope(&envelope)?;     // verify-only
+let server_record = server::import_public_envelope(&envelope)?; // strict public import
+identity.sign(b"x").unwrap_err();                              // not_private
+```
+
+`client::export_public_envelope` works with ANY implementation of `mcp_jack::client::signer::Signer`, including non-extractable ones (OS key stores, ssh-agent): the trait exposes only `sign`, `public_key` and `kid`, so exporting a public envelope never requires — or enables — revealing a seed. Private-envelope import is `client::import_private_envelope` (client sink); feeding a private or credential document to a public sink is refused (`wrong_envelope_type`, server sink: `private_material_rejected`).
+
+Documents are canonical JCS-style JSON capped at 4096 bytes; every error from the transfer API carries only a class, an optional member name and optional length pair (`UserKeyError::class/member/lengths`) — never input or secret bytes. The 66-case shared table (`user_key_transfer.rs`) is the executable specification of these rules.
