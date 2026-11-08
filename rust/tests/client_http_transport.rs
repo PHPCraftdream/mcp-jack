@@ -2488,12 +2488,200 @@ async fn overall_deadline_bounds_trickling_chunked_body() {
     );
 }
 
-/// Socket release is checked by the peer's cooperative EOF outcome; the
-/// fallback assertion rejects any non-closure result. The peer drains queued
-/// request bytes (positive data is NOT closure evidence) before waiting for
-/// EOF or read error. The client-side error assertions run after peer outcome
-/// collection; the peer handle is retained across bounded join/abort fallback.
-/// guard expired, failing the outcome assertion.
+// ---------------------------------------------------------------------------
+// Bounded reader for the adapter's fixed POST, used by
+// timeout_failure_socket_released_peer_observes_eof: parse before answering.
+// ---------------------------------------------------------------------------
+
+/// Upper bound for the buffered fixture request. The adapter's fixed POST is
+/// ~100 bytes; anything past this bound is a fixture regression, so the
+/// accumulation stays bounded to `PEER_REQUEST_MAX` plus one read chunk.
+const PEER_REQUEST_MAX: usize = 8 * 1024;
+
+/// Parse state of the accumulated request bytes.
+#[derive(Debug, PartialEq, Eq)]
+enum PeerRequestParse {
+    /// No complete `\r\n\r\n` head terminator buffered yet.
+    PartialHead,
+    /// Head parsed; the request completes at `body_end` total bytes (head
+    /// plus declared Content-Length, checked arithmetic).
+    PartialBody { body_end: usize },
+    /// Head and declared body fully buffered.
+    Complete,
+    /// Content-Length missing, duplicated, unparsable, or declaring a body
+    /// beyond `PEER_REQUEST_MAX`: a fixture regression, never silently
+    /// treated as a zero-length body.
+    Malformed,
+}
+
+/// Parses the adapter's fixed POST shape (origin-form request line, header
+/// lines, exactly one Content-Length). Byte-level on purpose: the fixture
+/// must reject malformed input without depending on UTF-8 validity.
+fn peer_request_parse(received: &[u8]) -> PeerRequestParse {
+    let Some(head_end) = received
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|at| at + 4)
+    else {
+        return PeerRequestParse::PartialHead;
+    };
+    let head = &received[..head_end];
+    let mut lengths = head
+        .split(|byte| *byte == b'\n')
+        .skip(1)
+        .filter_map(|line| {
+            let colon = line.iter().position(|byte| *byte == b':')?;
+            Some((&line[..colon], &line[colon + 1..]))
+        })
+        .filter(|(name, _)| {
+            name.trim_ascii_end()
+                .eq_ignore_ascii_case(b"content-length")
+        })
+        .map(|(_, value)| value);
+    // The adapter's fixed POST always carries exactly one Content-Length.
+    let Some(value) = lengths.next() else {
+        return PeerRequestParse::Malformed;
+    };
+    if lengths.next().is_some() {
+        // Duplicated even with equal values: the smuggling-shaped header set
+        // a real server rejects instead of guessing.
+        return PeerRequestParse::Malformed;
+    }
+    let value = value.trim_ascii();
+    if value.is_empty() || !value.iter().all(u8::is_ascii_digit) {
+        return PeerRequestParse::Malformed;
+    }
+    let Ok(digits) = std::str::from_utf8(value) else {
+        return PeerRequestParse::Malformed;
+    };
+    let Ok(body_len) = digits.parse::<usize>() else {
+        return PeerRequestParse::Malformed;
+    };
+    let Some(body_end) = head_end.checked_add(body_len) else {
+        return PeerRequestParse::Malformed;
+    };
+    if body_end > PEER_REQUEST_MAX {
+        return PeerRequestParse::Malformed;
+    }
+    if received.len() < body_end {
+        PeerRequestParse::PartialBody { body_end }
+    } else {
+        PeerRequestParse::Complete
+    }
+}
+
+/// Focused controls for the fixture parser above: the fixed POST completes
+/// only once head AND declared body are buffered; a short read stays
+/// incomplete; missing, duplicated, unparsable or over-bound Content-Length
+/// is Malformed (never silently a zero-length body).
+#[test]
+fn peer_request_parse_rejects_incomplete_and_malformed_fixed_post() {
+    let head =
+        b"POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\ncontent-length: 10\r\n\r\n";
+    let body = b"{\"ping\":1}";
+    let expected_end = head.len() + body.len();
+    let mut whole = head.to_vec();
+    whole.extend_from_slice(body);
+    assert_eq!(peer_request_parse(&whole), PeerRequestParse::Complete);
+    assert_eq!(
+        peer_request_parse(head),
+        PeerRequestParse::PartialBody {
+            body_end: expected_end
+        }
+    );
+    // Head terminator incomplete and body one byte short: never complete.
+    assert_eq!(
+        peer_request_parse(&head[..head.len() - 1]),
+        PeerRequestParse::PartialHead
+    );
+    assert_eq!(
+        peer_request_parse(&whole[..expected_end - 1]),
+        PeerRequestParse::PartialBody {
+            body_end: expected_end
+        }
+    );
+    // Missing Content-Length.
+    let missing = b"POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+    assert_eq!(peer_request_parse(missing), PeerRequestParse::Malformed);
+    // Duplicated Content-Length: identical and conflicting values.
+    for duplicated in [
+        b"POST /mcp HTTP/1.1\r\ncontent-length: 9\r\ncontent-length: 9\r\n\r\n".as_slice(),
+        b"POST /mcp HTTP/1.1\r\ncontent-length: 3\r\ncontent-length: 9\r\n\r\n".as_slice(),
+    ] {
+        assert_eq!(peer_request_parse(duplicated), PeerRequestParse::Malformed);
+    }
+    // Unparsable values: empty, signed, alphabetic, and beyond usize.
+    for unparsable in [
+        b"POST /mcp HTTP/1.1\r\ncontent-length:\r\n\r\n".as_slice(),
+        b"POST /mcp HTTP/1.1\r\ncontent-length: -9\r\n\r\n".as_slice(),
+        b"POST /mcp HTTP/1.1\r\ncontent-length: nine\r\n\r\n".as_slice(),
+        b"POST /mcp HTTP/1.1\r\ncontent-length: 99999999999999999999999\r\n\r\n".as_slice(),
+    ] {
+        assert_eq!(peer_request_parse(unparsable), PeerRequestParse::Malformed);
+    }
+    // Well-formed digits beyond the fixture bound.
+    let over_bound = format!(
+        "POST /mcp HTTP/1.1\r\ncontent-length: {}\r\n\r\n",
+        PEER_REQUEST_MAX + 1
+    );
+    assert_eq!(
+        peer_request_parse(over_bound.as_bytes()),
+        PeerRequestParse::Malformed
+    );
+}
+
+/// Drains the adapter's fixed POST (head plus declared body) BEFORE the
+/// fixture response is written: bytes sent before the request exists on the
+/// wire are unsolicited on an idle client connection and can surface as an
+/// early error that races the deadline. Malformed or incomplete input is a
+/// fixture failure (see [`PeerRequestParse`]), never a client-closure signal.
+async fn peer_read_request(stream: &mut tokio::net::TcpStream) -> std::io::Result<()> {
+    use tokio::io::AsyncRead;
+
+    let mut chunk = [0u8; 512];
+    let mut received = Vec::new();
+    loop {
+        match peer_request_parse(&received) {
+            PeerRequestParse::Complete => return Ok(()),
+            PeerRequestParse::Malformed => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "fixture request malformed: Content-Length missing, duplicated, invalid or over-bound",
+                ))
+            }
+            PeerRequestParse::PartialHead | PeerRequestParse::PartialBody { .. } => {}
+        }
+        if received.len() >= PEER_REQUEST_MAX {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "fixture request exceeded its bounded buffer",
+            ));
+        }
+        let mut buf = tokio::io::ReadBuf::new(&mut chunk);
+        std::future::poll_fn(|cx| Pin::new(&mut *stream).poll_read(cx, &mut buf)).await?;
+        if buf.filled().is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "peer saw EOF before the fixture request completed",
+            ));
+        }
+        received.extend_from_slice(buf.filled());
+    }
+}
+
+/// Contract: a stalled announced-length response (Content-Length: 64, five
+/// body bytes sent, socket held open) must surface as Err(Transport) naming
+/// the timeout, AND the failed socket must be genuinely released — proven by
+/// the peer observing a true EOF after the adapter's fixed POST was fully
+/// drained. The peer answers only after the complete request (rationale on
+/// `peer_read_request`).
+///
+/// Outcome discipline: ClientClosed is the success signal; ClientKeptSocket
+/// is the retained-socket failure signal; PeerWriteFailed/PeerReadFailed are
+/// fixture failures NEVER counted as closure; NoConnection means the client
+/// never connected. The peer handle is retained across the bounded join
+/// (abort+await fallback), and the client-side error assertions run only
+/// after the peer outcome is collected.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn timeout_failure_socket_released_peer_observes_eof() {
     // tokio's `io-util` extension traits are NOT enabled under this feature
@@ -2555,8 +2743,8 @@ async fn timeout_failure_socket_released_peer_observes_eof() {
     #[derive(Debug, PartialEq, Eq)]
     enum PeerOutcome {
         /// The client closed the socket (true zero-length EOF or read error)
-        /// after the queued request bytes were drained — the success signal:
-        /// the failure path released the connection.
+        /// after its complete request was drained — the success signal: the
+        /// failure path released the connection.
         ClientClosed,
         /// The peer's own absolute 10 s guard expired — the client KEPT
         /// the failed socket open (the retained-socket failure signal,
@@ -2565,6 +2753,10 @@ async fn timeout_failure_socket_released_peer_observes_eof() {
         /// The fixture write errored or the write bound expired — a peer/
         /// fixture problem, NEVER evidence of client closure.
         PeerWriteFailed,
+        /// The fixture read errored or the read bound expired before the
+        /// client's request completed — a peer/fixture problem, NEVER
+        /// evidence of client closure.
+        PeerReadFailed,
         /// The client never even connected (deadline broken long before).
         NoConnection,
     }
@@ -2579,15 +2771,23 @@ async fn timeout_failure_socket_released_peer_observes_eof() {
         .expect("bind 127.0.0.1:0");
     let addr = listener.local_addr().expect("local addr");
 
-    // ONE owned peer task: accept once, write the fixture, then drain the
-    // client's queued request bytes and read until the client closes
-    // (true EOF/error) or the absolute 10 s guard fires.
+    // ONE owned peer task: accept once, read the client's COMPLETE request,
+    // write the fixture, then wait until the client closes (true EOF/error)
+    // or the absolute 10 s guard fires.
     let mut peer = tokio::spawn(async move {
         let (mut stream, _) =
             match tokio::time::timeout(Duration::from_secs(10), listener.accept()).await {
                 Ok(Ok(accepted)) => accepted,
                 _ => return PeerOutcome::NoConnection,
             };
+        // The request is fully drained BEFORE any response byte is written
+        // (rationale on `peer_read_request`).
+        match tokio::time::timeout(Duration::from_secs(10), peer_read_request(&mut stream)).await {
+            Ok(Ok(())) => {}
+            // Read error or bound expiry: NOT evidence of client closure.
+            Ok(Err(_)) => return PeerOutcome::PeerReadFailed,
+            Err(_) => return PeerOutcome::PeerReadFailed,
+        }
         match tokio::time::timeout(
             Duration::from_secs(10),
             peer_write_all(&mut stream, fixture),
@@ -2600,13 +2800,13 @@ async fn timeout_failure_socket_released_peer_observes_eof() {
             Err(_) => return PeerOutcome::PeerWriteFailed,
         }
         // ONE absolute guard around the ENTIRE drain loop — never extended
-        // per read: draining the queued request bytes plus waiting for the
-        // client's release must fit inside a single bound.
+        // per read: with the request fully drained before the fixture went
+        // out, the client sends nothing further, so every read result is
+        // closure (or a protocol violation, still NOT closure evidence).
         let drain = async {
             loop {
                 match peer_read_one(&mut stream).await {
-                    // The client's queued request bytes: DATA, not closure
-                    // evidence.
+                    // Stray bytes are DATA, not closure evidence.
                     PeerRead::Data => continue,
                     // True zero-length read or read error: the CLIENT
                     // released its failed socket — the release signal this
@@ -2648,6 +2848,8 @@ async fn timeout_failure_socket_released_peer_observes_eof() {
          ClientKeptSocket = the peer's absolute 10 s guard expired (socket retained), \
          PeerWriteFailed = the fixture write failed or its bound expired (a real, distinguishable \
          outcome — never counted as client closure), \
+         PeerReadFailed = the fixture request read errored or its bound expired (a real, \
+         distinguishable outcome — never counted as client closure), \
          NoConnection = the client never connected; got: {outcome:?}"
     );
 }
