@@ -49,3 +49,18 @@ npm run build
 node ts/dist/interop/server.js --aud <aud> --policy <file> --state <file> --server-seed-hex <64 hex> [--bootstrap-ttl <seconds>] [--verify-only]
 node ts/dist/interop/client.js --url <base-url> --seed-hex <64 hex> --server-public-key <b64u> --aud <aud> --scenario <name> [--seeds <file>] [--ts <n>] [--nonce <b64u>] [--arg k=v]...
 ```
+
+## Standalone package consumer (CI)
+
+The checkout remains `private: true` at version `0.0.0`; this task does not publish or make it publishable. The ordinary `npm run build` above is unchanged and continues to compile the interop executables for existing CI. The consumer artifact uses the separate library-only `npm run build:package` configuration, which excludes `src/interop/`.
+
+From the repository root, prepare an npm tarball and its allowlisted member inventory, then verify it from an isolated consumer install:
+
+```
+node tools/consumer/package-ts.mjs tools/consumer/.scratch/ts-consumer
+node tools/consumer/verify-ts.mjs tools/consumer/.scratch/ts-consumer
+```
+
+The preparation script is CI-only and requires `GITHUB_ACTIONS=true`; the stage must be a new direct child under `tools/consumer/.scratch/`. It builds into that stage, then stages only library `dist` JavaScript/declarations, this README, and byte-for-byte copies of the root `LICENSE-MIT` and `LICENSE-APACHE`; it runs `npm pack` with the private metadata retained. The stage contains the tarball, inventory, and intermediate `build/`, `package/`, and `npm-cache/` directories. `tools/consumer/.scratch/` is ignored by Git. The verification driver installs the tarball and the consumer fixture's own TypeScript tooling into a stage-local `consumer/` directory, checks the installed-file inventory and exact license bytes, type-checks `smoke.ts` using only the `mcp-jack` package-root import, then executes it against a bounded real loopback server. The smoke covers client-key public transfer, issuer credential import against a separately constructed trusted server tuple, a signed client/server round trip, wrong-server-pin refusal, and tampered-request refusal. No consumer lockfile is copied from the SDK.
+
+CI runs the pair above as the consumer ts job (Node 20 and 22): the stage below `tools/consumer/.scratch/` is created fresh per run by the packaging driver, and the verification driver installs the tarball into a stage-local `consumer/` directory there; the tarball, inventory, and generated install/compiler files remain in that stage.

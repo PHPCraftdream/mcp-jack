@@ -1,0 +1,38 @@
+[package]
+name = "mcp-jack-consumer-smoke"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+# MSRV-aware resolver (v3); cargo 1.85 supports edition 2024 + rust-version.
+[dependencies]
+# The dependency points at the EXTRACTED .crate artifact staged by
+# verify-rust.mjs (never the live checkout), with the product lockfile
+# ignored: the consumer resolves its own graph fresh on Rust 1.85.
+mcp-jack = { path = "../vendor/mcp-jack-0.1.0", default-features = false }
+
+# Harness-only supporting deps permitted by task scope; the SDK dep itself
+# stays the extracted crate. All are optional and only enabled by the
+# consumer's own `server-http` feature (the adapter's request/response types
+# need http/bytes/http-body-util, the layer needs tower, the service key needs
+# ed25519-dalek + getrandom, and the blocking bridge uses futures' executor).
+# Additionally, tokio (rt/net/time) provides the deadline-bounded peer accept
+# used by the `client-http` feature — exactly the features the SDK's own
+# client-http graph already enables (rust/Cargo.toml: client-http =
+# [... "tokio/rt", "tokio/time", ...]; tokio declared with net).
+ed25519-dalek = { version = "2.2", features = ["std"], optional = true }
+getrandom = { version = "0.2", optional = true }
+http = { version = "1", optional = true }
+bytes = { version = "1", optional = true }
+http-body-util = { version = "0.1", optional = true }
+tower = { version = "0.5", features = ["util"], optional = true }
+futures = { version = "0.3", default-features = false, features = ["executor", "std"], optional = true }
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time"], optional = true }
+
+[features]
+default = []
+client-http = ["mcp-jack/client-http", "dep:tokio"]
+server-http = ["mcp-jack/http", "dep:ed25519-dalek", "dep:getrandom", "dep:http", "dep:bytes", "dep:http-body-util", "dep:tower", "dep:futures"]
+
+# Profile: keep cargo defaults (no [profile] section).

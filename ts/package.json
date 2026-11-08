@@ -2,6 +2,25 @@
   "name": "mcp-jack",
   "version": "0.0.0",
   "license": "MIT OR Apache-2.0",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/*.js",
+    "dist/*.d.ts",
+    "dist/client/*.js",
+    "dist/client/*.d.ts",
+    "dist/server/*.js",
+    "dist/server/*.d.ts",
+    "README.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/PHPCraftdream/mcp-jack.git",
@@ -14,6 +33,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:package": "tsc -p tsconfig.package.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsc -p tsconfig.test.json && node scripts/run-tests.mjs"
   },

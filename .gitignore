@@ -9,3 +9,6 @@ interop/bin/
 
 # agent session handoffs, not project documentation
 /docs/checkpoints/
+
+# consumer packaging scratch (CI-only)
+/tools/consumer/.scratch/

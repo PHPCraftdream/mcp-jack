@@ -176,3 +176,85 @@ jobs:
         run: node interop/transfer.mjs --self-test
       - name: Run credential transfer matrix
         run: node interop/transfer.mjs
+
+  consumer-ts:
+    name: consumer ts (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install TypeScript workspace dependencies
+        run: npm ci --no-audit --no-fund
+        working-directory: ts
+      - name: Package the private npm tarball
+        run: node tools/consumer/package-ts.mjs tools/consumer/.scratch/ts-consumer
+      - name: Verify from a standalone consumer install
+        run: node tools/consumer/verify-ts.mjs tools/consumer/.scratch/ts-consumer
+      - name: Upload package artifact and inventory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: consumer-ts-node${{ matrix.node }}-artifact
+          path: |
+            tools/consumer/.scratch/ts-consumer/mcp-jack-0.0.0.tgz
+            tools/consumer/.scratch/ts-consumer/inventory.json
+          if-no-files-found: error
+
+  consumer-rust:
+    name: consumer rust 1.85
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@1.85
+      - name: Package the .crate artifact
+        run: node tools/consumer/package-rust.mjs tools/consumer/.scratch/rust-consumer
+      - name: Verify from a standalone consumer crate
+        run: node tools/consumer/verify-rust.mjs tools/consumer/.scratch/rust-consumer
+      - name: Upload package artifact and inventory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: consumer-rust-artifact
+          path: |
+            tools/consumer/.scratch/rust-consumer/mcp-jack-0.1.0.crate
+            tools/consumer/.scratch/rust-consumer/inventory.json
+          if-no-files-found: error
+
+  consumer-go:
+    name: consumer go 1.22
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Package the staged module snapshot
+        run: node tools/consumer/package-go.mjs tools/consumer/.scratch/go-consumer
+      - name: Tar the staged module snapshot
+        run: tar -czf tools/consumer/.scratch/go-consumer/go-module-snapshot.tgz -C tools/consumer/.scratch/go-consumer module
+      - name: Verify from a standalone consumer module
+        run: node tools/consumer/verify-go.mjs tools/consumer/.scratch/go-consumer
+      - name: Upload package artifact and inventory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: consumer-go-artifact
+          path: |
+            tools/consumer/.scratch/go-consumer/go-module-snapshot.tgz
+            tools/consumer/.scratch/go-consumer/inventory.json
+          if-no-files-found: error
