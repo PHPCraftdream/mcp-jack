@@ -419,7 +419,7 @@ function importCredentialDocument(input: Uint8Array): CredentialData {
 }
 
 function validateIdentityTuple(input: unknown, mismatch: boolean): ValidatedIdentity {
-  const reject = (errorClass: UserKeyErrorClass, member?: string, length?: number): never => {
+  const reject: (errorClass: UserKeyErrorClass, member?: string, length?: number) => never = (errorClass, member, length) => {
     if (mismatch) {
       fail("server_identity_mismatch");
     }
