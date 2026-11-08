@@ -1,16 +1,45 @@
 # SDK coverage readiness review
 
-Status: documentation review of the tree at commit `2530b70` ("Read the full request before the
-timeout socket fixture responds"), worktree `sdk-coverage-readiness-1108`, plus the uncommitted
-coverage/fuzz/readiness delivery in this worktree: new fuzz targets in the root, `server`,
-`client` and `userkey` packages, the `.github/workflows/coverage.yml` and
-`.github/workflows/fuzz.yml` workflows, the summarizer and campaign scripts
-(`tools/coverage/go-summary.mjs`, `tools/coverage/lcov-summary.mjs`,
-`ts/scripts/coverage-summary.mjs`, `tools/fuzz/go-campaign.sh`) and this document. It reviews the Go,
-Rust and TypeScript SDKs, the specification and fixtures, the test suites and the CI workflow
-definitions, and it consolidates the readiness evidence for the SDKs as delivered, including the new coverage and fuzz CI. Every factual claim carries a `path:line` citation verified by
-reading the tree. CI execution itself is observed separately by the operator; this document
-makes no claim that any workflow has run or passed.
+Status: the SDK readiness delivery is committed at
+`deeb29fc5a18d5a876f0e2e6c3166dec0ee9b63e` on `release-readiness-1106` in
+[PR #12](https://github.com/PHPCraftdream/mcp-jack/pull/12). All 25 PR checks passed on
+that exact commit. The delivery includes the user-key APIs, portable credentials, Rust HTTPS
+transport, interoperability matrices, independent package consumers, and coverage/fuzz CI.
+This document separates the static source review from the observed CI evidence below.
+Green CI does not establish exhaustive coverage or authorize merge, release, tags, registry
+publication, dependency upgrades or version changes.
+
+### Verified CI evidence
+
+The following runs completed successfully on the exact commit above; their results do not
+apply automatically to later commits:
+
+- [Native SDKs, race/MSRV/Node matrices, fixtures, both interop matrices and independent consumers](https://github.com/PHPCraftdream/mcp-jack/actions/runs/42489931871).
+- [Licence checks](https://github.com/PHPCraftdream/mcp-jack/actions/runs/42489931896).
+- [Coverage reports and summarizer regression controls](https://github.com/PHPCraftdream/mcp-jack/actions/runs/42489931954).
+- [Bounded Go fuzz campaign and collection/error-source controls](https://github.com/PHPCraftdream/mcp-jack/actions/runs/42489931886).
+
+Downloaded coverage reports were inspected separately from workflow status:
+
+| Product metric | Covered / measured | Result |
+| --- | --- | --- |
+| Go statements | 2,025 / 2,331 | 86.87% |
+| Rust LLVM lines | 7,232 / 7,683 | 94.13% |
+| TypeScript V8 lines in loaded emitted JavaScript | 4,830 / 5,080 | 95.08% |
+
+These metrics are not interchangeable and do not measure comprehensive branch coverage.
+Notable uncovered areas include Go `client/tools.go` (50% statements), Go
+`userkey/transfer.go` (73.49% statements), and Rust `src/client/http_transport.rs`
+(79.78% measured lines). Reports partition product code from test/interop helpers. The TS
+inventory contains 62 emitted JS files, 58 loaded; the root export module and three interop
+executables are unloaded in this coverage run. Separate package-root consumers and real
+interop jobs passed; their execution is not included in these percentages.
+
+All eight Go fuzz targets passed a bounded campaign with 30 seconds fuzzing per target and
+a 10-second minimization budget on failure. The campaign self-test also passed its corpus,
+exit-status, log-failure and copy-failure controls. A finite passing campaign is not proof
+that no bugs exist. No local builds, tests, fuzz campaigns or runtime probes were used for
+this evidence.
 
 ## 1. Scope and method
 
@@ -18,10 +47,11 @@ Reviewed by read-only inspection: the specification (`spec/README.md`, `spec/fix
 design records (`docs/design/interop.md`, `docs/design/user-keys.md`,
 `docs/design/rust-ts-server-sdks.md`), the three SDKs (Go module at the root, `rust/`, `ts/`),
 the interop and credential-transfer harnesses (`interop/`), the consumer packaging checks
-(`tools/consumer/`) and the workflow definitions present at this commit
+(`tools/consumer/`) and the workflow definitions present at the reviewed commit
 (`.github/workflows/ci.yml`, `.github/workflows/license.yml`). No build, test or harness was
-executed; all numbers (scenario counts, fixture case counts, transfer-matrix counts) were
-counted directly in the files that declare them. The coverage and fuzz workflows
+executed locally during the review; scenario, fixture and transfer-matrix counts were
+counted directly in the files that declare them. The successful CI runs are recorded
+separately above. The coverage and fuzz workflows
 (`.github/workflows/coverage.yml`, `.github/workflows/fuzz.yml`), the bounded-campaign script
 (`tools/fuzz/go-campaign.sh`) and the three summarizer scripts (`tools/coverage/go-summary.mjs`,
 `tools/coverage/lcov-summary.mjs`, `ts/scripts/coverage-summary.mjs`) are reviewed below as
@@ -303,9 +333,15 @@ transfer table are all implemented and tested as documented (citations in sectio
 
 ## 9. Not covered by this review
 
-Runtime CI observation (green/red status of any workflow), release and publishing decisions
-(crate/npm/Go module remain unpacked-locally, `private: true` retained, `ts/package.json`),
-live-network behavior including real TLS peers, DNS behavior under resolver variation, proxy
-environments, and performance or soak characteristics. The coverage and fuzz workflows are
-reviewed as in-tree files of this delivery; runtime execution of any workflow is observed
-separately by the operator and is not claimed here.
+The static review alone does not establish runtime behavior; the separate CI evidence at
+the top of this document records the successful runs on `deeb29f`. Neither that review nor
+those finite runs establish arbitrary deployment-network behavior, DNS behavior under every
+resolver variation, proxy compatibility, or performance and soak characteristics.
+
+Merge, release and publishing decisions remain outside this review. Package artifacts and
+independent consumers were verified in CI, not installed or executed locally. npm
+`private: true`, Rust `publish = false`, product versions and Rust MSRV 1.85 remain unchanged.
+Open specification questions, including streaming signatures and server-key rotation, are
+separate design decisions rather than features implied by green CI. Dependabot proposals
+require individual compatibility, MSRV, licence and CI review; an open update PR alone does
+not establish a vulnerability or authorize a dependency upgrade.
