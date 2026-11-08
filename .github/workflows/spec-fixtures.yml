@@ -1,0 +1,46 @@
+# Spec fixture materialization.
+#
+# This workflow exists for environments that cannot run Node locally: it
+# materializes the generated fixtures (spec/fixtures JSON files and
+# spec/tests/CASES.md) as a CI artifact. The parent review flow downloads the
+# artifact and integrates the bytes. The existing `fixtures` job in ci.yml —
+# `gen-fixtures.mjs --check` — remains the standing staleness gate and is NOT
+# modified or replaced by this workflow.
+
+name: spec fixtures
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    name: generate and upload fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Generate fixtures
+        run: node spec/tools/gen-fixtures.mjs
+      - name: Verify regeneration is deterministic
+        run: node spec/tools/gen-fixtures.mjs --check
+      - name: Upload generated fixtures
+        uses: actions/upload-artifact@v4
+        with:
+          name: spec-generated-fixtures
+          path: |
+            spec/fixtures/keys.json
+            spec/fixtures/registry.json
+            spec/fixtures/request-vectors.json
+            spec/fixtures/admin-vectors.json
+            spec/fixtures/response-vectors.json
+            spec/fixtures/key-vectors.json
+            spec/fixtures/load-vectors.json
+            spec/fixtures/state-file-vectors.json
+            spec/tests/CASES.md
+          if-no-files-found: error

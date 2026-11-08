@@ -4,16 +4,20 @@
 
 Status: early draft. The specification, the normative test fixtures and SDKs for Go, Rust and TypeScript exist. CI runs the unit and conformance tests of all three on Linux and Windows and a cross-language interop matrix of every client against every server (3 × 3). No release has been made and nothing has been audited.
 
+**Scope reduced on 2026-11-08.** mcp-jack is strictly a security wrapper: authentication, integrity, replay protection, identity (key) management, audit, and — as the v0.2 direction — an authenticated, encrypted session channel with server key rotation. User kinds, scopes, the policy engine and the service-management profile are removed from the protocol: what a user may do inside MCP is decided by the users of the SDK, who receive the verified caller identity. The specification, the fixture generator and the reference tools implement this; the generated fixture bytes are materialized from them in CI and are pending that integration, and the Go, Rust and TypeScript SDKs follow in the next tasks, still containing the removed features until they land. Details: [docs/design/scope-review-2026-11-08.md](docs/design/scope-review-2026-11-08.md).
+
 ## Intent
 
-mcp-jack is a **secure transport protocol that wraps plain MCP**. Ordinary MCP messages (JSON-RPC) travel inside it unchanged; mcp-jack adds the protection MCP lacks: who is calling, what they may do, and a record of what they did.
+mcp-jack is a **secure transport protocol that wraps plain MCP**. Ordinary MCP messages (JSON-RPC) travel inside it unchanged; mcp-jack adds the protection MCP lacks: who is calling, and a record of what they did.
 
-A service embeds an mcp-jack server (or sits behind an mcp-jack gateway). Other programs and agents connect and can, subject to policy:
+A service embeds an mcp-jack server (or sits behind an mcp-jack gateway). Other programs and agents connect and can:
 
 - read logs and statistics;
 - read and change settings;
 - `reload` and `restart`;
 - manage users and their keys, through the protocol itself.
+
+What each caller may do among these is the service's own decision, made from the verified caller identity the SDK hands to the wrapped handler.
 
 ## Why
 
@@ -31,12 +35,12 @@ Operations such as restart or a configuration change need more than "whoever rea
 
 1. **Transport wrapper, not a new tool model.** The protocol carries unmodified MCP over HTTP. Three roles: a gateway in front of an unmodified MCP server, a local stdio bridge for MCP clients that know nothing about mcp-jack, and an embeddable library.
 2. **No bearer tokens.** Every request and response is signed with Ed25519, bound to the target server, a time window and a fresh nonce. Confidentiality is delegated to TLS.
-3. **Authorization is server policy.** Rules map MCP methods and tools to flat scopes (for example `read`, `config:write`, `lifecycle`, `admin`); everything else is denied.
+3. *(Being removed, see the scope change above.)* **Authorization is server policy.** Rules map MCP methods and tools to flat scopes (for example `read`, `config:write`, `lifecycle`, `admin`); everything else is denied.
 4. **User management is part of the protocol.** Administrators create users and invites through MCP tools; any party may generate a key pair; enrollment proves possession of the key. Servers and clients get this from the SDKs.
 5. **Private keys stay out of config files.** OS key stores, signer agents or hardware tokens; the SDKs expose a signer interface.
 6. **Audit everything.** Each call and each administrative change records the caller's key identity.
-7. **Logs are untrusted input.** A log line can contain instructions for an agent, so agents that read logs are never granted write or admin scopes.
-8. **Do not reinvent metrics and logs.** Use Prometheus and OpenTelemetry formats; the protocol only carries the request.
+7. *(Being removed from the protocol; stays as advice to SDK users.)* **Logs are untrusted input.** A log line can contain instructions for an agent, so agents that read logs are never granted write or admin scopes.
+8. *(Being removed together with the service-management profile.)* **Do not reinvent metrics and logs.** Use Prometheus and OpenTelemetry formats; the protocol only carries the request.
 
 ## Implementations
 
@@ -72,7 +76,7 @@ node interop/run.mjs --self-test
 
 ## Specification
 
-The draft lives in [spec/](spec/README.md): authentication, authorization, user management, an optional service-management profile, test fixtures and a reference verifier.
+The draft lives in [spec/](spec/README.md): authentication, the key registry and dispatch, user management, test fixtures and a reference verifier.
 
 ## Open questions
 

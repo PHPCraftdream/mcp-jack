@@ -201,7 +201,7 @@ The identical fourteen rows, realized with `mcp-jack` equivalents: `mcp-jack key
 
 ## 13. JSON duplicate members and D13
 
-D13 scopes last-occurrence-wins to JSON-RPC request bodies (spec 02 section 4); local documents parse strictly, resolving duplicates by decoded name AFTER unescaping, last occurrence wins. Ordinary ordered semantic checks may fail before final gate. Escaped-equivalent duplicate (`neg-dup-member-escaped`) and inner duplicate (`neg-cred-dup-inner-member`) fixtures pin behavior; inner first failure propagates at step 14 before outer gate 15. No bespoke duplicate scanner.
+D13 scopes last-occurrence-wins to JSON-RPC request bodies (spec 02 section 2); local documents parse strictly, resolving duplicates by decoded name AFTER unescaping, last occurrence wins. Ordinary ordered semantic checks may fail before final gate. Escaped-equivalent duplicate (`neg-dup-member-escaped`) and inner duplicate (`neg-cred-dup-inner-member`) fixtures pin behavior; inner first failure propagates at step 14 before outer gate 15. No bespoke duplicate scanner.
 
 ## 14. Examples (illustrative intent, not final APIs)
 
