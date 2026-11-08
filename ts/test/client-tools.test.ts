@@ -163,7 +163,7 @@ test("admin list decodes the wrappers", async () => {
   // Built inline instead of via newFixtureClient, whose single-nonce queue would
   // exhaust on the second call; config otherwise identical.
   const client = new Client({
-    baseUrl: "http://mcp.test/mcp",
+    baseUrl: "https://mcp.test/mcp",
     aud: fixtureAud,
     signer: seedSignerByName("alice"),
     serverKey: server.pub,

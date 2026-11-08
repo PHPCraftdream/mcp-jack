@@ -390,3 +390,64 @@ chunks.
 - `sign-only` injects fixed `ts` and `nonce` from `sign-cases.json`.
 - Ports and temp directories are per run; the harness never stores key material
   outside what it reads from `spec/fixtures` at run time.
+
+## 11. Credential-transfer matrix
+
+This is separate from the request-scenario matrix above. Run the transfer
+harness directly with either command:
+
+```sh
+node interop/transfer.mjs --self-test
+node interop/transfer.mjs
+```
+
+CI runs the `credential-transfer` job, which builds the probes; there is no
+fake fallback. The matrix covers nine issuer-to-client pairs across seven
+actual credentials (63 cases), plus 66 shared cases across nine pairs (594).
+The seven deterministic credentials are alice, bob, and five Unicode audience
+controls, each independently pinned by fixture/RFC seed, public key, `kid`, and
+canonical bytes. Five exact messages cover empty, ASCII, UTF-8, binary, NUL/LF/
+`0xff`, and 4096-byte inputs.
+
+Nine client-to-server pairs exercise 25 actual public-key exports per pair
+(OS-generated, three seeded, and 21 credential-imported: 225 exports). Ten
+signature verdicts per record (five positive and five negative) produce 2,250
+checks. Expected tuples are separate inputs and are never trusted from
+credential data. Seventeen wrong, invalid, missing, or null expected-value
+variants exercise strict refusals; the oracle checks 51 negative cases,
+including wrong sinks and inner/outer ordering.
+
+The probe IPC is one JSON line followed by EOF:
+
+```json
+{"operations":[{"id":"...","op":"..."}]}
+```
+
+and returns `{"results":[...]}`. Operations are `issue`, `generate`,
+`from-seed`, `import-private`, `import-credential`, `import-public`, and
+`validate-credential`. Bytes use canonical base64url. Expected values have
+exactly `url`, `aud`, `server_public_key`, and `server_kid`; missing fields in
+Go/Rust map to the zero tuple, while TypeScript preserves actual
+`undefined`/`null` distinctions.
+
+Ordinary client signers export only public envelopes; public-only imported records cannot sign or recover private material. Native
+compile-fail role guards remain; no server-private seed request is exposed.
+Limits are 2 MiB per IPC input, 1024 operations, 16 messages, 4096 bytes per
+message, and a 30-second deadline. Capture waits for the child close event, not
+exit, so trailing stdout is retained. Bounded cleanup targets only owned child
+PIDs; normal probes spawn no descendants. Diagnostics use fixed labels and
+never print raw secrets.
+
+Self-tests use actual SDK positives and mutate identity, signature, message,
+returned bytes, and connection; they also exercise all-accept/all-reject,
+real-child failure/truncation/timeout, and synthetic post-exit stdout only for
+lifecycle and retained-ownership controls. Test IPC credentials are plaintext;
+this is not SDK logging or a zeroization claim. Network issuance, protocol
+changes, packaging, and fuzzing are out of scope.
+
+Layout: `transfer.mjs` coordinates matrix, refusals, trust, and public
+modules; fixtures, checks, process, self-test, and lifecycle code remain
+separate. Probe paths are Go `interop/go/transfer/main.go`, Rust
+`rust/src/bin/interop_transfer.rs`, and TypeScript `ts/src/interop/transfer.ts`;
+the Rust `interop-transfer` binary is behind the existing `interop` feature.
+MSRV is 1.85 and default features remain `[]`.

@@ -1,0 +1,13 @@
+{
+  "name": "mcp-jack-ts-consumer-smoke",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "mcp-jack": "file:./artifact.tgz"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0"
+  }
+}

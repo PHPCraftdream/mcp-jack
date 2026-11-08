@@ -139,7 +139,8 @@ export function newTestServer(): TestServer {
   const writeSignedJSON = (auth: RequestAuth, status: number, body: Uint8Array): Response => {
     const msg = utf8(responseSigningString(status, auth.sig, kid, now, body));
     const sig = new Uint8Array(nodeSign(null, Buffer.from(msg), priv));
-    return new Response(body, {
+    // A null body for an empty payload: some statuses (304) reject any body, even zero-length.
+    return new Response(body.length > 0 ? body : null, {
       status,
       headers: { "content-type": "application/json", "jack-auth": formatResponseAuth({ kid, ts: now, sig: encodeBase64URL(sig) }) },
     });
@@ -212,9 +213,9 @@ export function rpcResultBody(structured: string): Uint8Array {
 
 /** newFixtureClient builds a Client pinned to the fake server with the given signer and fixture nonce, clocked at fixtureNow. */
 export function newFixtureClient(server: TestServer, signer: Signer, nonceB64: string): Client {
-  // "http://mcp.test/mcp" is never connected: the fake fetch intercepts; its target "/mcp" matches the fixtures.
+  // "https://mcp.test/mcp" is never connected: the fake fetch intercepts; its target "/mcp" matches the fixtures.
   return new Client({
-    baseUrl: "http://mcp.test/mcp",
+    baseUrl: "https://mcp.test/mcp",
     aud: fixtureAud,
     signer,
     serverKey: server.pub,

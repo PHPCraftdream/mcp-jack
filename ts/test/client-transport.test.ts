@@ -29,7 +29,7 @@ const newTransport = (server: TestServer, clock?: Clock): SigningFetch =>
 
 /** postMCP issues a signed POST of {"ping":1} to the fake server's /mcp target. */
 const postMCP = (f: SigningFetch): Promise<Response> =>
-  f("http://mcp.test/mcp", { method: "POST", headers: { "content-type": "application/json" }, body: utf8('{"ping":1}') });
+  f("https://mcp.test/mcp", { method: "POST", headers: { "content-type": "application/json" }, body: utf8('{"ping":1}') });
 
 test("transport round trip happy path", async () => {
   const server = newTestServer();
@@ -224,7 +224,7 @@ test("forwards signal and forces redirect to error", async () => {
     calls.push(init ?? {});
     return base(input, init);
   };
-  const resp = await newTransport(server)("http://mcp.test/mcp", {
+  const resp = await newTransport(server)("https://mcp.test/mcp", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: utf8('{"ping":1}'),
@@ -248,7 +248,7 @@ test("an explicit null signal overrides a Request signal", async () => {
     return base(input, init);
   };
   const requestSignal = new AbortController().signal;
-  const request = new Request("http://mcp.test/mcp", {
+  const request = new Request("https://mcp.test/mcp", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: '{"ping":1}',

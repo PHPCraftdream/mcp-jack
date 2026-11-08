@@ -1,0 +1,514 @@
+{
+  "note": "TEST ONLY. Hand-maintained SDK test table for local user-key transfer documents (docs/design/user-keys.md): key envelopes and server-issued client transfer credentials. Assembled by string concatenation from spec/fixtures/keys.json values and the fixed canonical templates; no cryptographic operation was executed while authoring this file. Consumers must derive and re-check every value themselves at test time (seed-to-public derivation, kid hashes, URL policy). Never use these keys outside tests. Seed base64url d-strings were corrected in revision 2 for transcription defects in the authored strings (alice -5PM to _5PM, carol ihXW to ihcW); later language runners must independently decode and compare every d with keys.json seed_hex. Revision 3 adds credential audience escaping/Unicode controls and escaped-equivalent and inner duplicate-name cases.",
+  "schema": "user-key-transfer-fixtures/1",
+  "document_templates": {
+    "public_envelope": "{\"crv\":\"Ed25519\",\"kid\":\"<KID43>\",\"kty\":\"OKP\",\"type\":\"user-key/public\",\"v\":1,\"x\":\"<PUB43>\"}",
+    "private_envelope": "{\"crv\":\"Ed25519\",\"d\":\"<SEED43>\",\"kid\":\"<KID43>\",\"kty\":\"OKP\",\"type\":\"user-key/private\",\"v\":1,\"x\":\"<PUB43>\"}",
+    "client_credential": "{\"aud\":\"<AUD>\",\"client_key\":\"<PRIVATE_ENVELOPE_STRING>\",\"server_kid\":\"<KID43>\",\"server_public_key\":\"<PUB43>\",\"type\":\"user-key/credential/client\",\"url\":\"<URL>\",\"v\":1}"
+  },
+  "provenance": {
+    "key_vectors_source": "spec/fixtures/keys.json (independent pinned oracle: name, seed_hex, public_key, kid)",
+    "standards_oracle": "RFC 8032 section 7.1 TEST 1 (seed 9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60, public d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a) and RFC 8037 appendix A.1 (same key as a JWK: d nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A, x 11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo)",
+    "invalid_public_oracle": "spec/fixtures/key-vectors.json reject-* cases (generated, normative)",
+    "server_identity_stand_in": "credentials use the keys.json vector svc as the server identity (public_key and kid only; a credential never carries server private material); the same document works with any active key as server stand-in",
+    "composed_cases": "entries with a \"compose\" member are assembled by the test runner from the named source at test time; nothing pre-computed"
+  },
+  "positives": [
+    {
+      "id": "pub-alice",
+      "kind": "public_envelope",
+      "envelope": "{\"crv\":\"Ed25519\",\"kid\":\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\",\"kty\":\"OKP\",\"type\":\"user-key/public\",\"v\":1,\"x\":\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\"}",
+      "expect_x": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+      "expect_kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs"
+    },
+    {
+      "id": "priv-alice",
+      "kind": "private_envelope",
+      "envelope": "{\"crv\":\"Ed25519\",\"d\":\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8\",\"kid\":\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\",\"kty\":\"OKP\",\"type\":\"user-key/private\",\"v\":1,\"x\":\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\"}"
+    },
+    {
+      "id": "pub-bob",
+      "kind": "public_envelope",
+      "envelope": "{\"crv\":\"Ed25519\",\"kid\":\"g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns\",\"kty\":\"OKP\",\"type\":\"user-key/public\",\"v\":1,\"x\":\"27O5sjd6_PRkCVbNLwEbIwxpfh0DZCURwFI9lWF-UHE\"}",
+      "expect_x": "27O5sjd6_PRkCVbNLwEbIwxpfh0DZCURwFI9lWF-UHE",
+      "expect_kid": "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns"
+    },
+    {
+      "id": "priv-bob",
+      "kind": "private_envelope",
+      "envelope": "{\"crv\":\"Ed25519\",\"d\":\"frT4kDPf5521qP2qZnNht2hyLWGbYvUx-6DK6XFKNRs\",\"kid\":\"g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns\",\"kty\":\"OKP\",\"type\":\"user-key/private\",\"v\":1,\"x\":\"27O5sjd6_PRkCVbNLwEbIwxpfh0DZCURwFI9lWF-UHE\"}"
+    },
+    {
+      "id": "pub-carol",
+      "kind": "public_envelope",
+      "envelope": "{\"crv\":\"Ed25519\",\"kid\":\"bu9N_ld9z81i0mvxfKO0bgHdiYjZx7jBF8sd8DTo9gc\",\"kty\":\"OKP\",\"type\":\"user-key/public\",\"v\":1,\"x\":\"r1DLsXDIaAY-rmPFCzV9dgAxes6dpdXkOrJNHiFkQl4\"}",
+      "expect_x": "r1DLsXDIaAY-rmPFCzV9dgAxes6dpdXkOrJNHiFkQl4",
+      "expect_kid": "bu9N_ld9z81i0mvxfKO0bgHdiYjZx7jBF8sd8DTo9gc"
+    },
+    {
+      "id": "priv-carol",
+      "kind": "private_envelope",
+      "envelope": "{\"crv\":\"Ed25519\",\"d\":\"UNLAPqsHcHdchHcuExAAugIdihcWYpsGioWyc8yhf7s\",\"kid\":\"bu9N_ld9z81i0mvxfKO0bgHdiYjZx7jBF8sd8DTo9gc\",\"kty\":\"OKP\",\"type\":\"user-key/private\",\"v\":1,\"x\":\"r1DLsXDIaAY-rmPFCzV9dgAxes6dpdXkOrJNHiFkQl4\"}"
+    },
+    {
+      "id": "priv-rfc8032-test1",
+      "kind": "private_envelope",
+      "compose": {
+        "seed_b64u_of_hex": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+        "public_key_b64u_of_hex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+        "kid": "base64url(SHA-256(public key bytes)) computed by the test runner with the SDK key-id function"
+      },
+      "note": "RFC 8037 A.1 gives the same key as a JWK; the runner's own base64url encodings MUST equal the RFC's d/x strings."
+    },
+    {
+      "id": "cred-alice",
+      "kind": "client_credential",
+      "envelope": "{\"aud\":\"https://svc.example.test\",\"client_key\":\"{\\\"crv\\\":\\\"Ed25519\\\",\\\"d\\\":\\\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8\\\",\\\"kid\\\":\\\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\\\",\\\"kty\\\":\\\"OKP\\\",\\\"type\\\":\\\"user-key/private\\\",\\\"v\\\":1,\\\"x\\\":\\\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\\\"}\",\"server_kid\":\"wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88\",\"server_public_key\":\"wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw\",\"type\":\"user-key/credential/client\",\"url\":\"https://svc.example.test\",\"v\":1}",
+      "expect_client_kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+      "expect_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88"
+    },
+    {
+      "id": "cred-bob",
+      "kind": "client_credential",
+      "envelope": "{\"aud\":\"https://svc.example.test\",\"client_key\":\"{\\\"crv\\\":\\\"Ed25519\\\",\\\"d\\\":\\\"frT4kDPf5521qP2qZnNht2hyLWGbYvUx-6DK6XFKNRs\\\",\\\"kid\\\":\\\"g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns\\\",\\\"kty\\\":\\\"OKP\\\",\\\"type\\\":\\\"user-key/private\\\",\\\"v\\\":1,\\\"x\\\":\\\"27O5sjd6_PRkCVbNLwEbIwxpfh0DZCURwFI9lWF-UHE\\\"}\",\"server_kid\":\"wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88\",\"server_public_key\":\"wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw\",\"type\":\"user-key/credential/client\",\"url\":\"https://svc.example.test\",\"v\":1}",
+      "expect_client_kid": "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
+      "expect_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88"
+    },
+    {
+      "id": "cred-aud-html-sensitive",
+      "kind": "client_credential",
+      "envelope": "{\"aud\":\"a<b>&c\",\"client_key\":\"{\\\"crv\\\":\\\"Ed25519\\\",\\\"d\\\":\\\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8\\\",\\\"kid\\\":\\\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\\\",\\\"kty\\\":\\\"OKP\\\",\\\"type\\\":\\\"user-key/private\\\",\\\"v\\\":1,\\\"x\\\":\\\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\\\"}\",\"server_kid\":\"wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88\",\"server_public_key\":\"wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw\",\"type\":\"user-key/credential/client\",\"url\":\"https://svc.example.test\",\"v\":1}",
+      "expect_aud": "a<b>&c",
+      "expect_client_kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+      "expect_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88"
+    },
+    {
+      "id": "cred-aud-codepoints",
+      "kind": "client_credential",
+      "compose": {
+        "template": "client_credential",
+        "client_key": "the exact priv-alice envelope string",
+        "server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+        "server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+        "url": "https://svc.example.test",
+        "aud_codepoints": [233, 128512],
+        "aud_note": "aud is e-acute followed by U+1F600; canonical bytes carry both as literal UTF-8"
+      },
+      "expect_client_kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+      "expect_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88"
+    },
+    {
+      "id": "cred-aud-control",
+      "kind": "client_credential",
+      "compose": {
+        "template": "client_credential",
+        "client_key": "the exact priv-alice envelope string",
+        "server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+        "server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+        "url": "https://svc.example.test",
+        "aud_codepoints": ["a", 1, "z"],
+        "aud_note": "the U+0001 control character is emitted by canonical JSON as the six-character lowercase escape sequence (backslash, u, 0, 0, 0, 1)"
+      },
+      "expect_client_kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+      "expect_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88"
+    },
+    {
+      "id": "cred-aud-separators",
+      "kind": "client_credential",
+      "compose": {
+        "template": "client_credential",
+        "client_key": "the exact priv-alice envelope string",
+        "server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+        "server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+        "url": "https://svc.example.test",
+        "aud_codepoints": ["a", 8232, "b", 8233],
+        "aud_note": "canonical bytes carry U+2028 and U+2029 as literal UTF-8; Go's standard encoder cannot emit them unescaped, exercising the narrow emitter requirement"
+      },
+      "expect_client_kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+      "expect_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88"
+    },
+    {
+      "id": "cred-aud-replacement-char",
+      "kind": "client_credential",
+      "compose": {
+        "template": "client_credential",
+        "client_key": "the exact priv-alice envelope string",
+        "server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+        "server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+        "url": "https://svc.example.test",
+        "aud_codepoints": ["a", 65533, "b"],
+        "aud_note": "a literal U+FFFD replacement character is valid UTF-8, parses everywhere and round-trips literally; distinct from an invalid escaped lone surrogate (neg-cred-aud-lone-surrogate-escape)"
+      },
+      "expect_client_kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+      "expect_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88"
+    }
+  ],
+  "negatives": [
+    {
+      "id": "neg-unknown-version",
+      "expect_class": "unknown_version",
+      "expect_why": "supported version is 1; v 2 is unknown",
+      "envelope": "{\"crv\":\"Ed25519\",\"d\":\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8\",\"kid\":\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\",\"kty\":\"OKP\",\"type\":\"user-key/private\",\"v\":2,\"x\":\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\"}"
+    },
+    {
+      "id": "neg-unknown-type",
+      "expect_class": "unknown_type",
+      "expect_why": "only user-key/private is defined for a private envelope",
+      "envelope": "{\"crv\":\"Ed25519\",\"d\":\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8\",\"kid\":\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\",\"kty\":\"OKP\",\"type\":\"user-key/secret\",\"v\":1,\"x\":\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\"}"
+    },
+    {
+      "id": "neg-bad-kty",
+      "expect_class": "unknown_type",
+      "expect_why": "kty must be OKP for Ed25519 keys",
+      "envelope": "{\"crv\":\"Ed25519\",\"d\":\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8\",\"kid\":\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\",\"kty\":\"EC\",\"type\":\"user-key/private\",\"v\":1,\"x\":\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\"}"
+    },
+    {
+      "id": "neg-bad-crv",
+      "expect_class": "unknown_type",
+      "expect_why": "crv must be Ed25519",
+      "envelope": "{\"crv\":\"Ed448\",\"d\":\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8\",\"kid\":\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\",\"kty\":\"OKP\",\"type\":\"user-key/private\",\"v\":1,\"x\":\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\"}"
+    },
+    {
+      "id": "neg-unknown-field",
+      "expect_class": "bad_member_set",
+      "expect_why": "the member set is exact; an extra comment member is not canonical",
+      "envelope": "{\"crv\":\"Ed25519\",\"kid\":\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\",\"kty\":\"OKP\",\"type\":\"user-key/public\",\"v\":1,\"x\":\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\",\"comment\":\"hi\"}"
+    },
+    {
+      "id": "neg-missing-kid",
+      "expect_class": "bad_member_set",
+      "expect_why": "kid is a required member",
+      "envelope": "{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"type\":\"user-key/public\",\"v\":1,\"x\":\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\"}"
+    },
+    {
+      "id": "neg-wrong-field-type",
+      "expect_class": "wrong_field_type",
+      "expect_why": "kid must be a string, not a number",
+      "envelope": "{\"crv\":\"Ed25519\",\"kid\":123,\"kty\":\"OKP\",\"type\":\"user-key/public\",\"v\":1,\"x\":\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\"}"
+    },
+    {
+      "id": "neg-null-field",
+      "expect_class": "wrong_field_type",
+      "expect_why": "x must be a base64url string, not null",
+      "envelope": "{\"crv\":\"Ed25519\",\"kid\":\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\",\"kty\":\"OKP\",\"type\":\"user-key/public\",\"v\":1,\"x\":null}"
+    },
+    {
+      "id": "neg-empty-d",
+      "expect_class": "bad_encoding",
+      "expect_why": "d is the 32-byte seed and must encode to exactly 43 base64url characters",
+      "envelope": "{\"crv\":\"Ed25519\",\"d\":\"\",\"kid\":\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\",\"kty\":\"OKP\",\"type\":\"user-key/private\",\"v\":1,\"x\":\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\"}"
+    },
+    {
+      "id": "neg-b64-padding",
+      "expect_class": "bad_encoding",
+      "expect_why": "base64url without padding only; a trailing = is rejected",
+      "envelope": "{\"crv\":\"Ed25519\",\"kid\":\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\",\"kty\":\"OKP\",\"type\":\"user-key/public\",\"v\":1,\"x\":\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE=\"}"
+    },
+    {
+      "id": "neg-b64-char",
+      "expect_class": "bad_encoding",
+      "expect_why": "+ is not a base64url character",
+      "envelope": "{\"crv\":\"Ed25519\",\"kid\":\"TXF9TkhWm+UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\",\"kty\":\"OKP\",\"type\":\"user-key/public\",\"v\":1,\"x\":\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\"}"
+    },
+    {
+      "id": "neg-escaped-member-name",
+      "expect_class": "non_canonical_bytes",
+      "expect_why": "the member name crv is written with an equivalent \u0063 escape: parsing yields the same object, so semantic checks pass and the canonical-bytes gate rejects the spelling",
+      "envelope": "{\"\\u0063rv\":\"Ed25519\",\"kid\":\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\",\"kty\":\"OKP\",\"type\":\"user-key/public\",\"v\":1,\"x\":\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\"}"
+    },
+    {
+      "id": "neg-len-short",
+      "expect_class": "bad_encoding",
+      "expect_why": "a 32-byte value encodes to exactly 43 base64url characters; 42 is too short",
+      "envelope": "{\"crv\":\"Ed25519\",\"kid\":\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\",\"kty\":\"OKP\",\"type\":\"user-key/public\",\"v\":1,\"x\":\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJ\"}"
+    },
+    {
+      "id": "neg-len-long",
+      "expect_class": "bad_encoding",
+      "expect_why": "a 32-byte value encodes to exactly 43 base64url characters; 44 is too long",
+      "envelope": "{\"crv\":\"Ed25519\",\"kid\":\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNsA\",\"kty\":\"OKP\",\"type\":\"user-key/public\",\"v\":1,\"x\":\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\"}"
+    },
+    {
+      "id": "neg-b64-trailing-bits",
+      "expect_class": "bad_encoding",
+      "expect_why": "the final character F has non-zero padding bits: decoding yields the same 32 bytes as alice's x but re-encoding reproduces E, so the value is not canonical base64url",
+      "envelope": "{\"crv\":\"Ed25519\",\"kid\":\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\",\"kty\":\"OKP\",\"type\":\"user-key/public\",\"v\":1,\"x\":\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJF\"}"
+    },
+    {
+      "id": "neg-seed-pub-mismatch",
+      "expect_class": "seed_pub_mismatch",
+      "expect_why": "the d seed does not derive the stated x public key (alice seed with bob public identity)",
+      "envelope": "{\"crv\":\"Ed25519\",\"d\":\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8\",\"kid\":\"g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns\",\"kty\":\"OKP\",\"type\":\"user-key/private\",\"v\":1,\"x\":\"27O5sjd6_PRkCVbNLwEbIwxpfh0DZCURwFI9lWF-UHE\"}"
+    },
+    {
+      "id": "neg-kid-mismatch",
+      "expect_class": "kid_mismatch",
+      "expect_why": "kid is the key id of x, not of a different key (alice envelope carrying bob kid)",
+      "envelope": "{\"crv\":\"Ed25519\",\"d\":\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8\",\"kid\":\"g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns\",\"kty\":\"OKP\",\"type\":\"user-key/private\",\"v\":1,\"x\":\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\"}"
+    },
+    {
+      "id": "neg-dup-member",
+      "expect_class": "non_canonical_bytes",
+      "expect_why": "kid appears twice with the same value: parsing keeps the last occurrence, so the document is a semantically valid alice private envelope that fails only the canonical-bytes gate",
+      "envelope": "{\"crv\":\"Ed25519\",\"d\":\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8\",\"kid\":\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\",\"kty\":\"OKP\",\"type\":\"user-key/private\",\"v\":1,\"x\":\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\",\"kid\":\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\"}"
+    },
+    {
+      "id": "neg-dup-member-last-mismatched",
+      "expect_class": "kid_mismatch",
+      "expect_why": "the duplicated kid's last occurrence is bob's kid: parsing keeps it, seed-pub stays consistent, so the ordered pipeline reaches kid_mismatch before the canonical gate",
+      "envelope": "{\"crv\":\"Ed25519\",\"d\":\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8\",\"kid\":\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\",\"kty\":\"OKP\",\"type\":\"user-key/private\",\"v\":1,\"x\":\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\",\"kid\":\"g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns\"}"
+    },
+    {
+      "id": "neg-dup-member-escaped",
+      "expect_class": "non_canonical_bytes",
+      "expect_why": "the duplicated kid's second occurrence is written with equivalent escapes for k, i and d: member names compare after unescaping, so it is a duplicate of kid, the parsed document stays a valid alice private envelope, and the canonical-bytes gate rejects the spelling",
+      "envelope": "{\"crv\":\"Ed25519\",\"d\":\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8\",\"kid\":\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\",\"kty\":\"OKP\",\"type\":\"user-key/private\",\"v\":1,\"x\":\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\",\"\\u006b\\u0069\\u0064\":\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\"}"
+    },
+    {
+      "id": "neg-noncanonical-ws",
+      "expect_class": "non_canonical_bytes",
+      "expect_why": "a space after the opening brace makes the bytes non-canonical",
+      "envelope": "{ \"crv\":\"Ed25519\",\"d\":\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8\",\"kid\":\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\",\"kty\":\"OKP\",\"type\":\"user-key/private\",\"v\":1,\"x\":\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\"}"
+    },
+    {
+      "id": "neg-key-reorder",
+      "expect_class": "non_canonical_bytes",
+      "expect_why": "members must appear in the exact canonical lexicographic order",
+      "envelope": "{\"type\":\"user-key/private\",\"v\":1,\"crv\":\"Ed25519\",\"d\":\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8\",\"kid\":\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\",\"kty\":\"OKP\",\"x\":\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\"}"
+    },
+    {
+      "id": "neg-truncated",
+      "expect_class": "malformed_json",
+      "expect_why": "the first 64 characters of priv-alice cut the JSON off mid-string",
+      "envelope": "{\"crv\":\"Ed25519\",\"d\":\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o"
+    },
+    {
+      "id": "neg-size-boundary-4096",
+      "expect_class": "non_canonical_bytes",
+      "expect_why": "exactly 4096 input bytes pass the size gate (rejection is larger-than, not at-least); the padding spaces then fail the canonical-bytes gate",
+      "compose": {
+        "kind": "priv-alice followed by trailing spaces",
+        "total_input_bytes": 4096
+      }
+    },
+    {
+      "id": "neg-size-boundary-4097",
+      "expect_class": "oversized_envelope",
+      "expect_why": "one byte over the cap: the size gate fires before any parsing",
+      "compose": {
+        "kind": "priv-alice followed by trailing spaces",
+        "total_input_bytes": 4097
+      }
+    },
+    {
+      "id": "neg-invalid-utf8",
+      "expect_class": "malformed_json",
+      "expect_why": "the document bytes are not valid UTF-8: rejected before any JSON parsing",
+      "compose": {
+        "kind": "UTF-8 encoding of the canonical priv-alice envelope string with its final byte 0x7D (closing brace) replaced by 0xFF; byte length unchanged. No BOM or LF; starting length is ASCII canonical envelope length"
+      }
+    },
+    {
+      "id": "neg-oversized-envelope",
+      "expect_class": "oversized_envelope",
+      "expect_why": "trailing whitespace parses in every SDK; the size gate must fire first",
+      "envelope": "{\"crv\":\"Ed25519\",\"d\":\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8\",\"kid\":\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\",\"kty\":\"OKP\",\"type\":\"user-key/private\",\"v\":1,\"x\":\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\"}                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                "
+    },
+    {
+      "id": "neg-root-array",
+      "expect_class": "wrong_root_type",
+      "expect_why": "the root of a transfer document must be a JSON object",
+      "envelope": "[]"
+    },
+    {
+      "id": "neg-root-string",
+      "expect_class": "wrong_root_type",
+      "expect_why": "a JSON string is not an object",
+      "envelope": "\"user-key/private\""
+    },
+    {
+      "id": "neg-empty-input",
+      "expect_class": "malformed_json",
+      "expect_why": "empty input cannot parse",
+      "envelope": ""
+    },
+    {
+      "id": "neg-null-input",
+      "expect_class": "wrong_root_type",
+      "expect_why": "JSON null is not an object",
+      "envelope": "null"
+    },
+    {
+      "id": "neg-v-float",
+      "expect_class": "non_canonical_bytes",
+      "expect_why": "the parsed numeric value equals 1 in every SDK, so the type check passes and the final canonical-bytes gate rejects the spelling identically in Go, Rust and TypeScript",
+      "envelope": "{\"crv\":\"Ed25519\",\"d\":\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8\",\"kid\":\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\",\"kty\":\"OKP\",\"type\":\"user-key/private\",\"v\":1.0,\"x\":\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\"}"
+    },
+    {
+      "id": "neg-invalid-pub-noncanonical-y",
+      "expect_class": "invalid_public_key",
+      "expect_why": "key-vectors.json reject-y-above-p: the y coordinate is not below 2^255-19",
+      "compose": {
+        "template": "public_envelope",
+        "x_from_key_vector": "reject-y-above-p",
+        "kid": "base64url(SHA-256(x bytes)) computed by the test runner"
+      }
+    },
+    {
+      "id": "neg-invalid-pub-identity",
+      "expect_class": "invalid_public_key",
+      "expect_why": "key-vectors.json reject-identity: the identity point",
+      "compose": {
+        "template": "public_envelope",
+        "x_from_key_vector": "reject-identity",
+        "kid": "base64url(SHA-256(x bytes)) computed by the test runner"
+      }
+    },
+    {
+      "id": "neg-invalid-pub-small-order",
+      "expect_class": "invalid_public_key",
+      "expect_why": "key-vectors.json reject-order-2: a small-order point",
+      "compose": {
+        "template": "public_envelope",
+        "x_from_key_vector": "reject-order-2",
+        "kid": "base64url(SHA-256(x bytes)) computed by the test runner"
+      }
+    },
+    {
+      "id": "neg-invalid-pub-off-curve",
+      "expect_class": "invalid_public_key",
+      "expect_why": "key-vectors.json reject-off-curve: not on the curve",
+      "compose": {
+        "template": "public_envelope",
+        "x_from_key_vector": "reject-off-curve",
+        "kid": "base64url(SHA-256(x bytes)) computed by the test runner"
+      }
+    },
+    {
+      "id": "neg-cred-unknown-version",
+      "expect_class": "unknown_version",
+      "expect_why": "supported credential version is 1",
+      "envelope": "{\"aud\":\"https://svc.example.test\",\"client_key\":\"{\\\"crv\\\":\\\"Ed25519\\\",\\\"d\\\":\\\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8\\\",\\\"kid\\\":\\\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\\\",\\\"kty\\\":\\\"OKP\\\",\\\"type\\\":\\\"user-key/private\\\",\\\"v\\\":1,\\\"x\\\":\\\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\\\"}\",\"server_kid\":\"wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88\",\"server_public_key\":\"wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw\",\"type\":\"user-key/credential/client\",\"url\":\"https://svc.example.test\",\"v\":2}"
+    },
+    {
+      "id": "neg-cred-unknown-type",
+      "expect_class": "unknown_type",
+      "expect_why": "only the client credential kind is defined",
+      "envelope": "{\"aud\":\"https://svc.example.test\",\"client_key\":\"{\\\"crv\\\":\\\"Ed25519\\\",\\\"d\\\":\\\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8\\\",\\\"kid\\\":\\\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\\\",\\\"kty\\\":\\\"OKP\\\",\\\"type\\\":\\\"user-key/private\\\",\\\"v\\\":1,\\\"x\\\":\\\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\\\"}\",\"server_kid\":\"wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88\",\"server_public_key\":\"wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw\",\"type\":\"user-key/credential/server\",\"url\":\"https://svc.example.test\",\"v\":1}"
+    },
+    {
+      "id": "neg-cred-missing-server-kid",
+      "expect_class": "bad_member_set",
+      "expect_why": "server_kid is a required member",
+      "envelope": "{\"aud\":\"https://svc.example.test\",\"client_key\":\"{\\\"crv\\\":\\\"Ed25519\\\",\\\"d\\\":\\\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8\\\",\\\"kid\\\":\\\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\\\",\\\"kty\\\":\\\"OKP\\\",\\\"type\\\":\\\"user-key/private\\\",\\\"v\\\":1,\\\"x\\\":\\\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\\\"}\",\"server_public_key\":\"wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw\",\"type\":\"user-key/credential/client\",\"url\":\"https://svc.example.test\",\"v\":1}"
+    },
+    {
+      "id": "neg-cred-extra-server-private-key",
+      "expect_class": "bad_member_set",
+      "expect_why": "the member set is exact, so a credential carrying any server private-key member is structurally invalid - the never-ship-a-server-private-key test; the value is deliberately borrowed from the keys.json bob public_key, its provenance is irrelevant because the member must not exist at all",
+      "envelope": "{\"aud\":\"https://svc.example.test\",\"client_key\":\"{\\\"crv\\\":\\\"Ed25519\\\",\\\"d\\\":\\\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8\\\",\\\"kid\\\":\\\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\\\",\\\"kty\\\":\\\"OKP\\\",\\\"type\\\":\\\"user-key/private\\\",\\\"v\\\":1,\\\"x\\\":\\\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\\\"}\",\"server_kid\":\"wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88\",\"server_public_key\":\"wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw\",\"type\":\"user-key/credential/client\",\"url\":\"https://svc.example.test\",\"v\":1,\"server_private_key\":\"27O5sjd6_PRkCVbNLwEbIwxpfh0DZCURwFI9lWF-UHE\"}"
+    },
+    {
+      "id": "neg-cred-server-kid-mismatch",
+      "expect_class": "kid_mismatch",
+      "expect_why": "server_kid does not match server_public_key",
+      "envelope": "{\"aud\":\"https://svc.example.test\",\"client_key\":\"{\\\"crv\\\":\\\"Ed25519\\\",\\\"d\\\":\\\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8\\\",\\\"kid\\\":\\\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\\\",\\\"kty\\\":\\\"OKP\\\",\\\"type\\\":\\\"user-key/private\\\",\\\"v\\\":1,\\\"x\\\":\\\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\\\"}\",\"server_kid\":\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\",\"server_public_key\":\"wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw\",\"type\":\"user-key/credential/client\",\"url\":\"https://svc.example.test\",\"v\":1}"
+    },
+    {
+      "id": "neg-cred-bad-url",
+      "expect_class": "bad_url",
+      "expect_why": "plain http to a non-loopback host is refused by the client URL policy",
+      "envelope": "{\"aud\":\"https://svc.example.test\",\"client_key\":\"{\\\"crv\\\":\\\"Ed25519\\\",\\\"d\\\":\\\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8\\\",\\\"kid\\\":\\\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\\\",\\\"kty\\\":\\\"OKP\\\",\\\"type\\\":\\\"user-key/private\\\",\\\"v\\\":1,\\\"x\\\":\\\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\\\"}\",\"server_kid\":\"wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88\",\"server_public_key\":\"wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw\",\"type\":\"user-key/credential/client\",\"url\":\"http://svc.example.test\",\"v\":1}"
+    },
+    {
+      "id": "neg-cred-empty-aud",
+      "expect_class": "wrong_field_type",
+      "expect_why": "aud is a string but empty: the domain check requires a non-empty audience",
+      "envelope": "{\"aud\":\"\",\"client_key\":\"{\\\"crv\\\":\\\"Ed25519\\\",\\\"d\\\":\\\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8\\\",\\\"kid\\\":\\\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\\\",\\\"kty\\\":\\\"OKP\\\",\\\"type\\\":\\\"user-key/private\\\",\\\"v\\\":1,\\\"x\\\":\\\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\\\"}\",\"server_kid\":\"wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88\",\"server_public_key\":\"wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw\",\"type\":\"user-key/credential/client\",\"url\":\"https://svc.example.test\",\"v\":1}"
+    },
+    {
+      "id": "neg-cred-aud-lone-surrogate-escape",
+      "expect_class": "malformed_json",
+      "expect_why": "an escape of a lone UTF-16 surrogate code unit (backslash, u, d, 8, 0, 0) is rejected by the step-2 lexical rule in every language: serde_json rejects the document at parse while Go and JS would otherwise replace or preserve it, so the rule equalizes the failure class before any parsing",
+      "compose": {
+        "base": "cred-alice",
+        "aud_replacement": "the six-character escape sequence (backslash, lowercase u, d, 8, 0, 0)"
+      }
+    },
+    {
+      "id": "neg-cred-aud-lone-low-surrogate-escape",
+      "expect_class": "malformed_json",
+      "expect_why": "A lone low-surrogate escape is rejected at step 2 before platform decoding; literal U+FFFD remains a distinct valid audience.",
+      "compose": {
+        "base": "cred-alice",
+        "aud_replacement": "the six-character escape sequence (backslash, lowercase u, d, c, 0, 0)"
+      }
+    },
+    {
+      "id": "neg-cred-aud-escaped-surrogate-pair",
+      "expect_class": "non_canonical_bytes",
+      "expect_why": "A valid UTF-16 surrogate escape pair decodes to U+1F600: step-2 scalar validation accepts it, semantic checks pass, and the canonical-bytes gate requires the literal UTF-8 scalar instead of escaped spelling.",
+      "compose": {
+        "base": "cred-alice",
+        "aud_replacement": "the twelve-character escape sequence (backslash, lowercase u, d, 8, 3, d, backslash, lowercase u, d, e, 0, 0)"
+      }
+    },
+    {
+      "id": "neg-cred-dup-inner-member",
+      "expect_class": "non_canonical_bytes",
+      "expect_why": "the inner envelope carries a duplicate kid member with the same value: inner strict import fails the canonical-bytes gate and the outer pipeline propagates that class at step 14 before its own canonical gate",
+      "compose": {
+        "base": "cred-alice",
+        "client_key_replacement": "the exact neg-dup-member envelope string"
+      }
+    },
+    {
+      "id": "neg-cred-invalid-server-pub",
+      "expect_class": "invalid_public_key",
+      "expect_why": "server_public_key is composed from key-vectors.json reject-y-above-p and fails strict public-key validity (step 11) before the kid check; its server_kid is consistently computed so the case isolates validity, not kid mismatch",
+      "compose": {
+        "template": "client_credential",
+        "client_key": "the exact priv-alice envelope string",
+        "server_public_key_from_key_vector": "reject-y-above-p",
+        "server_kid": "base64url(SHA-256(server_public_key bytes)) computed by the test runner",
+        "url": "https://svc.example.test",
+        "aud": "https://svc.example.test"
+      }
+    },
+    {
+      "id": "neg-escaped-url-slash",
+      "expect_class": "non_canonical_bytes",
+      "expect_why": "the url value uses escaped solidus spelling: parsing yields the same url, so semantic checks pass and the canonical-bytes gate rejects the spelling",
+      "envelope": "{\"aud\":\"https://svc.example.test\",\"client_key\":\"{\\\"crv\\\":\\\"Ed25519\\\",\\\"d\\\":\\\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8\\\",\\\"kid\\\":\\\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\\\",\\\"kty\\\":\\\"OKP\\\",\\\"type\\\":\\\"user-key/private\\\",\\\"v\\\":1,\\\"x\\\":\\\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\\\"}\",\"server_kid\":\"wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88\",\"server_public_key\":\"wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw\",\"type\":\"user-key/credential/client\",\"url\":\"https:\\/\\/svc.example.test\",\"v\":1}"
+    },
+    {
+      "id": "neg-cred-client-key-noncanonical",
+      "expect_class": "non_canonical_bytes",
+      "expect_why": "the embedded client_key must strict-import; the inner envelope has a space after its opening brace, and the credential propagates the inner non_canonical_bytes class",
+      "envelope": "{\"aud\":\"https://svc.example.test\",\"client_key\":\"{ \\\"crv\\\":\\\"Ed25519\\\",\\\"d\\\":\\\"FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8\\\",\\\"kid\\\":\\\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\\\",\\\"kty\\\":\\\"OKP\\\",\\\"type\\\":\\\"user-key/private\\\",\\\"v\\\":1,\\\"x\\\":\\\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\\\"}\",\"server_kid\":\"wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88\",\"server_public_key\":\"wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw\",\"type\":\"user-key/credential/client\",\"url\":\"https://svc.example.test\",\"v\":1}"
+    },
+    {
+      "id": "neg-cred-client-key-public",
+      "expect_class": "wrong_envelope_type",
+      "expect_why": "a client credential must embed a private envelope; a public one is a sink-type error",
+      "envelope": "{\"aud\":\"https://svc.example.test\",\"client_key\":\"{\\\"crv\\\":\\\"Ed25519\\\",\\\"kid\\\":\\\"TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs\\\",\\\"kty\\\":\\\"OKP\\\",\\\"type\\\":\\\"user-key/public\\\",\\\"v\\\":1,\\\"x\\\":\\\"kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE\\\"}\",\"server_kid\":\"wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88\",\"server_public_key\":\"wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw\",\"type\":\"user-key/credential/client\",\"url\":\"https://svc.example.test\",\"v\":1}"
+    }
+  ],
+  "context_cases": [
+    {
+      "id": "cred-wrong-server",
+      "kind": "client_credential",
+      "structural_outcome": "accepted_by_import_pipeline",
+      "trust_outcome": "server_identity_mismatch",
+      "compose": {
+        "template": "client_credential",
+        "client_key": "the exact priv-alice envelope string",
+        "server_public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+        "server_kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+        "url": "https://svc.example.test",
+        "aud": "https://svc.example.test"
+      },
+      "expect_why": "structurally valid and internally consistent (server_kid matches its server_public_key), but the embedded server identity is not the svc identity a client would pin; used with an independently trusted svc identity tuple to test wrong-server refusal"
+    }
+  ]
+}

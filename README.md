@@ -43,10 +43,14 @@ Operations such as restart or a configuration change need more than "whoever rea
 | Language | Location | Content | Status |
 |---|---|---|---|
 | Go | module at the repository root (`server/`, `client/`) | server middleware, client, native tools | tests and interop run in CI |
-| Rust | [rust/](rust/README.md), crate `mcp-jack` (MSRV 1.85) | server verifier and tower layer, client, native tools | tests and interop run in CI; builds on Rust 1.85 |
+| Rust | [rust/](rust/README.md), crate `mcp-jack` (MSRV 1.85) | server verifier and tower layer, client, native tools, optional client HTTP transport (`client-http` feature) | tests and interop run in CI; builds on Rust 1.85 |
 | TypeScript | [ts/](ts/README.md), npm package (Node 20+, no runtime dependencies) | server verifier with Fetch and `node:http` adapters, client, native tools | tests and interop run in CI (Node 20 and 22) |
 
 All implementations are checked against the same normative test vectors so they cannot drift apart. [interop/](interop/README.md) adds cross-language tests: a Node harness starts one server and one client executable per language and runs every scenario for all 3 × 3 server and client pairs, plus byte-exact signing checks.
+
+### Packaging and consumer smoke (CI)
+
+CI also produces, without publishing: an npm tarball from the TypeScript workspace with `private: true` retained, a cargo `.crate` from rust/ with `publish = false` retained, and a staged Go module snapshot. Every artifact is inspected for its allowlisted file inventory and for byte-exact copies of the dual licence texts. Packing is not publishing: no registry credentials are used, no tags or releases are created, and versions and safety flags are unchanged. No release-ready claim is made until these consumer checks pass. Language specifics live in the per-language READMEs: [ts/](ts/README.md) (standalone npm-package consumer), [rust/](rust/README.md) (packaged crate consumer) and the Go module snapshot (documented in `tools/consumer/package-go.mjs`).
 
 ### Go layout
 
@@ -78,7 +82,7 @@ The draft lives in [spec/](spec/README.md): authentication, authorization, user 
 
 ## Licence
 
-Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT licence](LICENSE-MIT) at your option.
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT licence](LICENSE-MIT) at your option. The distribution artifacts produced in CI (npm tarball, cargo crate, Go module snapshot) carry byte-exact copies of both licence texts, verified in CI.
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this work, as defined in the Apache-2.0 licence, shall be dual licensed as above, without any additional terms or conditions.
 

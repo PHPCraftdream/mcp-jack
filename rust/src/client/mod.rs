@@ -6,6 +6,8 @@
 
 pub mod auth;
 pub mod error;
+#[cfg(feature = "client-http")]
+pub mod http_transport;
 pub mod profile;
 pub mod rpc;
 pub mod signer;
@@ -15,6 +17,8 @@ pub mod url;
 
 pub use auth::{random_nonce, sign_request, SignedRequest, NONCE_SIZE};
 pub use error::{ClientError, HttpError, RpcError, ToolError, UnauthenticatedResponseError};
+#[cfg(feature = "client-http")]
+pub use http_transport::{HttpTransport, HttpTransportBuilder};
 pub use profile::{load_profile, save_profile, Profile};
 pub use rpc::{Client, Config};
 pub use signer::{InMemorySigner, Signer};

@@ -450,3 +450,30 @@ pub fn load_load_vectors() -> Result<LoadVectors, FixtureError> {
 pub fn load_pattern_vectors() -> Result<PatternVectors, FixtureError> {
     read_strict("pattern-vectors.json")
 }
+
+/// One case of client-url-policy.json: the raw URL and whether the client
+/// must accept it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UrlPolicyCase {
+    pub name: String,
+    pub url: String,
+    pub allow: bool,
+    /// Parsers that reject an allow=true row (e.g. `["go"]`). Informational
+    /// only: Rust has no parser and must accept every allow=true row.
+    #[serde(default)]
+    pub parse_reject: Vec<String>,
+}
+
+/// client-url-policy.json: the normative table of the client URL policy.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UrlPolicyFile {
+    pub description: String,
+    pub policy: String,
+    pub cases: Vec<UrlPolicyCase>,
+}
+
+pub fn load_client_url_policy() -> Result<UrlPolicyFile, FixtureError> {
+    read_strict("client-url-policy.json")
+}

@@ -1,0 +1,133 @@
+# Coverage reporting with retained machine-readable and readable artifacts.
+# Runs the same native suites as ci.yml (go test, cargo test, compiled TS
+# tests) plus coverage instrumentation; no thresholds are enforced and no
+# third-party upload service is involved — everything lands as job artifacts.
+name: coverage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go-coverage:
+    name: go coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Coverage summarizer regression controls
+        run: node --test tools/coverage/go-summary.test.mjs tools/coverage/lcov-summary.test.mjs
+      - name: Create the coverage output directory
+        run: mkdir -p coverage
+      - name: Run the Go test suite with statement coverage
+        run: go test -covermode=atomic -coverpkg=./... -coverprofile=coverage/go-cover.out ./...
+      - name: Per-function summary
+        run: go tool cover -func=coverage/go-cover.out -o coverage/go-func-summary.txt
+      - name: Annotated HTML report
+        run: go tool cover -html=coverage/go-cover.out -o coverage/go-cover.html
+      - name: Partitioned product/helper/interop summary
+        run: node tools/coverage/go-summary.mjs coverage/go-cover.out coverage/go-summary.json coverage/go-summary.txt
+      - name: Show the summary in the job log
+        run: cat coverage/go-summary.txt
+      - name: Upload Go coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-go
+          path: |
+            coverage/go-cover.out
+            coverage/go-cover.html
+            coverage/go-func-summary.txt
+            coverage/go-summary.json
+            coverage/go-summary.txt
+          if-no-files-found: error
+
+  rust-coverage:
+    name: rust coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: Install the coverage runtime component
+        run: rustup component add llvm-tools-preview
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.9.1
+      - name: Create the coverage output directory
+        run: mkdir -p ../coverage/rust
+      - name: Run the Rust test suite with LLVM coverage (all features)
+        run: cargo llvm-cov --locked --all-features --lcov --output-path ../coverage/rust/lcov.info
+      - name: Annotated line report
+        run: cargo llvm-cov report --text --output-path ../coverage/rust/report.txt
+      - name: Partitioned product/helper summary
+        run: node ../tools/coverage/lcov-summary.mjs ../coverage/rust/lcov.info ../coverage/rust/summary.json ../coverage/rust/summary.txt
+      - name: Show the summary in the job log
+        run: cat ../coverage/rust/summary.txt
+      - name: Upload Rust coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-rust
+          path: |
+            coverage/rust/lcov.info
+            coverage/rust/report.txt
+            coverage/rust/summary.json
+            coverage/rust/summary.txt
+          if-no-files-found: error
+
+  ts-coverage:
+    name: ts coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: ts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --no-audit --no-fund
+      - name: Coverage summarizer regression controls
+        run: node --test scripts/coverage-summary.test.mjs
+      # Compile without NODE_V8_COVERAGE set so the compiler process itself
+      # contributes no V8 profile to the raw directory.
+      - name: Compile the test suite
+        run: npx tsc -p tsconfig.test.json
+      - name: Run the TS test suite with V8 coverage collection
+        env:
+          NODE_V8_COVERAGE: coverage/raw
+        run: |
+          mkdir -p coverage/raw
+          node scripts/run-tests.mjs
+      - name: Summarize coverage (product / interop helper / tests)
+        run: node scripts/coverage-summary.mjs coverage/raw coverage
+      - name: Show the summary in the job log
+        run: cat coverage/summary.txt
+      - name: Upload TS coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-ts
+          path: |
+            ts/coverage/raw/
+            ts/coverage/summary.json
+            ts/coverage/summary.txt
+          if-no-files-found: error

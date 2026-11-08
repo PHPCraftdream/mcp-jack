@@ -5,6 +5,7 @@ import { JackError } from "../errors.js";
 import { Client } from "./rpc.js";
 import type { Clock, NonceSource } from "./auth.js";
 import type { Signer } from "./signer.js";
+import { checkDestination } from "./url-policy.js";
 
 /**
  * Profile is a client configuration file. It deliberately has no private-key
@@ -43,10 +44,12 @@ export function saveProfile(p: Profile): string {
 export function validateProfile(p: Profile): void {
   // WHATWG normalization would turn "https:///mcp" into https://mcp/ (host
   // "mcp"); Go rejects the empty authority, so the raw text is checked too.
-  const scheme = /^https?:\/\//.exec(p.url);
+  const scheme = /^https?:\/\//i.exec(p.url);
   if (scheme === null || p.url.length === scheme[0].length || "/?#".includes(p.url.charAt(scheme[0].length))) {
     throw new Error("jack client: profile url must be an absolute http/https URL with a host");
   }
+  // Client URL policy on the raw string (https any host; http loopback literals only).
+  checkDestination(p.url);
   let u: URL;
   try {
     u = new URL(p.url);
