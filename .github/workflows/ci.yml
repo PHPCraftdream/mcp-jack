@@ -144,3 +144,35 @@ jobs:
       - run: node interop/run.mjs --self-test
       - name: Run the matrix
         run: node interop/run.mjs
+
+  credential-transfer:
+    name: credential transfer matrix (3x3)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [go, rust, ts, fixtures]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build Go transfer executable
+        run: go build -o interop/bin/go-transfer ./interop/go/transfer
+      - name: Build Rust transfer executable
+        working-directory: rust
+        run: cargo build --locked --release --features interop --bin interop-transfer
+      - name: Build TypeScript transfer executable
+        working-directory: ts
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+      - name: Transfer self-test
+        run: node interop/transfer.mjs --self-test
+      - name: Run credential transfer matrix
+        run: node interop/transfer.mjs

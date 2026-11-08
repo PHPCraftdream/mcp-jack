@@ -27,6 +27,11 @@ name = "interop-client"
 path = "src/bin/interop_client.rs"
 required-features = ["interop"]
 
+[[bin]]
+name = "interop-transfer"
+path = "src/bin/interop_transfer.rs"
+required-features = ["interop"]
+
 [dependencies]
 ed25519-dalek = { version = "2.2", features = ["std"] }
 curve25519-dalek = "4.1"
