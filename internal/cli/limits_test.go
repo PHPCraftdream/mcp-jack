@@ -3,57 +3,183 @@
 package cli
 
 import (
-	"bufio"
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/PHPCraftdream/mcp-jack/client"
 )
 
+type ownedPipeAttempt struct {
+	frame      string
+	n          int
+	syscallErr error
+	controlErr error
+}
+
+type ownedPipeWriteResult struct {
+	n   int
+	err error
+}
+
 type observedPipeOutput struct {
 	*os.File
-	attempted chan struct{}
-	once      sync.Once
+	raw       syscall.RawConn
+	expected  string
+	armed     atomic.Bool
+	writes    atomic.Int32
+	attempted chan ownedPipeAttempt
+	returned  chan ownedPipeWriteResult
 }
 
 func (w *observedPipeOutput) Write(p []byte) (int, error) {
-	if len(p) > 100000 {
-		w.once.Do(func() { close(w.attempted) })
+	if !w.armed.Load() {
+		return w.File.Write(p)
 	}
-	return w.File.Write(p)
+	w.writes.Add(1)
+	a := ownedPipeAttempt{frame: string(p), n: -1}
+	if a.frame == w.expected {
+		// Control never waits for readiness. This syscall establishes the cause
+		// for this exact verified response, not merely for the earlier filler.
+		a.controlErr = w.raw.Control(func(fd uintptr) {
+			for tries := 0; tries < 100; tries++ {
+				a.n, a.syscallErr = syscall.Write(int(fd), p)
+				if a.syscallErr != syscall.EINTR {
+					break
+				}
+			}
+		})
+	}
+	select {
+	case w.attempted <- a:
+	default:
+	}
+	var n int
+	var err error
+	if a.frame != w.expected {
+		err = errors.New("unexpected terminal output bytes")
+	} else if a.controlErr != nil {
+		err = a.controlErr
+	} else if a.n > 0 || a.syscallErr == nil {
+		// Never write a successful probe's bytes twice. Any progress invalidates
+		// the saturated/broken precondition and must fail, not become output.
+		if a.n > 0 {
+			n = a.n
+		}
+		err = fmt.Errorf("terminal syscall unexpectedly progressed: n=%d err=%T %v", a.n, a.syscallErr, a.syscallErr)
+	} else if wouldBlock(a.syscallErr) || errors.Is(a.syscallErr, syscall.EPIPE) {
+		// The real owned pollable File, not a channel, supplies the blocking or
+		// broken-peer behavior. Close can interrupt its actual Write.
+		n, err = w.File.Write(p)
+	} else {
+		err = a.syscallErr
+	}
+	select {
+	case w.returned <- ownedPipeWriteResult{n, err}:
+	default:
+	}
+	return n, err
+}
+
+func ownedOutputRaw(f *os.File) (syscall.RawConn, error) {
+	raw, err := f.SyscallConn()
+	if err != nil {
+		return nil, err
+	}
+	var flags uintptr
+	var flagErr syscall.Errno
+	err = raw.Control(func(fd uintptr) {
+		flags, _, flagErr = syscall.Syscall(syscall.SYS_FCNTL, fd, syscall.F_GETFL, 0)
+	})
+	if err != nil || flagErr != 0 || flags&syscall.O_NONBLOCK == 0 {
+		return nil, fmt.Errorf("output flags=%#x controlErr=%T %v fcntlErr=%T %v", flags, err, err, flagErr, flagErr)
+	}
+	return raw, nil
+}
+
+func saturateOwnedOutput(raw syscall.RawConn) (int64, error) {
+	var written int64
+	var fillErr error
+	err := raw.Control(func(fd uintptr) {
+		block := make([]byte, 4096)
+		for tries := 0; tries < 16*maxBody && written < 16*maxBody; tries++ {
+			n, err := syscall.Write(int(fd), block)
+			if err == syscall.EINTR {
+				continue
+			}
+			if wouldBlock(err) {
+				if len(block) == 1 && n <= 0 {
+					return
+				}
+				block = block[:1]
+				continue
+			}
+			if err != nil || n <= 0 {
+				fillErr = fmt.Errorf("filler n=%d err=%T %v", n, err, err)
+				return
+			}
+			written += int64(n)
+		}
+		fillErr = errors.New("filler did not reach actual one-byte EAGAIN within work bound")
+	})
+	if err != nil {
+		return written, err
+	}
+	return written, fillErr
 }
 
 func TestOwnedPipeBrokenOutputAndBackpressure(t *testing.T) {
-	for _, broken := range []bool{true, false} {
-		t.Run(map[bool]string{true: "broken", false: "blocked"}[broken], func(t *testing.T) {
-			finalReply := make(chan struct{}, 1)
+	const terminalFrame = `{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}` + "\n"
+	type runResult struct {
+		code   int
+		stderr string
+	}
+	type ioResult struct {
+		n   int64
+		b   []byte
+		err error
+	}
+	for _, mode := range []string{"broken", "blocked", "peer-drain"} {
+		t.Run(mode, func(t *testing.T) {
+			var calls [3]atomic.Int32
+			var sequence, unexpected atomic.Int32
 			path, cfg, _ := signedFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				b, _ := io.ReadAll(r.Body)
-				m, _ := object(b)
-				w.Header().Set("Content-Type", "application/json")
-				switch text(m["method"]) {
-				case "initialize":
-					_, _ = io.WriteString(w, initializeReply)
-				case "notifications/initialized":
-					w.WriteHeader(202)
-				case "tools/list":
-					select {
-					case finalReply <- struct{}{}:
-					default:
-						t.Error("large response request retried")
+				b, readErr := io.ReadAll(r.Body)
+				m, parseErr := object(b)
+				methods := [...]string{"initialize", "notifications/initialized", "tools/list"}
+				index := -1
+				for i, method := range methods {
+					if text(m["method"]) == method {
+						index = i
 					}
-					_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":2,"result":{"value":"`+strings.Repeat("x", 900000)+`"}}`)
-				default:
-					t.Error("unexpected lifecycle call")
+				}
+				if readErr != nil || parseErr != nil || index < 0 {
+					unexpected.Add(1)
 					w.WriteHeader(400)
+					return
+				}
+				calls[index].Add(1)
+				if sequence.Add(1) != int32(index+1) {
+					unexpected.Add(1)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				switch index {
+				case 0:
+					_, _ = io.WriteString(w, initializeReply)
+				case 1:
+					w.WriteHeader(202)
+				case 2:
+					_, _ = io.WriteString(w, strings.TrimSuffix(terminalFrame, "\n"))
 				}
 			}))
 			cfg.CallTimeoutMS = 2000
@@ -62,61 +188,320 @@ func TestOwnedPipeBrokenOutputAndBackpressure(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer inRead.Close()
-			defer inWrite.Close()
 			outRead, outWrite, err := os.Pipe()
 			if err != nil {
+				_ = inRead.Close()
+				_ = inWrite.Close()
 				t.Fatal(err)
 			}
-			defer outRead.Close()
-			defer outWrite.Close()
-			if inWrite.SetWriteDeadline(time.Now().Add(6*time.Second)) != nil || outRead.SetReadDeadline(time.Now().Add(6*time.Second)) != nil {
-				t.Fatal("test pipes lack deadlines")
+			var closeOnce sync.Once
+			closed := make(chan struct{})
+			closePipes := func() {
+				closeOnce.Do(func() {
+					go func() {
+						_ = inRead.Close()
+						_ = inWrite.Close()
+						_ = outWrite.Close()
+						_ = outRead.Close()
+						close(closed)
+					}()
+				})
 			}
-			observed := &observedPipeOutput{File: outWrite, attempted: make(chan struct{})}
-			var stderr bytes.Buffer
-			done := make(chan int, 1)
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			joined := false
 			defer func() {
+				closePipes()
+				select {
+				case <-closed:
+				case <-time.After(3 * time.Second):
+					t.Error("stage=pipe-cleanup close join exceeded failure guard")
+				}
+			}()
+			// Inspect without File.Fd or changing flags; retain os.Pipe's owned,
+			// pollable File for both the probe and the delegated Write.
+			raw, err := ownedOutputRaw(outWrite)
+			if err != nil {
+				t.Fatalf("stage=output-nonblocking err=%T %v", err, err)
+			}
+			if err := outWrite.SetWriteDeadline(time.Time{}); err != nil {
+				t.Fatalf("stage=output-pollable err=%T %v", err, err)
+			}
+			observed := &observedPipeOutput{
+				File: outWrite, raw: raw, expected: terminalFrame,
+				attempted: make(chan ownedPipeAttempt, 1), returned: make(chan ownedPipeWriteResult, 1),
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan runResult, 1)
+			var result *runResult
+			var pendingIO <-chan ioResult
+			var attempt *ownedPipeAttempt
+			var returned *ownedPipeWriteResult
+			var filled int64
+			stage := "run-started"
+			stopAndJoin := func() error {
 				cancel()
-				_ = inRead.Close()
-				_ = outWrite.Close()
-				if !joined {
+				closePipes()
+				guard := time.NewTimer(3 * time.Second)
+				defer guard.Stop()
+				closeWait := (<-chan struct{})(closed)
+				for closeWait != nil || result == nil || pendingIO != nil {
 					select {
-					case <-done:
-					case <-time.After(3 * time.Second):
-						t.Error("test bridge failed to join after cleanup")
+					case <-closeWait:
+						closeWait = nil
+					case r := <-done:
+						result = &r
+						done = nil
+					case <-pendingIO:
+						pendingIO = nil
+					case <-guard.C:
+						return errors.New("cleanup close/Run/IO join exceeded failure guard")
 					}
 				}
+				return nil
+			}
+			fail := func(err error) {
+				t.Helper()
+				joinErr := stopAndJoin()
+				if attempt == nil {
+					select {
+					case a := <-observed.attempted:
+						attempt = &a
+					default:
+					}
+				}
+				if returned == nil {
+					select {
+					case r := <-observed.returned:
+						returned = &r
+					default:
+					}
+				}
+				runInfo := "unavailable (Run not joined; stderr not read)"
+				if result != nil {
+					runInfo = fmt.Sprintf("code=%d stderr=%q", result.code, result.stderr)
+				}
+				attemptInfo, returnInfo := "not observed", "not observed"
+				if attempt != nil {
+					attemptInfo = fmt.Sprintf("frame=%q exact=%t n=%d syscallErr=%T %v controlErr=%T %v", attempt.frame, attempt.frame == terminalFrame, attempt.n, attempt.syscallErr, attempt.syscallErr, attempt.controlErr, attempt.controlErr)
+				}
+				if returned != nil {
+					returnInfo = fmt.Sprintf("n=%d err=%T %v", returned.n, returned.err, returned.err)
+				}
+				t.Fatalf("stage=%s err=%T %v; Run %s; attempt={%s}; File.Write={%s}; filler=%d writes=%d calls=[%d %d %d] unexpected=%d; joinErr=%T %v", stage, err, err, runInfo, attemptInfo, returnInfo, filled, observed.writes.Load(), calls[0].Load(), calls[1].Load(), calls[2].Load(), unexpected.Load(), joinErr, joinErr)
+			}
+			defer func() {
+				if err := stopAndJoin(); err != nil {
+					t.Errorf("stage=%s cleanup err=%T %v", stage, err, err)
+				}
 			}()
+			runDone := done
 			go func() {
-				done <- Run(ctx, []string{"bridge", "--config", path}, IO{In: inRead, Out: observed, Err: &stderr})
+				var stderr bytes.Buffer
+				code := Run(ctx, []string{"bridge", "--config", path}, IO{In: inRead, Out: observed, Err: &stderr})
+				// Only this goroutine accesses Buffer; publish immutable diagnostics
+				// after Run has joined its workers and finished writing stderr.
+				runDone <- runResult{code, stderr.String()}
 			}()
-			writeInput(t, inWrite, initializeFrame+"\n")
-			if line, err := bufio.NewReader(outRead).ReadString('\n'); err != nil || line != initializeReply+"\n" {
-				t.Fatal("pipe test initialize failed")
-			}
-			writeInput(t, inWrite, initializedFrame+"\n")
-			if broken {
-				_ = outRead.Close()
-			}
-			writeInput(t, inWrite, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`+"\n")
-			receiveTest(t, finalReply)
-			receiveTest(t, observed.attempted)
-			select {
-			case code := <-done:
-				joined = true
-				want := "jack: operation cancelled or deadline exceeded\n"
-				if broken {
-					want = "jack: unsupported or invalid protocol message\n"
+			stepIO := func(name string, op func() ioResult) ioResult {
+				t.Helper()
+				stage = name
+				ch := make(chan ioResult, 1)
+				pendingIO = ch
+				go func() { ch <- op() }()
+				guard := time.NewTimer(3 * time.Second)
+				defer guard.Stop()
+				for {
+					select {
+					case r := <-ch:
+						pendingIO = nil
+						if r.err != nil {
+							fail(r.err)
+						}
+						return r
+					case r := <-done:
+						result, done = &r, nil
+						// IO can complete before its result sender is scheduled.
+						// Keep the Run verdict, collect IO, then validate both.
+					case <-guard.C:
+						fail(context.DeadlineExceeded)
+					}
 				}
-				if code != 1 || stderr.String() != want {
-					t.Fatal("output failure was hidden or failed for the wrong reason")
+			}
+			writeFrame := func(name, frame string) {
+				t.Helper()
+				r := stepIO(name, func() ioResult {
+					if err := inWrite.SetWriteDeadline(time.Now().Add(3 * time.Second)); err != nil {
+						return ioResult{err: err}
+					}
+					n, err := io.WriteString(inWrite, frame)
+					return ioResult{n: int64(n), err: err}
+				})
+				if r.n != int64(len(frame)) {
+					fail(fmt.Errorf("input short write: n=%d want=%d", r.n, len(frame)))
 				}
-			case <-time.After(3 * time.Second):
-				t.Fatal("blocked owned pipe did not close/join")
+			}
+			readFrame := func(name, frame string) {
+				t.Helper()
+				r := stepIO(name, func() ioResult {
+					if err := outRead.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+						return ioResult{err: err}
+					}
+					b := make([]byte, len(frame))
+					n, err := io.ReadFull(outRead, b)
+					return ioResult{n: int64(n), b: b[:n], err: err}
+				})
+				if string(r.b) != frame {
+					fail(fmt.Errorf("output frame=%q want=%q", r.b, frame))
+				}
+			}
+			waitRun := func() {
+				t.Helper()
+				stage = "Run-result"
+				if result != nil {
+					return
+				}
+				guard := time.NewTimer(3 * time.Second)
+				defer guard.Stop()
+				select {
+				case r := <-done:
+					result, done = &r, nil
+				case <-guard.C:
+					fail(context.DeadlineExceeded)
+				}
+			}
+			writeFrame("initialize-input", initializeFrame+"\n")
+			readFrame("initialize-frame", initializeReply+"\n")
+			writeFrame("initialized-input", initializedFrame+"\n")
+			if mode == "broken" {
+				stage = "reader-close"
+				if err := outRead.Close(); err != nil {
+					fail(err)
+				}
+			} else {
+				stage = "pipe-saturation"
+				filled, err = saturateOwnedOutput(raw)
+				if err != nil || filled <= 0 {
+					fail(fmt.Errorf("saturation filled=%d err=%T %v", filled, err, err))
+				}
+			}
+			observed.armed.Store(true)
+			writeFrame("tools-list-input", `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`+"\n")
+			stage = "exact-response-syscall"
+			guard := time.NewTimer(3 * time.Second)
+			for attempt == nil {
+				if result != nil {
+					// A fast broken-peer return can race this receive. Run's join
+					// guarantees any earlier attempt is already buffered.
+					select {
+					case a := <-observed.attempted:
+						attempt = &a
+					default:
+						guard.Stop()
+						fail(errors.New("Run returned without terminal syscall stage"))
+					}
+					break
+				}
+				select {
+				case a := <-observed.attempted:
+					attempt = &a
+				case r := <-done:
+					result, done = &r, nil
+				case <-guard.C:
+					fail(context.DeadlineExceeded)
+				}
+			}
+			guard.Stop()
+			if attempt.frame != terminalFrame || attempt.controlErr != nil || attempt.n > 0 {
+				fail(errors.New("exact-response syscall precondition failed"))
+			}
+			if mode == "broken" {
+				if !errors.Is(attempt.syscallErr, syscall.EPIPE) {
+					fail(errors.New("terminal syscall did not observe real broken peer"))
+				}
+			} else if !wouldBlock(attempt.syscallErr) {
+				fail(errors.New("terminal syscall did not observe actual response EAGAIN"))
+			}
+			if mode == "peer-drain" {
+				if result != nil {
+					fail(errors.New("Run completed before peer-drain action"))
+				}
+				// No reader has drained anything since saturation. Remove exactly
+				// the accounted zero filler, then read only the exact terminal frame.
+				r := stepIO("peer-drain-filler", func() ioResult {
+					if err := outRead.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+						return ioResult{err: err}
+					}
+					b := make([]byte, int(filled))
+					n, err := io.ReadFull(outRead, b)
+					return ioResult{n: int64(n), b: b[:n], err: err}
+				})
+				if r.n != filled || !bytes.Equal(r.b, make([]byte, int(filled))) {
+					fail(errors.New("peer drain did not consume exactly the zero filler"))
+				}
+				readFrame("terminal-frame", terminalFrame)
+				stage = "File.Write-return"
+				guard := time.NewTimer(3 * time.Second)
+				select {
+				case r := <-observed.returned:
+					returned = &r
+				case r := <-done:
+					result, done = &r, nil
+					guard.Stop()
+					fail(errors.New("Run returned before peer-drain write result"))
+				case <-guard.C:
+					fail(context.DeadlineExceeded)
+				}
+				guard.Stop()
+				if returned.n != len(terminalFrame) || returned.err != nil {
+					fail(errors.New("peer drain did not complete real File.Write"))
+				}
+				stage = "stdin-eof-after-complete-reply"
+				if err := inWrite.Close(); err != nil {
+					fail(err)
+				}
+			}
+			waitRun()
+			stage = "Run-verdict"
+			wantCode, wantStderr := 1, "jack: operation cancelled or deadline exceeded\n"
+			if mode == "broken" {
+				wantStderr = "jack: unsupported or invalid protocol message\n"
+			} else if mode == "peer-drain" {
+				wantCode, wantStderr = 0, ""
+			}
+			if result.code != wantCode || result.stderr != wantStderr {
+				fail(fmt.Errorf("want code=%d stderr=%q", wantCode, wantStderr))
+			}
+			if returned == nil {
+				select {
+				case r := <-observed.returned:
+					returned = &r
+				default:
+					fail(errors.New("Run joined without File.Write return event"))
+				}
+			}
+			stage = "File.Write-verdict"
+			if mode == "broken" {
+				if returned.n != 0 || !(errors.Is(returned.err, syscall.EPIPE) || errors.Is(returned.err, os.ErrClosed)) {
+					fail(errors.New("broken output did not return real EPIPE/closed File error"))
+				}
+			} else if mode == "blocked" {
+				if returned.n != 0 || !errors.Is(returned.err, os.ErrClosed) {
+					fail(errors.New("undrained File.Write did not return closed after bridge deadline"))
+				}
+			}
+			if mode == "peer-drain" {
+				r := stepIO("extra-output-eof", func() ioResult {
+					if err := outRead.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+						return ioResult{err: err}
+					}
+					b, err := io.ReadAll(io.LimitReader(outRead, maxBody+1))
+					return ioResult{n: int64(len(b)), b: b, err: err}
+				})
+				if r.n != 0 {
+					fail(fmt.Errorf("extra output=%q", r.b))
+				}
+			}
+			stage = "lifecycle-counts"
+			if observed.writes.Load() != 1 || sequence.Load() != 3 || unexpected.Load() != 0 || calls[0].Load() != 1 || calls[1].Load() != 1 || calls[2].Load() != 1 {
+				fail(errors.New("expected exactly initialize, initialized, tools/list and one terminal Write; no retry"))
 			}
 		})
 	}
