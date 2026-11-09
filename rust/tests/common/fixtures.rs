@@ -1,10 +1,12 @@
-//! Strict typed loaders mirroring the Go spec package (spec/spec.go): the
-//! JSON fixtures under ../spec/fixtures are the conformance source of truth.
+//! Strict typed loaders mirroring the Go spec package: the JSON fixtures
+//! under ../spec/fixtures are the conformance source of truth. Every loader
+//! mirrors the admin-only contract shapes (registry entries `{kid,
+//! public_key, name, admin?, not_before?, not_after?}`, invite records
+//! `{invite_id, admin?, created_by, created_at, expires_at, key_ttl_seconds?}`).
 
-// Typed loaders mirror every field of spec/spec.go; the load tests exercise
-// only counts and ids, so unread fields are expected.
+// Typed loaders mirror every field of the spec generator; the load tests
+// exercise only counts and ids, so unread fields are expected.
 #![allow(dead_code)]
-use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -67,17 +69,18 @@ pub struct KeyFile {
     pub keys: Vec<TestKey>,
 }
 
-/// RegistryEntry is one key of a registry document. Kind, not_before and
-/// not_after are Option because documents may omit them (then they default)
-/// and the JSON uses null for unbounded validity.
+/// RegistryEntry is one key of a registry document. `admin` is a strict JSON
+/// boolean when present (serde's plain bool rejects null/string/number) and
+/// defaults to false when absent; not_before/not_after are Option because
+/// documents may omit them.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RegistryEntry {
     pub kid: String,
     pub public_key: String,
     pub name: String,
-    pub kind: Option<String>,
-    pub scopes: Vec<String>,
+    #[serde(default)]
+    pub admin: bool,
     pub not_before: Option<i64>,
     pub not_after: Option<i64>,
 }
@@ -107,7 +110,6 @@ pub struct RequestState {
     pub now: i64,
     pub window_seconds: i64,
     pub aud: String,
-    pub policy: String,
     pub nonce_cache: Vec<NonceCacheEntry>,
 }
 
@@ -134,24 +136,38 @@ pub struct AuditExpect {
     pub actor_kid: String,
 }
 
-/// UserSummary is one entry of an after.users expectation.
+/// IdentityExpect is the verified caller identity the server must hand to the
+/// wrapped handler on a forwarded accept (02 section 3). Present only on
+/// forwarded accepts: never on native `jack.*` accepts or rejections.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityExpect {
+    pub kid: String,
+    pub name: String,
+    pub admin: bool,
+}
+
+/// UserSummary is one entry of an after.users expectation: a full registry
+/// entry, admin always present (false included).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct UserSummary {
-    pub name: String,
     pub kid: String,
-    pub kind: String,
-    pub scopes: Vec<String>,
+    pub public_key: String,
+    pub name: String,
+    pub admin: bool,
     pub not_before: Option<i64>,
     pub not_after: Option<i64>,
 }
 
-/// AfterState summarizes the sequence state after a step ran.
+/// AfterState summarizes the sequence state after a step ran. invites is the
+/// full raw stored-record expectation list; keeping JSON values preserves
+/// literal member presence (notably absent versus explicit null).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AfterState {
     pub users: Vec<UserSummary>,
-    pub invites: i64,
+    pub invites: Vec<serde_json::Value>,
 }
 
 /// Expect is the shared outcome expectation. structured stays raw JSON: its
@@ -171,6 +187,9 @@ pub struct Expect {
     pub code: String,
     #[serde(default)]
     pub audit: Option<AuditExpect>,
+    /// Present exactly on forwarded accepts: the verified caller identity.
+    #[serde(default)]
+    pub identity: Option<IdentityExpect>,
     #[serde(default)]
     pub nonce_recorded: bool,
     #[serde(default)]
@@ -198,41 +217,36 @@ pub struct RequestCase {
     pub debug: Debug,
 }
 
-/// RequestVectors is request-vectors.json; policies maps a case's
-/// state.policy name to the file that holds it.
+/// RequestVectors is request-vectors.json; the registry is the named file.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RequestVectors {
     pub registry: String,
-    pub policies: HashMap<String, String>,
     pub cases: Vec<RequestCase>,
 }
 
-/// InviteRecord is a stored invite in a sequence state. key_ttl_seconds is
-/// null when the enrolled key never expires.
+/// InviteRecord is a seeded stored invite in a sequence state.
+/// key_ttl_seconds is absent when the enrolled key never expires.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InviteRecord {
     pub invite_id: String,
-    pub scopes: Vec<String>,
-    pub kind: Option<String>,
+    #[serde(default)]
+    pub admin: bool,
     pub created_by: String,
     pub created_at: i64,
     pub expires_at: i64,
+    #[serde(default)]
     pub key_ttl_seconds: Option<i64>,
 }
 
-/// SequenceState is the initial state of an admin sequence case. The five
-/// RequestState fields are repeated explicitly instead of using
-/// #[serde(flatten)] because flatten cannot be combined with
-/// deny_unknown_fields, which the strict fixture contract requires.
+/// SequenceState is the initial state of an admin sequence case.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SequenceState {
     pub now: i64,
     pub window_seconds: i64,
     pub aud: String,
-    pub policy: String,
     pub nonce_cache: Vec<NonceCacheEntry>,
     pub registry: Vec<RegistryEntry>,
     pub invites: Vec<InviteRecord>,
@@ -334,8 +348,8 @@ pub struct KeyVectors {
 }
 
 /// LoadCase is one load-time validation vector. document stays raw JSON: the
-/// invalid cases intentionally contain fields the typed policy and registry
-/// forms reject, so typed strict decoding of the fixture itself would fail.
+/// invalid cases intentionally contain fields the typed forms reject, so
+/// typed strict decoding of the fixture itself would fail.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LoadCase {
@@ -346,31 +360,30 @@ pub struct LoadCase {
     pub reason: String,
 }
 
-/// LoadVectors is load-vectors.json.
+/// LoadVectors is load-vectors.json (registry documents only).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LoadVectors {
-    pub policies: Vec<LoadCase>,
     pub registries: Vec<LoadCase>,
 }
 
-/// PatternCase is one policy pattern matching vector; * is the only
-/// metacharacter and matches any run of characters including none and newlines.
+/// StateFileCase is one state-file validation vector; document stays raw JSON
+/// because invalid cases carry members the typed forms reject.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PatternCase {
+pub struct StateFileCase {
     pub id: String,
-    pub pattern: String,
-    pub input: String,
-    #[serde(rename = "match")]
-    pub matched: bool,
+    pub document: serde_json::Value,
+    pub expect: String,
+    #[serde(default)]
+    pub reason: String,
 }
 
-/// PatternVectors is pattern-vectors.json.
+/// StateFileVectors is state-file-vectors.json.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PatternVectors {
-    pub cases: Vec<PatternCase>,
+pub struct StateFileVectors {
+    pub cases: Vec<StateFileCase>,
 }
 
 /// Load error: a fixture failed to read or strictly decode.
@@ -417,16 +430,6 @@ pub fn load_registry() -> Result<RegistryDocument, FixtureError> {
     read_strict("registry.json")
 }
 
-/// Loads the policy document as raw JSON; the typed loader is mcp_jack::server::policy::Policy::parse.
-pub fn load_default_policy() -> Result<serde_json::Value, FixtureError> {
-    read_strict("policy.json")
-}
-
-/// Loads the policy document as raw JSON; the typed loader is mcp_jack::server::policy::Policy::parse.
-pub fn load_wildcard_policy() -> Result<serde_json::Value, FixtureError> {
-    read_strict("policy-wildcard.json")
-}
-
 pub fn load_request_vectors() -> Result<RequestVectors, FixtureError> {
     read_strict("request-vectors.json")
 }
@@ -447,8 +450,8 @@ pub fn load_load_vectors() -> Result<LoadVectors, FixtureError> {
     read_strict("load-vectors.json")
 }
 
-pub fn load_pattern_vectors() -> Result<PatternVectors, FixtureError> {
-    read_strict("pattern-vectors.json")
+pub fn load_state_file_vectors() -> Result<StateFileVectors, FixtureError> {
+    read_strict("state-file-vectors.json")
 }
 
 /// One case of client-url-policy.json: the raw URL and whether the client

@@ -157,7 +157,8 @@ fn handle(req: http::Request<Full<Bytes>>) -> http::Response<Full<Bytes>> {
                 ),
                 None => json_response(not_found(id)),
             },
-            // Policy denies these before they reach here; kept per contract.
+            // Ordinary non-native calls are forwarded by the verifier; these
+            // canned responses are only application behavior if they arrive.
             Some("logs.tail" | "config.set") => result_envelope(
                 id,
                 &ContentResult {

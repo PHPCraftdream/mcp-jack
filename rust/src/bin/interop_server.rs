@@ -19,7 +19,6 @@ use mcp_jack::encoding::{decode_b64url, decode_b64url_fixed, encode_b64url, key_
 use mcp_jack::server::http::{HandlerConfig, JackLayer};
 use mcp_jack::server::native::{bootstrap_admin, Native, NativeOptions};
 use mcp_jack::server::nonce::NonceStore;
-use mcp_jack::server::policy::Policy;
 use mcp_jack::server::state::StateStore as _;
 use mcp_jack::server::state_file::FileState;
 use mcp_jack::server::verify::{Clock, Config, Verifier};
@@ -31,7 +30,6 @@ use interop::{hex_decode_32, unix_now};
 /// Parsed command line (Go's flag set).
 struct Flags {
     aud: String,
-    policy: String,
     state: String,
     seed_hex: String,
     bootstrap_ttl: Option<String>,
@@ -52,7 +50,6 @@ fn parse_flags() -> Flags {
     let mut args = std::env::args().skip(1);
     let mut flags = Flags {
         aud: String::new(),
-        policy: String::new(),
         state: String::new(),
         seed_hex: String::new(),
         bootstrap_ttl: None,
@@ -77,7 +74,6 @@ fn parse_flags() -> Flags {
         };
         match name.as_str() {
             "aud" => flags.aud = value("aud"),
-            "policy" => flags.policy = value("policy"),
             "state" => flags.state = value("state"),
             "server-seed-hex" => flags.seed_hex = value("server-seed-hex"),
             "bootstrap-ttl" => flags.bootstrap_ttl = Some(value("bootstrap-ttl")),
@@ -85,12 +81,8 @@ fn parse_flags() -> Flags {
             _ => fail(format!("unknown flag --{name}")),
         }
     }
-    if flags.aud.is_empty()
-        || flags.policy.is_empty()
-        || flags.state.is_empty()
-        || flags.seed_hex.is_empty()
-    {
-        fail("--aud, --policy, --state and --server-seed-hex are required");
+    if flags.aud.is_empty() || flags.state.is_empty() || flags.seed_hex.is_empty() {
+        fail("--aud, --state and --server-seed-hex are required");
     }
     flags
 }
@@ -251,15 +243,6 @@ async fn run() -> Result<(), String> {
         Ok(s) => s,
         Err(e) => fail(format!("state file: {e}")),
     };
-    let policy_data = match std::fs::read(&flags.policy) {
-        Ok(d) => d,
-        Err(e) => fail(format!("policy file: {e}")),
-    };
-    // The policy is parsed even in verify-only mode, mirroring Go.
-    let policy = match Policy::parse(&policy_data) {
-        Ok(p) => p,
-        Err(e) => fail(format!("policy file: {e}")),
-    };
 
     if flags.verify_only {
         // Bootstrap-ttl is ignored in this mode (Go returns before it).
@@ -290,7 +273,6 @@ async fn run() -> Result<(), String> {
         // window 0: the spec default 30 s (interop README section 4).
         state: Arc::new(state),
         nonces: Arc::new(NonceStore::new()),
-        policy: Arc::new(policy),
         audit: None,
         native: Some(Arc::new(Native::new(NativeOptions::default()))),
         window_seconds: 0,

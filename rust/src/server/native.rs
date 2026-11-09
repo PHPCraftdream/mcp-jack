@@ -6,18 +6,18 @@ use serde_json::json;
 use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
 
-use super::state::{InviteRecord, RegistryEntry, StateEdit, StateStore, KIND_AGENT, KIND_HUMAN};
+use super::state::{InviteRecord, RegistryEntry, StateEdit, StateStore};
 use super::verify::{
     entry_active, NativeCall, NativeResult, NativeTools, TOOL_ADMIN_INVITE_CREATE,
     TOOL_ADMIN_INVITE_LIST, TOOL_ADMIN_INVITE_REVOKE, TOOL_ADMIN_USER_CREATE, TOOL_ADMIN_USER_GET,
-    TOOL_ADMIN_USER_LIST, TOOL_ADMIN_USER_REVOKE, TOOL_ADMIN_USER_SET_SCOPES, TOOL_ENROLL,
+    TOOL_ADMIN_USER_LIST, TOOL_ADMIN_USER_REVOKE, TOOL_ADMIN_USER_SET_ADMIN, TOOL_ENROLL,
     TOOL_ROTATE_KEY, TOOL_WHOAMI,
 };
 use crate::ed25519::{validate_public_key, verify};
 use crate::encoding::{decode_b64url_fixed, encode_b64url, key_id};
 use crate::error::{codes, JackError};
 use crate::signing::rotate_proof_string;
-use crate::syntax::{valid_name, valid_scope};
+use crate::syntax::valid_name;
 
 const DEFAULT_INVITE_TTL: i64 = 3600;
 const MAX_INVITE_TTL: i64 = 604800;
@@ -68,9 +68,10 @@ impl Native {
 }
 
 /// Creates the first administrator's invite out of band (spec 03 section 5,
-/// Go: BootstrapAdmin): one single-use invite for the admin scope and the
-/// human kind, valid for `ttl_seconds`. Returns the invite CODE, which exists
-/// nowhere else. Not an MCP tool; never called from a network handler.
+/// Go: BootstrapAdmin): one single-use invite with `admin: true` — the first
+/// administrator's invite — valid for `ttl_seconds`. Returns the invite CODE,
+/// which exists nowhere else. Not an MCP tool; never called from a network
+/// handler.
 pub fn bootstrap_admin(
     state: &dyn StateStore,
     now: i64,
@@ -89,8 +90,7 @@ pub fn bootstrap_admin(
     state.update(&mut |e| {
         e.put_invite(InviteRecord {
             invite_id: invite_id.clone(),
-            scopes: vec!["admin".to_owned()],
-            kind: KIND_HUMAN.to_owned(),
+            admin: true,
             created_by: "bootstrap".to_owned(),
             created_at: now,
             expires_at: ttl_at(now, ttl_seconds)?,
@@ -129,11 +129,11 @@ fn no_such_key() -> JackError {
     JackError::new(404, codes::UNKNOWN_TARGET, "no such key")
 }
 
-fn lacks_admin_scope() -> JackError {
+fn admin_required() -> JackError {
     JackError::new(
         403,
-        codes::INSUFFICIENT_SCOPE,
-        "the key lacks the admin scope",
+        codes::ADMIN_REQUIRED,
+        "the caller is not an administrator",
     )
 }
 
@@ -225,41 +225,13 @@ fn time_arg(args: &Args, key: &str) -> Option<Option<i64>> {
     }
 }
 
-/// Decodes an array of distinct valid scopes; an empty array is valid
-/// (Go: scopesFrom).
-fn scopes_arg(args: &Args, key: &str) -> Option<Vec<String>> {
+/// Decodes a present JSON boolean member: the member's raw JSON text must be
+/// exactly a JSON boolean (parsed via serde into bool), so null, string and
+/// number are all None. An ABSENT member is None too — the caller decides the
+/// default (and `set_admin` requires it) (spec 03 sections 3.3 and 4).
+fn bool_arg(args: &Args, key: &str) -> Option<bool> {
     let raw = args.get(key)?;
-    let items = serde_json::from_str::<Vec<Box<RawValue>>>(raw.get()).ok()?;
-    let mut out = Vec::with_capacity(items.len());
-    for item in &items {
-        let s = serde_json::from_str::<String>(item.get()).ok()?;
-        if !valid_scope(&s) || out.contains(&s) {
-            return None;
-        }
-        out.push(s);
-    }
-    Some(out)
-}
-
-/// Decodes the optional kind; absent means human. A present null is invalid:
-/// spec 03 section 3 puts "`kind` is `"human"` or `"agent"`" inside the rule
-/// "an argument that is missing, of the wrong type, or outside its stated
-/// range is `400 invalid_params`" — null is the wrong type, and the reference
-/// verifier agrees (reference-verifier.mjs argKind throws for anything but
-/// "human"/"agent"). Go parity: absent -> human, explicit null ->
-/// invalid_params (Go: kindFrom).
-fn kind_arg(args: &Args) -> Option<String> {
-    match args.get("kind") {
-        None => Some(KIND_HUMAN.to_owned()),
-        Some(raw) => {
-            let kind = serde_json::from_str::<String>(raw.get()).ok()?;
-            if kind == KIND_HUMAN || kind == KIND_AGENT {
-                Some(kind)
-            } else {
-                None
-            }
-        }
-    }
+    serde_json::from_str::<bool>(raw.get()).ok()
 }
 
 /// Decodes a submitted public key and applies the validity rules of spec 03
@@ -280,24 +252,14 @@ fn public_key_arg(args: &Args) -> Result<Vec<u8>, JackError> {
 // Pure helpers
 // ---------------------------------------------------------------------------
 
-/// Applies the default kind of records that do not carry one
-/// (Go: kindOrHuman).
-fn kind_or_human(kind: &str) -> &str {
-    if kind.is_empty() {
-        KIND_HUMAN
-    } else {
-        kind
-    }
-}
-
-/// The user.list/user.get view of an entry (Go: viewOf).
+/// The user.list/user.get view of an entry; `admin` is ALWAYS present
+/// (spec 02 section 1, Go: viewOf).
 fn entry_view(e: &RegistryEntry) -> serde_json::Value {
     json!({
         "kid": e.kid,
         "public_key": e.public_key,
         "name": e.name,
-        "kind": kind_or_human(&e.kind),
-        "scopes": e.scopes,
+        "admin": e.admin,
         "not_before": e.not_before,
         "not_after": e.not_after,
     })
@@ -309,8 +271,7 @@ fn whoami_view(e: &RegistryEntry) -> serde_json::Value {
     json!({
         "kid": e.kid,
         "name": e.name,
-        "kind": kind_or_human(&e.kind),
-        "scopes": e.scopes,
+        "admin": e.admin,
         "not_before": e.not_before,
         "not_after": e.not_after,
     })
@@ -320,19 +281,18 @@ fn whoami_view(e: &RegistryEntry) -> serde_json::Value {
 fn invite_view(i: &InviteRecord) -> serde_json::Value {
     json!({
         "invite_id": i.invite_id,
-        "scopes": i.scopes,
-        "kind": kind_or_human(&i.kind),
+        "admin": i.admin,
         "created_by": i.created_by,
         "created_at": i.created_at,
         "expires_at": i.expires_at,
     })
 }
 
-/// Counts entries that hold admin and are active at now (spec 03 section 4
+/// Counts entries with admin=true that are active at now (spec 03 section 4
 /// rule 4; Go: activeAdmins).
 fn active_admins(keys: &[RegistryEntry], now: i64) -> usize {
     keys.iter()
-        .filter(|k| k.scopes.iter().any(|s| s == "admin") && entry_active(k, now))
+        .filter(|k| k.admin && entry_active(k, now))
         .count()
 }
 
@@ -350,40 +310,15 @@ fn ttl_at(now: i64, seconds: i64) -> Result<i64, JackError> {
 }
 
 /// Re-reads the calling administrator inside a transaction, so a concurrent
-/// change to its scopes is honored (spec 03 section 9; Go: currentAdmin).
+/// demotion is honored: the admin gate is checked against the CURRENT
+/// registry, so concurrent demotions serialize correctly (spec 03 section 4
+/// rule 1, section 9; Go: currentAdmin).
 fn current_admin(edit: &StateEdit, kid: &str) -> Result<RegistryEntry, JackError> {
     let caller = edit.key(kid).ok_or_else(unknown_key)?;
-    if !caller.scopes.iter().any(|s| s == "admin") {
-        return Err(lacks_admin_scope());
+    if !caller.admin {
+        return Err(admin_required());
     }
     Ok(caller)
-}
-
-/// Applies rules 1 and 2 of spec 03 section 4 to scopes about to be added to
-/// an entry of the given kind (Go: grantable).
-fn grantable(
-    caller: &RegistryEntry,
-    added: &[String],
-    kind: &str,
-    after: &[String],
-) -> Result<(), JackError> {
-    for s in added {
-        if !caller.scopes.iter().any(|held| held == s) {
-            return Err(JackError::new(
-                403,
-                codes::SCOPE_ESCALATION,
-                "the key may not grant a scope it does not hold",
-            ));
-        }
-    }
-    if kind == KIND_AGENT && after.iter().any(|s| s == "admin") {
-        return Err(JackError::new(
-            403,
-            codes::AGENT_ADMIN_FORBIDDEN,
-            "an agent key cannot hold the admin scope",
-        ));
-    }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -400,7 +335,7 @@ impl NativeTools for Native {
             TOOL_ADMIN_USER_LIST
             | TOOL_ADMIN_USER_GET
             | TOOL_ADMIN_USER_CREATE
-            | TOOL_ADMIN_USER_SET_SCOPES
+            | TOOL_ADMIN_USER_SET_ADMIN
             | TOOL_ADMIN_USER_REVOKE
             | TOOL_ADMIN_INVITE_CREATE
             | TOOL_ADMIN_INVITE_LIST
@@ -463,8 +398,7 @@ impl Native {
                 kid: c.kid.to_owned(),
                 public_key: public_key.clone(),
                 name: name.clone(),
-                kind: kind_or_human(&invite.kind).to_owned(),
-                scopes: invite.scopes.clone(),
+                admin: invite.admin,
                 not_before: None,
                 not_after: invite
                     .key_ttl_seconds
@@ -482,8 +416,7 @@ impl Native {
             structured: json!({
                 "kid": enrolled.kid,
                 "name": enrolled.name,
-                "kind": enrolled.kind,
-                "scopes": enrolled.scopes,
+                "admin": enrolled.admin,
             }),
         })
     }
@@ -552,14 +485,18 @@ impl Native {
     }
 
     /// Runs the user and invite administration tools in the check order of
-    /// spec 03 section 4: admin scope, arguments, key validity, target, rules,
-    /// conflicts, last administrator, then the atomic change (Go: admin).
+    /// spec 03 section 4: caller admin, arguments, key validity, target,
+    /// rules, conflicts, last administrator, then the atomic change (Go:
+    /// admin).
     fn admin(&self, c: &mut NativeCall) -> Result<NativeResult, JackError> {
         let Some(caller) = c.caller else {
             return Err(unknown_key());
         };
-        if !caller.scopes.iter().any(|s| s == "admin") {
-            return Err(lacks_admin_scope());
+        // The admin gate precedes argument parsing: an argument error must
+        // not leak anything to a non-admin caller (spec 03 sections 3.3
+        // and 4).
+        if !caller.admin {
+            return Err(admin_required());
         }
         let args = parse_args(&c.arguments)?;
 
@@ -583,7 +520,7 @@ impl Native {
                 })
             }
             TOOL_ADMIN_USER_CREATE => self.user_create(c, &args),
-            TOOL_ADMIN_USER_SET_SCOPES => self.user_set_scopes(c, &args),
+            TOOL_ADMIN_USER_SET_ADMIN => self.user_set_admin(c, &args),
             TOOL_ADMIN_USER_REVOKE => self.user_revoke(c, &args),
             TOOL_ADMIN_INVITE_CREATE => self.invite_create(c, &args),
             TOOL_ADMIN_INVITE_LIST => self.invite_list(c),
@@ -597,7 +534,11 @@ impl Native {
         }
     }
 
-    /// Creates a registry entry directly (Go: userCreate).
+    /// Creates a registry entry directly (Go: userCreate). Arguments are
+    /// looked up by exact member name, so stale `scopes`/`kind` members in a
+    /// request are inert (ignored) per spec 03 section 3. A create can never
+    /// trip the last-admin rule: it ADDS an entry, so the active-admin count
+    /// cannot drop (spec 03 section 4 rule 4).
     fn user_create(&self, c: &mut NativeCall, args: &Args) -> Result<NativeResult, JackError> {
         let Some(name) = str_arg(args, "name").filter(|n| valid_name(n)) else {
             return Err(invalid_params());
@@ -605,11 +546,14 @@ impl Native {
         // Audit names the target even if the call fails from here on (spec 03
         // section 8: target is the name); a malformed name sets nothing.
         c.target = name.clone();
-        let Some(scopes) = scopes_arg(args, "scopes") else {
-            return Err(invalid_params());
-        };
-        let Some(kind) = kind_arg(args) else {
-            return Err(invalid_params());
+        // Optional strict boolean, default false; present-but-mistyped fails
+        // closed (spec 03 sections 3 and 4).
+        let admin = match args.get("admin") {
+            // Absent: the documented default false (spec 03 section 3).
+            None => false,
+            // Present: must be a strict JSON boolean (spec 03 section 3);
+            // null/string/number fail closed.
+            Some(_) => bool_arg(args, "admin").ok_or_else(invalid_params)?,
         };
         let Some(not_before) = time_arg(args, "not_before") else {
             return Err(invalid_params());
@@ -627,8 +571,10 @@ impl Native {
         let public_key = str_arg(args, "public_key").unwrap_or_default();
 
         c.state.update(&mut |e| {
-            let caller = current_admin(e, c.kid)?;
-            grantable(&caller, &scopes, &kind, &scopes)?;
+            // Rules 1-3 of spec 03 section 4, against the CURRENT registry:
+            // caller admin, then key validity (already done above), then
+            // name unused, kid unregistered.
+            current_admin(e, c.kid)?;
             if e.key_by_name(&name).is_some() {
                 return Err(name_taken());
             }
@@ -639,8 +585,7 @@ impl Native {
                 kid: kid.clone(),
                 public_key: public_key.clone(),
                 name: name.clone(),
-                kind: kind.clone(),
-                scopes: scopes.clone(),
+                admin,
                 not_before,
                 not_after,
             });
@@ -651,36 +596,29 @@ impl Native {
         })
     }
 
-    /// Replaces an entry's scopes (Go: userSetScopes).
-    fn user_set_scopes(&self, c: &mut NativeCall, args: &Args) -> Result<NativeResult, JackError> {
+    /// Sets an entry's admin flag (Go: userSetAdmin). `admin` is REQUIRED:
+    /// absent, null, string and number are all invalid_params. The last-admin
+    /// rule is evaluated against the registry AS IT WOULD BE after the
+    /// change, so concurrent demotions serialize (spec 03 section 4 rule 4).
+    fn user_set_admin(&self, c: &mut NativeCall, args: &Args) -> Result<NativeResult, JackError> {
         let Some(kid) = str_arg(args, "kid") else {
             return Err(invalid_params());
         };
         // Audit names the target even if the call fails from here on (spec 03
-        // section 8: target is the kid); malformed scopes must not clear it.
+        // section 8: target is the kid).
         c.target = kid.clone();
-        let Some(scopes) = scopes_arg(args, "scopes") else {
+        let Some(admin) = bool_arg(args, "admin") else {
             return Err(invalid_params());
         };
 
         let mut updated: Option<RegistryEntry> = None;
         c.state.update(&mut |e| {
-            let caller = current_admin(e, c.kid)?;
+            // Caller re-read + admin gate against the CURRENT registry, so a
+            // concurrent demotion of the caller wins (spec 03 section 4).
+            current_admin(e, c.kid)?;
             let mut target = e.key(&kid).ok_or_else(no_such_key)?;
-            let added: Vec<String> = scopes
-                .iter()
-                .filter(|s| !target.scopes.contains(s))
-                .cloned()
-                .collect();
-            grantable(&caller, &added, kind_or_human(&target.kind), &scopes)?;
-            if target.scopes.iter().any(|s| !caller.scopes.contains(s)) {
-                return Err(JackError::new(
-                    403,
-                    codes::FORBIDDEN_ADMIN_TARGET,
-                    "the key holds a scope the administrator lacks",
-                ));
-            }
-            target.scopes = scopes.clone();
+            target.admin = admin;
+            // Last-admin rule against the would-be registry.
             let mut after = e.keys();
             for entry in after.iter_mut() {
                 if entry.kid == kid {
@@ -708,20 +646,15 @@ impl Native {
         c.target = kid.clone();
 
         c.state.update(&mut |e| {
-            let caller = current_admin(e, c.kid)?;
+            // Caller re-read + admin gate against the CURRENT registry.
+            current_admin(e, c.kid)?;
             let target = e.key(&kid).ok_or_else(no_such_key)?;
-            if target.scopes.iter().any(|s| !caller.scopes.contains(s)) {
-                return Err(JackError::new(
-                    403,
-                    codes::FORBIDDEN_ADMIN_TARGET,
-                    "the key holds a scope the administrator lacks",
-                ));
-            }
+            // Last-admin rule against the would-be registry without the kid.
             let rest: Vec<RegistryEntry> = e.keys().into_iter().filter(|k| k.kid != kid).collect();
             if active_admins(&rest, c.now) < 1 {
                 return Err(last_admin());
             }
-            e.remove_key(&kid);
+            e.remove_key(&target.kid);
             Ok(())
         })?;
         Ok(NativeResult {
@@ -729,13 +662,16 @@ impl Native {
         })
     }
 
-    /// Mints a single-use invite (Go: inviteCreate).
+    /// Mints a single-use invite (Go: inviteCreate). Stale `scopes`/`kind`
+    /// members are inert: arguments are looked up by exact member name (spec
+    /// 03 section 3).
     fn invite_create(&self, c: &mut NativeCall, args: &Args) -> Result<NativeResult, JackError> {
-        let Some(scopes) = scopes_arg(args, "scopes") else {
-            return Err(invalid_params());
-        };
-        let Some(kind) = kind_arg(args) else {
-            return Err(invalid_params());
+        let admin = match args.get("admin") {
+            // Absent: the documented default false (spec 03 section 3).
+            None => false,
+            // Present: must be a strict JSON boolean (spec 03 section 3);
+            // null/string/number fail closed.
+            Some(_) => bool_arg(args, "admin").ok_or_else(invalid_params)?,
         };
         let ttl_seconds = match args.get("ttl_seconds") {
             None => DEFAULT_INVITE_TTL,
@@ -757,12 +693,11 @@ impl Native {
         let created_by = c.caller.map(|e| e.kid.clone()).unwrap_or_default();
 
         c.state.update(&mut |e| {
-            let caller = current_admin(e, c.kid)?;
-            grantable(&caller, &scopes, &kind, &scopes)?;
+            // Caller re-read + admin gate against the CURRENT registry.
+            current_admin(e, c.kid)?;
             e.put_invite(InviteRecord {
                 invite_id: invite_id.clone(),
-                scopes: scopes.clone(),
-                kind: kind.clone(),
+                admin,
                 created_by: created_by.clone(),
                 created_at: c.now,
                 expires_at,
@@ -838,17 +773,23 @@ mod tests {
         SigningKey::from_bytes(&seed.into())
     }
 
-    fn test_key(id: &str, name: &str, scopes: &[&str]) -> RegistryEntry {
+    fn test_key(id: &str, name: &str) -> RegistryEntry {
         let public = test_signing(id).verifying_key().to_bytes();
         RegistryEntry {
             kid: key_id(&public),
             public_key: encode_b64url(&public),
             name: name.to_owned(),
-            kind: KIND_HUMAN.to_owned(),
-            scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
+            admin: false,
             not_before: None,
             not_after: None,
         }
+    }
+
+    /// Like `test_key` but with the admin flag set.
+    fn admin_key(id: &str, name: &str) -> RegistryEntry {
+        let mut entry = test_key(id, name);
+        entry.admin = true;
+        entry
     }
 
     /// Native with a deterministic random source; invite codes repeat.
@@ -920,12 +861,12 @@ mod tests {
         let code = bootstrap_admin(state.as_ref(), NOW, 600, opts()).unwrap();
         let view = state.view();
         assert_eq!(view.invites.len(), 1);
-        assert_eq!(view.invites[0].scopes, vec!["admin".to_owned()]);
+        assert!(view.invites[0].admin);
         assert_eq!(view.invites[0].created_by, "bootstrap");
         assert_eq!(view.invites[0].expires_at, NOW + 600);
 
         // First enrollment succeeds; the entry carries the invite's grants.
-        let first = test_key("enroll-1", "first", &[]);
+        let first = test_key("enroll-1", "first");
         let native = deterministic_native();
         let mut call = make_call(
             TOOL_ENROLL,
@@ -940,19 +881,17 @@ mod tests {
         let res = native.call(&mut call).unwrap();
         assert_eq!(res.structured["kid"], first.kid.as_str());
         assert_eq!(res.structured["name"], "first");
-        assert_eq!(res.structured["kind"], "human");
-        assert_eq!(res.structured["scopes"], serde_json::json!(["admin"]));
-        // Stored entry: scopes from the invite, kid from the submitted key.
+        assert_eq!(res.structured["admin"], true);
+        // Stored entry: admin from the invite, kid from the submitted key.
         let view = state.view();
         assert_eq!(view.keys.len(), 1);
         assert_eq!(view.keys[0].kid, first.kid);
         assert_eq!(view.keys[0].name, "first");
-        assert_eq!(view.keys[0].kind, KIND_HUMAN);
-        assert_eq!(view.keys[0].scopes, vec!["admin".to_owned()]);
+        assert!(view.keys[0].admin);
         assert_eq!(view.keys[0].not_after, None);
         // Single-use: the invite was consumed, a second use is invalid.
         assert!(state.view().invites.is_empty());
-        let second = test_key("enroll-2", "second", &[]);
+        let second = test_key("enroll-2", "second");
         let mut call = make_call(
             TOOL_ENROLL,
             raw_args(&format!(
@@ -969,14 +908,110 @@ mod tests {
     }
 
     #[test]
-    fn invite_code_is_never_stored() {
+    fn enroll_default_invite_is_not_admin() {
+        // An invite without the admin member enrolls admin=false (spec 03
+        // sections 3.3 and 3.2: absent admin defaults to false).
         let state = Arc::new(MemoryState::new());
-        let caller = test_key("admin", "root", &["admin", "read"]);
+        let caller = admin_key("admin", "root");
         seed(std::slice::from_ref(&caller), &[], state.as_ref());
         let native = deterministic_native();
         let mut call = make_call(
             TOOL_ADMIN_INVITE_CREATE,
-            raw_args(r#"{"scopes":["read"]}"#),
+            raw_args("{}"),
+            Some(&caller),
+            &caller.kid,
+            Arc::clone(&state) as Arc<dyn StateStore>,
+        );
+        native.call(&mut call).unwrap();
+        let invite = &state.view().invites[0];
+        assert!(!invite.admin);
+        let fresh = test_key("fresh", "newcomer");
+        let mut call = make_call(
+            TOOL_ENROLL,
+            raw_args(&format!(
+                r#"{{"code":"{}","name":"newcomer","public_key":"{}"}}"#,
+                encode_b64url(&[0xA5; 32]),
+                fresh.public_key
+            )),
+            None,
+            &fresh.kid,
+            Arc::clone(&state) as Arc<dyn StateStore>,
+        );
+        let res = native.call(&mut call).unwrap();
+        assert_eq!(res.structured["admin"], false);
+        assert!(!state.lookup(&fresh.kid).unwrap().admin);
+    }
+
+    #[test]
+    fn rotate_preserves_admin() {
+        // Rotation keeps the entry's admin and validity interval (spec 03
+        // section 3.1: rotate only replaces kid and public_key).
+        let state = Arc::new(MemoryState::new());
+        let mut caller = admin_key("root", "root");
+        caller.not_before = Some(NOW - 60);
+        caller.not_after = Some(NOW + 3600);
+        seed(std::slice::from_ref(&caller), &[], state.as_ref());
+        let before = state.view();
+        let native = deterministic_native();
+        let old_signing = test_signing("root");
+        let new_signing = test_signing("newroot");
+        let new_pub_key = test_key("newroot", "root");
+        let proof_string = rotate_proof_string(AUD, &caller.kid, &new_pub_key.kid, NOW);
+        let old_key_proof = encode_b64url(&old_signing.sign(proof_string.as_bytes()).to_bytes());
+
+        let mut invalid_call = make_call(
+            TOOL_ROTATE_KEY,
+            raw_args(&format!(
+                r#"{{"public_key":"{}","proof":"{old_key_proof}"}}"#,
+                new_pub_key.public_key
+            )),
+            Some(&caller),
+            &caller.kid,
+            Arc::clone(&state) as Arc<dyn StateStore>,
+        );
+        let err = native.call(&mut invalid_call).unwrap_err();
+        assert_eq!(err.code, codes::INVALID_PROOF);
+        assert_eq!(
+            state.view(),
+            before,
+            "invalid proof must leave state unchanged"
+        );
+
+        // The new key signs the exact same rotate proof bytes; that proof is
+        // valid for possession of the submitted replacement key.
+        let new_key_proof = encode_b64url(&new_signing.sign(proof_string.as_bytes()).to_bytes());
+        let mut valid_call = make_call(
+            TOOL_ROTATE_KEY,
+            raw_args(&format!(
+                r#"{{"public_key":"{}","proof":"{new_key_proof}"}}"#,
+                new_pub_key.public_key
+            )),
+            Some(&caller),
+            &caller.kid,
+            Arc::clone(&state) as Arc<dyn StateStore>,
+        );
+        native.call(&mut valid_call).unwrap();
+
+        let rotated = state.lookup(&new_pub_key.kid).expect("rotated entry");
+        assert!(rotated.admin);
+        assert_eq!(rotated.name, "root");
+        assert_eq!(rotated.not_before, caller.not_before);
+        assert_eq!(rotated.not_after, caller.not_after);
+        assert!(
+            state.lookup(&caller.kid).is_none(),
+            "old kid must be removed"
+        );
+    }
+
+    #[test]
+    fn invite_code_is_never_stored() {
+        let state = Arc::new(MemoryState::new());
+        let caller = admin_key("admin", "root");
+        seed(std::slice::from_ref(&caller), &[], state.as_ref());
+        let native = deterministic_native();
+        let mut call = make_call(
+            TOOL_ADMIN_INVITE_CREATE,
+            raw_args("{}"),
             Some(&caller),
             &caller.kid,
             Arc::clone(&state) as Arc<dyn StateStore>,
@@ -993,7 +1028,7 @@ mod tests {
     #[test]
     fn admin_requires_admin_before_arguments() {
         let state = Arc::new(MemoryState::new());
-        let caller = test_key("plain", "plain", &["read"]);
+        let caller = test_key("plain", "plain");
         seed(std::slice::from_ref(&caller), &[], state.as_ref());
         let native = Native::new(NativeOptions::default());
         let mut call = make_call(
@@ -1005,7 +1040,7 @@ mod tests {
         );
         let err = native.call(&mut call).unwrap_err();
         assert_eq!(err.http_status, 403);
-        assert_eq!(err.code, codes::INSUFFICIENT_SCOPE);
+        assert_eq!(err.code, codes::ADMIN_REQUIRED);
     }
 
     #[test]
@@ -1013,8 +1048,8 @@ mod tests {
         let native = Native::new(NativeOptions::default());
         for _ in 0..50 {
             let state: Arc<dyn StateStore> = Arc::new(MemoryState::new());
-            let a = test_key("admin-a", "admin-a", &["admin"]);
-            let b = test_key("admin-b", "admin-b", &["admin"]);
+            let a = admin_key("admin-a", "admin-a");
+            let b = admin_key("admin-b", "admin-b");
             seed(&[a.clone(), b.clone()], &[], state.as_ref());
             let successes = AtomicUsize::new(0);
             std::thread::scope(|s| {
@@ -1062,8 +1097,8 @@ mod tests {
     fn last_admin_survives_many_concurrent_demotes_and_revokes() {
         let native = Native::new(NativeOptions::default());
         let state: Arc<dyn StateStore> = Arc::new(MemoryState::new());
-        let a = test_key("admin-a", "admin-a", &["admin", "read"]);
-        let b = test_key("admin-b", "admin-b", &["admin", "read"]);
+        let a = admin_key("admin-a", "admin-a");
+        let b = admin_key("admin-b", "admin-b");
         seed(&[a.clone(), b.clone()], &[], state.as_ref());
         let successes = std::sync::Mutex::new(Vec::new());
         std::thread::scope(|s| {
@@ -1079,12 +1114,13 @@ mod tests {
                     let arguments = if revoke {
                         raw_args(&format!(r#"{{"kid":"{}"}}"#, target.kid))
                     } else {
-                        raw_args(&format!(r#"{{"kid":"{}","scopes":["read"]}}"#, target.kid))
+                        // Demote arm: set_admin admin=false.
+                        raw_args(&format!(r#"{{"kid":"{}","admin":false}}"#, target.kid))
                     };
                     let tool = if revoke {
                         TOOL_ADMIN_USER_REVOKE
                     } else {
-                        TOOL_ADMIN_USER_SET_SCOPES
+                        TOOL_ADMIN_USER_SET_ADMIN
                     };
                     let mut call = make_call(tool, arguments, Some(caller), &caller.kid, store);
                     if let Ok(res) = native.call(&mut call) {
@@ -1173,14 +1209,14 @@ mod tests {
         // Mirrors the fixture admin-create-not-after-negative-zero; spec 03
         // section 3: `-0` is the integer 0.
         let state = Arc::new(MemoryState::new());
-        let caller = test_key("admin", "root", &["admin", "read"]);
+        let caller = admin_key("admin", "root");
         seed(std::slice::from_ref(&caller), &[], state.as_ref());
         let native = deterministic_native();
-        let dave = test_key("dave", "dave", &["read"]);
+        let dave = test_key("dave", "dave");
         let mut call = make_call(
             TOOL_ADMIN_USER_CREATE,
             raw_args(&format!(
-                r#"{{"name":"dave","public_key":"{}","scopes":["read"],"not_after":-0}}"#,
+                r#"{{"name":"dave","public_key":"{}","not_after":-0}}"#,
                 dave.public_key
             )),
             Some(&caller),
@@ -1191,18 +1227,121 @@ mod tests {
         let stored = state.lookup(&dave.kid).unwrap();
         assert_eq!(stored.not_after, Some(0));
         assert_eq!(stored.name, "dave");
+        assert!(!stored.admin);
     }
 
     #[test]
-    fn kind_arg_null_is_invalid_absent_is_human() {
-        assert_eq!(kind_arg(&args_of(r#"{"kind":null}"#)), None);
-        assert_eq!(kind_arg(&args_of("{}")), Some(KIND_HUMAN.to_owned()));
+    fn set_admin_argument_strictness() {
+        // admin is REQUIRED and strict boolean: absent, null, number and
+        // string are all invalid_params; the target entry (already admin) is
+        // left untouched (spec 03 section 4).
+        let state = Arc::new(MemoryState::new());
+        let caller = admin_key("root", "root");
+        let target = admin_key("admin-b", "admin-b");
+        seed(&[caller.clone(), target.clone()], &[], state.as_ref());
+        let native = Native::new(NativeOptions::default());
+        for admin in ["", ":null", ":1", ":\"yes\""] {
+            let args = if admin.is_empty() {
+                format!(r#"{{"kid":"{}"}}"#, target.kid)
+            } else {
+                format!(r#"{{"kid":"{}","admin"{}}}"#, target.kid, admin)
+            };
+            let mut call = make_call(
+                TOOL_ADMIN_USER_SET_ADMIN,
+                raw_args(&args),
+                Some(&caller),
+                &caller.kid,
+                Arc::clone(&state) as Arc<dyn StateStore>,
+            );
+            let err = native.call(&mut call).unwrap_err();
+            assert_eq!(err.http_status, 400, "args: {args}");
+            assert_eq!(err.code, codes::INVALID_PARAMS, "args: {args}");
+        }
+        assert!(state.lookup(&target.kid).unwrap().admin, "nothing mutated");
+    }
+
+    #[test]
+    fn admin_create_admin_mistyped_is_invalid_params() {
+        // Mirrors the fixture admin-create-admin-mistyped: "true" (a string)
+        // is not a JSON boolean -> invalid_params (spec 03 section 4).
+        let state = Arc::new(MemoryState::new());
+        let caller = admin_key("root", "root");
+        seed(std::slice::from_ref(&caller), &[], state.as_ref());
+        let native = Native::new(NativeOptions::default());
+        let dave = test_key("dave", "dave");
+        let mut call = make_call(
+            TOOL_ADMIN_USER_CREATE,
+            raw_args(&format!(
+                r#"{{"name":"dave","public_key":"{}","admin":"true"}}"#,
+                dave.public_key
+            )),
+            Some(&caller),
+            &caller.kid,
+            Arc::clone(&state) as Arc<dyn StateStore>,
+        );
+        let err = native.call(&mut call).unwrap_err();
+        assert_eq!(err.http_status, 400);
+        assert_eq!(err.code, codes::INVALID_PARAMS);
+        assert!(state.lookup(&dave.kid).is_none());
+    }
+
+    #[test]
+    fn invite_create_admin_mistyped_is_invalid_params() {
+        // Same rule as user_create: a present mistyped admin (string "true")
+        // is not a JSON boolean -> invalid_params (spec 03 section 3).
+        let state = Arc::new(MemoryState::new());
+        let caller = admin_key("root", "root");
+        seed(std::slice::from_ref(&caller), &[], state.as_ref());
+        let native = deterministic_native();
+        let mut call = make_call(
+            TOOL_ADMIN_INVITE_CREATE,
+            raw_args(r#"{"admin":"true"}"#),
+            Some(&caller),
+            &caller.kid,
+            Arc::clone(&state) as Arc<dyn StateStore>,
+        );
+        let err = native.call(&mut call).unwrap_err();
+        assert_eq!(err.http_status, 400);
+        assert_eq!(err.code, codes::INVALID_PARAMS);
+        assert!(state.view().invites.is_empty(), "nothing mutated");
+    }
+
+    #[test]
+    fn invite_ttl_member_decoys_are_invalid_params() {
+        // String, boolean and fractional ttl_seconds are all invalid_params
+        // (spec 03 section 3: integer only, judged on the JSON text).
+        let state = Arc::new(MemoryState::new());
+        let caller = admin_key("root", "root");
+        seed(std::slice::from_ref(&caller), &[], state.as_ref());
+        let native = deterministic_native();
+        for ttl in ["\"60\"", "true", "1.5"] {
+            let mut call = make_call(
+                TOOL_ADMIN_INVITE_CREATE,
+                raw_args(&format!(r#"{{"ttl_seconds":{ttl}}}"#)),
+                Some(&caller),
+                &caller.kid,
+                Arc::clone(&state) as Arc<dyn StateStore>,
+            );
+            let err = native.call(&mut call).unwrap_err();
+            assert_eq!(err.http_status, 400, "ttl {ttl}");
+            assert_eq!(err.code, codes::INVALID_PARAMS, "ttl {ttl}");
+        }
+        // Duplicate member names keep the LAST value (parse_args map decode).
+        let mut call = make_call(
+            TOOL_ADMIN_INVITE_CREATE,
+            raw_args(r#"{"ttl_seconds":1,"ttl_seconds":2}"#),
+            Some(&caller),
+            &caller.kid,
+            Arc::clone(&state) as Arc<dyn StateStore>,
+        );
+        let res = native.call(&mut call).unwrap();
+        assert_eq!(res.structured["expires_at"], NOW + 2);
     }
 
     #[test]
     fn audit_target_names_target_on_failures() {
         let state = Arc::new(MemoryState::new());
-        let caller = test_key("admin", "root", &["admin", "read"]);
+        let caller = admin_key("root", "root");
         seed(std::slice::from_ref(&caller), &[], state.as_ref());
         let native = Native::new(NativeOptions::default());
 
@@ -1211,9 +1350,7 @@ mod tests {
         let bad_pub = encode_b64url(&[1u8; 32]);
         let mut call = make_call(
             TOOL_ADMIN_USER_CREATE,
-            raw_args(&format!(
-                r#"{{"name":"dave","public_key":"{bad_pub}","scopes":["read"]}}"#
-            )),
+            raw_args(&format!(r#"{{"name":"dave","public_key":"{bad_pub}"}}"#)),
             Some(&caller),
             &caller.kid,
             Arc::clone(&state) as Arc<dyn StateStore>,
@@ -1222,13 +1359,13 @@ mod tests {
         assert_eq!(err.code, codes::KEY_REJECTED);
         assert_eq!(call.target, "dave");
 
-        // (b) user.set_scopes: well-formed kid, scopes as a string ->
+        // (b) user.set_admin: well-formed kid, admin mistyped (number) ->
         //     invalid_params, and the target is already the kid.
-        let alice = test_key("alice", "alice", &["read"]);
+        let alice = test_key("alice", "alice");
         seed(std::slice::from_ref(&alice), &[], state.as_ref());
         let mut call = make_call(
-            TOOL_ADMIN_USER_SET_SCOPES,
-            raw_args(&format!(r#"{{"kid":"{}","scopes":"read"}}"#, alice.kid)),
+            TOOL_ADMIN_USER_SET_ADMIN,
+            raw_args(&format!(r#"{{"kid":"{}","admin":1}}"#, alice.kid)),
             Some(&caller),
             &caller.kid,
             Arc::clone(&state) as Arc<dyn StateStore>,
@@ -1243,26 +1380,24 @@ mod tests {
         // Validation precedes the first mutation in EVERY native tool: each
         // closure is checks-then-mutate (enroll: put_key/remove_invite after
         // the invite+name+kid checks; rotate: remove/put after key_exists;
-        // user.create: put after grantable+name+kid; set_scopes: put after
-        // grantable+forbidden+last_admin; revoke: remove after
-        // forbidden+last_admin; invite.create: put after grantable;
+        // user.create: put after current_admin+name+kid; set_admin: put after
+        // current_admin+target+last_admin; revoke: remove after current_admin
+        // +target+last_admin; invite.create: put after current_admin;
         // invite.revoke: remove after found+expiry; bootstrap: put after the
         // ttl check). This pins the tool-level half; the store-level
         // commit-only-on-Ok property (a closure that DOES mutate then fail
         // rolls back) is pinned by state.rs::rollback_on_error.
         let state: Arc<dyn StateStore> = Arc::new(MemoryState::new());
-        let root = test_key("root", "root", &["admin", "read"]);
+        let root = admin_key("root", "root");
         let bob_signing = test_signing("bob");
-        let alice = test_key("alice", "alice", &["read"]);
-        let bob = test_key("bob", "bob", &["read"]);
+        let alice = test_key("alice", "alice");
+        let bob = test_key("bob", "bob");
         let expired = InviteRecord {
             invite_id: "expired".into(),
-            scopes: vec!["read".into()],
-            kind: KIND_HUMAN.into(),
             created_by: "root".into(),
             created_at: NOW - 1,
             expires_at: NOW,
-            key_ttl_seconds: None,
+            ..Default::default()
         };
         seed(
             &[root.clone(), alice.clone(), bob.clone()],
@@ -1292,7 +1427,7 @@ mod tests {
         )
         .unwrap();
         let before: crate::server::state::StateView = state.view();
-        let fresh = test_key("fresh", "root", &[]);
+        let fresh = test_key("fresh", "root");
         let err = call(
             TOOL_ENROLL,
             format!(
@@ -1346,36 +1481,39 @@ mod tests {
         assert_eq!(err.code, codes::INVALID_PROOF);
         assert_eq!(before, state.view());
 
-        // 4. user.create: escalation -> 403 scope_escalation (spec 03
-        //    section 4 rule 1), unchanged.
-        let esc = test_key("esc", "esc", &[]);
-        let err = call(
+        // 4. user.create with stale members: `scopes`/`kind` are inert
+        //    (lookup by exact member name), so this mirrors the fixture
+        //    admin-create-stale-members-inert and SUCCEEDS, creating the
+        //    entry with admin=false (spec 03 section 3).
+        let esc = test_key("esc", "esc");
+        let res = call(
             TOOL_ADMIN_USER_CREATE,
             format!(
-                r#"{{"name":"esc","public_key":"{}","scopes":["lifecycle"]}}"#,
+                r#"{{"name":"esc","public_key":"{}","scopes":["read","admin"],"kind":"agent"}}"#,
                 esc.public_key
             ),
             Some(&root),
             &root.kid,
         )
-        .unwrap_err();
-        assert_eq!(err.http_status, 403);
-        assert_eq!(err.code, codes::SCOPE_ESCALATION);
-        assert_eq!(before, state.view());
+        .unwrap();
+        assert_eq!(res.structured["kid"], esc.kid.as_str());
+        let stored = state.lookup(&esc.kid).expect("entry created");
+        assert!(!stored.admin);
+        let after_create = state.view();
 
-        // 5. user.set_scopes: the sole admin demotes itself -> mid-closure
-        //    last_admin AFTER grantable+forbidden, BEFORE put_key (spec 03
+        // 5. user.set_admin: the sole admin demotes itself -> mid-closure
+        //    last_admin AFTER current_admin+target, BEFORE put_key (spec 03
         //    section 4 rule 4), unchanged.
         let err = call(
-            TOOL_ADMIN_USER_SET_SCOPES,
-            format!(r#"{{"kid":"{}","scopes":["read"]}}"#, root.kid),
+            TOOL_ADMIN_USER_SET_ADMIN,
+            format!(r#"{{"kid":"{}","admin":false}}"#, root.kid),
             Some(&root),
             &root.kid,
         )
         .unwrap_err();
         assert_eq!(err.http_status, 409);
         assert_eq!(err.code, codes::LAST_ADMIN);
-        assert_eq!(before, state.view());
+        assert_eq!(after_create, state.view());
 
         // 6. user.revoke: the sole admin revokes itself -> mid-closure
         //    last_admin BEFORE remove_key, unchanged.
@@ -1388,19 +1526,20 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.http_status, 409);
         assert_eq!(err.code, codes::LAST_ADMIN);
-        assert_eq!(before, state.view());
+        assert_eq!(after_create, state.view());
 
-        // 7. invite.create: escalation -> 403 scope_escalation, unchanged.
+        // 7. invite.create: a mistyped ttl is invalid_params before the
+        //    transaction, unchanged.
         let err = call(
             TOOL_ADMIN_INVITE_CREATE,
-            r#"{"scopes":["lifecycle"]}"#.to_owned(),
+            r#"{"ttl_seconds":"60"}"#.to_owned(),
             Some(&root),
             &root.kid,
         )
         .unwrap_err();
-        assert_eq!(err.http_status, 403);
-        assert_eq!(err.code, codes::SCOPE_ESCALATION);
-        assert_eq!(before, state.view());
+        assert_eq!(err.http_status, 400);
+        assert_eq!(err.code, codes::INVALID_PARAMS);
+        assert_eq!(after_create, state.view());
 
         // 8. invite.revoke: the invite expired at NOW -> 404 unknown_target
         //    BEFORE remove_invite, unchanged.
@@ -1413,7 +1552,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.http_status, 404);
         assert_eq!(err.code, codes::UNKNOWN_TARGET);
-        assert_eq!(before, state.view());
+        assert_eq!(after_create, state.view());
 
         // 9. bootstrap_admin: ttl 0 -> Err before any update, unchanged.
         assert!(bootstrap_admin(
@@ -1425,7 +1564,7 @@ mod tests {
             },
         )
         .is_err());
-        assert_eq!(before, state.view());
+        assert_eq!(after_create, state.view());
     }
 
     #[test]
@@ -1433,18 +1572,17 @@ mod tests {
         let state = Arc::new(MemoryState::new());
         let invite = InviteRecord {
             invite_id: invite_id_of(&[0xA5; 32]),
-            scopes: vec!["read".to_owned()],
-            kind: KIND_HUMAN.to_owned(),
             created_by: "root".to_owned(),
             created_at: NOW,
             expires_at: NOW + 600,
             // An attacker-crafted (or corrupted) store could hold this; the
             // TTL math must fail closed, not wrap into an immortal key.
             key_ttl_seconds: Some(i64::MAX),
+            ..Default::default()
         };
         seed(&[], &[invite], state.as_ref());
         let before: crate::server::state::StateView = state.view();
-        let fresh = test_key("fresh", "newcomer", &[]);
+        let fresh = test_key("fresh", "newcomer");
         let native = deterministic_native();
         let mut call = make_call(
             TOOL_ENROLL,

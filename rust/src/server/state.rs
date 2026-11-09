@@ -1,76 +1,64 @@
 //! In-memory registry/invite state store: JSON record shapes, immutable
 //! views, atomic edits and the shared `StateStore` trait (Go: server/state.go).
 //! See spec 02-authorization.md section 1 (registry entries) and
-//! 03-user-management.md sections 3.2 and 9 (invites).
+//! 03-user-management.md sections 3.3 and 10 (invites).
 
 use std::sync::{Mutex, MutexGuard};
 
 use crate::error::JackError;
 
-/// Principal kind for human keys (Go: KindHuman).
-pub const KIND_HUMAN: &str = "human";
-/// Principal kind for agent keys (Go: KindAgent).
-pub const KIND_AGENT: &str = "agent";
-
-/// One registered key in the server state. Field order matches the Go JSON
+/// One registered key in the server state. Field order matches the wire
 /// tags (serde_json emits declaration order), pointer fields marshal as
 /// `null` when absent (no `skip_serializing_if`). See spec 02 section 1.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RegistryEntry {
     pub kid: String,
     pub public_key: String,
     pub name: String,
-    /// `kind` is `"human"` (default) or `"agent"` (spec 02 section 1); an
-    /// omitted or null kind on LOAD therefore decodes as human (load-vectors
-    /// case valid-kind-omitted). Go rejects an omitted kind instead — a Go
-    /// gap fixed here. Non-default kinds are rejected by the loader.
-    #[serde(default = "default_kind", deserialize_with = "deserialize_kind")]
-    pub kind: String,
-    /// REQUIRED on decode: serde rejects both a missing and a null `scopes`,
-    /// mirroring Go's strict-load "has no scopes array" rejection.
-    pub scopes: Vec<String>,
+    /// Strict JSON boolean on decode: plain `bool` with `#[serde(default)]`
+    /// IS the strict rule — serde rejects null, string and number for a bool
+    /// field, and `default` applies only when the member is absent, so
+    /// absent decodes as false (spec 02 section 1).
+    #[serde(default)]
+    pub admin: bool,
     #[serde(default)]
     pub not_before: Option<i64>,
     #[serde(default)]
     pub not_after: Option<i64>,
 }
 
-/// Manual `Default` (not derived): `kind` defaults to human (spec 02
-/// section 1), not to the empty string.
-impl Default for RegistryEntry {
-    fn default() -> Self {
-        Self {
-            kid: String::new(),
-            public_key: String::new(),
-            name: String::new(),
-            kind: KIND_HUMAN.to_string(),
-            scopes: Vec::new(),
-            not_before: None,
-            not_after: None,
-        }
-    }
-}
-
-/// One pending invite. Field order matches the Go JSON tags; see
-/// spec 03 sections 3.2 and 9.
+/// One pending invite. Field order matches the wire; see
+/// spec 03 sections 3.3 and 10.
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InviteRecord {
-    #[serde(default)]
     pub invite_id: String,
-    /// REQUIRED on decode, same reasoning as [`RegistryEntry::scopes`].
-    pub scopes: Vec<String>,
+    /// Optional strict boolean, default false: same plain-`bool` reasoning as
+    /// [`RegistryEntry::admin`] (spec 03 sections 3.3 and 10).
     #[serde(default)]
-    pub kind: String,
-    #[serde(default)]
+    pub admin: bool,
     pub created_by: String,
-    #[serde(default)]
     pub created_at: i64,
-    #[serde(default)]
     pub expires_at: i64,
-    #[serde(default)]
+    /// ABSENT on the wire when None, never null: a stored record with
+    /// `"key_ttl_seconds": null` is invalid. The custom decoder preserves the
+    /// i64-only wire type (serde's Option decoder would accept null).
+    #[serde(
+        default,
+        deserialize_with = "deserialize_key_ttl_seconds",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub key_ttl_seconds: Option<i64>,
+}
+
+fn deserialize_key_ttl_seconds<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    <i64 as serde::Deserialize>::deserialize(deserializer)
+        .map(Some)
+        .map_err(|err| serde::de::Error::custom(format!("key_ttl_seconds: {err}")))
 }
 
 /// Immutable deep-copy snapshot of the store. Keys are sorted by `kid`,
@@ -79,17 +67,6 @@ pub struct InviteRecord {
 pub struct StateView {
     pub keys: Vec<RegistryEntry>,
     pub invites: Vec<InviteRecord>,
-}
-
-fn default_kind() -> String {
-    KIND_HUMAN.to_string()
-}
-
-/// Maps an omitted (via the serde default above) or explicit-null kind to
-/// `"human"`; any other value passes through for load-time validation.
-fn deserialize_kind<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
-    let kind: Option<String> = serde::Deserialize::deserialize(d)?;
-    Ok(kind.unwrap_or_else(default_kind))
 }
 
 /// Mutable deep copy of the current state handed to a `StateStore::update`
@@ -140,10 +117,8 @@ impl StateEdit {
         out
     }
 
-    /// Replaces any entry with the same kid, else appends. Go normalized a
-    /// nil scopes slice to empty so marshaled JSON showed `[]`; Rust's
-    /// `Vec<String>` cannot be null, so there is nothing to normalize. The
-    /// entry is moved in, so the store never aliases caller data.
+    /// Replaces any entry with the same kid, else appends. The entry is
+    /// moved in, so the store never aliases caller data.
     pub fn put_key(&mut self, entry: RegistryEntry) {
         match self.keys.iter_mut().find(|e| e.kid == entry.kid) {
             Some(slot) => *slot = entry,
@@ -341,65 +316,89 @@ mod tests {
             kid: key_id(&public),
             public_key: encode_b64url(&public),
             name: name.to_string(),
-            kind: KIND_HUMAN.to_string(),
-            scopes: vec!["read".to_string()],
+            admin: false,
             not_before: None,
             not_after: None,
         }
     }
 
     #[test]
-    fn registry_entry_json_nil_pointers() {
+    fn entry_admin_serializes_always_present() {
         let entry = RegistryEntry {
             kid: "k1".into(),
             public_key: "pk".into(),
             name: "alice".into(),
-            kind: KIND_HUMAN.into(),
-            scopes: vec!["read".into()],
-            ..Default::default()
-        };
-        assert_eq!(
-            serde_json::to_string(&entry).unwrap(),
-            r#"{"kid":"k1","public_key":"pk","name":"alice","kind":"human","scopes":["read"],"not_before":null,"not_after":null}"#
-        );
-    }
-
-    #[test]
-    fn invite_record_json_nil_ttl() {
-        let inv = InviteRecord {
-            invite_id: "i1".into(),
-            scopes: vec!["read".into()],
-            kind: KIND_HUMAN.into(),
-            created_by: "root".into(),
-            created_at: 1767225500,
-            expires_at: 1767228600,
-            key_ttl_seconds: None,
-        };
-        assert_eq!(
-            serde_json::to_string(&inv).unwrap(),
-            r#"{"invite_id":"i1","scopes":["read"],"kind":"human","created_by":"root","created_at":1767225500,"expires_at":1767228600,"key_ttl_seconds":null}"#
-        );
-    }
-
-    #[test]
-    fn set_pointers_marshal_as_numbers() {
-        let entry = RegistryEntry {
-            kid: "k1".into(),
-            public_key: "pk".into(),
-            name: "alice".into(),
-            kind: KIND_HUMAN.into(),
-            scopes: vec!["read".into()],
+            admin: false,
             not_before: Some(1767225500),
             not_after: Some(1767229200),
         };
         assert_eq!(
             serde_json::to_string(&entry).unwrap(),
-            r#"{"kid":"k1","public_key":"pk","name":"alice","kind":"human","scopes":["read"],"not_before":1767225500,"not_after":1767229200}"#
+            r#"{"kid":"k1","public_key":"pk","name":"alice","admin":false,"not_before":1767225500,"not_after":1767229200}"#
         );
+    }
+
+    #[test]
+    fn invite_key_ttl_absent_is_omitted_never_null() {
         let inv = InviteRecord {
             invite_id: "i1".into(),
-            scopes: vec!["read".into()],
-            kind: KIND_HUMAN.into(),
+            admin: false,
+            created_by: "root".into(),
+            created_at: 1767225500,
+            expires_at: 1767228600,
+            key_ttl_seconds: None,
+        };
+        let json = serde_json::to_string(&inv).unwrap();
+        assert_eq!(
+            json,
+            r#"{"invite_id":"i1","admin":false,"created_by":"root","created_at":1767225500,"expires_at":1767228600}"#
+        );
+        // Absent on the wire (not null), and the record round-trips.
+        assert!(!json.contains("key_ttl_seconds"), "json: {json}");
+        let back: InviteRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, inv);
+    }
+
+    #[test]
+    fn invite_ttl_absent_is_omitted_null_rejected_and_required_members_enforced() {
+        let valid = r#"{"invite_id":"i1","created_by":"root","created_at":0,"expires_at":0}"#;
+        let invite: InviteRecord = serde_json::from_str(valid).unwrap();
+        assert!(!invite.admin, "omitted admin defaults to false");
+        assert_eq!(invite.key_ttl_seconds, None);
+        let serialized = serde_json::to_string(&invite).unwrap();
+        assert!(
+            !serialized.contains("key_ttl_seconds"),
+            "json: {serialized}"
+        );
+        assert!(
+            serialized.contains(r#""admin":false"#),
+            "admin defaults to false: {serialized}"
+        );
+        let reopened: InviteRecord = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(reopened, invite);
+
+        let null_ttl = valid.trim_end_matches('}').to_owned() + r#","key_ttl_seconds":null}"#;
+        let err = serde_json::from_str::<InviteRecord>(&null_ttl).unwrap_err();
+        assert!(err.to_string().contains("key_ttl_seconds"), "err: {err}");
+
+        for member in ["invite_id", "created_by", "created_at", "expires_at"] {
+            let missing = match member {
+                "invite_id" => r#"{"created_by":"root","created_at":0,"expires_at":0}"#,
+                "created_by" => r#"{"invite_id":"i1","created_at":0,"expires_at":0}"#,
+                "created_at" => r#"{"invite_id":"i1","created_by":"root","expires_at":0}"#,
+                "expires_at" => r#"{"invite_id":"i1","created_by":"root","created_at":0}"#,
+                _ => unreachable!(),
+            };
+            let err = serde_json::from_str::<InviteRecord>(missing).unwrap_err();
+            assert!(err.to_string().contains(member), "member {member}: {err}");
+        }
+    }
+
+    #[test]
+    fn invite_key_ttl_present_serializes_the_number() {
+        let inv = InviteRecord {
+            invite_id: "i1".into(),
+            admin: true,
             created_by: "root".into(),
             created_at: 1767225500,
             expires_at: 1767228600,
@@ -407,55 +406,48 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&inv).unwrap(),
-            r#"{"invite_id":"i1","scopes":["read"],"kind":"human","created_by":"root","created_at":1767225500,"expires_at":1767228600,"key_ttl_seconds":3600}"#
+            r#"{"invite_id":"i1","admin":true,"created_by":"root","created_at":1767225500,"expires_at":1767228600,"key_ttl_seconds":3600}"#
         );
     }
 
     #[test]
-    fn empty_scopes_round_trip_as_empty_array() {
-        // Vec<String> cannot be null in Rust; pin that empty scopes marshal
-        // (and round-trip) as [] rather than null.
-        let mut entry = state_test_key("k1", "alice");
-        entry.scopes.clear();
-        let json = serde_json::to_string(&entry).unwrap();
-        assert!(json.contains(r#""scopes":[]"#), "json: {json}");
-        let back: RegistryEntry = serde_json::from_str(&json).unwrap();
-        assert!(back.scopes.is_empty());
+    fn admin_bool_decode_table() {
+        // Absent -> false.
+        let entry: RegistryEntry =
+            serde_json::from_str(r#"{"kid":"k1","public_key":"pk","name":"alice"}"#).unwrap();
+        assert!(!entry.admin);
+        // true and false decode.
+        let entry: RegistryEntry =
+            serde_json::from_str(r#"{"kid":"k1","public_key":"pk","name":"alice","admin":true}"#)
+                .unwrap();
+        assert!(entry.admin);
+        // Null, string and number are all rejected (strict boolean).
+        for admin in ["null", "\"true\"", "1"] {
+            assert!(
+                serde_json::from_str::<RegistryEntry>(&format!(
+                    r#"{{"kid":"k1","public_key":"pk","name":"alice","admin":{admin}}}"#
+                ))
+                .is_err(),
+                "admin {admin} must be rejected"
+            );
+        }
     }
 
     #[test]
-    fn null_vs_absent_decode() {
-        // Omitted kind decodes as human (spec 02 section 1 default;
-        // load-vectors case valid-kind-omitted), and so does explicit null.
-        let entry: RegistryEntry = serde_json::from_str(
+    fn legacy_members_rejected_by_name() {
+        // An entry carrying legacy `kind` or `scopes` is rejected and the
+        // error NAMES the offending member (deny_unknown_fields diagnostic);
+        // the file is never migrated or stripped (spec 02 section 1).
+        let err = serde_json::from_str::<RegistryEntry>(
             r#"{"kid":"k1","public_key":"pk","name":"alice","scopes":["read"]}"#,
         )
-        .unwrap();
-        assert_eq!(entry.kind, KIND_HUMAN);
-        let entry: RegistryEntry = serde_json::from_str(
-            r#"{"kid":"k1","public_key":"pk","name":"alice","kind":null,"scopes":["read"]}"#,
+        .unwrap_err();
+        assert!(err.to_string().contains("scopes"), "err: {err}");
+        let err = serde_json::from_str::<RegistryEntry>(
+            r#"{"kid":"k1","public_key":"pk","name":"alice","kind":"human"}"#,
         )
-        .unwrap();
-        assert_eq!(entry.kind, KIND_HUMAN);
-        // The in-memory default carries the same spec default.
-        assert_eq!(RegistryEntry::default().kind, KIND_HUMAN);
-        // A non-default value still decodes here; rejecting it is the
-        // strict loader's job, not the type's.
-        let entry: RegistryEntry = serde_json::from_str(
-            r#"{"kid":"k1","public_key":"pk","name":"alice","kind":"robot","scopes":["read"]}"#,
-        )
-        .unwrap();
-        assert_eq!(entry.kind, "robot");
-
-        // Null and absent scopes are both rejected (REQUIRED field).
-        assert!(serde_json::from_str::<RegistryEntry>(
-            r#"{"kid":"k1","public_key":"pk","name":"alice","scopes":null}"#
-        )
-        .is_err());
-        assert!(serde_json::from_str::<RegistryEntry>(
-            r#"{"kid":"k1","public_key":"pk","name":"alice"}"#
-        )
-        .is_err());
+        .unwrap_err();
+        assert!(err.to_string().contains("kind"), "err: {err}");
     }
 
     #[test]
@@ -529,7 +521,7 @@ mod tests {
         let mut replaced = state_test_key("k1", "alice");
         let original = replaced.clone();
         replaced.name = "alice2".into();
-        replaced.scopes = vec!["read".into(), "write".into()];
+        replaced.admin = true;
         store
             .update(&mut |e| {
                 // FnMut closures cannot consume captures; the store clones internally anyway.
@@ -541,7 +533,7 @@ mod tests {
         let view = store.view();
         assert_eq!(view.keys.len(), 1);
         assert_eq!(view.keys[0].name, "alice2");
-        assert_eq!(view.keys[0].scopes.len(), 2);
+        assert!(view.keys[0].admin);
     }
 
     #[test]
@@ -613,14 +605,14 @@ mod tests {
         store
             .update(&mut |e| {
                 let mut got = e.key(&k.kid).unwrap();
-                got.scopes[0] = "MUTATED".into();
                 got.name = "MUTATED".into();
+                got.admin = !got.admin;
                 Ok(())
             })
             .unwrap();
         let view = store.view();
         assert_eq!(view.keys[0].name, "alice");
-        assert_eq!(view.keys[0].scopes[0], "read");
+        assert!(!view.keys[0].admin);
     }
 
     #[test]
@@ -630,7 +622,7 @@ mod tests {
             .update(&mut |e| {
                 e.put_invite(InviteRecord {
                     invite_id: "i1".into(),
-                    scopes: vec!["read".into()],
+                    admin: true,
                     created_by: "root".into(),
                     ..Default::default()
                 });
@@ -646,7 +638,7 @@ mod tests {
                     .ok_or_else(|| JackError::new(403, "invalid_invite", ""))?;
                 e.remove_invite("i1");
                 let mut entry = enrolled.clone();
-                entry.scopes = inv.scopes;
+                entry.admin = inv.admin;
                 e.put_key(entry);
                 Ok(())
             })
@@ -692,7 +684,7 @@ mod tests {
             .unwrap();
         let mut view = store.view();
         view.keys[0].name = "MUTATED".into();
-        view.keys[0].scopes[0] = "MUTATED".into();
+        view.keys[0].admin = !view.keys[0].admin;
         view.keys.push(state_test_key("k2", "mallory"));
         view.invites.push(InviteRecord {
             invite_id: "i1".into(),
@@ -701,7 +693,7 @@ mod tests {
         let after = store.view();
         assert_eq!(after.keys.len(), 1);
         assert_eq!(after.keys[0].name, "alice");
-        assert_eq!(after.keys[0].scopes[0], "read");
+        assert!(!after.keys[0].admin);
         assert!(after.invites.is_empty());
     }
 
@@ -719,11 +711,11 @@ mod tests {
             })
             .unwrap();
         // Mutate the caller's local copy after the commit.
-        entry.scopes[0] = "admin".into();
-        entry.scopes.push("extra".into());
+        entry.name = "MUTATED".into();
+        entry.admin = true;
         entry.not_before = Some(0);
         let got = store.view().keys.remove(0);
-        assert_eq!(got.scopes, ["read"]);
+        assert_eq!(got.name, "alice");
         assert_eq!(got.not_before, Some(5));
     }
 
@@ -739,7 +731,8 @@ mod tests {
         assert_eq!(got, Err(boom()));
         assert!(store.view().keys.is_empty());
         // Caller mutates their local afterwards; store stays (empty).
-        entry.scopes[0] = "admin".into();
+        entry.name = "MUTATED".into();
+        entry.admin = true;
         entry.not_before = Some(0);
         assert!(store.view().keys.is_empty());
     }

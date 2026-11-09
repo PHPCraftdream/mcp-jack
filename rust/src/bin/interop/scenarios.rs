@@ -9,7 +9,7 @@ use mcp_jack::client::rpc::{Client, Config};
 use mcp_jack::client::signer::{InMemorySigner, Signer};
 use mcp_jack::client::tools::{
     InviteCreateParams, InviteCreateResult, UserCreateParams, TOOL_ADMIN_USER_LIST,
-    TOOL_ADMIN_USER_SET_SCOPES, TOOL_ENROLL, TOOL_WHOAMI,
+    TOOL_ADMIN_USER_SET_ADMIN, TOOL_ENROLL, TOOL_WHOAMI,
 };
 use mcp_jack::client::transport::{
     HttpRequest, HttpResponse, SigningTransport, Transport, TransportError,
@@ -89,8 +89,7 @@ impl Env {
     /// against Intermediate::Ok; the code carries on success.
     fn invite_step(&self, idx: usize) -> Result<InviteCreateResult, StepResult> {
         let res = self.typed("root").admin_invite_create(&InviteCreateParams {
-            scopes: vec!["read".to_owned()],
-            kind: None,
+            admin: None,
             ttl_seconds: None,
             key_ttl_seconds: None,
         });
@@ -671,8 +670,7 @@ fn admin_create(e: &Env) -> StepResult {
             .admin_user_create(&UserCreateParams {
                 name: "dave".to_owned(),
                 public_key: encode_b64url(&e.primary.public_key()),
-                scopes: vec!["read".to_owned()],
-                kind: None,
+                admin: None,
                 not_before: None,
                 not_after: None,
             })
@@ -701,14 +699,16 @@ fn revoke_key(e: &Env) -> StepResult {
 }
 
 fn last_admin(e: &Env) -> StepResult {
-    // kid,scopes is alphabetical, so json!'s Value map keeps spec order.
+    // kid,admin is alphabetical, so json!'s Value map keeps spec order; this
+    // set_admin either trips the last-admin rule or strips the caller's own
+    // admin flag (interop/scenarios.json).
     let args = serde_json::json!({
         "kid": e.primary.kid(),
-        "scopes": ["read"],
+        "admin": false,
     });
     e.typed_raw_call(
         e.primary.as_ref(),
-        TOOL_ADMIN_USER_SET_SCOPES,
+        TOOL_ADMIN_USER_SET_ADMIN,
         Some(&args.to_string()),
     )
 }

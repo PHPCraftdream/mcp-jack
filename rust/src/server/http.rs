@@ -421,7 +421,19 @@ where
         body: Bytes,
         res: &VerifyResult,
     ) -> Result<http::Response<Full<Bytes>>, S::Error> {
-        let inner_req = http::Request::from_parts(parts, Full::new(body));
+        // Typed request extension carrying the verified caller identity
+        // snapshot (spec 02 section 3): the verifier derives it exclusively
+        // from signature verification and the registry, and the extension
+        // type has no public constructor, so the wrapped service cannot read
+        // it from any header/query/body nor fabricate one. It is Some on
+        // every forwarded accept; None here is a verifier bug, answered like
+        // the other unreachable paths with the signed 500.
+        let identity = match res.identity.clone() {
+            Some(identity) => identity,
+            None => return Ok(self.internal(res)),
+        };
+        let mut inner_req = http::Request::from_parts(parts, Full::new(body));
+        inner_req.extensions_mut().insert(identity);
         // Clone-and-swap so the future owns the inner instance and self stays
         // usable for the next call.
         let inner = {

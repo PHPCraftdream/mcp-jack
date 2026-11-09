@@ -1,4 +1,6 @@
-//! Integration tests for the file-backed state store (Go: server/statefile_test.go).
+//! Integration tests for the file-backed state store (Go: server/statefile_test.go)
+//! under the admin-only contract, plus the state-file-vectors.json runner
+//! (spec tests README, 03-user-management section 10).
 
 mod common;
 
@@ -7,11 +9,13 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use common::fixtures::{load_load_vectors, load_registry, RegistryDocument};
+use common::fixtures::{
+    load_load_vectors, load_registry, load_state_file_vectors, RegistryDocument,
+};
 use ed25519_dalek::SigningKey;
 use mcp_jack::encoding::{encode_b64url, key_id};
 use mcp_jack::error::JackError;
-use mcp_jack::server::state::{InviteRecord, RegistryEntry, StateEdit, StateStore, KIND_AGENT};
+use mcp_jack::server::state::{InviteRecord, RegistryEntry, StateEdit, StateStore};
 use mcp_jack::server::state_file::{FileState, CODE_STATE_CORRUPT};
 use sha2::{Digest, Sha256};
 
@@ -22,11 +26,13 @@ static UNIQUE: AtomicUsize = AtomicUsize::new(0);
 
 impl TempDirGuard {
     fn new(tag: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "mcp-jack-statefile-{tag}-{}-{}",
-            std::process::id(),
-            UNIQUE.fetch_add(1, Ordering::SeqCst)
-        ));
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!(
+                "mcp-jack-statefile-{tag}-{}-{}",
+                std::process::id(),
+                UNIQUE.fetch_add(1, Ordering::SeqCst)
+            ));
         fs::create_dir_all(&dir).expect("create temp dir");
         TempDirGuard(dir)
     }
@@ -52,21 +58,19 @@ fn state_test_key(id: &str, name: &str) -> RegistryEntry {
         kid: key_id(&public),
         public_key: encode_b64url(&public),
         name: name.to_string(),
-        kind: "human".to_string(),
-        scopes: vec!["read".to_string()],
+        admin: false,
         not_before: None,
         not_after: None,
     }
 }
 
-/// Maps a fixture registry entry (kind optional) onto the store type.
+/// Maps a fixture registry entry onto the store type.
 fn fixture_entry(f: &common::fixtures::RegistryEntry) -> RegistryEntry {
     RegistryEntry {
         kid: f.kid.clone(),
         public_key: f.public_key.clone(),
         name: f.name.clone(),
-        kind: f.kind.clone().unwrap_or_else(|| "human".to_string()),
-        scopes: f.scopes.clone(),
+        admin: f.admin,
         not_before: f.not_before,
         not_after: f.not_after,
     }
@@ -90,7 +94,8 @@ fn doc_with_keys(entries: &[RegistryEntry]) -> String {
     format!("{{\"version\":1,\"keys\":[{keys}],\"invites\":[]}}")
 }
 
-fn expect_corrupt(path: &Path) {
+fn expect_corrupt(path: &Path) -> JackError {
+    let before = fs::read(path).expect("read bytes before failed open");
     let err = FileState::open(path).expect_err("open must fail as corrupt");
     assert_eq!(err.code, CODE_STATE_CORRUPT, "error: {err}");
     assert!(
@@ -98,6 +103,9 @@ fn expect_corrupt(path: &Path) {
             .contains(&path.file_name().unwrap().to_string_lossy().to_string()),
         "message must mention the file: {err}"
     );
+    let after = fs::read(path).expect("read bytes after failed open");
+    assert_eq!(before, after, "failed open must leave raw bytes unchanged");
+    err
 }
 
 fn state_path(dir: &TempDirGuard) -> PathBuf {
@@ -106,6 +114,16 @@ fn state_path(dir: &TempDirGuard) -> PathBuf {
 
 fn open_ok(path: &Path) -> FileState {
     FileState::open(path).expect("open state file")
+}
+
+/// A state document with the fixture's first registry key and the given
+/// raw invite-record JSON (already comma-separated if plural).
+fn doc_with_invites(invites_json: &str) -> String {
+    let entry = fixture_base();
+    format!(
+        "{{\"version\":1,\"keys\":[{{\"kid\":{:?},\"public_key\":{:?},\"name\":{:?},\"admin\":{},\"not_before\":null,\"not_after\":null}}],\"invites\":[{}]}}",
+        entry.kid, entry.public_key, entry.name, entry.admin, invites_json
+    )
 }
 
 #[test]
@@ -234,9 +252,25 @@ fn load_vectors_registries_through_file_state() {
                 );
             }
             "invalid" => {
+                let before = fs::read(&path).expect("read bytes before rejected vector open");
                 let err = FileState::open(&path)
                     .expect_err(&format!("case {} must be rejected", case.id));
                 assert_eq!(err.code, CODE_STATE_CORRUPT, "case {}", case.id);
+                if case.id.contains("legacy") {
+                    let member = if case.id.contains("kind") {
+                        "kind"
+                    } else {
+                        "scopes"
+                    };
+                    assert!(
+                        err.message.contains(member),
+                        "case {}: {}",
+                        case.id,
+                        err.message
+                    );
+                }
+                let after = fs::read(&path).expect("read bytes after rejected vector open");
+                assert_eq!(before, after, "case {} must preserve the raw file", case.id);
             }
             other => panic!("case {}: unknown expect {other}", case.id),
         }
@@ -298,44 +332,459 @@ fn reject_duplicate_name() {
     expect_corrupt(&path);
 }
 
+/// Legacy `kind` inside a state-file entry is REJECTED, not migrated: the
+/// file must name the member in the error and stay byte-identical on disk
+/// (spec 03 section 10: never migrate/strip/reset/rewrite).
 #[test]
-fn reject_invalid_kind() {
-    let dir = TempDirGuard::new("invalid-kind");
-    let mut base = fixture_base();
-    base.kind = "robot".into();
+fn reject_legacy_entry_kind() {
+    let dir = TempDirGuard::new("legacy-entry-kind");
     let path = state_path(&dir);
-    write_file(&path, &doc_with_keys(&[base]));
+    let mut doc = doc_with_keys(&[fixture_base()]);
+    // Splice a legacy member into the (admin-shaped) entry.
+    doc = doc.replace(r##""admin":false,"##, r##""admin":false,"kind":"agent","##);
+    assert!(doc.contains(r##""kind":"agent""##), "splice must apply");
+    write_file(&path, &doc);
+    let err = expect_corrupt(&path);
+    assert!(
+        err.message.contains("kind"),
+        "message must name the offending member: {}",
+        err.message
+    );
+}
+
+/// Legacy `scopes` inside a state-file entry is rejected and named.
+#[test]
+fn reject_legacy_entry_scopes() {
+    let dir = TempDirGuard::new("legacy-entry-scopes");
+    let path = state_path(&dir);
+    let doc = doc_with_keys(&[fixture_base()])
+        .replace(r#""admin":false,"#, r#""admin":false,"scopes":["read"],"#);
+    write_file(&path, &doc);
+    let err = expect_corrupt(&path);
+    assert!(
+        err.message.contains("scopes"),
+        "message must name the offending member: {}",
+        err.message
+    );
+}
+
+/// Legacy `kind` inside a stored invite is rejected and named.
+#[test]
+fn reject_legacy_invite_kind() {
+    let dir = TempDirGuard::new("legacy-invite-kind");
+    let path = state_path(&dir);
+    let doc = doc_with_invites(
+        r#"{"invite_id":"i1","admin":false,"created_by":"root","created_at":1,"expires_at":2,"kind":"human"}"#,
+    );
+    write_file(&path, &doc);
+    let err = expect_corrupt(&path);
+    assert!(
+        err.message.contains("kind"),
+        "message must name the offending member: {}",
+        err.message
+    );
+}
+
+/// `admin` must be a strict JSON boolean in state-file entries (the string
+/// variant is fixture case statefile-invalid-admin-string; number and null
+/// are local pins of the same rule).
+#[test]
+fn reject_admin_string() {
+    let dir = TempDirGuard::new("admin-string");
+    let path = state_path(&dir);
+    write_file(
+        &path,
+        &doc_with_keys(&[fixture_base()]).replace(r#""admin":false"#, r#""admin":"true""#),
+    );
     expect_corrupt(&path);
 }
 
 #[test]
-fn reject_scope_uppercase() {
-    let dir = TempDirGuard::new("scope-upper");
-    let mut base = fixture_base();
-    base.scopes = vec!["Read".into()];
+fn reject_admin_number() {
+    let dir = TempDirGuard::new("admin-number");
     let path = state_path(&dir);
-    write_file(&path, &doc_with_keys(&[base]));
+    write_file(
+        &path,
+        &doc_with_keys(&[fixture_base()]).replace(r#""admin":false"#, r#""admin":1"#),
+    );
     expect_corrupt(&path);
 }
 
 #[test]
-fn reject_scope_empty_segment() {
-    let dir = TempDirGuard::new("scope-empty-seg");
-    let mut base = fixture_base();
-    base.scopes = vec!["a::b".into()];
+fn reject_admin_null() {
+    let dir = TempDirGuard::new("admin-null");
     let path = state_path(&dir);
-    write_file(&path, &doc_with_keys(&[base]));
+    write_file(
+        &path,
+        &doc_with_keys(&[fixture_base()]).replace(r#""admin":false"#, r#""admin":null"#),
+    );
+    expect_corrupt(&path);
+}
+
+/// `key_ttl_seconds: null` on a stored invite is invalid: the member is
+/// absent when the key never expires, never null (spec 03 section 10).
+#[test]
+fn reject_invite_ttl_null() {
+    let dir = TempDirGuard::new("invite-ttl-null");
+    let path = state_path(&dir);
+    write_file(
+        &path,
+        &doc_with_invites(
+            r#"{"invite_id":"i1","admin":false,"created_by":"root","created_at":1,"expires_at":2,"key_ttl_seconds":null}"#,
+        ),
+    );
+    let err = expect_corrupt(&path);
+    assert!(
+        err.message.contains("key_ttl_seconds"),
+        "diagnostic: {}",
+        err.message
+    );
+}
+
+/// Boundary vector: a TTL below the minimum (0) and above the maximum
+/// (31536001) is invalid; the minimum (1) and maximum (31536000) load.
+#[test]
+fn reject_invite_ttl_bounds() {
+    for (ttl, ok) in [(0, false), (31536001, false), (1, true), (31536000, true)] {
+        let dir = TempDirGuard::new(&format!("invite-ttl-{ttl}"));
+        let path = state_path(&dir);
+        write_file(
+            &path,
+            &doc_with_invites(&format!(
+                r#"{{"invite_id":"i1","admin":false,"created_by":"root","created_at":1,"expires_at":2,"key_ttl_seconds":{ttl}}}"#,
+            )),
+        );
+        if ok {
+            open_ok(&path);
+        } else {
+            expect_corrupt(&path);
+        }
+    }
+}
+
+/// created_at > expires_at is invalid; created_at == expires_at is the
+/// boundary and loads.
+#[test]
+fn reject_invite_timestamp_order() {
+    for (created, expires, ok) in [(3, 2, false), (2, 2, true), (1, 2, true)] {
+        let dir = TempDirGuard::new(&format!("invite-order-{created}-{expires}"));
+        let path = state_path(&dir);
+        write_file(
+            &path,
+            &doc_with_invites(&format!(
+                r#"{{"invite_id":"i1","admin":false,"created_by":"root","created_at":{created},"expires_at":{expires}}}"#,
+            )),
+        );
+        if ok {
+            open_ok(&path);
+        } else {
+            expect_corrupt(&path);
+        }
+    }
+}
+
+/// An empty created_by is invalid (names are validated on invites too).
+#[test]
+fn reject_invite_empty_created_by() {
+    let dir = TempDirGuard::new("invite-created-by");
+    let path = state_path(&dir);
+    write_file(
+        &path,
+        &doc_with_invites(
+            r#"{"invite_id":"i1","admin":false,"created_by":"","created_at":1,"expires_at":2}"#,
+        ),
+    );
     expect_corrupt(&path);
 }
 
 #[test]
-fn reject_duplicate_scopes() {
-    let dir = TempDirGuard::new("dup-scope");
-    let mut base = fixture_base();
-    base.scopes = vec!["read".into(), "read".into()];
+fn required_invite_members_are_required_and_strictly_typed() {
+    let dir = TempDirGuard::new("invite-required");
     let path = state_path(&dir);
-    write_file(&path, &doc_with_keys(&[base]));
-    expect_corrupt(&path);
+    let valid = serde_json::json!({
+        "invite_id": "i1",
+        "admin": false,
+        "created_by": "root",
+        "created_at": 0,
+        "expires_at": 0
+    });
+    write_file(&path, &doc_with_invites(&valid.to_string()));
+    open_ok(&path); // Positive control: all required members present, time zero/equal.
+
+    for member in ["invite_id", "created_by", "created_at", "expires_at"] {
+        for mutation in ["missing", "null", "wrong-type"] {
+            let mut invite = valid.clone();
+            let fields = invite.as_object_mut().expect("invite object");
+            match mutation {
+                "missing" => {
+                    let _ = fields.remove(member);
+                }
+                "null" => {
+                    let _ = fields.insert(member.to_owned(), serde_json::Value::Null);
+                }
+                "wrong-type" => {
+                    let wrong = if matches!(member, "invite_id" | "created_by") {
+                        serde_json::json!(7)
+                    } else {
+                        serde_json::json!("0")
+                    };
+                    let _ = fields.insert(member.to_owned(), wrong);
+                }
+                _ => unreachable!(),
+            }
+            let case_dir = TempDirGuard::new(&format!("invite-{member}-{mutation}"));
+            let case_path = state_path(&case_dir);
+            write_file(&case_path, &doc_with_invites(&invite.to_string()));
+            let err = expect_corrupt(&case_path);
+            if mutation == "missing" {
+                assert!(
+                    err.message.contains(member),
+                    "missing {member}: {}",
+                    err.message
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn invite_id_and_creator_must_be_nonempty_strings() {
+    for (member, value) in [("invite_id", ""), ("created_by", "")] {
+        let dir = TempDirGuard::new(&format!("invite-empty-{member}"));
+        let path = state_path(&dir);
+        let mut invite = serde_json::json!({
+            "invite_id": "i1",
+            "admin": false,
+            "created_by": "root",
+            "created_at": 0,
+            "expires_at": 0
+        });
+        invite[member] = serde_json::json!(value);
+        write_file(&path, &doc_with_invites(&invite.to_string()));
+        expect_corrupt(&path);
+    }
+
+    for (member, invalid) in [
+        ("invite_id", serde_json::Value::Null),
+        ("invite_id", serde_json::json!(7)),
+        ("created_by", serde_json::Value::Null),
+        ("created_by", serde_json::json!(7)),
+    ] {
+        let dir = TempDirGuard::new(&format!("invite-invalid-{member}"));
+        let path = state_path(&dir);
+        let mut invite = serde_json::json!({
+            "invite_id": "i1",
+            "admin": false,
+            "created_by": "root",
+            "created_at": 0,
+            "expires_at": 0
+        });
+        invite[member] = invalid;
+        write_file(&path, &doc_with_invites(&invite.to_string()));
+        expect_corrupt(&path);
+    }
+}
+
+#[test]
+fn invite_timestamps_reject_invalid_json_number_types() {
+    for member in ["created_at", "expires_at"] {
+        for (label, invalid) in [
+            ("negative", serde_json::json!(-1)),
+            ("fraction", serde_json::json!(1.5)),
+            ("string", serde_json::json!("1")),
+            ("boolean", serde_json::json!(true)),
+            ("null", serde_json::Value::Null),
+        ] {
+            let dir = TempDirGuard::new(&format!("invite-{member}-{label}"));
+            let path = state_path(&dir);
+            let mut invite = serde_json::json!({
+                "invite_id": "i1",
+                "admin": false,
+                "created_by": "root",
+                "created_at": 0,
+                "expires_at": 0
+            });
+            invite[member] = invalid;
+            write_file(&path, &doc_with_invites(&invite.to_string()));
+            expect_corrupt(&path);
+        }
+    }
+
+    // Zero and equal timestamps are valid boundaries.
+    let dir = TempDirGuard::new("invite-zero-equal");
+    let path = state_path(&dir);
+    write_file(
+        &path,
+        &doc_with_invites(
+            r#"{"invite_id":"i1","admin":false,"created_by":"root","created_at":0,"expires_at":0}"#,
+        ),
+    );
+    open_ok(&path);
+}
+
+#[test]
+fn invite_ttl_rejects_non_integer_json_types() {
+    for (label, ttl) in [
+        ("string", serde_json::json!("1")),
+        ("boolean", serde_json::json!(true)),
+        ("fraction", serde_json::json!(1.5)),
+    ] {
+        let dir = TempDirGuard::new(&format!("invite-ttl-{label}"));
+        let path = state_path(&dir);
+        let mut invite = serde_json::json!({
+            "invite_id": "i1",
+            "admin": false,
+            "created_by": "root",
+            "created_at": 0,
+            "expires_at": 0,
+            "key_ttl_seconds": 1
+        });
+        invite["key_ttl_seconds"] = ttl;
+        write_file(&path, &doc_with_invites(&invite.to_string()));
+        let err = expect_corrupt(&path);
+        assert!(
+            err.message.contains("key_ttl_seconds"),
+            "diagnostic: {}",
+            err.message
+        );
+    }
+}
+
+/// Two otherwise-valid records sharing one invite_id violate the unique-id
+/// rule; the error message must name the duplicate rule.
+#[test]
+fn reject_duplicate_invite_id() {
+    let dir = TempDirGuard::new("dup-invite-id");
+    let path = state_path(&dir);
+    write_file(
+        &path,
+        &doc_with_invites(
+            r#"{"invite_id":"i1","admin":false,"created_by":"root","created_at":1,"expires_at":2},
+               {"invite_id":"i1","admin":false,"created_by":"root","created_at":3,"expires_at":4}"#,
+        ),
+    );
+    let err = expect_corrupt(&path);
+    assert!(
+        err.message.to_lowercase().contains("duplicate"),
+        "message must name the duplicate rule: {}",
+        err.message
+    );
+}
+
+/// Persistence check (spec 03 section 10): an invite stored WITHOUT a TTL
+/// must not serialize a `key_ttl_seconds` member at all (absent, never
+/// null), and the file must reload to an equal view.
+#[test]
+fn default_invite_persists_without_ttl_member() {
+    let dir = TempDirGuard::new("default-invite");
+    let path = state_path(&dir);
+    let store = open_ok(&path);
+    store
+        .update(&mut |e: &mut StateEdit| {
+            e.put_invite(InviteRecord {
+                invite_id: "i1".into(),
+                created_by: "root".into(),
+                created_at: 1,
+                expires_at: 2,
+                ..Default::default()
+            });
+            Ok(())
+        })
+        .expect("update");
+    let text = read_file(&path);
+    assert!(
+        !text.contains("key_ttl_seconds"),
+        "default invite must omit key_ttl_seconds, file: {text}"
+    );
+    let reopened = open_ok(&path);
+    assert_eq!(reopened.view(), store.view());
+}
+
+#[test]
+fn omitted_invite_defaults_survive_file_round_trip() {
+    let dir = TempDirGuard::new("omitted-invite-defaults");
+    let path = state_path(&dir);
+    write_file(
+        &path,
+        &doc_with_invites(
+            r#"{"invite_id":"i1","created_by":"root","created_at":0,"expires_at":0}"#,
+        ),
+    );
+    let store = open_ok(&path);
+    let view = store.view();
+    let invite = &view.invites[0];
+    assert!(!invite.admin);
+    assert_eq!(invite.key_ttl_seconds, None);
+
+    store
+        .update(&mut |_edit: &mut StateEdit| Ok(()))
+        .expect("persist normalized valid state");
+    let text = read_file(&path);
+    let doc: serde_json::Value = serde_json::from_str(&text).expect("parse persisted state");
+    let saved_invite = &doc["invites"][0];
+    assert!(!saved_invite["admin"].as_bool().expect("admin boolean"));
+    assert!(saved_invite.get("key_ttl_seconds").is_none());
+    let reopened = open_ok(&path);
+    assert_eq!(reopened.view(), store.view());
+}
+
+/// Runs EVERY state-file-vectors.json case through FileState::open with the
+/// document VERBATIM (these documents are already state-file shaped). A
+/// valid case must open with key/invite counts equal to the document's
+/// array lengths (positive control); an invalid case must fail as
+/// CODE_STATE_CORRUPT (spec tests README, state-file vectors).
+#[test]
+fn state_file_vectors_run() {
+    let vectors = load_state_file_vectors().expect("load state-file-vectors.json");
+    assert!(!vectors.cases.is_empty(), "state-file vectors are empty");
+    for case in &vectors.cases {
+        let dir = TempDirGuard::new(&format!("sfvec-{}", case.id));
+        let path = state_path(&dir);
+        write_file(
+            &path,
+            &serde_json::to_string(&case.document).expect("serialize document"),
+        );
+        match case.expect.as_str() {
+            "valid" => {
+                let store = open_ok(&path);
+                let doc = case.document.as_object().expect("document is an object");
+                assert_eq!(
+                    store.view().keys.len(),
+                    doc["keys"].as_array().expect("keys array").len(),
+                    "case {}: key count",
+                    case.id
+                );
+                assert_eq!(
+                    store.view().invites.len(),
+                    doc["invites"].as_array().expect("invites array").len(),
+                    "case {}: invite count",
+                    case.id
+                );
+            }
+            "invalid" => {
+                let before = fs::read(&path).expect("read bytes before rejected vector open");
+                let err = FileState::open(&path)
+                    .expect_err(&format!("case {} must be rejected", case.id));
+                assert_eq!(err.code, CODE_STATE_CORRUPT, "case {}", case.id);
+                if case.id.contains("legacy") {
+                    let member = if case.id.contains("kind") {
+                        "kind"
+                    } else {
+                        "scopes"
+                    };
+                    assert!(
+                        err.message.contains(member),
+                        "case {}: {}",
+                        case.id,
+                        err.message
+                    );
+                }
+                let after = fs::read(&path).expect("read bytes after rejected vector open");
+                assert_eq!(before, after, "case {} must preserve the raw file", case.id);
+            }
+            other => panic!("case {}: unknown expect {other}", case.id),
+        }
+    }
 }
 
 #[test]
@@ -347,39 +796,6 @@ fn reject_identity_public_key() {
     // kid matches the public key; the point is the curve-point check.
     base.public_key = encode_b64url(&identity);
     base.kid = key_id(&identity);
-    let path = state_path(&dir);
-    write_file(&path, &doc_with_keys(&[base]));
-    expect_corrupt(&path);
-}
-
-#[test]
-fn reject_scopes_missing() {
-    let dir = TempDirGuard::new("scopes-missing");
-    let doc = doc_with_keys(&[fixture_base()]);
-    let stripped = doc.replace(r#""scopes":["read"],"#, "");
-    assert_ne!(stripped, doc, "stripping must have changed the doc");
-    let path = state_path(&dir);
-    write_file(&path, &stripped);
-    expect_corrupt(&path);
-}
-
-#[test]
-fn reject_scopes_null() {
-    let dir = TempDirGuard::new("scopes-null");
-    let doc = doc_with_keys(&[fixture_base()]);
-    let nulled = doc.replace(r#""scopes":["read"]"#, r#""scopes":null"#);
-    assert_ne!(nulled, doc, "nulling must have changed the doc");
-    let path = state_path(&dir);
-    write_file(&path, &nulled);
-    expect_corrupt(&path);
-}
-
-#[test]
-fn reject_agent_with_admin() {
-    let dir = TempDirGuard::new("agent-admin");
-    let mut base = fixture_base();
-    base.kind = KIND_AGENT.into();
-    base.scopes = vec!["admin".into()];
     let path = state_path(&dir);
     write_file(&path, &doc_with_keys(&[base]));
     expect_corrupt(&path);
@@ -440,8 +856,8 @@ fn corrupt_unknown_field_in_entry() {
     write_file(
         &path,
         &format!(
-            r#"{{"version":1,"keys":[{{"kid":{:?},"public_key":{:?},"name":{:?},"kind":{:?},"scopes":{:?},"not_before":null,"not_after":null,"bogus":1}}],"invites":[]}}"#,
-            entry.kid, entry.public_key, entry.name, entry.kind, entry.scopes
+            r#"{{"version":1,"keys":[{{"kid":{:?},"public_key":{:?},"name":{:?},"admin":{},"not_before":null,"not_after":null,"bogus":1}}],"invites":[]}}"#,
+            entry.kid, entry.public_key, entry.name, entry.admin
         ),
     );
     expect_corrupt(&path);
@@ -467,13 +883,7 @@ fn corrupt_duplicate_kid() {
     second.name = "alice-copy".into(); // a valid, distinct name
     let path = state_path(&dir);
     write_file(&path, &doc_with_keys(&[first, second]));
-    let err = FileState::open(&path).expect_err("duplicate kid must be rejected");
-    assert_eq!(err.code, CODE_STATE_CORRUPT);
-    assert!(
-        err.message.contains("duplicate key"),
-        "message must name the rule: {}",
-        err.message
-    );
+    assert!(expect_corrupt(&path).message.contains("duplicate key"));
 }
 
 #[test]
@@ -489,7 +899,7 @@ fn error_message_mentions_file_name() {
     let dir = TempDirGuard::new("msg-filename");
     let path = state_path(&dir);
     write_file(&path, "not json");
-    let err = FileState::open(&path).expect_err("corrupt");
+    let err = expect_corrupt(&path);
     assert!(
         err.message.contains("state.json"),
         "message: {}",

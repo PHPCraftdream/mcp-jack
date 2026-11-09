@@ -1,9 +1,9 @@
-//! Server-side state, policy, verification, native tools and HTTP adapter.
+//! Server-side state, identity, verification, native tools and HTTP adapter.
 
 pub mod audit;
+pub mod identity;
 pub mod native;
 pub mod nonce;
-pub mod policy;
 pub mod state;
 pub mod state_file;
 pub mod verify;
