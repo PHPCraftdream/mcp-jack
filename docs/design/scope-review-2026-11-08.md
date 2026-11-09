@@ -16,7 +16,7 @@ mcp-jack does not decide what a caller may do inside ordinary MCP. The applicati
 |---|---|---|---|
 | Q1 | Streaming: per-chunk signatures or a hash chain | Authenticated session channel is a future v0.2 direction; authentication and confidentiality are distinct. Exact design pending, not implemented. | Direction agreed; future v0.2 |
 | Q2 | Delegation from a human key to an agent key | No human/agent distinction or delegation in the protocol; all are users. | Closed |
-| Q3 | Server key pinning and rotation on the client | Rotation is separate future work; exact design and implementation remain pending. | Direction agreed; design pending |
+| Q3 | Server key pinning and rotation on the client | Rotation is separate future work; exact design and implementation remain pending. | Direction agreed; proposal under review |
 | Q4 | Registry and policy distribution, hot reload | Nothing is distributed; user creation is server-side and ordinary MCP authorization is application-owned. | Closed |
 | Q5 | Nonce cache for multi-instance servers | Clusters and cluster management are deferred and need separate design. | Open, deferred |
 | Q6 | How a client learns `aud` and the server key | Out of band, by hand (for example SSH or a trusted browser path). | Closed |
@@ -33,6 +33,8 @@ Keep current per-request signed-message behavior until a separate design and ver
 ## 4. Q3: server-key rotation is separate future design
 
 The discussion direction was for the server to announce a next public key in a statement signed by the currently pinned key, with a transition period. A client would verify that announcement against its existing pin, hold both keys during the transition, and retire the old key after the transition. A missed transition would require manual re-pinning out of band. This does not define a protocol or commit the implementation: announcement format and delivery, pin persistence, and client/server key-set APIs remain open. Trust on first use and replacing a pin with an unauthenticated key remain rejected. Baseline `b13b972` does not implement server-key rotation.
+
+The [server-key-rotation proposal](server-key-rotation.md) now records a candidate exact contract. It is a draft under parent design/security review; it is not accepted as normative v0.1 and is not implemented. Review must precede any separately versioned implementation.
 
 ## 5. Reduced contract
 
@@ -52,7 +54,7 @@ Removed are user classification and delegation semantics, scope-based registry/i
 ## 7. Still open
 
 - Q1 session-channel transport, TLS relationship, lifetime/rekeying, replay, and multi-instance behavior.
-- Q3 exact authenticated server-key-rotation design.
+- Q3 review of the [server-key-rotation proposal](server-key-rotation.md).
 - Q5 clusters and cluster management.
 - Service discovery and whether services/clients are local-only or remote/third-party.
 
