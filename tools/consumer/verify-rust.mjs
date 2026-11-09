@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 // Verifies the packaged Rust .crate from a fresh standalone consumer crate.
 // CI-only, same stage discipline as verify-ts.mjs.
 //
-// The consumer resolves its dependency graph FRESH on Rust 1.85: no product
+// The consumer resolves its dependency graph FRESH on Rust 1.88: no product
 // lockfile is copied into the consumer, and afterwards the consumer-generated
 // Cargo.lock must exist and must differ byte-wise from rust/Cargo.lock —
 // proof of independent resolution (Cargo ignores path-dependency lockfiles).
@@ -96,7 +96,7 @@ for (const [packagedLicense, rootLicense] of [["LICENSE-MIT", "LICENSE-MIT"], ["
 const packagedManifest = await readFile(path.join(packageRoot, "Cargo.toml"), "utf8");
 if (!/^publish\s*=\s*false$/m.test(packagedManifest)) throw new Error("packaged Cargo.toml lost publish = false");
 if (!/^version\s*=\s*"0\.1\.0"$/m.test(packagedManifest)) throw new Error('packaged Cargo.toml lost version "0.1.0"');
-if (!/^rust-version\s*=\s*"1\.85"$/m.test(packagedManifest)) throw new Error('packaged Cargo.toml lost rust-version "1.85"');
+if (!/^rust-version\s*=\s*"1\.88"$/m.test(packagedManifest)) throw new Error('packaged Cargo.toml lost rust-version "1.88"');
 if (!/^license\s*=\s*"MIT OR Apache-2\.0"$/m.test(packagedManifest)) throw new Error('packaged Cargo.toml lost license "MIT OR Apache-2.0"');
 for (const feature of ["default", "http", "client-http", "interop"]) {
   if (!new RegExp(`^${feature}\\s*=`, "mu").test(packagedManifest)) throw new Error(`packaged Cargo.toml lost feature ${feature}`);

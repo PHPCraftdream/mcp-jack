@@ -7,8 +7,8 @@
 # interop executables built by CI
 interop/bin/
 
-# agent session handoffs, not project documentation
-/docs/checkpoints/
+# Checkpoints in docs/checkpoints/ are tracked and included in commits.
+# Never include secrets or machine-private paths in committed checkpoints.
 
 # consumer packaging scratch (CI-only)
 /tools/consumer/.scratch/
