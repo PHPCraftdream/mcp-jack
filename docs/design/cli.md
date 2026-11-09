@@ -318,22 +318,53 @@ Read/Write. On EOF, broken pipe, deadline, cancellation or protocol failure, it
 cancels HTTP, closes owned stdio and joins its reader/worker before returning.
 Arbitrary injected blocking Go readers/writers whose Close cannot unblock
 operations are unsupported. Stderr is a caller-owned diagnostic sink and must
-not block indefinitely. The production pipe preparation has focused unrun
-blocking-inherited-descriptor/deadline/close regression sources; this is not a
-runtime validation claim. The actual `os.File.Read` deadline control is separate
+not block indefinitely. The production pipe preparation has focused
+blocking-inherited-descriptor/deadline/close regression sources; the current
+follow-up edits are unrun. The actual `os.File.Read` deadline control is separate
 from the `SyscallConn` close/readiness controls. Those controls first inspect
 `O_NONBLOCK` without `File.Fd`, then require a real nonblocking read/write to
 return `EAGAIN`/`EWOULDBLOCK` before closing the prepared file. The input peer
 stays open without data; output is filled through actual one-byte would-block
 and its reader stays open and undrained until the chosen action. RawConn callback
 `false` requests poll/readiness retry; callbacks never wait on test channels.
-Close must produce `os.ErrClosed`, not arbitrary failure. Peer-write/peer-drain
-positive controls must re-enter the callback and complete one byte successfully.
-These source oracles exclude closed-before-call and EOF/broken-peer explanations;
-they establish an active RawConn operation that has encountered would-block, not
-that the runtime goroutine was already parked when Close happened. They do not
-prove a distinct in-flight `os.File.Read`/`Write` hook. Fixture receives and joins
-are bounded failure guards, never evidence of successful interruption.
+
+RawConn forwards poll-layer errors directly, without the conversion performed
+by `os.File.Read`/`Write`; requiring raw close to match `os.ErrClosed` was the
+wrong oracle. Each close case now captures an opaque reference error through
+public APIs on a separate independently prepared pipe: obtain its RawConn while
+open, successfully `File.Close` it with a bounded join, then call the matching
+RawConn Read/Write. The reference must be nonnil and its callback must never run.
+It must not contain a `syscall.Errno`, nor match bad-descriptor, would-block,
+deadline, invalid-file, EOF or broken-pipe errors in either direction. No internal
+sentinel is imported, named in an assertion, or recognized by its error string.
+The active operation must match that reference via `errors.Is`, not return a
+syscall error, and leave its last syscall at would-block with no progress
+(`n == -1` or `n == 0`) and at least one callback. Nil, `EBADF`, `EAGAIN`, deadline,
+EOF/broken-peer failure, or a successful final callback cannot satisfy this
+combination. Failure diagnostics include error types/values, the reference,
+syscall result and callback count. Peer-write/peer-drain positive controls still
+must re-enter the callback and complete one byte successfully.
+
+The worker inspected local Go 1.26.0 sources. Parent independently fetched
+Go 1.22.12 tagged upstream [rawconn.go](https://github.com/golang/go/blob/go1.22.12/src/os/rawconn.go),
+[file.go](https://github.com/golang/go/blob/go1.22.12/src/os/file.go), and
+[poll/fd.go](https://github.com/golang/go/blob/go1.22.12/src/internal/poll/fd.go).
+RawConn Read/Write return RawRead/RawWrite errors unchanged; the internal
+file-closing sentinel is an ordinary errors.New value. File.wrapErr converts
+that sentinel to os.ErrClosed and wraps it in a PathError. The test must not
+assume this public File conversion also applies to RawConn. Its reference oracle
+uses public APIs on the actual CI toolchain rather than importing an internal
+sentinel or comparing its error string.
+
+After verified Close and the raw-operation join, a separate actual
+`os.File.Read`/`Write` on that same prepared file must return zero bytes and an
+error matching `os.ErrClosed`. This checks the public File error conversion
+**after** close, not an observed in-flight File operation. The active raw controls
+exclude closed-before-call and EOF/broken-peer explanations; they establish an
+active RawConn operation that has encountered would-block, not that the runtime
+goroutine was already parked when Close happened. They do not prove a distinct
+in-flight `os.File.Read`/`Write` hook. Fixture receives and joins remain bounded
+failure guards, never evidence of successful interruption.
 
 Each call creates a fresh HTTP/1 transport: no proxy, no connection reuse, no
 HTTP/2, no compression, no application retries or redirects. The SDK installs
@@ -344,8 +375,17 @@ out of band, and never automatically resubmit a side-effecting call.
 
 ## Parent-CI sources and remaining gates
 
-All added tests are **unrun**. No executable commands, builds, tests, formatters,
-scripts, probes or git writes were performed for this implementation.
+The current follow-up edits are **unrun**. No executable commands, builds, tests,
+formatters, scripts, probes or git writes were performed for this follow-up.
+Parent-provided logs for exact head
+`8c769b36bdb862dca9136b73ad331915d395f73b` record Linux normal/race/coverage
+failures in both raw input-close and output-close cases at the former
+`errors.Is(opErr, os.ErrClosed)` assertion. Those logs contain no actual error
+value/type, so the raw/public error-layer mismatch is a source-based diagnosis,
+not a newly observed runtime result. The logs were found read-only in the parent
+`.rush/stdin` directory. No production change was needed for this test-oracle
+correction. Parent CI must format-check and rerun these edits; no passing rerun
+or acceptance is claimed.
 
 Sources include real Unix listeners and real HTTP signing/verifying middleware,
 not solely fake round-trippers; process sources launch the parent-CI test binary
@@ -391,7 +431,8 @@ descriptors, regular-file rejection, pending EOF with a successful final worker
 write, strict JSON-RPC error codes (null/string/fraction rejected), and invalid or
 duplicate Native enrollment versions leaving invite/state bytes unchanged before
 a valid enrollment. The process helper now uses the same `RunProcess` preparation
-as the executable; neither these sources nor platform behavior have been run.
+as the executable; the current follow-up edits remain unrun, and the prior
+parent-CI failures above are not platform acceptance.
 
 Remaining release gates are real: parent CI must compile, format-check and run
 these sources on supported Unix systems and cross-build the fail-closed Windows
