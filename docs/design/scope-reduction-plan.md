@@ -1,6 +1,6 @@
 # Scope reduction: implementation record (2026-11-08)
 
-This is the decision record for the 2026-11-08 scope reduction, not a live implementation checklist. The specification and Go, Rust, and TypeScript SDKs implement the reduced contract in baseline `b13b972`. Shared interop matrix acceptance, packaged-consumer checks, and coverage/fuzz evidence remain pending parent CI. No local generator, build, test, or validation is claimed here.
+This is the decision record for the 2026-11-08 scope reduction, not a live implementation checklist. The specification and Go, Rust, and TypeScript SDKs implement the reduced contract in baseline `b13b972`. Shared interop matrix acceptance, packaged-consumer checks, and coverage/fuzz evidence were verified in GitHub CI on `444c69b` (see readiness evidence). No local generator, build, test, or validation is claimed here.
 
 ## Current contract
 
@@ -12,9 +12,9 @@ This is the decision record for the 2026-11-08 scope reduction, not a live imple
 
 ## Current evidence boundary
 
-Shared request interop scenarios are defined in `interop/scenarios.json`, the current source of truth. The harness implements verified-identity forwarding through the ordinary handler and malformed required-boolean admin-input controls; matrix acceptance remains pending parent CI. Preserve ordinary MCP pass-through, verified identity hand-off, protocol admin gates, strict request/response signing, trust, freshness/replay, signed errors, and last-active-admin behavior.
+Shared request interop scenarios are defined in `interop/scenarios.json`, the current source of truth. The harness implements verified-identity forwarding through the ordinary handler and malformed required-boolean admin-input controls; matrix acceptance was verified in GitHub CI on `444c69b` (see readiness evidence). Preserve ordinary MCP pass-through, verified identity hand-off, protocol admin gates, strict request/response signing, trust, freshness/replay, signed errors, and last-active-admin behavior.
 
-The existing SDK test source is distinct from integration evidence: Go root/client/server/userkey tests; Rust integration tests under `rust/tests/`; TypeScript tests under `ts/test/`; shared contract fixtures under `spec/fixtures/`. Parent CI evidence for this baseline remains pending. No release, tag, publication, dependency, or version change is implied.
+The existing SDK test source is distinct from integration evidence: Go root/client/server/userkey tests; Rust integration tests under `rust/tests/`; TypeScript tests under `ts/test/`; shared contract fixtures under `spec/fixtures/`. GitHub CI evidence for integrated `444c69b` is recorded in readiness. No release, tag, publication, dependency, or version change is implied.
 
 ## Historical design questions
 

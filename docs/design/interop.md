@@ -1,6 +1,6 @@
 # Design: cross-language interoperability tests
 
-Status: Go, Rust and TypeScript SDKs implement the reduced admin-only identity contract in baseline `b13b972`; shared interop matrix acceptance remains pending parent CI. The scenario source of truth is [`interop/scenarios.json`](../../interop/scenarios.json). The harness exercises verified-identity forwarding through ordinary handlers and malformed required-boolean admin-input controls. No harness result is claimed here.
+Status: Go, Rust and TypeScript SDKs implement the reduced admin-only identity contract in baseline `b13b972`; shared interop matrix acceptance was verified in GitHub CI on `444c69b` (see readiness evidence). The scenario source of truth is [`interop/scenarios.json`](../../interop/scenarios.json). The harness exercises verified-identity forwarding through ordinary handlers and malformed required-boolean admin-input controls. The integrated harness passed on `444c69b`; see readiness for exact runs.
 
 ## Contract and boundaries
 
@@ -21,7 +21,7 @@ The current server CLI is `interop-server --aud <aud> --state <file> --server-se
 
 Language harness sources are `interop/go/{server,client,transfer}/`, `rust/src/bin/interop*.rs`, and `ts/src/interop/`. They are outside the public SDK APIs. `interop/run.mjs` coordinates request scenarios and signing controls; `interop/transfer.mjs` separately coordinates user-key transfer. The latter's envelope, strict import, independent trust tuple, and role-isolated key surfaces remain governed by [user-keys.md](user-keys.md) and its fixtures. Do not conflate its envelope `type` discriminator with the removed user `kind` field.
 
-Shared harness matrix acceptance, packaged-consumer checks, and coverage/fuzz evidence for baseline `b13b972` remain pending parent CI. Q1 session-channel work is future v0.2 design, not implemented. Q3 server-key rotation requires a separate exact design and is not implemented.
+Shared harness matrix acceptance, packaged-consumer checks, and coverage/fuzz evidence for baseline `b13b972` were verified in GitHub CI on `444c69b` (see readiness evidence). Q1 session-channel work is future v0.2 design, not implemented. Q3 server-key rotation requires a separate exact design and is not implemented.
 
 ## 9. Client URL policy
 

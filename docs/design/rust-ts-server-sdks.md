@@ -2,7 +2,7 @@
 
 The SDK migration in baseline `b13b972` implements the current reduced contract in Go, Rust, and TypeScript. Authenticated ordinary MCP requests pass through unchanged; the wrapped application receives immutable verified identity `{kid, name, admin}` and performs its own authorization. The protocol's `admin` flag gates only reserved `jack.admin.*` tools. Legacy user/state `kind` or `scopes` data is rejected without migration or rewrite.
 
-This is a design and source inventory, not a test result. Parent CI evidence for shared interop reconciliation, packaged consumers, coverage, and fuzzing remains pending. Q1's authenticated session channel is future v0.2 design work; Q3 server-key rotation is separate future work requiring an exact design. Neither is implemented.
+This is a design and source inventory, not a test result. GitHub CI verified shared interop, packaged consumers, coverage, and fuzzing on `444c69b`. Q1's authenticated session channel is future v0.2 design work; Q3 server-key rotation is separate future work requiring an exact design. Neither is implemented.
 
 ## Repository and package boundaries
 
@@ -25,12 +25,12 @@ These boundaries keep common cryptographic and wire primitives separate from cli
 
 The shared fixtures in `spec/fixtures/` include authentication, keys, requests, responses, administration, state loading, URL policy, and user-key transfer. Go tests live beside root primitives and under `client/`, `server/`, and `userkey/`; Rust integration tests are under `rust/tests/`; TypeScript tests are under `ts/test/`. These are source inventories only and make no claim that the baseline has passed them.
 
-The current interop scenario source is [`interop/scenarios.json`](../../interop/scenarios.json). It includes identity-forwarding, exact request-byte preservation, forged-identity rejection, and strict-boolean admin-control cases. CI acceptance remains pending. Preserve signing-byte parity, trust, freshness/replay, signed authenticated errors, and last-active-admin coverage; no shared-harness result is claimed here.
+The current interop scenario source is [`interop/scenarios.json`](../../interop/scenarios.json). It includes identity-forwarding, exact request-byte preservation, forged-identity rejection, and strict-boolean admin-control cases. CI acceptance passed on `444c69b`. Preserve signing-byte parity, trust, freshness/replay, signed authenticated errors, and last-active-admin coverage; the integrated shared harness passed on `444c69b`.
 
 ## Historical CI boundary
 
-Workflow definitions describe Go vet/tests and race tests; Rust formatting, clippy, tests, feature isolation and MSRV checks; TypeScript typecheck/tests; fixture freshness; interop and transfer harnesses; consumers; coverage; fuzzing; and licence checks. Only the first groups exist as current SDK test/check sources; results for baseline `b13b972` are not established here. Coverage, fuzz, packaged-consumer and shared interop evidence await parent CI integration.
+Workflow definitions describe Go vet/tests and race tests; Rust formatting, clippy, tests, feature isolation and MSRV checks; TypeScript typecheck/tests; fixture freshness; interop and transfer harnesses; consumers; coverage; fuzzing; and licence checks. The source inventory is separate from execution receipts for the integrated candidate. Coverage, fuzz, packaged-consumer and shared interop evidence are recorded for `444c69b` in readiness evidence.
 
-The original design-time requirement was fixture parity on Linux and Windows, with shared fixtures consumed in place. Current CI definitions and all baseline outcomes must be assessed by parent CI; this design record does not assert green status.
+The original design-time requirement was fixture parity on Linux and Windows, with shared fixtures consumed in place. Current CI definitions and all baseline outcomes must be assessed by parent CI; readiness records exact green CI evidence for `444c69b`.
 
-See [interop design](interop.md), [scope review](scope-review-2026-11-08.md), and [readiness](../readiness.md) for the separately owned harness boundary, scope decisions, and earlier-commit-only metrics.
+See [interop design](interop.md), [scope review](scope-review-2026-11-08.md), and [readiness](../readiness.md) for the separately owned harness boundary, scope decisions, and commit-specific metrics.

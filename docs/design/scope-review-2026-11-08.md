@@ -1,6 +1,6 @@
 # Scope review: what mcp-jack is responsible for (2026-11-08)
 
-Status: **decided; SDK migration baseline `b13b972`.** The specification and Go, Rust, and TypeScript SDKs implement the reduced admin-only identity contract: unchanged ordinary MCP pass-through, immutable verified identity `{kid, name, admin}`, and `admin` gating only reserved `jack.admin.*` tools. Protocol operations are audited. Shared interop matrix acceptance, packaged-consumer checks, and coverage/fuzz evidence remain pending parent CI; no result is claimed here. Legacy user/state `kind` or `scopes` records are rejected without migration or rewrite. The transfer-envelope `type` discriminator is independent and unchanged.
+Status: **decided; SDK migration baseline `b13b972`.** The specification and Go, Rust, and TypeScript SDKs implement the reduced admin-only identity contract: unchanged ordinary MCP pass-through, immutable verified identity `{kid, name, admin}`, and `admin` gating only reserved `jack.admin.*` tools. Protocol operations are audited. Shared interop matrix acceptance, packaged-consumer checks, and coverage/fuzz evidence were verified in GitHub CI on `444c69b` (see readiness evidence); the exact CI runs for `444c69b` are recorded in readiness. Legacy user/state `kind` or `scopes` records are rejected without migration or rewrite. The transfer-envelope `type` discriminator is independent and unchanged.
 
 This record covers Q1-Q8 and Q10 of [spec/README.md](../../spec/README.md) (Q9, the licence, was resolved earlier).
 
@@ -45,8 +45,8 @@ Removed are user classification and delegation semantics, scope-based registry/i
 ## 6. Implementation and integration status
 
 - The specification and three SDKs implement the reduced contract in baseline `b13b972`.
-- Shared interop scenario definitions are in `interop/scenarios.json`, the current source of truth. The harness implements verified-identity forwarding through the ordinary handler and malformed required-boolean admin-input controls. Matrix acceptance remains pending parent CI; no passing result is claimed.
-- Packaged-consumer and coverage/fuzz evidence remain pending parent CI.
+- Shared interop scenario definitions are in `interop/scenarios.json`, the current source of truth. The harness implements verified-identity forwarding through the ordinary handler and malformed required-boolean admin-input controls. Matrix acceptance was verified in GitHub CI on `444c69b` (see readiness evidence); the exact passing CI runs for `444c69b` are recorded in readiness.
+- Packaged-consumer and coverage/fuzz evidence were verified in GitHub CI on `444c69b` (see readiness evidence).
 - Q1 channel and Q3 server-key rotation remain future design work; multi-instance/cluster management is deferred.
 
 ## 7. Still open

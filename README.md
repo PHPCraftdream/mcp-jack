@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/PHPCraftdream/mcp-jack/actions/workflows/ci.yml/badge.svg)](https://github.com/PHPCraftdream/mcp-jack/actions/workflows/ci.yml)
 
-mcp-jack wraps ordinary MCP over HTTP with signed, replay-protected messages, key management, protocol auditing, and SDKs for Go, Rust, and TypeScript. The reduced contract and SDK migration are represented by baseline `b13b972`; this document does not claim its checks passed. Shared interop matrix acceptance, packaged-consumer evidence, and coverage/fuzz evidence remain pending parent CI. No release has been made and nothing has been audited.
+mcp-jack wraps ordinary MCP over HTTP with signed, replay-protected messages, key management, protocol auditing, and SDKs for Go, Rust, and TypeScript. The reduced contract and SDK migration are represented by baseline `b13b972`; the integrated candidate `444c69b` passed the checks recorded in readiness. Shared interop matrix acceptance, packaged-consumer evidence, and coverage/fuzz evidence were verified in GitHub CI on `444c69b` (see readiness evidence). No release has been made and nothing has been audited.
 
 ## Contract
 
@@ -48,7 +48,7 @@ The workflow definitions specify Go vet/tests and race tests; Rust formatting, c
 
 Package-isolation consumers install the actual npm tarball (`private: true`), Rust `.crate` (`publish = false`), and a Go module snapshot separately. The pinned baseline is TypeScript 5.9, Go 1.22, Rust 1.85, and Node 20/22. These are baseline pins, not new measurements or green results; no versions are changed here.
 
-The interop and credential-transfer harnesses, packaged consumers, coverage reports, and bounded Go fuzz campaign have workflow definitions in this repository. Matrix acceptance, packaged-consumer checks, coverage, and fuzz evidence for this baseline remain pending parent CI. The current interop scenario source of truth is [`interop/scenarios.json`](interop/scenarios.json). Historical readiness measurements are explicitly tied to their earlier commit in [docs/readiness.md](docs/readiness.md).
+The interop and credential-transfer harnesses, packaged consumers, coverage reports, and bounded Go fuzz campaign have workflow definitions in this repository. Matrix acceptance, packaged-consumer checks, coverage, and fuzz evidence for this baseline were verified in GitHub CI on `444c69b` (see readiness evidence). The current interop scenario source of truth is [`interop/scenarios.json`](interop/scenarios.json). Historical readiness measurements are explicitly tied to their earlier commit in [docs/readiness.md](docs/readiness.md).
 
 ## Specification and future work
 

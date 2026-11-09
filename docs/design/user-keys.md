@@ -263,4 +263,4 @@ if (!ok) throw new Error("bad signature");
 - The shared fixture corpus is hand-authored and byte-exact; imported material is checked against independent seed/public/kid and RFC 8032 oracles.
 - Resolved: the namespace default is fixed (section 7); issuance needs no separate feature or namespace.
 
-The transfer contract is implemented in the Go, Rust, and TypeScript SDKs. The named fixture obligations do not assert that parent CI ran successfully for baseline `b13b972`; shared harness, consumer, coverage, and fuzz evidence remains pending parent integration.
+The transfer contract is implemented in the Go, Rust, and TypeScript SDKs. The fixture obligations are separate from execution evidence; CI passed on integrated `444c69b`; shared harness, consumer, coverage, and fuzz evidence was verified in GitHub CI on `444c69b`.

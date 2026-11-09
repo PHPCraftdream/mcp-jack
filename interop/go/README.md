@@ -12,6 +12,6 @@ In `--verify-only` mode the process reads one JSON object from stdin (`method`, 
 
 ## Client and status
 
-`interop-client` accepts `--url`, `--seed-hex`, `--server-public-key`, `--aud`, and `--scenario`; optional inputs are `--seeds`, `--ts`, `--nonce`, and repeatable `--arg k=v`. `sign-only` uses fixed values and does not contact a server. The Go interop sources implement identity forwarding for POST/GET and dot-segment targets, plus malformed required-boolean admin-input controls; `scenarios.json` is the shared expected-outcome source. Parent CI/reconciliation remains pending; these are implemented harness cases, not design-only work.
+`interop-client` accepts `--url`, `--seed-hex`, `--server-public-key`, `--aud`, and `--scenario`; optional inputs are `--seeds`, `--ts`, `--nonce`, and repeatable `--arg k=v`. `sign-only` uses fixed values and does not contact a server. The Go interop sources implement identity forwarding for POST/GET and dot-segment targets, plus malformed required-boolean admin-input controls; `scenarios.json` is the shared expected-outcome source. Parent CI passed on `444c69b`; these are implemented harness cases, not design-only work.
 
 Signing parity, freshness/replay, trusted server responses, signed authenticated errors and last-active-admin behavior remain coverage requirements. For transfer-envelope behavior see [the independent user-key contract](../../docs/design/user-keys.md); it is separate from request interop.
