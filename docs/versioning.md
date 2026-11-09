@@ -33,6 +33,10 @@ Values below are the checked-in snapshot at worktree base `777771fed0a53011898e5
 
 Do not change these values or remove publication restrictions for an RC. They do not mean a component is released or approved for publication. Keep the Go 1.22, Rust 1.85, and Node 20/22 baselines and TypeScript's zero-runtime-dependency property unless separately reviewed and approved ([`go.mod`](../go.mod), [`rust/Cargo.toml`](../rust/Cargo.toml), [`.github/workflows/ci.yml`](../.github/workflows/ci.yml), [`ts/package.json`](../ts/package.json), [`ts/README.md`](../ts/README.md)).
 
+### Patched Go security toolchain decision
+
+On 2026-11-09 the owner separately approved a patched Go toolchain for security CI and deployment guidance, without changing the Go 1.22 language floor, existing compatibility checks, SDK/dependency versions, or publication restrictions. Go 1.22 compatibility is not a security endorsement. The first advisory run on Go 1.22.12 reported standard-library vulnerabilities, including reachable HTTP/X.509 paths; changing the security lane does not remediate binaries built with that old toolchain. Security CI must use an independently verified patched Go release, and deployment builds must use a patched, supported toolchain. See [dependency scanning](security-dependencies.md) for exact pins and acceptance evidence.
+
 ## Compatibility, transition, and freeze gates
 
 Compatibility includes wire semantics, SDK/API surfaces, persisted state, static profiles and credentials, and operator workflows. Wire compatibility covers signing byte layout, signing domain, and canonicalization; parse and validation rules, including observable error precedence; identity and admin semantics; and rotation, restart, and replay behavior. Any break in any of these areas requires explicit review and an approved migration or rejection plan. A profile change is not automatically a signing-domain or wire change. A genuinely breaking `mcp-jack/v1` wire change requires a new wire identifier and explicit migration; never silently reinterpret existing `v1` signatures or bytes.
