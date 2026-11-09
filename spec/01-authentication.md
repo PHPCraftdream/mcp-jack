@@ -61,7 +61,7 @@ mcp-jack/v1/request
 
 `sig` = `base64url(Ed25519_sign(private_key, signing_string))`.
 
-The body is hashed and verified before it is parsed, and the hash always covers the bytes exactly as sent: a body is never re-serialized, for example after resolving duplicate member names (02 section 4), before verification. Servers SHOULD enforce a maximum body size before hashing.
+The body is hashed and verified before it is parsed, and the hash always covers the bytes exactly as sent: a body is never re-serialized, for example after resolving duplicate member names (02 section 2), before verification. Servers SHOULD enforce a maximum body size before hashing.
 
 ## 4. Request verification
 
@@ -77,7 +77,7 @@ A server MUST perform these steps in order and stop at the first failure. Failur
 | 6 | `abs(now - ts) > window` (default 30 s, SHOULD NOT exceed 120 s) | 401 | `timestamp_out_of_window` |
 | 7 | Signature does not verify over the recomputed signing string | 401 | `bad_signature` |
 | 8 | `(kid, nonce)` already recorded and still live | 401 | `replayed_nonce` |
-| 9 | Authorization, see [02-authorization.md](02-authorization.md) | 400/403 | see there |
+| 9 | Dispatch and identity hand-off, see [02-authorization.md](02-authorization.md) | 400/403/501 | see there |
 
 Rules:
 
@@ -127,12 +127,12 @@ Client verification order, each failure being a client-side error. These codes a
 
 Responses to requests that failed authentication MAY be unsigned. A client MUST NOT act on an unsigned or unverified response beyond reporting its status.
 
-Streaming responses (for example event streams of logs) cannot carry a whole-body hash; see open question Q1 in [README.md](README.md).
+Streaming responses (for example event streams of logs) cannot carry a whole-body hash; in v0.1 a server refuses event streams with `501 streaming_unsupported` ([02-authorization.md](02-authorization.md) section 2) until the v0.2 session channel (open question Q1 in [README.md](README.md)).
 
 ## 6. Security considerations (informative)
 
 - **Private-key storage is the real boundary.** A stolen signing key is as good as a stolen token. Implementations SHOULD keep keys in a non-extractable store (TPM, secure enclave, hardware token) or behind a signer agent that returns signatures without exposing the key.
-- **Signing is not authorization.** An agent that can ask a signer for signatures can be tricked (prompt injection through log content) into requesting a dangerous operation. Signer agents should apply their own policy and require human confirmation for destructive operations.
+- **Signing is not authorization.** An agent that can ask a signer for signatures can be tricked (prompt injection through log content) into requesting a dangerous operation. Signer agents should apply their own access rules and require human confirmation for destructive operations.
 - **Domain separation.** The `mcp-jack/v1/request` and `mcp-jack/v1/response` prefixes prevent a signature from one context being valid in the other, or in another protocol using the same key.
 - **No downgrade.** There is one algorithm and one version; unknown versions are rejected, not negotiated.
 - **Clock.** Servers and clients need clocks within the window; a skewed client sees `timestamp_out_of_window`. Time synchronisation is a deployment prerequisite.

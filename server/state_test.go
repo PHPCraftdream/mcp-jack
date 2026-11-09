@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -25,8 +26,6 @@ func stateTestKey(id, name string) RegistryEntry {
 		Kid:       base64.RawURLEncoding.EncodeToString(sum[:]),
 		PublicKey: base64.RawURLEncoding.EncodeToString(pub),
 		Name:      name,
-		Kind:      KindHuman,
-		Scopes:    []string{"read"},
 	}
 }
 
@@ -36,12 +35,12 @@ func stateTestIntPtr(v int64) *int64 { return &v }
 // TestRegistryEntryAndInviteJSON pins the on-disk JSON shape of the records.
 func TestRegistryEntryAndInviteJSON(t *testing.T) {
 	t.Run("registry entry with nil pointers", func(t *testing.T) {
-		entry := RegistryEntry{Kid: "k1", PublicKey: "pk", Name: "alice", Kind: KindHuman, Scopes: []string{"read"}}
+		entry := RegistryEntry{Kid: "k1", PublicKey: "pk", Name: "alice"}
 		data, err := json.Marshal(entry)
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
 		}
-		want := `{"kid":"k1","public_key":"pk","name":"alice","kind":"human","scopes":["read"],"not_before":null,"not_after":null}`
+		want := `{"kid":"k1","public_key":"pk","name":"alice","admin":false,"not_before":null,"not_after":null}`
 		if string(data) != want {
 			t.Fatalf("got %s\nwant %s", data, want)
 		}
@@ -50,8 +49,6 @@ func TestRegistryEntryAndInviteJSON(t *testing.T) {
 	t.Run("invite record with nil key ttl", func(t *testing.T) {
 		inv := InviteRecord{
 			InviteID:  "i1",
-			Scopes:    []string{"read"},
-			Kind:      "human",
 			CreatedBy: "root",
 			CreatedAt: 1767225500,
 			ExpiresAt: 1767228600,
@@ -60,7 +57,7 @@ func TestRegistryEntryAndInviteJSON(t *testing.T) {
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
 		}
-		want := `{"invite_id":"i1","scopes":["read"],"kind":"human","created_by":"root","created_at":1767225500,"expires_at":1767228600,"key_ttl_seconds":null}`
+		want := `{"invite_id":"i1","admin":false,"created_by":"root","created_at":1767225500,"expires_at":1767228600}`
 		if string(data) != want {
 			t.Fatalf("got %s\nwant %s", data, want)
 		}
@@ -70,19 +67,17 @@ func TestRegistryEntryAndInviteJSON(t *testing.T) {
 		nb := int64(1767225500)
 		na := int64(1767229200)
 		ttl := int64(3600)
-		entry := RegistryEntry{Kid: "k1", PublicKey: "pk", Name: "alice", Kind: KindHuman, Scopes: []string{"read"}, NotBefore: &nb, NotAfter: &na}
+		entry := RegistryEntry{Kid: "k1", PublicKey: "pk", Name: "alice", NotBefore: &nb, NotAfter: &na}
 		data, err := json.Marshal(entry)
 		if err != nil {
 			t.Fatalf("marshal entry: %v", err)
 		}
-		want := `{"kid":"k1","public_key":"pk","name":"alice","kind":"human","scopes":["read"],"not_before":1767225500,"not_after":1767229200}`
+		want := `{"kid":"k1","public_key":"pk","name":"alice","admin":false,"not_before":1767225500,"not_after":1767229200}`
 		if string(data) != want {
 			t.Fatalf("got %s\nwant %s", data, want)
 		}
 		inv := InviteRecord{
 			InviteID:      "i1",
-			Scopes:        []string{"read"},
-			Kind:          "human",
 			CreatedBy:     "root",
 			CreatedAt:     1767225500,
 			ExpiresAt:     1767228600,
@@ -92,29 +87,28 @@ func TestRegistryEntryAndInviteJSON(t *testing.T) {
 		if err != nil {
 			t.Fatalf("marshal invite: %v", err)
 		}
-		want = `{"invite_id":"i1","scopes":["read"],"kind":"human","created_by":"root","created_at":1767225500,"expires_at":1767228600,"key_ttl_seconds":3600}`
+		want = `{"invite_id":"i1","admin":false,"created_by":"root","created_at":1767225500,"expires_at":1767228600,"key_ttl_seconds":3600}`
 		if string(data) != want {
 			t.Fatalf("got %s\nwant %s", data, want)
 		}
 	})
 
-	t.Run("nil scopes normalized through PutKey", func(t *testing.T) {
+	t.Run("zero value admin marshals as false and survives PutKey", func(t *testing.T) {
 		store := NewMemoryState()
-		entry := stateTestKey("k1", "alice")
-		entry.Scopes = nil
+		entry := RegistryEntry{Kid: "k1", PublicKey: "pk", Name: "alice"}
 		if err := store.Update(func(e *StateEdit) error { e.PutKey(entry); return nil }); err != nil {
 			t.Fatalf("update: %v", err)
 		}
 		got := store.View().Keys[0]
-		if got.Scopes == nil {
-			t.Fatal("Scopes is nil, want non-nil empty slice")
+		if got.Admin {
+			t.Fatal("Admin = true, want false for the zero value")
 		}
-		if len(got.Scopes) != 0 {
-			t.Fatalf("Scopes = %v, want empty", got.Scopes)
+		data, err := json.Marshal(got)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
 		}
-		data, _ := json.Marshal(got.Scopes)
-		if string(data) != "[]" {
-			t.Fatalf("Scopes marshaled as %s, want []", data)
+		if !strings.Contains(string(data), `"admin":false`) {
+			t.Fatalf("entry marshaled as %s, want \"admin\":false", data)
 		}
 	})
 }
@@ -156,7 +150,7 @@ func TestStateEditBasics(t *testing.T) {
 		entry := stateTestKey("k1", "alice")
 		replaced := entry
 		replaced.Name = "alice2"
-		replaced.Scopes = []string{"read", "write"}
+		replaced.Admin = true
 		if err := store.Update(func(e *StateEdit) error {
 			e.PutKey(entry)
 			e.PutKey(replaced)
@@ -168,7 +162,7 @@ func TestStateEditBasics(t *testing.T) {
 		if len(view.Keys) != 1 {
 			t.Fatalf("len(keys) = %d, want 1", len(view.Keys))
 		}
-		if view.Keys[0].Name != "alice2" || len(view.Keys[0].Scopes) != 2 {
+		if view.Keys[0].Name != "alice2" || !view.Keys[0].Admin {
 			t.Fatalf("entry not replaced: %+v", view.Keys[0])
 		}
 	})
@@ -230,19 +224,21 @@ func TestStateEditBasics(t *testing.T) {
 	t.Run("edit getters are deep copies", func(t *testing.T) {
 		store := NewMemoryState()
 		k := stateTestKey("k1", "alice")
+		k.NotBefore = stateTestIntPtr(5)
 		if err := store.Update(func(e *StateEdit) error {
 			e.PutKey(k)
 			return nil
 		}); err != nil {
 			t.Fatalf("update: %v", err)
 		}
-		// Mutate a getter-returned entry's Scopes inside another update.
+		// Mutate a getter-returned entry's timestamp pointee inside another
+		// update: the getter must have copied it.
 		if err := store.Update(func(e *StateEdit) error {
 			got, ok := e.Key(k.Kid)
 			if !ok {
 				t.Fatal("Key(kid) not found")
 			}
-			got.Scopes[0] = "MUTATED"
+			*got.NotBefore = 999
 			got.Name = "MUTATED"
 			return nil
 		}); err != nil {
@@ -252,8 +248,8 @@ func TestStateEditBasics(t *testing.T) {
 		if view.Keys[0].Name != "alice" {
 			t.Fatalf("Name = %s, want alice", view.Keys[0].Name)
 		}
-		if view.Keys[0].Scopes[0] != "read" {
-			t.Fatalf("Scopes[0] = %s, want read", view.Keys[0].Scopes[0])
+		if view.Keys[0].NotBefore == nil || *view.Keys[0].NotBefore != 5 {
+			t.Fatalf("NotBefore = %v, want 5", view.Keys[0].NotBefore)
 		}
 	})
 }
@@ -262,7 +258,7 @@ func TestStateEditBasics(t *testing.T) {
 func TestEnrollFlow(t *testing.T) {
 	store := NewMemoryState()
 	if err := store.Update(func(e *StateEdit) error {
-		e.PutInvite(InviteRecord{InviteID: "i1", Scopes: []string{"read"}, CreatedBy: "root"})
+		e.PutInvite(InviteRecord{InviteID: "i1", CreatedBy: "root"})
 		e.PutKey(stateTestKey("admin", "root"))
 		return nil
 	}); err != nil {
@@ -274,10 +270,11 @@ func TestEnrollFlow(t *testing.T) {
 		if !ok {
 			return errors.New("invite missing")
 		}
+		if inv.Admin {
+			return errors.New("the invite carries admin, want the default false")
+		}
 		e.RemoveInvite("i1")
-		entry := enrolled
-		entry.Scopes = inv.Scopes
-		e.PutKey(entry)
+		e.PutKey(enrolled)
 		return nil
 	}); err != nil {
 		t.Fatalf("enroll: %v", err)
@@ -366,15 +363,20 @@ func TestRollbackOnError(t *testing.T) {
 // TestViewIsCopy checks mutations of a returned view never reach the store.
 func TestViewIsCopy(t *testing.T) {
 	store := NewMemoryState()
+	entry := stateTestKey("k1", "alice")
+	entry.NotBefore = stateTestIntPtr(5)
 	if err := store.Update(func(e *StateEdit) error {
-		e.PutKey(stateTestKey("k1", "alice"))
+		e.PutKey(entry)
 		return nil
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	view := store.View()
 	view.Keys[0].Name = "MUTATED"
-	view.Keys[0].Scopes[0] = "MUTATED"
+	if view.Keys[0].NotBefore == nil {
+		t.Fatal("NotBefore is nil, want 5")
+	}
+	*view.Keys[0].NotBefore = 999
 	view.Keys = append(view.Keys, stateTestKey("k2", "mallory"))
 	view.Invites = append(view.Invites, InviteRecord{InviteID: "i1"})
 
@@ -382,7 +384,7 @@ func TestViewIsCopy(t *testing.T) {
 	if len(after.Keys) != 1 {
 		t.Fatalf("len(keys) = %d, want 1", len(after.Keys))
 	}
-	if after.Keys[0].Name != "alice" || after.Keys[0].Scopes[0] != "read" {
+	if after.Keys[0].Name != "alice" || after.Keys[0].NotBefore == nil || *after.Keys[0].NotBefore != 5 {
 		t.Fatalf("store entry mutated: %+v", after.Keys[0])
 	}
 	if len(after.Invites) != 0 {
@@ -485,36 +487,30 @@ func TestPutKeyInputIsolation(t *testing.T) {
 	t.Run("putkey", func(t *testing.T) {
 		store := NewMemoryState()
 		entry := stateTestKey("k1", "alice")
-		entry.Scopes = []string{"read"}
 		entry.NotBefore = stateTestIntPtr(5)
+		entry.NotAfter = stateTestIntPtr(50)
 		if err := store.Update(func(e *StateEdit) error { e.PutKey(entry); return nil }); err != nil {
 			t.Fatalf("update: %v", err)
 		}
-		entry.Scopes[0] = "admin"
-		entry.Scopes = append(entry.Scopes, "extra")
 		*entry.NotBefore = 0
+		*entry.NotAfter = 0
 		got := store.View().Keys[0]
-		if len(got.Scopes) != 1 || got.Scopes[0] != "read" {
-			t.Fatalf("Scopes = %v, want [read]", got.Scopes)
-		}
 		if got.NotBefore == nil || *got.NotBefore != 5 {
 			t.Fatalf("NotBefore = %v, want 5", got.NotBefore)
+		}
+		if got.NotAfter == nil || *got.NotAfter != 50 {
+			t.Fatalf("NotAfter = %v, want 50", got.NotAfter)
 		}
 	})
 
 	t.Run("putinvite", func(t *testing.T) {
 		store := NewMemoryState()
-		inv := InviteRecord{InviteID: "i1", Scopes: []string{"read"}, CreatedBy: "root", KeyTTLSeconds: stateTestIntPtr(3600)}
+		inv := InviteRecord{InviteID: "i1", CreatedBy: "root", KeyTTLSeconds: stateTestIntPtr(3600)}
 		if err := store.Update(func(e *StateEdit) error { e.PutInvite(inv); return nil }); err != nil {
 			t.Fatalf("update: %v", err)
 		}
-		inv.Scopes[0] = "admin"
-		inv.Scopes = append(inv.Scopes, "extra")
 		*inv.KeyTTLSeconds = 0
 		got := store.View().Invites[0]
-		if len(got.Scopes) != 1 || got.Scopes[0] != "read" {
-			t.Fatalf("Scopes = %v, want [read]", got.Scopes)
-		}
 		if got.KeyTTLSeconds == nil || *got.KeyTTLSeconds != 3600 {
 			t.Fatalf("KeyTTLSeconds = %v, want 3600", got.KeyTTLSeconds)
 		}

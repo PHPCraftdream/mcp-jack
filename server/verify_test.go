@@ -1,8 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"sort"
 	"strings"
@@ -23,13 +26,12 @@ func stateFromEntries(t *testing.T, entries []spec.RegistryEntry) *MemoryState {
 	st := NewMemoryState()
 	err := st.Update(func(e *StateEdit) error {
 		for _, entry := range entries {
-			kind := KindHuman
-			if entry.Kind != nil {
-				kind = *entry.Kind
-			}
+			// The fixture registry omits admin for non-admin keys, so a nil
+			// pointer is false.
 			e.PutKey(RegistryEntry{
-				Kid: entry.Kid, PublicKey: entry.PublicKey, Name: entry.Name, Kind: kind,
-				Scopes: entry.Scopes, NotBefore: entry.NotBefore, NotAfter: entry.NotAfter,
+				Kid: entry.Kid, PublicKey: entry.PublicKey, Name: entry.Name,
+				Admin:     entry.Admin != nil && *entry.Admin,
+				NotBefore: entry.NotBefore, NotAfter: entry.NotAfter,
 			})
 		}
 		return nil
@@ -49,9 +51,6 @@ func jackAuthValues(headers []spec.HeaderPair) []string {
 	}
 	return values
 }
-
-// policyFiles maps the policy names used by the vectors to fixture files.
-var policyFiles = map[string]string{"default": "policy.json", "wildcard": "policy-wildcard.json"}
 
 // matchValue compares decoded JSON values; the string "<b64u43>" in want
 // matches any canonical base64url encoding of 32 bytes (invite codes and ids
@@ -129,6 +128,12 @@ func checkOutcome(t *testing.T, label string, res Result, want spec.Expect) {
 		}
 	}
 
+	if want.Identity != nil {
+		if res.Identity == nil || res.Identity.Kid() != want.Identity.Kid || res.Identity.Name() != want.Identity.Name || res.Identity.Admin() != want.Identity.Admin {
+			t.Fatalf("%s: identity = %+v, want %s/%s/%v", label, res.Identity, want.Identity.Kid, want.Identity.Name, want.Identity.Admin)
+		}
+	}
+
 	if len(want.Structured) > 0 {
 		gotJSON, err := json.Marshal(res.Structured)
 		if err != nil {
@@ -147,28 +152,146 @@ func checkOutcome(t *testing.T, label string, res Result, want spec.Expect) {
 	}
 }
 
-// summarize mirrors the "after" expectation of the sequence vectors.
+// summarize mirrors the "after" expectation of the sequence vectors. Users
+// are sorted by name; invites are every stored invite — durable state, not
+// the live listing — sorted by invite id, ties by created_at.
 func summarize(st StateStore, now int64) spec.AfterState {
 	view := st.View()
 	keys := append([]RegistryEntry(nil), view.Keys...)
 	sort.Slice(keys, func(i, j int) bool { return keys[i].Name < keys[j].Name })
 	users := make([]spec.UserSummary, 0, len(keys))
 	for _, k := range keys {
-		scopes := make([]string, len(k.Scopes))
-		copy(scopes, k.Scopes)
-		sort.Strings(scopes)
 		users = append(users, spec.UserSummary{
-			Name: k.Name, Kid: k.Kid, Kind: kindOrHuman(k.Kind), Scopes: scopes,
+			Kid: k.Kid, PublicKey: k.PublicKey, Name: k.Name, Admin: k.Admin,
 			NotBefore: k.NotBefore, NotAfter: k.NotAfter,
 		})
 	}
-	live := 0
-	for _, i := range view.Invites {
-		if now < i.ExpiresAt {
-			live++
+	invites := append([]InviteRecord(nil), view.Invites...)
+	sort.Slice(invites, func(i, j int) bool {
+		if invites[i].InviteID != invites[j].InviteID {
+			return invites[i].InviteID < invites[j].InviteID
+		}
+		return invites[i].CreatedAt < invites[j].CreatedAt
+	})
+	summaries := make([]spec.InviteSummary, 0, len(invites))
+	for _, inv := range invites {
+		summaries = append(summaries, spec.InviteSummary{
+			InviteID: inv.InviteID, Admin: inv.Admin, CreatedBy: inv.CreatedBy,
+			CreatedAt: inv.CreatedAt, ExpiresAt: inv.ExpiresAt, KeyTTLSeconds: inv.KeyTTLSeconds,
+		})
+	}
+	return spec.AfterState{Users: users, Invites: summaries}
+}
+
+// afterMatches compares the post-step state with the fixture expectation,
+// "<b64u43>" wildcards included. Users are matched positionally (sorted by
+// name on both sides); invites are matched as an unordered multiset because
+// an implementation-created invite id sorts by an unknown text.
+func afterMatches(t *testing.T, label string, want spec.AfterState, st StateStore, now int64) bool {
+	t.Helper()
+	got := summarize(st, now)
+	if len(got.Users) != len(want.Users) {
+		t.Fatalf("%s: users after the step: %d entries, want %d\n got %+v\nwant %+v", label, len(got.Users), len(want.Users), got.Users, want.Users)
+	}
+	for i := range want.Users {
+		gotJSON, err := json.Marshal(got.Users[i])
+		if err != nil {
+			t.Fatalf("%s: marshal user: %v", label, err)
+		}
+		wantJSON, err := json.Marshal(want.Users[i])
+		if err != nil {
+			t.Fatalf("%s: marshal expected user: %v", label, err)
+		}
+		var gotVal, wantVal any
+		if err := json.Unmarshal(gotJSON, &gotVal); err != nil {
+			t.Fatalf("%s: decode user: %v", label, err)
+		}
+		if err := json.Unmarshal(wantJSON, &wantVal); err != nil {
+			t.Fatalf("%s: decode expected user: %v", label, err)
+		}
+		if !matchValue(wantVal, gotVal) {
+			t.Fatalf("%s: user %d after the step\n got %s\nwant %s", label, i, gotJSON, wantJSON)
 		}
 	}
-	return spec.AfterState{Users: users, Invites: live}
+	if len(got.Invites) != len(want.Invites) {
+		t.Fatalf("%s: invites after the step: %d records, want %d\n got %+v\nwant %+v", label, len(got.Invites), len(want.Invites), got.Invites, want.Invites)
+	}
+	consumed := make([]bool, len(got.Invites))
+	for _, w := range want.Invites {
+		wantJSON, err := json.Marshal(w)
+		if err != nil {
+			t.Fatalf("%s: marshal expected invite: %v", label, err)
+		}
+		var wantVal any
+		if err := json.Unmarshal(wantJSON, &wantVal); err != nil {
+			t.Fatalf("%s: decode expected invite: %v", label, err)
+		}
+		found := false
+		for i, g := range got.Invites {
+			if consumed[i] {
+				continue
+			}
+			gotJSON, err := json.Marshal(g)
+			if err != nil {
+				t.Fatalf("%s: marshal invite: %v", label, err)
+			}
+			var gotVal any
+			if err := json.Unmarshal(gotJSON, &gotVal); err != nil {
+				t.Fatalf("%s: decode invite: %v", label, err)
+			}
+			if matchValue(wantVal, gotVal) {
+				consumed[i] = true
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("%s: no stored invite matches %+v\n got %+v", label, w, got.Invites)
+		}
+	}
+	return true
+}
+
+// identityFromWrappedHandler runs an accepted fixture case through the real
+// middleware stack in front of a probe and returns the identity the wrapped
+// handler read from its request context. The plain Verify comparison proves
+// the verifier computes the identity; this proves the middleware injects that
+// snapshot into the forwarded request (spec 02 section 3).
+func identityFromWrappedHandler(t *testing.T, c spec.RequestCase, body []byte, st StateStore, now int64) (Identity, bool) {
+	t.Helper()
+	nonces := NewNonceStore()
+	for _, n := range c.State.NonceCache {
+		nonces.CheckAndRecord(n.Kid, n.Nonce, 0, n.RetainUntil)
+	}
+	v, err := NewVerifier(Config{
+		Aud: c.State.Aud, State: st, Nonces: nonces,
+		Native: NewNativeTools(NativeOptions{}),
+		Window: int64(c.State.WindowSeconds), Now: func() int64 { return now },
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	var captured Identity
+	var ok bool
+	probe := func(w http.ResponseWriter, r *http.Request) {
+		captured, ok = IdentityFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("{}"))
+	}
+	h, err := NewHandler(HandlerConfig{Verifier: v, ServerKey: testPrivateKey(t, "svc")}, http.HandlerFunc(probe))
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	req := httptest.NewRequest(c.Request.Method, c.Request.Target, bytes.NewReader(body))
+	for _, hd := range c.Request.Headers {
+		req.Header.Add(hd.Name, hd.Value)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("wrapped-handler run: status = %d, body %s, want a forwarded accept", rec.Code, rec.Body.String())
+	}
+	return captured, ok
 }
 
 // TestRequestVectors runs every single-request fixture case through the
@@ -193,18 +316,15 @@ func TestRequestVectors(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Body: %v", err)
 			}
-			policyFile, ok := vectors.Policies[c.State.Policy]
-			if !ok {
-				t.Fatalf("unknown policy %q", c.State.Policy)
-			}
+			st := registryFromFixture(t, registry)
 			nonces := NewNonceStore()
 			for _, n := range c.State.NonceCache {
 				nonces.CheckAndRecord(n.Kid, n.Nonce, 0, n.RetainUntil)
 			}
 			now := c.State.Now
 			v, err := NewVerifier(Config{
-				Aud: c.State.Aud, State: registryFromFixture(t, registry), Nonces: nonces,
-				Policy: loadTestPolicy(t, policyFile), Native: NewNativeTools(NativeOptions{}),
+				Aud: c.State.Aud, State: st, Nonces: nonces,
+				Native: NewNativeTools(NativeOptions{}),
 				Window: int64(c.State.WindowSeconds), Now: func() int64 { return now },
 			})
 			if err != nil {
@@ -215,17 +335,23 @@ func TestRequestVectors(t *testing.T) {
 				AuthValues: jackAuthValues(c.Request.Headers), Body: body,
 			})
 			checkOutcome(t, c.ID, res, c.Expect)
+			if c.Expect.Identity != nil {
+				id, ok := identityFromWrappedHandler(t, c, body, st, now)
+				if !ok {
+					t.Fatalf("%s: the wrapped handler saw no identity", c.ID)
+				}
+				if id.Kid() != c.Expect.Identity.Kid || id.Name() != c.Expect.Identity.Name || id.Admin() != c.Expect.Identity.Admin {
+					t.Fatalf("%s: wrapped-handler identity = %s/%s/%v, want %s/%s/%v", c.ID,
+						id.Kid(), id.Name(), id.Admin(), c.Expect.Identity.Kid, c.Expect.Identity.Name, c.Expect.Identity.Admin)
+				}
+			}
 		})
 	}
 }
 
 func inviteFromFixture(i spec.InviteRecord) InviteRecord {
-	kind := KindHuman
-	if i.Kind != nil {
-		kind = *i.Kind
-	}
 	return InviteRecord{
-		InviteID: i.InviteID, Scopes: i.Scopes, Kind: kind, CreatedBy: i.CreatedBy,
+		InviteID: i.InviteID, Admin: i.Admin != nil && *i.Admin, CreatedBy: i.CreatedBy,
 		CreatedAt: i.CreatedAt, ExpiresAt: i.ExpiresAt, KeyTTLSeconds: i.KeyTTLSeconds,
 	}
 }
@@ -261,7 +387,7 @@ func TestAdminSequences(t *testing.T) {
 			}
 			now := c.State.Now
 			v, err := NewVerifier(Config{
-				Aud: c.State.Aud, State: st, Nonces: nonces, Policy: loadTestPolicy(t, policyFiles[c.State.Policy]),
+				Aud: c.State.Aud, State: st, Nonces: nonces,
 				Native: NewNativeTools(NativeOptions{}), Window: int64(c.State.WindowSeconds),
 				Now: func() int64 { return now },
 			})
@@ -281,9 +407,7 @@ func TestAdminSequences(t *testing.T) {
 				})
 				checkOutcome(t, label, res, step.Expect)
 				if step.Expect.After != nil {
-					if got := summarize(st, now); !reflect.DeepEqual(got, *step.Expect.After) {
-						t.Fatalf("%s: state after the step\n got %+v\nwant %+v", label, got, *step.Expect.After)
-					}
+					afterMatches(t, label, *step.Expect.After, st, now)
 				}
 			}
 		})

@@ -42,8 +42,8 @@ func TestBootstrapAdminThenEnroll(t *testing.T) {
 	}
 	kid := jack.KeyID(testPrivateKey(t, "newbie").Public().(ed25519.PublicKey))
 	entry, ok := st.Lookup(kid)
-	if !ok || len(entry.Scopes) != 1 || entry.Scopes[0] != "admin" || entry.Kind != KindHuman {
-		t.Fatalf("enrolled entry = %+v (found %v), want a human admin", entry, ok)
+	if !ok || !entry.Admin {
+		t.Fatalf("enrolled entry = %+v (found %v), want an admin entry", entry, ok)
 	}
 	if len(st.View().Invites) != 0 {
 		t.Fatal("the bootstrap invite must be consumed")
@@ -57,14 +57,14 @@ func TestBootstrapAdminThenEnroll(t *testing.T) {
 func TestInviteCodeIsNeverStored(t *testing.T) {
 	st := NewMemoryState()
 	admin := stateTestKey("admin-1", "admin1")
-	admin.Scopes = []string{"admin", "read"}
+	admin.Admin = true
 	if err := st.Update(func(e *StateEdit) error { e.PutKey(admin); return nil }); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
 	n := NewNativeTools(NativeOptions{})
 	res, jerr := n.Call(&NativeCall{
-		Tool: ToolAdminInviteCreate, Arguments: json.RawMessage(`{"scopes":["read"]}`),
+		Tool: ToolAdminInviteCreate, Arguments: json.RawMessage("{}"),
 		Caller: &admin, Kid: admin.Kid, Now: testNow, State: st,
 	})
 	if jerr != nil {
@@ -97,25 +97,99 @@ func TestLastAdministratorSurvivesConcurrentRevokes(t *testing.T) {
 		st := NewMemoryState()
 		a := stateTestKey("admin-a", "admina")
 		b := stateTestKey("admin-b", "adminb")
-		a.Scopes = []string{"admin"}
-		b.Scopes = []string{"admin"}
+		a.Admin = true
+		b.Admin = true
 		if err := st.Update(func(e *StateEdit) error { e.PutKey(a); e.PutKey(b); return nil }); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 
-		revoke := func(caller RegistryEntry, target RegistryEntry, wg *sync.WaitGroup) {
+		// Each goroutine writes only its own slot before wg.Done; read after Wait.
+		errs := make([]*jack.Error, 2)
+		revoke := func(i int, caller RegistryEntry, target RegistryEntry, wg *sync.WaitGroup) {
 			defer wg.Done()
 			args := json.RawMessage(fmt.Sprintf(`{"kid":%q}`, target.Kid))
-			_, _ = n.Call(&NativeCall{Tool: ToolAdminUserRevoke, Arguments: args, Caller: &caller, Kid: caller.Kid, Now: testNow, State: st})
+			_, errs[i] = n.Call(&NativeCall{Tool: ToolAdminUserRevoke, Arguments: args, Caller: &caller, Kid: caller.Kid, Now: testNow, State: st})
 		}
 		var wg sync.WaitGroup
 		wg.Add(2)
-		go revoke(a, b, &wg)
-		go revoke(b, a, &wg)
+		go revoke(0, a, b, &wg)
+		go revoke(1, b, a, &wg)
 		wg.Wait()
 
-		if got := activeAdmins(st.View().Keys, testNow); got < 1 {
-			t.Fatalf("round %d: %d administrators left, want at least 1", round, got)
+		succeeded := 0
+		for _, jerr := range errs {
+			if jerr == nil {
+				succeeded++
+			}
+		}
+		if succeeded != 1 {
+			t.Fatalf("round %d: %d concurrent mutual revokes succeeded, want exactly 1", round, succeeded)
+		}
+		for _, jerr := range errs {
+			if jerr == nil {
+				continue
+			}
+			if jerr.Code != jack.CodeUnknownKey {
+				t.Fatalf("round %d: loser error code = %v, want unknown_key (the caller was already revoked)", round, jerr.Code)
+			}
+		}
+		if got := activeAdmins(st.View().Keys, testNow); got != 1 {
+			t.Fatalf("round %d: %d administrators left, want exactly 1", round, got)
+		}
+	}
+}
+
+// TestConcurrentSelfRevokesKeepOneAdmin has two administrators SELF-revoke
+// concurrently. Each invocation individually satisfies the last-administrator
+// rule (the other admin is still active), but together they would leave none,
+// so serialized evaluation must keep exactly one administrator (spec 03
+// sections 4 and 9). Removing the last-admin check lets both succeed and
+// leaves no administrator, so this test discriminates the rule itself rather
+// than mere caller-removal ordering.
+func TestConcurrentSelfRevokesKeepOneAdmin(t *testing.T) {
+	n := NewNativeTools(NativeOptions{})
+	for round := 0; round < 50; round++ {
+		st := NewMemoryState()
+		a := stateTestKey("admin-a", "admina")
+		b := stateTestKey("admin-b", "adminb")
+		a.Admin = true
+		b.Admin = true
+		if err := st.Update(func(e *StateEdit) error { e.PutKey(a); e.PutKey(b); return nil }); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+
+		// Each goroutine writes only its own slot before wg.Done; read after Wait.
+		errs := make([]*jack.Error, 2)
+		selfRevoke := func(i int, self RegistryEntry, wg *sync.WaitGroup) {
+			defer wg.Done()
+			args := json.RawMessage(fmt.Sprintf(`{"kid":%q}`, self.Kid))
+			_, errs[i] = n.Call(&NativeCall{Tool: ToolAdminUserRevoke, Arguments: args, Caller: &self, Kid: self.Kid, Now: testNow, State: st})
+		}
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go selfRevoke(0, a, &wg)
+		go selfRevoke(1, b, &wg)
+		wg.Wait()
+
+		succeeded := 0
+		for _, jerr := range errs {
+			if jerr == nil {
+				succeeded++
+			}
+		}
+		if succeeded != 1 {
+			t.Fatalf("round %d: %d concurrent self-revokes succeeded, want exactly 1 (the last-admin rule must stop the second)", round, succeeded)
+		}
+		for _, jerr := range errs {
+			if jerr == nil {
+				continue
+			}
+			if jerr.Code != jack.CodeLastAdmin {
+				t.Fatalf("round %d: loser error code = %v, want last_admin", round, jerr.Code)
+			}
+		}
+		if got := activeAdmins(st.View().Keys, testNow); got != 1 {
+			t.Fatalf("round %d: %d administrators left, want exactly 1", round, got)
 		}
 	}
 }
@@ -132,7 +206,7 @@ func TestAdminToolsRequireAdminBeforeArguments(t *testing.T) {
 		Tool: ToolAdminUserList, Arguments: json.RawMessage(`7`),
 		Caller: &reader, Kid: reader.Kid, Now: testNow, State: st,
 	})
-	if jerr == nil || jerr.Code != jack.CodeInsufficientScope {
-		t.Fatalf("error = %v, want insufficient_scope", jerr)
+	if jerr == nil || jerr.Code != jack.CodeAdminRequired {
+		t.Fatalf("error = %v, want admin_required", jerr)
 	}
 }

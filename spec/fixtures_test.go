@@ -26,31 +26,12 @@ func TestLoadersDecodeAllFixtures(t *testing.T) {
 		t.Fatalf("LoadRegistry: no keys")
 	}
 
-	defaultPolicy, err := LoadDefaultPolicy()
-	if err != nil {
-		t.Fatalf("LoadDefaultPolicy: %v", err)
-	}
-	if len(defaultPolicy.Rules) == 0 {
-		t.Fatalf("LoadDefaultPolicy: no rules")
-	}
-
-	wildcardPolicy, err := LoadWildcardPolicy()
-	if err != nil {
-		t.Fatalf("LoadWildcardPolicy: %v", err)
-	}
-	if len(wildcardPolicy.Rules) == 0 {
-		t.Fatalf("LoadWildcardPolicy: no rules")
-	}
-
 	requests, err := LoadRequestVectors()
 	if err != nil {
 		t.Fatalf("LoadRequestVectors: %v", err)
 	}
 	if len(requests.Cases) == 0 {
 		t.Fatalf("LoadRequestVectors: no cases")
-	}
-	if len(requests.Policies) == 0 {
-		t.Fatalf("LoadRequestVectors: no policies")
 	}
 
 	admin, err := LoadAdminVectors()
@@ -81,16 +62,16 @@ func TestLoadersDecodeAllFixtures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadLoadVectors: %v", err)
 	}
-	if len(loadVectors.Policies) == 0 || len(loadVectors.Registries) == 0 {
-		t.Fatalf("LoadLoadVectors: empty policy or registry cases")
+	if len(loadVectors.Registries) == 0 {
+		t.Fatalf("LoadLoadVectors: no registry cases")
 	}
 
-	patterns, err := LoadPatternVectors()
+	stateFiles, err := LoadStateFileVectors()
 	if err != nil {
-		t.Fatalf("LoadPatternVectors: %v", err)
+		t.Fatalf("LoadStateFileVectors: %v", err)
 	}
-	if len(patterns.Cases) == 0 {
-		t.Fatalf("LoadPatternVectors: no cases")
+	if len(stateFiles.Cases) == 0 {
+		t.Fatalf("LoadStateFileVectors: no cases")
 	}
 }
 

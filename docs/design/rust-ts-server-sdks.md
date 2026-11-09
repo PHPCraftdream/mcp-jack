@@ -1,115 +1,36 @@
-# Design: Rust and TypeScript server SDKs
+# Design: Rust and TypeScript SDKs
 
-Status: implemented; kept as the design record. Scope at design time: server side only, matching the Go `jack` + `spec` + `server` packages; the Rust and TypeScript client SDKs have since been added as well.
+The SDK migration in baseline `b13b972` implements the current reduced contract in Go, Rust, and TypeScript. Authenticated ordinary MCP requests pass through unchanged; the wrapped application receives immutable verified identity `{kid, name, admin}` and performs its own authorization. The protocol's `admin` flag gates only reserved `jack.admin.*` tools. Legacy user/state `kind` or `scopes` data is rejected without migration or rewrite.
 
-## 1. Goal and acceptance
+This is a design and source inventory, not a test result. GitHub CI verified shared interop, packaged consumers, coverage, and fuzzing on `444c69b`. Q1's authenticated session channel is future v0.2 design work; Q3 server-key rotation is separate future work requiring an exact design. Neither is implemented.
 
-A service written in Rust or TypeScript can put an unmodified MCP endpoint behind mcp-jack exactly as the Go `server` package does.
+## Repository and package boundaries
 
-Acceptance, per language:
+- The Go module is at the repository root. Root package `jack` contains shared primitives, not client or server APIs. `client/` provides signing and response-verifying transport, profiles, and typed protocol calls. `server/` provides verifier, middleware, immutable identity hand-off, state/nonce, native tools, and audit. `userkey/` supplies role-specific user-key and transfer utilities. `spec/` provides fixture loaders and conformance data.
+- Rust is one `mcp-jack` crate in `rust/`, with client, server, protocol primitives, and user-key modules. Its Tower HTTP adapter is behind `http`; optional client HTTP transport is behind `client-http`; interop executables are behind `interop`. Default features remain empty.
+- TypeScript is one ESM `mcp-jack` package in `ts/`. The root export provides shared primitives, server APIs, user-key transfer and the namespaced client API. Server adapters are Fetch and `node:http`; interop executables live under `src/interop/`. The package targets Node 20+, is `private: true`, and has no runtime dependencies.
 
-1. Every fixture file in `spec/fixtures/` is consumed by a conformance test, with the same runner contract as `spec/tests/README.md`:
-   - `request-vectors.json`: every case, including `jack.*` tools (native tools are part of the SDK);
-   - `admin-vectors.json`: every sequence;
-   - `key-vectors.json`, `pattern-vectors.json`, `response-vectors.json`;
-   - `load-vectors.json`: both `policies` and `registries`.
-2. The HTTP adapter passes an end-to-end test: a request signed with the test keys reaches a trivial wrapped MCP handler, the signed response verifies, a rejection carries the spec error body and `WWW-Authenticate: Jack-Auth` on 401, a streaming response is refused with 501 `streaming_unsupported`.
-3. Behavioral parity tests that the vectors cannot express, ported from the Go tests: atomic state updates, concurrent last-admin protection, invite code never stored, nonce retention and purge, strict state-file loading, bootstrap.
-4. CI runs all of it on Linux and Windows. Fixtures are read from `spec/fixtures/` in place, never copied, so a fixture change breaks all three SDKs at once.
+These boundaries keep common cryptographic and wire primitives separate from client transport, server integration, and independent user-key transfer. The Go `spec` package embeds fixture JSON via `go:embed`; Rust and TypeScript test suites load shared fixtures in place, not as embedded runtime-library data.
 
-Non-goals for this step: client SDKs, stdio bridge, gateway binary, streaming signatures (spec README Q1), publishing to crates.io or npm, a CLI.
+## Current behavior to preserve
 
-## 2. Repository layout
+- Requests are authenticated with strict Ed25519 verification, freshness checks and replay protection. The exact request body bytes are verified; middleware restores the body before forwarding.
+- Defined protocol-native tools are handled by the wrapper. Only `jack.admin.*` requires protocol `admin`; ordinary MCP calls and methods are forwarded without policy filtering. The verified identity is immutable and cannot be constructed from request data.
+- Protocol operations are audited. State updates preserve atomicity and last-active-admin protection; state loading rejects unknown/legacy fields rather than rewriting input.
+- Responses are signed, including authenticated application errors. Streaming responses are refused with 501 in v0.1. Request and response limits bound bytes, not elapsed time; an application deadline must wrap the full handler if needed.
+- Client destination policy is literal-only: HTTPS for valid hosts and HTTP only for canonical literal loopback. SDK-owned clients refuse redirects and retain TLS validation. Caller-injected transports remain responsible for connecting to the exact supplied URL, TLS for HTTPS, and no redirects.
+- User-key transfer remains a separate, role-asymmetric contract: client role has no private-export API; server issuance exposes public registration identity separately from an explicit credential hand-off; credential trust requires an independently pinned server identity. See [user-keys.md](user-keys.md).
 
-```
-/                 Go module (unchanged)
-/rust/            Cargo package `mcp-jack` (one crate)
-/ts/              npm package `mcp-jack`
-/spec/fixtures/   shared normative vectors, read by all three
-```
+## Current test-source inventory
 
-One crate and one npm package, not workspaces: the server SDK is small and a split into `core` and `server` can happen when the client SDKs arrive.
+The shared fixtures in `spec/fixtures/` include authentication, keys, requests, responses, administration, state loading, URL policy, and user-key transfer. Go tests live beside root primitives and under `client/`, `server/`, and `userkey/`; Rust integration tests are under `rust/tests/`; TypeScript tests are under `ts/test/`. These are source inventories only and make no claim that the baseline has passed them.
 
-## 3. Module map (parity with Go)
+The current interop scenario source is [`interop/scenarios.json`](../../interop/scenarios.json). It includes identity-forwarding, exact request-byte preservation, forged-identity rejection, and strict-boolean admin-control cases. CI acceptance passed on `444c69b`. Preserve signing-byte parity, trust, freshness/replay, signed authenticated errors, and last-active-admin coverage; the integrated shared harness passed on `444c69b`.
 
-| Go | Rust (`mcp_jack::…`) | TypeScript (`mcp-jack/…`) |
-|---|---|---|
-| `base64.go` | `encoding` | `encoding.ts` |
-| `signing.go` | `signing` | `signing.ts` |
-| `authheader.go` | `auth_header` | `auth-header.ts` |
-| `ed25519.go` | `ed25519` | `ed25519.ts` |
-| `syntax.go` | `syntax` | `syntax.ts` |
-| `errors.go` | `error` (`JackError`, `codes`) | `errors.ts` (`JackError`, `Code`) |
-| `server/state.go`, `statefile.go` | `server::state`, `server::state_file` | `server/state.ts`, `server/state-file.ts` |
-| `server/nonce.go` | `server::nonce` | `server/nonce.ts` |
-| `server/audit.go` | `server::audit` | `server/audit.ts` |
-| `server/policy.go` | `server::policy` | `server/policy.ts` |
-| `server/verify.go` | `server::verify` | `server/verify.ts` |
-| `server/native.go` | `server::native` | `server/native.ts` |
-| `server/middleware.go` | `server::http` (feature `http`) | `server/fetch.ts`, `server/node.ts` |
-| `spec/spec.go` | `tests/common/fixtures.rs` (test-only) | `test/fixtures.ts` (test-only) |
+## Historical CI boundary
 
-Names follow each language's conventions (`Verifier::verify` / `verifier.verify`), but types, fields, error codes and check order are the Go ones. Where Go and the spec disagree, the spec wins and the Go code gets a fix.
+Workflow definitions describe Go vet/tests and race tests; Rust formatting, clippy, tests, feature isolation and MSRV checks; TypeScript typecheck/tests; fixture freshness; interop and transfer harnesses; consumers; coverage; fuzzing; and licence checks. The source inventory is separate from execution receipts for the integrated candidate. Coverage, fuzz, packaged-consumer and shared interop evidence are recorded for `444c69b` in readiness evidence.
 
-## 4. Shared semantics that are easy to get wrong across languages
+The original design-time requirement was fixture parity on Linux and Windows, with shared fixtures consumed in place. Current CI definitions and all baseline outcomes must be assessed by parent CI; readiness records exact green CI evidence for `444c69b`.
 
-These are the places where three independent implementations drift. Each gets a dedicated unit test in both new SDKs; any gap found in the vectors is fixed in `gen-fixtures.mjs` first, so all three SDKs inherit the case.
-
-- **Exact bytes.** The body hash and signature cover the raw body bytes. Never re-serialize JSON before hashing; never decode the body to a string before the UTF-8 check.
-- **UTF-8 before JSON.** Invalid UTF-8 is `invalid_request` before any parse. Rust: `std::str::from_utf8`; TypeScript: `new TextDecoder("utf-8", { fatal: true })`. `JSON.parse` on a lossily decoded string must never happen.
-- **Strict base64url.** Unpadded, alphabet `A-Z a-z 0-9 - _`, non-zero trailing bits rejected, exact decoded length for fixed-size fields. Rust: `base64` crate engine with `DecodePaddingMode::RequireNone` and `decode_allow_trailing_bits(false)`, plus an explicit alphabet check. TypeScript: hand-written decoder (Node's `Buffer.from(s, "base64url")` is lenient and must not be used for verification).
-- **Strict Ed25519.** S < L and canonical, prime-order-subgroup, non-identity public keys (spec 01, strict verification section).
-  - Rust: `ed25519-dalek` `verify_strict` for the signature; public-key validation through `curve25519-dalek` (decompress, re-compress and compare bytes for canonicity, `is_torsion_free`, not identity).
-  - TypeScript: `node:crypto` `verify(null, …)` for the signature plus an explicit S < L check on the signature bytes; public-key validation by porting the BigInt point arithmetic of `spec/tools/reference-verifier.mjs` (no third-party crypto).
-  - `key-vectors.json` decides; a library that accepts a vector the spec rejects is wrapped, not trusted.
-- **Missing vs null.** Policy `scope` absent and `scope: null` differ. Rust: deserialize rules into `serde_json::Map` and inspect keys; TypeScript: `Object.hasOwn`. No `Option<T>` shortcut in Rust that merges the two.
-- **Unknown fields.** Strict loaders reject unknown fields (`#[serde(deny_unknown_fields)]` in Rust; an explicit key whitelist in TypeScript).
-- **Integers.** Native tool arguments such as `ttl_seconds` follow Go's `intFrom`: the JSON number must be an integer in range. `1.0`, `1e3` and `-0` are a cross-language hazard; the TypeScript side cannot tell `1` from `1.0` after `JSON.parse`. A shared fixture task first checks which of these Go accepts, then adds fixture cases so all three agree (a `JSON.parse` reviver with source text is not available on Node 20, so TypeScript inspects the raw argument text).
-- **Duplicate JSON object keys.** Go, `serde_json::Map` and `JSON.parse` all keep the last value. Now normative: spec decision D13 and 02 section 4 pin last-occurrence-wins, with `dup-*` cases in the request and admin vectors.
-- **Clocks and randomness.** Injected clock (Unix seconds) and injected random source for invite codes, as in Go; no wall-clock reads in logic.
-- **Atomic state.** `StateStore.update` takes a closure over a deep-copied edit and swaps it in only on success; the closure may run against a snapshot taken under the store lock. The last-admin rule depends on this.
-
-## 5. Rust design
-
-- Package `mcp-jack`, library name `mcp_jack`, edition 2021, MSRV 1.85 (recorded in `rust-version`; `ed25519-dalek` 2.2 needs 1.81).
-- Dependencies (runtime): `ed25519-dalek` (features `std`), `curve25519-dalek`, `sha2`, `base64`, `serde` (derive), `serde_json`, `getrandom`. Feature `http` adds `http` 1.x, `bytes`, `http-body-util` and `tower-service`/`tower-layer` for the adapter. Dev: `tokio` (rt, macros), `tower` (util) for adapter tests. No `axum` dependency; a `tower::Layer` works under axum, hyper and tonic alike.
-  - Tradeoff: `tower` is the de-facto Rust middleware abstraction; avoiding it would mean an adapter per framework. It stays behind a feature so the core has no async dependency.
-- Core is synchronous: `Verifier::verify(&self, &Request) -> VerifyResult`. Types are `Send + Sync`; the stores use `std::sync::Mutex`.
-- Traits mirror Go interfaces: `StateStore { view, lookup, update }`, `AuditSink { record }`, `NativeTools { call(&self, &mut NativeCall) -> Result<NativeResult, JackError> }`.
-- `JackLayer` / `JackService<S>`: buffers the request body up to `max_body_bytes` (default 1 MiB), runs the verifier, answers native tools itself, forwards accepted requests to the inner service with the body restored, buffers and signs the response (bounded by `max_response_bytes`, default 1 MiB; overflow is a signed 502 `response_too_large` and the inner body is dropped; the cap bounds bytes read, not time: a body that never yields a frame, or only empty frames, is not stopped by it; a timeout on the inner service covers only obtaining the response, so a deadline including body consumption must wrap the whole `JackService` from `JackLayer`, the caller's responsibility; the inner service's own pre-return allocations are unbounded), refuses `text/event-stream` with 501.
-- Fixtures: integration tests in `rust/tests/` load `../spec/fixtures/*.json` through `env!("CARGO_MANIFEST_DIR")`. Not embedded in the library, so `cargo package` stays valid.
-- Lints: `#![forbid(unsafe_code)]`, `cargo clippy -- -D warnings`, `cargo fmt --check`.
-
-## 6. TypeScript design
-
-- Package `mcp-jack`, ESM only, `"type": "module"`, Node >= 20, TypeScript `strict` plus `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`.
-- Zero runtime dependencies (only `node:crypto`, `node:fs`, `node:http`). Dev dependencies: `typescript`, `@types/node`. Tests use `node:test` and `node:assert`; no test framework dependency.
-- Core is synchronous where Go is (`Verifier.verify`); stores expose a synchronous `update(fn)` so the atomic-update rule is easy to keep (a JavaScript closure cannot be preempted).
-- HTTP, two thin layers over one core:
-  - `jackFetchHandler(config, next)`: `next` is a Fetch-standard `(Request) => Promise<Response>`; the returned handler has the same shape; the buffered upstream response is bounded by `maxResponseBytes` (default 1 MiB, signed 502 `response_too_large` on overflow; the cap bounds bytes, not time, so a deadline must wrap the whole returned handler call, not only `next`). This fits Hono, Deno, Bun and the Web-standard transport of the MCP TypeScript SDK.
-  - `serveNode(handler)`: adapts a Fetch handler to `node:http` (`(IncomingMessage, ServerResponse)`), with the same body limit.
-  - Gateway use (an MCP server in another process) is `next = (req) => fetch(upstreamUrl, …)`, documented as an example, not a separate API.
-- Fixtures: tests read `../spec/fixtures/*.json` with `node:fs` relative to the test file. Not shipped in the package.
-- Build: `tsc -p .` to `dist/`; tests run against compiled output (`node --test dist-test/`), so no loader or `tsx` dependency.
-
-## 7. CI
-
-As built in `.github/workflows/ci.yml`:
-
-- `rust` (ubuntu, windows): `cargo fmt --check`, `cargo clippy --locked --all-targets --all-features -- -D warnings`, `cargo test --locked --all-features`, plus `cargo test --locked --no-default-features` on ubuntu; a separate job checks the MSRV with `cargo check --locked --all-targets --all-features` on Rust 1.85.
-- `ts` (ubuntu, windows; Node 20 and 22): `npm ci --no-audit --no-fund`, `npm run typecheck`, `npm test`.
-- Path filters are not added: the fixtures are shared, so every SDK must run on every change.
-
-Design-time policy, kept for the record: builds and tests run in CI; locally only `cargo fmt`, `cargo check` and `cargo clippy` for Rust and, for TypeScript, nothing beyond formatting. CONTRIBUTING.md now asks for the checks that apply to a change before opening a pull request.
-
-## 8. Risks
-
-- Design-time risk (superseded): with no local test runs, the first CI run would surface compile and test failures; Rust was checked locally with `cargo check` and `cargo clippy`.
-- Crypto library strictness differs from the spec; the key and request vectors are the arbiter (section 4).
-- Design-time risk (resolved): the Go SDK had never run when this was written, so a divergence found by Rust or TypeScript could have been a Go bug. Decision rule: the spec text and the JavaScript reference verifier decide, then the vectors.
-
-## 9. Open questions
-
-1. Allow `tsc --noEmit` locally for TypeScript (type check only, no build output)? CI already runs `npm run typecheck`; permission for local execution remains a separate operator decision.
-2. Package names on crates.io and npm are free (checked on 2026-11-05); reserve them now or at the first release?
-3. ~~Duplicate JSON object keys in request bodies: reject in all SDKs or keep last-wins and state it in the spec?~~ Resolved: keep last-wins, specified as D13 in the spec README (normative text in 02 section 4) with `dup-*` conformance vectors.
+See [interop design](interop.md), [scope review](scope-review-2026-11-08.md), and [readiness](../readiness.md) for the separately owned harness boundary, scope decisions, and commit-specific metrics.

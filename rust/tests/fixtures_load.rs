@@ -7,7 +7,8 @@ use common::fixtures::*;
 #[test]
 fn keys_load() {
     let v = load_keys().expect("load keys.json");
-    assert!(v.keys.len() >= 15);
+    // Current materialized keys.json: exactly 15 test keys.
+    assert_eq!(v.keys.len(), 15);
     let ids: HashSet<_> = v.keys.iter().map(|k| k.kid.as_str()).collect();
     assert_eq!(ids.len(), v.keys.len());
 }
@@ -15,7 +16,8 @@ fn keys_load() {
 #[test]
 fn registry_load() {
     let v = load_registry().expect("load registry.json");
-    assert!(v.keys.len() >= 7);
+    // Current materialized registry.json: exactly 7 keys.
+    assert_eq!(v.keys.len(), 7);
     let ids: HashSet<_> = v.keys.iter().map(|k| k.kid.as_str()).collect();
     assert_eq!(ids.len(), v.keys.len());
 }
@@ -23,24 +25,17 @@ fn registry_load() {
 #[test]
 fn request_vectors_load() {
     let v = load_request_vectors().expect("load request-vectors.json");
-    assert!(v.cases.len() >= 79);
+    // Current materialized request-vectors.json: exactly 85 cases, unique ids.
+    assert_eq!(v.cases.len(), 85);
     let ids: HashSet<_> = v.cases.iter().map(|c| c.id.as_str()).collect();
     assert_eq!(ids.len(), v.cases.len());
-    // Runner contract: every case's state.policy names a loaded policy.
-    for case in &v.cases {
-        assert!(
-            v.policies.contains_key(case.state.policy.as_str()),
-            "case {} policy {} not in policies",
-            case.id,
-            case.state.policy
-        );
-    }
 }
 
 #[test]
 fn admin_vectors_load() {
     let v = load_admin_vectors().expect("load admin-vectors.json");
-    assert!(v.cases.len() >= 71);
+    // Current materialized admin-vectors.json: exactly 94 cases, unique ids.
+    assert_eq!(v.cases.len(), 94);
     let ids: HashSet<_> = v.cases.iter().map(|c| c.id.as_str()).collect();
     assert_eq!(ids.len(), v.cases.len());
     // Runner contract: every sequence has at least one step.
@@ -52,15 +47,8 @@ fn admin_vectors_load() {
 #[test]
 fn key_vectors_load() {
     let v = load_key_vectors().expect("load key-vectors.json");
-    assert!(v.cases.len() >= 24);
-    let ids: HashSet<_> = v.cases.iter().map(|c| c.id.as_str()).collect();
-    assert_eq!(ids.len(), v.cases.len());
-}
-
-#[test]
-fn pattern_vectors_load() {
-    let v = load_pattern_vectors().expect("load pattern-vectors.json");
-    assert!(v.cases.len() >= 22);
+    // Current materialized key-vectors.json: exactly 24 cases, unique ids.
+    assert_eq!(v.cases.len(), 24);
     let ids: HashSet<_> = v.cases.iter().map(|c| c.id.as_str()).collect();
     assert_eq!(ids.len(), v.cases.len());
 }
@@ -68,7 +56,8 @@ fn pattern_vectors_load() {
 #[test]
 fn response_vectors_load() {
     let v = load_response_vectors().expect("load response-vectors.json");
-    assert!(v.cases.len() >= 14);
+    // Current materialized response-vectors.json: exactly 14 cases, unique ids.
+    assert_eq!(v.cases.len(), 14);
     let ids: HashSet<_> = v.cases.iter().map(|c| c.id.as_str()).collect();
     assert_eq!(ids.len(), v.cases.len());
 }
@@ -76,31 +65,27 @@ fn response_vectors_load() {
 #[test]
 fn load_vectors_load() {
     let v = load_load_vectors().expect("load load-vectors.json");
-    assert!(v.policies.len() >= 17);
-    assert!(v.registries.len() >= 15);
-    // Ids repeat across the two collections (valid-default, ...): check each alone.
-    let policy_ids: HashSet<_> = v.policies.iter().map(|c| c.id.as_str()).collect();
-    assert_eq!(policy_ids.len(), v.policies.len());
+    // Current materialized load-vectors.json: registry documents only,
+    // exactly 19 registries with unique ids.
+    assert_eq!(v.registries.len(), 19);
     let registry_ids: HashSet<_> = v.registries.iter().map(|c| c.id.as_str()).collect();
     assert_eq!(registry_ids.len(), v.registries.len());
 }
 
 #[test]
-fn default_policy_load() {
-    let v = load_default_policy().expect("load policy.json");
-    let rules = v
-        .get("rules")
-        .and_then(|r| r.as_array())
-        .expect("rules array");
-    assert!(!rules.is_empty());
-}
-
-#[test]
-fn wildcard_policy_load() {
-    let v = load_wildcard_policy().expect("load policy-wildcard.json");
-    let rules = v
-        .get("rules")
-        .and_then(|r| r.as_array())
-        .expect("rules array");
-    assert!(!rules.is_empty());
+fn state_file_vectors_load() {
+    let v = load_state_file_vectors().expect("load state-file-vectors.json");
+    // Current materialized state-file-vectors.json: exactly 18 cases, unique
+    // ids, each expecting valid or invalid.
+    assert_eq!(v.cases.len(), 18);
+    let ids: HashSet<_> = v.cases.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(ids.len(), v.cases.len());
+    for case in &v.cases {
+        assert!(
+            case.expect == "valid" || case.expect == "invalid",
+            "case {}: unknown expect {}",
+            case.id,
+            case.expect
+        );
+    }
 }

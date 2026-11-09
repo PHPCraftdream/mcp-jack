@@ -2,25 +2,25 @@
  * Conformance runner for every single-request vector in
  * spec/fixtures/request-vectors.json, ported from Go's TestRequestVectors +
  * checkOutcome (server/verify_test.go). Each case builds its own independent
- * state (fresh MemoryState, fresh NonceStore preseeded from the fixture cache,
- * fixture-named policy, injected fixed clock), runs the exact body bytes
- * through the Verifier, and compares result, kid / HTTP status + code,
- * nonce_recorded and audit with the fixture expectation.
- *
- * TestAdminSequences is a LATER task and is deliberately NOT ported here.
+ * state (fresh MemoryState seeded from the fixture registry, fresh NonceStore
+ * preseeded from the fixture cache, injected fixed clock, and no authorization
+ * rules — the admin-only contract has none), runs the exact body bytes through the
+ * Verifier with the REAL native tools, and compares result, kid / HTTP status
+ * + code, nonce_recorded, audit, structured (with the `<b64u43>` wildcard rule
+ * of spec/tests/README.md) and the verified caller identity: present and
+ * frozen on forwarded accepts, absent everywhere else.
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Code, JackError } from "../src/errors.js";
-import { decodeBase64URL } from "../src/encoding.js";
-import type { NativeCall, NativeResult, NativeTools } from "../src/server/verify.js";
-import { Verifier } from "../src/server/verify.js";
+import { decodeBase64URL, encodeBase64URL } from "../src/encoding.js";
+import { Native } from "../src/server/native.js";
 import { NonceStore } from "../src/server/nonce.js";
-import { parsePolicy } from "../src/server/policy.js";
 import { MemoryState } from "../src/server/state.js";
 import type { RegistryEntry as StateRegistryEntry } from "../src/server/state.js";
-import { loadDefaultPolicy, loadRegistry, loadRequestVectors, loadWildcardPolicy } from "./fixtures.js";
-import type { HeaderPair, PolicyDocument, RegistryEntry as FixtureRegistryEntry, RequestVectors } from "./fixtures.js";
+import { Verifier } from "../src/server/verify.js";
+import type { JsonValue } from "./fixtures.js";
+import { loadRegistry, loadRequestVectors } from "./fixtures.js";
+import type { HeaderPair, RegistryEntry as FixtureRegistryEntry } from "./fixtures.js";
 
 /** Builder form of a readonly src type (exactOptionalPropertyTypes-safe writes). */
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
@@ -36,10 +36,9 @@ function toStateEntry(e: FixtureRegistryEntry): StateRegistryEntry {
     kid: e.kid,
     publicKey: e.publicKey,
     name: e.name,
-    scopes: e.scopes,
   };
-  if (e.kind !== undefined) {
-    out.kind = e.kind;
+  if (e.admin !== undefined) {
+    out.admin = e.admin;
   }
   if (e.notBefore !== undefined) {
     out.notBefore = e.notBefore;
@@ -50,44 +49,42 @@ function toStateEntry(e: FixtureRegistryEntry): StateRegistryEntry {
   return out;
 }
 
-const policyCache = new Map<string, ReturnType<typeof parsePolicy>>();
-
-/** Resolves a case's policy name through the vectors' OWN name->file mapping; the file must be one with a typed loader. */
-function policyFor(vectors: RequestVectors, name: string): ReturnType<typeof parsePolicy> {
-  const file = vectors.policies[name];
-  if (file === undefined) {
-    throw new Error(`unknown policy "${name}"`);
-  }
-  const cached = policyCache.get(file);
-  if (cached !== undefined) {
-    return cached;
-  }
-  const doc: PolicyDocument | undefined =
-    file === "policy.json" ? loadDefaultPolicy() : file === "policy-wildcard.json" ? loadWildcardPolicy() : undefined;
-  if (doc === undefined) {
-    throw new Error(`no typed loader for policy fixture "${file}"`);
-  }
-  const parsed = parsePolicy(JSON.stringify(doc));
-  policyCache.set(file, parsed);
-  return parsed;
-}
-
 /**
- * TEST DOUBLE, not the real native tools. It reproduces ONLY spec 03 section 4
- * rule 1 — the admin gate — the one piece of native-tool behavior that
- * verifier-level expectations depend on: an admin tool called without the
- * admin scope is rejected. Enrollment/rotation/user/invite logic is the later
- * ts/src/server/native.ts task. Because the double's structured result is the
- * empty object `{}`, the fixture `structured` comparisons for the two native
- * accept cases are skipped below (see the comment at the structured check).
+ * The `<b64u43>` rule of spec/tests/README.md: a string in the expectation
+ * equal to "<b64u43>" matches any canonical 43-character base64url string
+ * (decode/encode round-trips, rejecting non-canonical trailing bits). Objects
+ * and arrays must match recursively; everything else compares strictly.
  */
-class AdminGateNativeTools implements NativeTools {
-  call(c: NativeCall): NativeResult {
-    if (c.tool.startsWith("jack.admin.") && !(c.caller?.scopes ?? []).includes("admin")) {
-      throw new JackError(403, Code.INSUFFICIENT_SCOPE, "the caller lacks admin");
+function deepMatch(expected: JsonValue, actual: unknown): boolean {
+  if (expected === "<b64u43>") {
+    if (typeof actual !== "string" || actual.length !== 43 || !/^[A-Za-z0-9_-]{43}$/.test(actual)) {
+      return false;
     }
-    return { structured: {} };
+    try {
+      return encodeBase64URL(decodeBase64URL(actual)) === actual;
+    } catch {
+      return false;
+    }
   }
+  if (Array.isArray(expected)) {
+    if (!Array.isArray(actual) || actual.length !== expected.length) {
+      return false;
+    }
+    return expected.every((item, i) => deepMatch(item, actual[i]));
+  }
+  if (typeof expected === "object" && expected !== null) {
+    if (typeof actual !== "object" || actual === null || Array.isArray(actual)) {
+      return false;
+    }
+    const want = expected as { readonly [key: string]: JsonValue };
+    const got = actual as Record<string, unknown>;
+    // Same key SETS: an unexpected extra key is a mismatch, not a pass.
+    if (Object.keys(got).length !== Object.keys(want).length) {
+      return false;
+    }
+    return Object.keys(want).every((key) => Object.hasOwn(got, key) && deepMatch(want[key] as JsonValue, got[key]));
+  }
+  return Object.is(expected, actual);
 }
 
 test("request vectors: every case", () => {
@@ -116,8 +113,7 @@ test("request vectors: every case", () => {
       aud: c.state.aud,
       state: st,
       nonces,
-      policy: policyFor(vectors, c.state.policy),
-      native: new AdminGateNativeTools(),
+      native: new Native(),
       window: c.state.windowSeconds,
       now: () => now,
     });
@@ -156,12 +152,24 @@ test("request vectors: every case", () => {
       }
     }
 
-    // The two native accept cases (native-whoami, native-admin-list) expect a
-    // real structured result, but AdminGateNativeTools returns `{}`; the
-    // comparison is skipped until the later ts/src/server/native.ts task
-    // provides the real tools. Nothing else is assertable here.
-    if (c.expect.structured !== undefined) {
-      continue;
+    // Structured: presence parity, then the <b64u43>-aware deep match against
+    // the real tools' result.
+    if (c.expect.structured === undefined) {
+      assert.equal(res.structured, undefined, `${label}: unexpected structured result`);
+    } else {
+      assert.ok(res.structured !== undefined, `${label}: missing structured result`);
+      assert.ok(deepMatch(c.expect.structured, res.structured), `${label}: structured mismatch`);
+    }
+
+    // Identity: only forwarded accepts carry the verified caller identity the
+    // SDK hands to the wrapped handler — frozen, and equal to the fixture
+    // snapshot; native accepts and every reject carry none.
+    if (c.expect.identity !== undefined) {
+      assert.ok(res.identity !== undefined, `${label}: missing identity`);
+      assert.deepStrictEqual({ ...res.identity }, c.expect.identity, `${label}: identity`);
+      assert.ok(Object.isFrozen(res.identity), `${label}: identity must be frozen`);
+    } else {
+      assert.equal(res.identity, undefined, `${label}: unexpected identity`);
     }
     // requestSig / rpcId / tool are deliberately not compared (Go's
     // checkOutcome does not either).

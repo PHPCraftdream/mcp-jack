@@ -8,8 +8,8 @@ use crate::auth_header::{parse_request_auth, RequestAuth};
 use crate::encoding::{decode_b64url_fixed, key_id};
 use crate::error::{codes, JackError};
 use crate::server::audit::{AuditEvent, AuditSink, AUDIT_FAILURE, AUDIT_SUCCESS};
+use crate::server::identity::VerifiedIdentity;
 use crate::server::nonce::NonceStore;
-use crate::server::policy::{Decision, Policy};
 use crate::server::state::{RegistryEntry, StateStore};
 use crate::signing::{request_signing_string, DEFAULT_WINDOW_SECONDS};
 
@@ -26,7 +26,7 @@ pub const TOOL_ADMIN_USER_GET: &str = "jack.admin.user.get";
 /// Protocol-native admin tool (spec 03 section 4).
 pub const TOOL_ADMIN_USER_CREATE: &str = "jack.admin.user.create";
 /// Protocol-native admin tool (spec 03 section 4).
-pub const TOOL_ADMIN_USER_SET_SCOPES: &str = "jack.admin.user.set_scopes";
+pub const TOOL_ADMIN_USER_SET_ADMIN: &str = "jack.admin.user.set_admin";
 /// Protocol-native admin tool (spec 03 section 4).
 pub const TOOL_ADMIN_USER_REVOKE: &str = "jack.admin.user.revoke";
 /// Protocol-native admin tool (spec 03 section 3.2).
@@ -45,7 +45,7 @@ const NATIVE_TOOLS: [&str; 11] = [
     TOOL_ADMIN_USER_LIST,
     TOOL_ADMIN_USER_GET,
     TOOL_ADMIN_USER_CREATE,
-    TOOL_ADMIN_USER_SET_SCOPES,
+    TOOL_ADMIN_USER_SET_ADMIN,
     TOOL_ADMIN_USER_REVOKE,
     TOOL_ADMIN_INVITE_CREATE,
     TOOL_ADMIN_INVITE_LIST,
@@ -120,8 +120,6 @@ pub struct Config {
     pub state: Arc<dyn StateStore>,
     /// Records seen (kid, nonce) pairs.
     pub nonces: Arc<NonceStore>,
-    /// Maps MCP operations to scopes.
-    pub policy: Arc<Policy>,
     /// Audit sink for protocol-native calls; optional.
     pub audit: Option<Arc<dyn AuditSink>>,
     /// Implements the jack.* tools; None denies every jack.* tool.
@@ -277,7 +275,7 @@ impl Verifier {
         self.authorize(req, &auth, now, caller.as_ref(), res)
     }
 
-    /// Step 9: body shape, protocol-native tools, policy (Go: authorize).
+    /// Step 9: body shape, protocol-native tools, forwarding (Go: authorize).
     fn authorize(
         &self,
         req: &Request,
@@ -288,6 +286,7 @@ impl Verifier {
     ) -> VerifyResult {
         // GET carries no body; nothing to classify.
         if req.method == "GET" {
+            res.identity = self.identity_for(caller);
             res.accepted = true;
             return res;
         }
@@ -302,6 +301,7 @@ impl Verifier {
         };
         res.rpc_id = msg.id.clone();
         if msg.kind == MessageKind::Response {
+            res.identity = self.identity_for(caller);
             res.accepted = true;
             return res;
         }
@@ -371,31 +371,31 @@ impl Verifier {
         }
 
         // Unreachable: only a jack.enroll request passes step 4 without a
-        // registry entry, and it was handled above.
-        let Some(caller) = caller else {
-            return fail(res, 401, codes::UNKNOWN_KEY, "unknown key");
+        // registry entry, and it was handled above (native calls, so the
+        // identity stays None).
+        let caller = match caller {
+            Some(caller) => caller,
+            None => return fail(res, 401, codes::UNKNOWN_KEY, "unknown key"),
         };
-        let decision: Decision = self.cfg.policy.evaluate(&msg.method, msg.tool.as_deref());
-        if !decision.allowed {
-            return fail(
-                res,
-                403,
-                codes::OPERATION_DENIED,
-                "operation is not permitted",
-            );
-        }
-        if let Some(scope) = &decision.scope {
-            if !caller.scopes.iter().any(|s| s == scope) {
-                return fail(
-                    res,
-                    403,
-                    codes::INSUFFICIENT_SCOPE,
-                    "the key lacks the required scope",
-                );
-            }
-        }
+        // Ordinary MCP traffic is forwarded unchanged for ANY authenticated
+        // caller, whatever the method or tool name (spec 02 section 2
+        // pass-through); the verified identity snapshot rides along (spec 02
+        // section 3).
+        res.identity = Some(VerifiedIdentity::new(
+            caller.kid.clone(),
+            caller.name.clone(),
+            caller.admin,
+        ));
         res.accepted = true;
         res
+    }
+
+    /// Builds the identity snapshot for a forwarded accept (spec 02 section
+    /// 3). `caller` is None only for the enrollment request, which is native
+    /// and never forwarded; that shape is rejected earlier as unknown_key, so
+    /// the None arm is defensive.
+    fn identity_for(&self, caller: Option<&RegistryEntry>) -> Option<VerifiedIdentity> {
+        caller.map(|c| VerifiedIdentity::new(c.kid.clone(), c.name.clone(), c.admin))
     }
 }
 
@@ -439,6 +439,10 @@ pub struct VerifyResult {
     pub structured: Option<serde_json::Value>,
     /// Audit event written for the call, if any.
     pub audit: Option<AuditEvent>,
+    /// The verified caller identity for requests forwarded to the wrapped
+    /// handler; None for rejections and protocol-native calls (spec 02
+    /// section 3).
+    pub identity: Option<VerifiedIdentity>,
 }
 
 /// Builds the rejection form of a result: only status, code and message.
@@ -446,6 +450,8 @@ fn fail(mut res: VerifyResult, http_status: u16, code: &str, message: &str) -> V
     res.http_status = http_status;
     res.code = code.to_owned();
     res.message = message.to_owned();
+    // A rejection never carries an identity.
+    res.identity = None;
     res
 }
 
@@ -647,29 +653,14 @@ mod tests {
     use super::*;
     use crate::encoding::encode_b64url;
     use crate::server::native::{Native, NativeOptions};
-    use crate::server::state::{MemoryState, StateEdit, KIND_HUMAN};
+    use crate::server::state::{MemoryState, StateEdit};
     use ed25519_dalek::Signer;
     use ed25519_dalek::SigningKey;
     use sha2::{Digest, Sha256};
-    use std::sync::LazyLock;
 
     const NOW: i64 = 1_767_225_600;
     const AUD: &str = "https://svc.example.test";
     const PING: &str = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
-    const DEFAULT_POLICY: &str = r#"{"version":1,"rules":[
-        {"match":{"method":"ping"},"scope":null},
-        {"match":{"method":"tools/list"},"scope":null},
-        {"match":{"method":"notifications/*"},"scope":null},
-        {"match":{"method":"tools/call","tool":"svc.danger.*"},"effect":"deny"},
-        {"match":{"method":"tools/call","tool":"svc.config.set"},"scope":"config:write"},
-        {"match":{"method":"tools/call","tool":"svc.reload"},"scope":"lifecycle"},
-        {"match":{"method":"tools/call","tool":"svc.restart"},"scope":"lifecycle"},
-        {"match":{"method":"tools/call","tool":"svc.*"},"scope":"read"}
-    ]}"#;
-
-    static POLICY: LazyLock<Arc<Policy>> = LazyLock::new(|| {
-        Arc::new(Policy::parse(DEFAULT_POLICY.as_bytes()).expect("default policy must parse"))
-    });
 
     /// Deterministic test key pair derived from a fixed id (mirrors
     /// state.rs state_test_key).
@@ -683,12 +674,18 @@ mod tests {
                 kid: key_id(&public),
                 public_key: encode_b64url(&public),
                 name: id.to_string(),
-                kind: KIND_HUMAN.to_string(),
-                scopes: vec!["read".to_owned()],
+                admin: false,
                 not_before: None,
                 not_after: None,
             },
         )
+    }
+
+    /// Like `test_key` but with the admin flag set.
+    fn admin_key(id: &str) -> (SigningKey, RegistryEntry) {
+        let (key, mut entry) = test_key(id);
+        entry.admin = true;
+        (key, entry)
     }
 
     fn seeded_state(entries: &[&RegistryEntry]) -> Arc<dyn StateStore> {
@@ -713,7 +710,6 @@ mod tests {
             aud: AUD.to_owned(),
             state,
             nonces: Arc::new(NonceStore::new()),
-            policy: Arc::clone(&POLICY),
             audit: None,
             native,
             window_seconds: 30,
@@ -790,14 +786,10 @@ mod tests {
                     "stub: already registered",
                 ));
             }
-            if c.tool.starts_with("jack.admin.")
-                && !c
-                    .caller
-                    .is_some_and(|e| e.scopes.iter().any(|s| s == "admin"))
-            {
+            if c.tool.starts_with("jack.admin.") && !c.caller.is_some_and(|e| e.admin) {
                 return Err(JackError::new(
                     403,
-                    codes::INSUFFICIENT_SCOPE,
+                    codes::ADMIN_REQUIRED,
                     "stub: admin required",
                 ));
             }
@@ -1147,31 +1139,24 @@ mod tests {
     }
 
     #[test]
-    fn authorization_codes() {
+    fn forwarded_for_any_authenticated_caller() {
+        // Spec 02 section 2 pass-through: ordinary MCP traffic is forwarded
+        // unchanged for ANY authenticated caller, whatever the method or tool
+        // name, with the identity snapshot set (spec 02 section 3).
         let (alice_key, alice) = test_key("alice");
-        let (admin, mut admin_entry) = test_key("admin");
-        admin_entry.scopes = vec!["admin".to_owned(), "read".to_owned()];
-        let state = seeded_state(&[&alice, &admin_entry]);
-        let v = verifier(config(NOW, state, None));
+        let v = verifier(config(NOW, seeded_state(&[&alice]), None));
 
-        // Steps 1-8 pass; ends at step 9 policy: 403 insufficient_scope.
+        // A tools/call of a non-native tool: accepted with identity.
         let req = post_call("svc.restart", None, &alice_key, &alice.kid, &nonce(13));
         let res = v.verify(&req);
-        assert_eq!(res.http_status, 403);
-        assert_eq!(res.code, codes::INSUFFICIENT_SCOPE);
+        assert!(res.accepted, "code: {}", res.code);
         assert!(res.nonce_recorded);
+        let identity = res.identity.expect("forwarded accept carries identity");
+        assert_eq!(identity.kid(), alice.kid);
+        assert_eq!(identity.name(), "alice");
+        assert!(!identity.admin());
 
-        // Policy deny beats any scopes: 403 operation_denied.
-        let req = post_call(
-            "svc.danger.wipe",
-            None,
-            &admin,
-            &admin_entry.kid,
-            &nonce(14),
-        );
-        assert_eq!(v.verify(&req).code, codes::OPERATION_DENIED);
-
-        // No matching rule: 403 operation_denied.
+        // A non-tools/call method is forwarded too.
         let req = signed(
             "POST",
             "/mcp",
@@ -1179,13 +1164,11 @@ mod tests {
             &alice_key,
             &alice.kid,
             NOW,
-            &nonce(15),
+            &nonce(14),
         );
-        assert_eq!(v.verify(&req).code, codes::OPERATION_DENIED);
-
-        // Alice holds the "read" scope svc.* requires: accepted.
-        let req = post_call("svc.status", None, &alice_key, &alice.kid, &nonce(16));
-        assert!(v.verify(&req).accepted);
+        let res = v.verify(&req);
+        assert!(res.accepted);
+        assert!(res.identity.is_some());
     }
 
     #[test]
@@ -1395,8 +1378,7 @@ mod tests {
 
     #[test]
     fn audit_target_set_on_failed_native_calls() {
-        let (root_key, mut root) = test_key("root");
-        root.scopes = vec!["admin".to_owned(), "read".to_owned()];
+        let (root_key, root) = admin_key("root");
         let native: Arc<dyn NativeTools> = Arc::new(Native::new(NativeOptions::default()));
         let v = verifier(config(
             NOW,
@@ -1409,7 +1391,7 @@ mod tests {
         //     03 section 8). Both failure paths exit before new_invite_code,
         //     so the default (OS) random source is never reached.
         let bad_pub = encode_b64url(&[1u8; 32]);
-        let args = format!(r#"{{"name":"dave","public_key":"{bad_pub}","scopes":["read"]}}"#);
+        let args = format!(r#"{{"name":"dave","public_key":"{bad_pub}"}}"#);
         let req = post_call(
             TOOL_ADMIN_USER_CREATE,
             Some(&args),
@@ -1424,12 +1406,12 @@ mod tests {
         assert_eq!(event.code, codes::KEY_REJECTED);
         assert_eq!(event.target, "dave");
 
-        // (b) user.set_scopes: well-formed kid, scopes as a string -> the
-        //     failure is invalid_params and the audit target is the kid.
+        // (b) user.set_admin: well-formed kid, admin mistyped (number) ->
+        //     the failure is invalid_params and the audit target is the kid.
         let (_, alice) = test_key("alice");
-        let args = format!(r#"{{"kid":"{}","scopes":"read"}}"#, alice.kid);
+        let args = format!(r#"{{"kid":"{}","admin":1}}"#, alice.kid);
         let req = post_call(
-            TOOL_ADMIN_USER_SET_SCOPES,
+            TOOL_ADMIN_USER_SET_ADMIN,
             Some(&args),
             &root_key,
             &root.kid,
@@ -1437,17 +1419,14 @@ mod tests {
         );
         let res = v.verify(&req);
         assert_eq!(res.http_status, 400);
-        let event = res.audit.expect("user.set_scopes is audited");
+        let event = res.audit.expect("user.set_admin is audited");
         assert_eq!(event.outcome, AUDIT_FAILURE);
         assert_eq!(event.code, codes::INVALID_PARAMS);
         assert_eq!(event.target, alice.kid);
 
         // (c) A SUCCESSFUL user.create still targets the name.
         let (_, dave) = test_key("dave");
-        let args = format!(
-            r#"{{"name":"dave","public_key":"{}","scopes":["read"]}}"#,
-            dave.public_key
-        );
+        let args = format!(r#"{{"name":"dave","public_key":"{}"}}"#, dave.public_key);
         let req = post_call(
             TOOL_ADMIN_USER_CREATE,
             Some(&args),
@@ -1464,37 +1443,138 @@ mod tests {
 
     #[test]
     fn duplicate_members_last_value_wins() {
-        let (key, entry) = test_key("alice");
-        let v = verifier(config(NOW, seeded_state(&[&entry]), None));
+        let (alice_key, alice) = test_key("alice");
+        let state = seeded_state(&[&alice]);
+        let v = verifier(config(NOW, Arc::clone(&state), Some(stub())));
 
-        // If the FIRST value won, ping would be allowed; the LAST value must
-        // reach the policy, and resources/read matches no rule -> 403. This
-        // proves the last value, not the first, and not a parse rejection.
-        let body = r#"{"jsonrpc":"2.0","id":1,"method":"ping","method":"resources/read"}"#;
+        // Duplicate params.name: if the FIRST value won, the native admin
+        // tool would be dispatched and rejected with admin_required (alice is
+        // not an admin); the call is ACCEPTED instead, proving the LAST value
+        // (an ordinary forwarded tool) reached dispatch.
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.user.list","name":"svc.status"}}"#;
         let req = signed(
             "POST",
             "/mcp",
             body.as_bytes(),
-            &key,
-            &entry.kid,
+            &alice_key,
+            &alice.kid,
             NOW,
             &nonce(34),
         );
         let res = v.verify(&req);
-        assert_eq!(res.http_status, 403);
-        assert_eq!(res.code, codes::OPERATION_DENIED);
+        assert!(res.accepted, "code: {}", res.code);
+        assert!(!res.native);
+        assert!(res.identity.is_some());
 
-        // First name is deny-ruled, last name is allowed (read scope).
-        let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"svc.danger.wipe","name":"svc.status"}}"#;
+        // Reverse: first ordinary, last an unknown jack.* tool -> 403
+        // operation_denied proves the LAST value won, not the first.
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"svc.status","name":"jack.nope"}}"#;
         let req = signed(
             "POST",
             "/mcp",
             body.as_bytes(),
-            &key,
-            &entry.kid,
+            &alice_key,
+            &alice.kid,
             NOW,
             &nonce(35),
         );
-        assert!(v.verify(&req).accepted);
+        let res = v.verify(&req);
+        assert_eq!(res.http_status, 403);
+        assert_eq!(res.code, codes::OPERATION_DENIED);
+    }
+
+    #[test]
+    fn identity_snapshot_lifecycle() {
+        // (a) Native jack.whoami accept carries identity=None while
+        //     `structured` is set (native calls never reach the handler).
+        let (key, entry) = admin_key("root");
+        let native: Arc<dyn NativeTools> = Arc::new(Native::new(NativeOptions::default()));
+        let state = seeded_state(&[&entry]);
+        let v = verifier(config(NOW, Arc::clone(&state), Some(native)));
+        let req = post_call(TOOL_WHOAMI, None, &key, &entry.kid, &nonce(60));
+        let res = v.verify(&req);
+        assert!(res.accepted, "code: {}", res.code);
+        assert!(res.native);
+        assert!(res.structured.is_some());
+        assert!(res.identity.is_none());
+
+        // (c) A rejection carries identity=None.
+        let req = post_call("jack.nope", None, &key, &entry.kid, &nonce(61));
+        let res = v.verify(&req);
+        assert!(!res.accepted);
+        assert!(res.identity.is_none());
+
+        // (d) Snapshot lifecycle: the second verification reflects the NEW
+        //     registry (subsequent requests see registry changes), while the
+        //     first result keeps its old snapshot.
+        let (alice_key, alice) = test_key("alice");
+        let state = seeded_state(&[&alice]);
+        let v = verifier(config(NOW, Arc::clone(&state), None));
+        let first = v.verify(&get(&alice_key, &alice.kid, NOW, &nonce(62)));
+        assert!(first.accepted);
+        let first_identity = first.identity.clone().expect("forwarded accept");
+        assert!(!first_identity.admin());
+        // set_admin-style change of the caller's admin flag.
+        let mut promoted = alice.clone();
+        promoted.admin = true;
+        state
+            .update(&mut |e| {
+                e.put_key(promoted.clone());
+                Ok(())
+            })
+            .unwrap();
+        let second = v.verify(&get(&alice_key, &alice.kid, NOW, &nonce(63)));
+        assert!(second.accepted);
+        let second_identity = second.identity.expect("forwarded accept");
+        assert!(second_identity.admin());
+        assert_eq!(second_identity.kid(), alice.kid);
+        // The in-flight first snapshot is unchanged.
+        assert!(!first_identity.admin());
+
+        state
+            .update(&mut |e| {
+                e.put_key(alice.clone());
+                Ok(())
+            })
+            .unwrap();
+
+        // (e) Unspoofable: remote bytes cannot influence the snapshot. The
+        //     body carries a fabricated identity but the signed, non-admin
+        //     entry decides what is handed on.
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"svc.x","arguments":{"identity":{"kid":"evil","name":"evil","admin":true}}}}"#;
+        let req = signed(
+            "POST",
+            "/mcp",
+            body.as_bytes(),
+            &alice_key,
+            &alice.kid,
+            NOW,
+            &nonce(64),
+        );
+        let res = v.verify(&req);
+        assert!(res.accepted);
+        let identity = res.identity.expect("forwarded accept");
+        assert_eq!(identity.kid(), alice.kid);
+        assert_eq!(identity.name(), "alice");
+        assert!(!identity.admin());
+    }
+
+    #[test]
+    fn forwarded_accept_identity_admin_flag() {
+        // (a) both admin true and false entries carry their registry admin
+        //     flag in the identity snapshot.
+        let (admin_signing, admin) = admin_key("boss");
+        let (plain_signing, plain) = test_key("pleb");
+        let v = verifier(config(NOW, seeded_state(&[&admin, &plain]), None));
+
+        let res = v.verify(&get(&admin_signing, &admin.kid, NOW, &nonce(65)));
+        let identity = res.identity.expect("GET accept carries identity");
+        assert_eq!(identity.kid(), admin.kid);
+        assert_eq!(identity.name(), "boss");
+        assert!(identity.admin());
+
+        let res = v.verify(&get(&plain_signing, &plain.kid, NOW, &nonce(66)));
+        let identity = res.identity.expect("GET accept carries identity");
+        assert!(!identity.admin());
     }
 }

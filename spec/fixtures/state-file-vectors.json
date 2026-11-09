@@ -1,0 +1,426 @@
+{
+  "cases": [
+    {
+      "id": "statefile-valid-empty",
+      "document": {
+        "version": 1,
+        "keys": [],
+        "invites": []
+      },
+      "expect": "valid"
+    },
+    {
+      "id": "statefile-valid-entry-and-invite",
+      "document": {
+        "version": 1,
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice"
+          }
+        ],
+        "invites": [
+          {
+            "invite_id": "5XYnrK9In0_bcwDgfuAmTeLB5sB1RF9PvYmeac5lDfI",
+            "admin": false,
+            "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "created_at": 100,
+            "expires_at": 200,
+            "key_ttl_seconds": 3600
+          }
+        ]
+      },
+      "expect": "valid"
+    },
+    {
+      "id": "statefile-valid-default-invite",
+      "document": {
+        "version": 1,
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice"
+          }
+        ],
+        "invites": [
+          {
+            "invite_id": "7siqhdVjfEgN-IpXjmal6kYTFmXn7_BqcP2udPfsmRs",
+            "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "created_at": 100,
+            "expires_at": 200
+          }
+        ]
+      },
+      "expect": "valid"
+    },
+    {
+      "id": "statefile-valid-invite-ttl-min",
+      "document": {
+        "version": 1,
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice"
+          }
+        ],
+        "invites": [
+          {
+            "invite_id": "1KWElGMHzKkFyQvCUbN3qbjzu_RdJTzy60HQKKqITa8",
+            "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "created_at": 100,
+            "expires_at": 200,
+            "key_ttl_seconds": 1
+          }
+        ]
+      },
+      "expect": "valid"
+    },
+    {
+      "id": "statefile-valid-invite-ttl-max",
+      "document": {
+        "version": 1,
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice"
+          }
+        ],
+        "invites": [
+          {
+            "invite_id": "pSpZzzkTd3jTdxCriddi_MRQC__E0O7coYjMW5bgW9Y",
+            "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "created_at": 100,
+            "expires_at": 200,
+            "key_ttl_seconds": 31536000
+          }
+        ]
+      },
+      "expect": "valid"
+    },
+    {
+      "id": "statefile-invalid-legacy-kind-entry",
+      "document": {
+        "version": 1,
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice",
+            "kind": "human"
+          }
+        ],
+        "invites": [
+          {
+            "invite_id": "5XYnrK9In0_bcwDgfuAmTeLB5sB1RF9PvYmeac5lDfI",
+            "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "created_at": 100,
+            "expires_at": 200
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "legacy field kind"
+    },
+    {
+      "id": "statefile-invalid-legacy-scopes-entry",
+      "document": {
+        "version": 1,
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice",
+            "scopes": [
+              "read"
+            ]
+          }
+        ],
+        "invites": [
+          {
+            "invite_id": "5XYnrK9In0_bcwDgfuAmTeLB5sB1RF9PvYmeac5lDfI",
+            "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "created_at": 100,
+            "expires_at": 200
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "legacy field scopes"
+    },
+    {
+      "id": "statefile-invalid-legacy-kind-invite",
+      "document": {
+        "version": 1,
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice"
+          }
+        ],
+        "invites": [
+          {
+            "invite_id": "5XYnrK9In0_bcwDgfuAmTeLB5sB1RF9PvYmeac5lDfI",
+            "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "created_at": 100,
+            "expires_at": 200,
+            "kind": "human"
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "legacy field kind"
+    },
+    {
+      "id": "statefile-invalid-unknown-document-field",
+      "document": {
+        "version": 1,
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice"
+          }
+        ],
+        "invites": [
+          {
+            "invite_id": "5XYnrK9In0_bcwDgfuAmTeLB5sB1RF9PvYmeac5lDfI",
+            "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "created_at": 100,
+            "expires_at": 200
+          }
+        ],
+        "comment": "x"
+      },
+      "expect": "invalid",
+      "reason": "unknown field: comment"
+    },
+    {
+      "id": "statefile-invalid-unknown-invite-field",
+      "document": {
+        "version": 1,
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice"
+          }
+        ],
+        "invites": [
+          {
+            "invite_id": "5XYnrK9In0_bcwDgfuAmTeLB5sB1RF9PvYmeac5lDfI",
+            "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "created_at": 100,
+            "expires_at": 200,
+            "note": "x"
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "unknown field: note"
+    },
+    {
+      "id": "statefile-invalid-version",
+      "document": {
+        "version": 2,
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice"
+          }
+        ],
+        "invites": [
+          {
+            "invite_id": "5XYnrK9In0_bcwDgfuAmTeLB5sB1RF9PvYmeac5lDfI",
+            "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "created_at": 100,
+            "expires_at": 200
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "document"
+    },
+    {
+      "id": "statefile-invalid-duplicate-kid",
+      "document": {
+        "version": 1,
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice"
+          },
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "other"
+          }
+        ],
+        "invites": [
+          {
+            "invite_id": "5XYnrK9In0_bcwDgfuAmTeLB5sB1RF9PvYmeac5lDfI",
+            "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "created_at": 100,
+            "expires_at": 200
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "duplicate_kid"
+    },
+    {
+      "id": "statefile-invalid-duplicate-invite-id",
+      "document": {
+        "version": 1,
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice"
+          }
+        ],
+        "invites": [
+          {
+            "invite_id": "5XYnrK9In0_bcwDgfuAmTeLB5sB1RF9PvYmeac5lDfI",
+            "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "created_at": 100,
+            "expires_at": 200
+          },
+          {
+            "invite_id": "5XYnrK9In0_bcwDgfuAmTeLB5sB1RF9PvYmeac5lDfI",
+            "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "created_at": 150,
+            "expires_at": 200
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "duplicate_invite_id"
+    },
+    {
+      "id": "statefile-invalid-admin-string",
+      "document": {
+        "version": 1,
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice",
+            "admin": "true"
+          }
+        ],
+        "invites": [
+          {
+            "invite_id": "5XYnrK9In0_bcwDgfuAmTeLB5sB1RF9PvYmeac5lDfI",
+            "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "created_at": 100,
+            "expires_at": 200
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "admin must be a strict boolean"
+    },
+    {
+      "id": "statefile-invalid-invite-times",
+      "document": {
+        "version": 1,
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice"
+          }
+        ],
+        "invites": [
+          {
+            "invite_id": "5XYnrK9In0_bcwDgfuAmTeLB5sB1RF9PvYmeac5lDfI",
+            "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "created_at": 300,
+            "expires_at": 200
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "expires_at"
+    },
+    {
+      "id": "statefile-invalid-invite-ttl-null",
+      "document": {
+        "version": 1,
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice"
+          }
+        ],
+        "invites": [
+          {
+            "invite_id": "7siqhdVjfEgN-IpXjmal6kYTFmXn7_BqcP2udPfsmRs",
+            "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "created_at": 100,
+            "expires_at": 200,
+            "key_ttl_seconds": null
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "key_ttl_seconds"
+    },
+    {
+      "id": "statefile-invalid-invite-ttl-zero",
+      "document": {
+        "version": 1,
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice"
+          }
+        ],
+        "invites": [
+          {
+            "invite_id": "7siqhdVjfEgN-IpXjmal6kYTFmXn7_BqcP2udPfsmRs",
+            "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "created_at": 100,
+            "expires_at": 200,
+            "key_ttl_seconds": 0
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "key_ttl_seconds"
+    },
+    {
+      "id": "statefile-invalid-invite-ttl-above-max",
+      "document": {
+        "version": 1,
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice"
+          }
+        ],
+        "invites": [
+          {
+            "invite_id": "7siqhdVjfEgN-IpXjmal6kYTFmXn7_BqcP2udPfsmRs",
+            "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "created_at": 100,
+            "expires_at": 200,
+            "key_ttl_seconds": 31536001
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "key_ttl_seconds"
+    }
+  ]
+}

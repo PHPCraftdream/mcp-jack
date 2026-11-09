@@ -16,53 +16,47 @@ pub const TOOL_ROTATE_KEY: &str = "jack.key.rotate";
 pub const TOOL_ADMIN_USER_LIST: &str = "jack.admin.user.list";
 pub const TOOL_ADMIN_USER_GET: &str = "jack.admin.user.get";
 pub const TOOL_ADMIN_USER_CREATE: &str = "jack.admin.user.create";
-pub const TOOL_ADMIN_USER_SET_SCOPES: &str = "jack.admin.user.set_scopes";
+/// spec 03 section 3.3, the admin argument is REQUIRED (a plain boolean).
+pub const TOOL_ADMIN_USER_SET_ADMIN: &str = "jack.admin.user.set_admin";
 pub const TOOL_ADMIN_USER_REVOKE: &str = "jack.admin.user.revoke";
 pub const TOOL_ADMIN_INVITE_CREATE: &str = "jack.admin.invite.create";
 pub const TOOL_ADMIN_INVITE_LIST: &str = "jack.admin.invite.list";
 pub const TOOL_ADMIN_INVITE_REVOKE: &str = "jack.admin.invite.revoke";
 
-/// One registry key entry (spec 03 section 3.3). Go's nil validity fields map
-/// to None; an absent kind maps to "" like Go's zero value.
+/// The full registry entry view (spec 03 section 3.3): the admin flag is
+/// always present on results; Go's nil validity fields map to None.
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Entry {
     pub kid: String,
     pub public_key: String,
     pub name: String,
-    #[serde(default)]
-    pub kind: String,
-    #[serde(default)]
-    pub scopes: Vec<String>,
+    pub admin: bool,
     #[serde(default)]
     pub not_before: Option<i64>,
     #[serde(default)]
     pub not_after: Option<i64>,
 }
 
-/// Describes the calling key (spec 03 section 3.3).
+/// Describes the calling key (spec 03 section 3.1); the admin flag is always
+/// present on results.
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct WhoAmIResult {
     pub kid: String,
     pub name: String,
-    #[serde(default)]
-    pub kind: String,
-    #[serde(default)]
-    pub scopes: Vec<String>,
+    pub admin: bool,
     #[serde(default)]
     pub not_before: Option<i64>,
     #[serde(default)]
     pub not_after: Option<i64>,
 }
 
-/// Describes the key just enrolled via an invite (spec 03 section 3.2).
+/// Describes the key just enrolled via an invite (spec 03 section 3.2 step
+/// 8): the admin flag comes from the invite, so it is always present.
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct EnrollResult {
     pub kid: String,
     pub name: String,
-    #[serde(default)]
-    pub kind: String,
-    #[serde(default)]
-    pub scopes: Vec<String>,
+    pub admin: bool,
 }
 
 /// Reports the kid of the affected registry entry.
@@ -80,14 +74,12 @@ pub struct InviteCreateResult {
     pub expires_at: i64,
 }
 
-/// One live invite (spec 03 section 3.3).
+/// One live invite in the invite.list view (spec 03 section 3.3); the
+/// key_ttl_seconds bound is not part of the view.
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct InviteListEntry {
     pub invite_id: String,
-    #[serde(default)]
-    pub scopes: Vec<String>,
-    #[serde(default)]
-    pub kind: String,
+    pub admin: bool,
     pub created_by: String,
     pub created_at: i64,
     pub expires_at: i64,
@@ -99,29 +91,26 @@ pub struct InviteRevokeResult {
     pub invite_id: String,
 }
 
-/// The arguments of jack.admin.user.create. Go's Kind is a string with
-/// omitempty (the empty string is dropped from the wire form); the Rust
-/// caller passes None for absent, mirroring that.
+/// The arguments of jack.admin.user.create. Admin follows public_key on the
+/// wire; the absent forms are dropped like Go's omitempty.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct UserCreateParams {
     pub name: String,
     pub public_key: String,
-    pub scopes: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
+    pub admin: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub not_before: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub not_after: Option<i64>,
 }
 
-/// The arguments of jack.admin.invite.create. The ttl bounds are the
-/// server's (spec 03 section 3.3).
+/// The arguments of jack.admin.invite.create. Admin is FIRST on the wire;
+/// the ttl bounds are the server's (spec 03 section 3.3).
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct InviteCreateParams {
-    pub scopes: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
+    pub admin: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ttl_seconds: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -153,11 +142,11 @@ struct KidArgs {
     kid: String,
 }
 
-/// Go's anonymous struct {kid, scopes}.
+/// Go's anonymous struct {kid, admin}; the boolean is REQUIRED.
 #[derive(serde::Serialize)]
-struct SetScopesArgs {
+struct SetAdminArgs {
     kid: String,
-    scopes: Vec<String>,
+    admin: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -272,20 +261,17 @@ impl Client {
         )?)
     }
 
-    /// Replaces the scopes of one entry.
-    pub fn admin_user_set_scopes(
-        &self,
-        kid: &str,
-        scopes: &[String],
-    ) -> Result<Entry, ClientError> {
-        let args = SetScopesArgs {
+    /// Sets (or clears) the admin flag of one entry (spec 03 section 3.3);
+    /// returns the full updated entry.
+    pub fn admin_user_set_admin(&self, kid: &str, admin: bool) -> Result<Entry, ClientError> {
+        let args = SetAdminArgs {
             kid: kid.to_string(),
-            scopes: scopes.to_vec(),
+            admin,
         };
         decode_out(self.call_raw(
             None,
             None,
-            TOOL_ADMIN_USER_SET_SCOPES,
+            TOOL_ADMIN_USER_SET_ADMIN,
             Some(&args_json(&args)?),
         )?)
     }
@@ -348,7 +334,7 @@ mod tests {
         assert_eq!(TOOL_ADMIN_USER_LIST, "jack.admin.user.list");
         assert_eq!(TOOL_ADMIN_USER_GET, "jack.admin.user.get");
         assert_eq!(TOOL_ADMIN_USER_CREATE, "jack.admin.user.create");
-        assert_eq!(TOOL_ADMIN_USER_SET_SCOPES, "jack.admin.user.set_scopes");
+        assert_eq!(TOOL_ADMIN_USER_SET_ADMIN, "jack.admin.user.set_admin");
         assert_eq!(TOOL_ADMIN_USER_REVOKE, "jack.admin.user.revoke");
         assert_eq!(TOOL_ADMIN_INVITE_CREATE, "jack.admin.invite.create");
         assert_eq!(TOOL_ADMIN_INVITE_LIST, "jack.admin.invite.list");
@@ -381,66 +367,82 @@ mod tests {
         let minimal = UserCreateParams {
             name: "n".to_string(),
             public_key: "p".to_string(),
-            scopes: vec!["read".to_string()],
-            kind: None,
+            admin: None,
             not_before: None,
             not_after: None,
         };
         assert_eq!(
             serde_json::to_string(&minimal).expect("serialize"),
-            r#"{"name":"n","public_key":"p","scopes":["read"]}"#
+            r#"{"name":"n","public_key":"p"}"#
         );
         let full = UserCreateParams {
-            kind: Some("human".to_string()),
+            admin: Some(true),
             not_before: Some(1),
             not_after: Some(2),
             ..minimal
         };
         assert_eq!(
             serde_json::to_string(&full).expect("serialize"),
-            r#"{"name":"n","public_key":"p","scopes":["read"],"kind":"human","not_before":1,"not_after":2}"#
+            r#"{"name":"n","public_key":"p","admin":true,"not_before":1,"not_after":2}"#
         );
     }
 
     #[test]
     fn invite_create_params_wire_order() {
         let minimal = InviteCreateParams {
-            scopes: vec!["read".to_string()],
-            kind: None,
+            admin: None,
+            ttl_seconds: None,
+            key_ttl_seconds: None,
+        };
+        assert_eq!(serde_json::to_string(&minimal).expect("serialize"), r"{}");
+        let admin_only = InviteCreateParams {
+            admin: Some(true),
             ttl_seconds: None,
             key_ttl_seconds: None,
         };
         assert_eq!(
-            serde_json::to_string(&minimal).expect("serialize"),
-            r#"{"scopes":["read"]}"#
+            serde_json::to_string(&admin_only).expect("serialize"),
+            r#"{"admin":true}"#
         );
         let full = InviteCreateParams {
-            kind: Some("human".to_string()),
-            ttl_seconds: Some(60),
-            key_ttl_seconds: Some(3600),
-            ..minimal
+            admin: None,
+            ttl_seconds: Some(604800),
+            key_ttl_seconds: Some(31536000),
         };
         assert_eq!(
             serde_json::to_string(&full).expect("serialize"),
-            r#"{"scopes":["read"],"kind":"human","ttl_seconds":60,"key_ttl_seconds":3600}"#
+            r#"{"ttl_seconds":604800,"key_ttl_seconds":31536000}"#
+        );
+        let set_admin = SetAdminArgs {
+            kid: "k".to_string(),
+            admin: false,
+        };
+        assert_eq!(
+            serde_json::to_string(&set_admin).expect("serialize"),
+            r#"{"kid":"k","admin":false}"#
         );
     }
 
-    // Go also tolerates explicit nulls as no-ops; serde errors on null for
-    // String/i64 fields, so only the absent forms are tested here.
+    // Results always carry admin (spec 03 section 3.3), so an entry without
+    // it must FAIL to decode; validity fields tolerate absent and null.
     #[test]
     fn entry_decodes_absent_and_null_validity() {
         let absent: Entry =
-            serde_json::from_str(r#"{"kid":"k","public_key":"p","name":"n","scopes":["read"]}"#)
+            serde_json::from_str(r#"{"kid":"k","public_key":"p","name":"n","admin":false}"#)
                 .expect("decode");
-        assert_eq!(absent.kind, "");
+        assert!(!absent.admin);
         assert_eq!(absent.not_before, None);
         assert_eq!(absent.not_after, None);
 
-        let with_expiry: Entry = serde_json::from_str(
-            r#"{"kid":"k","public_key":"p","name":"n","scopes":["read"],"not_after":1750000000}"#,
+        let null_validity: Entry = serde_json::from_str(
+            r#"{"kid":"k","public_key":"p","name":"n","admin":true,"not_before":null,"not_after":null}"#,
         )
         .expect("decode");
-        assert_eq!(with_expiry.not_after, Some(1750000000));
+        assert_eq!(null_validity.not_before, None);
+        assert_eq!(null_validity.not_after, None);
+
+        let missing_admin =
+            serde_json::from_str::<Entry>(r#"{"kid":"k","public_key":"p","name":"n"}"#);
+        assert!(missing_admin.is_err());
     }
 }

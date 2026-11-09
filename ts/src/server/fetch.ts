@@ -1,10 +1,11 @@
-/** Fetch-standard request handler adapter: body buffering, verification, native tools, response signing. */
+/** Fetch-standard request handler adapter: body buffering, verification, native tools, response signing, verified-identity hand-off to the wrapped handler. */
 import { createPrivateKey, createPublicKey, sign } from "node:crypto";
 import type { KeyObject } from "node:crypto";
 import { formatResponseAuth } from "../auth-header.js";
 import { keyId, encodeBase64URL } from "../encoding.js";
 import { responseSigningString } from "../signing.js";
 import type { Verifier, VerifyResult } from "./verify.js";
+import type { JackIdentity } from "./verify.js";
 
 // Go NewHandler returns errors; the Fetch-standard API has no error return in
 // its factory shape, so configuration problems THROW a plain Error instead.
@@ -64,6 +65,27 @@ export const AUTH_VALUES_SYMBOL = Symbol("mcp-jack.auth-values");
 export interface JackRequest extends Request {
   [RAW_TARGET_SYMBOL]?: string;
   [AUTH_VALUES_SYMBOL]?: readonly string[];
+}
+
+/**
+ * SDK-PRIVATE request-to-identity storage, keyed by the request object the
+ * adapter hands to the wrapped handler. A WeakMap — not an own property — is
+ * the association boundary: handler code can neither discover the identity
+ * (no own symbol of the request carries it), nor replace it (property
+ * assignment cannot touch a map it holds no reference to), nor carry it onto
+ * a copied Request (a different object has no entry). The only access path
+ * is the jackIdentity() read accessor below; entries die with their request.
+ */
+const identities = new WeakMap<object, JackIdentity>();
+
+/**
+ * Read accessor for the frozen verified-identity snapshot associated by
+ * forward() with a forwarded request; undefined when the request carries
+ * none. Returns the snapshot itself, never a copy, so snapshot identity is
+ * preserved across reads.
+ */
+export function jackIdentity(req: Request): JackIdentity | undefined {
+  return identities.get(req);
 }
 
 /**
@@ -204,6 +226,19 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
       headers: new Headers(req.headers),
       ...(req.method !== "GET" && req.method !== "HEAD" && body.length > 0 ? { body } : {}),
     });
+    // Preserve the node adapter's exact authenticated target for the wrapped
+    // handler too; the Request URL itself remains URL-normalized.
+    const rawTarget = (req as JackRequest)[RAW_TARGET_SYMBOL];
+    if (rawTarget !== undefined) {
+      (restored as JackRequest)[RAW_TARGET_SYMBOL] = rawTarget;
+    }
+    // Associate the verified caller identity with the restored request in
+    // SDK-private storage (WeakMap): nothing on the request object to
+    // discover or overwrite, and a reconstructed Request carries no
+    // association.
+    if (res.identity !== undefined) {
+      identities.set(restored, res.identity);
+    }
 
     let resp: Response;
     try {

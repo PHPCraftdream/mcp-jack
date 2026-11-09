@@ -16,7 +16,7 @@ import (
 var fixtures embed.FS
 
 // Fixture returns the raw bytes of one embedded fixture file, for consumers
-// that interpret a document themselves (for example a policy loader).
+// that interpret a document themselves (for example a state-file reader).
 func Fixture(name string) ([]byte, error) {
 	data, err := fixtures.ReadFile("fixtures/" + name)
 	if err != nil {
@@ -64,17 +64,18 @@ type KeyFile struct {
 	Keys []TestKey `json:"keys"`
 }
 
-// RegistryEntry is one key of a registry document. Kind, NotBefore and
-// NotAfter are pointers because documents may omit them (then they default)
-// and the JSON uses null for unbounded validity.
+// RegistryEntry is one key of a registry document. Admin, NotBefore and
+// NotAfter are pointers because documents may omit them (admin then defaults
+// to false for the consumer); admin must be a strict JSON boolean when
+// present in the fixture documents and the JSON uses null for unbounded
+// validity.
 type RegistryEntry struct {
-	Kid       string   `json:"kid"`
-	PublicKey string   `json:"public_key"`
-	Name      string   `json:"name"`
-	Kind      *string  `json:"kind,omitempty"`
-	Scopes    []string `json:"scopes"`
-	NotBefore *int64   `json:"not_before,omitempty"`
-	NotAfter  *int64   `json:"not_after,omitempty"`
+	Kid       string `json:"kid"`
+	PublicKey string `json:"public_key"`
+	Name      string `json:"name"`
+	Admin     *bool  `json:"admin,omitempty"`
+	NotBefore *int64 `json:"not_before,omitempty"`
+	NotAfter  *int64 `json:"not_after,omitempty"`
 }
 
 // RegistryDocument is registry.json.
@@ -82,28 +83,6 @@ type RegistryDocument struct {
 	Version int             `json:"version"`
 	Aud     string          `json:"aud"`
 	Keys    []RegistryEntry `json:"keys"`
-}
-
-// PolicyMatch selects requests by JSON-RPC method and, for tools/call, tool name.
-type PolicyMatch struct {
-	Method string `json:"method"`
-	Tool   string `json:"tool,omitempty"`
-}
-
-// PolicyRule is one first-match-wins rule. Scope is nil for JSON null ("any
-// authenticated key") and for deny rules, which carry no scope; this typed form
-// only holds valid documents, so load-time validation, which must tell a null
-// scope from a missing one, works on raw JSON (see LoadCase).
-type PolicyRule struct {
-	Match  PolicyMatch `json:"match"`
-	Scope  *string     `json:"scope,omitempty"`
-	Effect string      `json:"effect,omitempty"`
-}
-
-// PolicyDocument is policy.json / policy-wildcard.json.
-type PolicyDocument struct {
-	Version int          `json:"version"`
-	Rules   []PolicyRule `json:"rules"`
 }
 
 // HeaderPair is one [name, value] pair; the list form keeps repeated headers
@@ -153,7 +132,6 @@ type RequestState struct {
 	Now           int64             `json:"now"`
 	WindowSeconds int               `json:"window_seconds"`
 	Aud           string            `json:"aud"`
-	Policy        string            `json:"policy"`
 	NonceCache    []NonceCacheEntry `json:"nonce_cache"`
 }
 
@@ -178,20 +156,47 @@ type AuditExpect struct {
 	ActorKid string  `json:"actor_kid"`
 }
 
-// UserSummary is one entry of an after.users expectation.
+// UserSummary is one full registry entry of an after.users expectation,
+// sorted by name; admin is always present and not_before/not_after are null
+// when unbounded.
 type UserSummary struct {
-	Name      string   `json:"name"`
-	Kid       string   `json:"kid"`
-	Kind      string   `json:"kind"`
-	Scopes    []string `json:"scopes"`
-	NotBefore *int64   `json:"not_before,omitempty"`
-	NotAfter  *int64   `json:"not_after,omitempty"`
+	Kid       string `json:"kid"`
+	PublicKey string `json:"public_key"`
+	Name      string `json:"name"`
+	Admin     bool   `json:"admin"`
+	NotBefore *int64 `json:"not_before"`
+	NotAfter  *int64 `json:"not_after"`
 }
 
-// AfterState summarizes the sequence state after a step ran.
+// InviteSummary is one stored invite record of an after.invites expectation,
+// sorted by the invite_id text then created_at. key_ttl_seconds is present
+// only when the invite sets a key expiry (never null here); an
+// implementation-created invite_id appears as the "<b64u43>" wildcard.
+type InviteSummary struct {
+	InviteID      string `json:"invite_id"`
+	Admin         bool   `json:"admin"`
+	CreatedBy     string `json:"created_by"`
+	CreatedAt     int64  `json:"created_at"`
+	ExpiresAt     int64  `json:"expires_at"`
+	KeyTTLSeconds *int64 `json:"key_ttl_seconds,omitempty"`
+}
+
+// AfterState summarizes the durable sequence state after a step ran: the full
+// registry (sorted by name) and every stored invite record (sorted by
+// invite_id text, then created_at), expired ones included — it is the durable
+// state, not the live-only tool listing.
 type AfterState struct {
-	Users   []UserSummary `json:"users"`
-	Invites int           `json:"invites"`
+	Users   []UserSummary   `json:"users"`
+	Invites []InviteSummary `json:"invites"`
+}
+
+// IdentityExpect is the verified caller identity the server SDK hands to the
+// wrapped handler on forwarded accepts (spec 02 section 3; spec/tests/README.md
+// runner rules). It is present exactly on forwarded accepts.
+type IdentityExpect struct {
+	Kid   string `json:"kid"`
+	Name  string `json:"name"`
+	Admin bool   `json:"admin"`
 }
 
 // Expect is the shared outcome expectation. Structured stays raw JSON: its
@@ -200,6 +205,7 @@ type AfterState struct {
 type Expect struct {
 	Result        string          `json:"result"`
 	Kid           string          `json:"kid,omitempty"`
+	Identity      *IdentityExpect `json:"identity,omitempty"`
 	Structured    json.RawMessage `json:"structured,omitempty"`
 	HTTPStatus    int             `json:"http_status,omitempty"`
 	Code          string          `json:"code,omitempty"`
@@ -224,24 +230,22 @@ type RequestCase struct {
 	Debug       Debug          `json:"debug"`
 }
 
-// RequestVectors is request-vectors.json; Policies maps a case's state.policy
-// name to the file that holds it.
+// RequestVectors is request-vectors.json.
 type RequestVectors struct {
-	Registry string            `json:"registry"`
-	Policies map[string]string `json:"policies"`
-	Cases    []RequestCase     `json:"cases"`
+	Registry string        `json:"registry"`
+	Cases    []RequestCase `json:"cases"`
 }
 
-// InviteRecord is a stored invite in a sequence state. KeyTTLSeconds is null
-// when the enrolled key never expires.
+// InviteRecord is a stored invite in a sequence state. Admin is optional
+// (defaults to false; a strict boolean when present) and KeyTTLSeconds is
+// absent or an integer 1..31536000, never null.
 type InviteRecord struct {
-	InviteID      string   `json:"invite_id"`
-	Scopes        []string `json:"scopes"`
-	Kind          *string  `json:"kind,omitempty"`
-	CreatedBy     string   `json:"created_by"`
-	CreatedAt     int64    `json:"created_at"`
-	ExpiresAt     int64    `json:"expires_at"`
-	KeyTTLSeconds *int64   `json:"key_ttl_seconds,omitempty"`
+	InviteID      string `json:"invite_id"`
+	Admin         *bool  `json:"admin,omitempty"`
+	CreatedBy     string `json:"created_by"`
+	CreatedAt     int64  `json:"created_at"`
+	ExpiresAt     int64  `json:"expires_at"`
+	KeyTTLSeconds *int64 `json:"key_ttl_seconds,omitempty"`
 }
 
 // SequenceState is the initial state of an admin sequence case.
@@ -325,8 +329,8 @@ type KeyVectors struct {
 }
 
 // LoadCase is one load-time validation vector. Document stays raw JSON: the
-// invalid cases intentionally contain fields the typed policy and registry
-// forms reject, so typed strict decoding of the fixture itself would fail.
+// invalid cases intentionally contain fields the typed registry form rejects,
+// so typed strict decoding of the fixture itself would fail.
 type LoadCase struct {
 	ID       string          `json:"id"`
 	Document json.RawMessage `json:"document"`
@@ -334,24 +338,24 @@ type LoadCase struct {
 	Reason   string          `json:"reason,omitempty"`
 }
 
-// LoadVectors is load-vectors.json.
+// LoadVectors is load-vectors.json: registry cases only — the policy cases
+// were removed with the admin-only wrapper contract.
 type LoadVectors struct {
-	Policies   []LoadCase `json:"policies"`
 	Registries []LoadCase `json:"registries"`
 }
 
-// PatternCase is one policy pattern matching vector; * is the only
-// metacharacter and matches any run of characters including none and newlines.
-type PatternCase struct {
-	ID      string `json:"id"`
-	Pattern string `json:"pattern"`
-	Input   string `json:"input"`
-	Match   bool   `json:"match"`
+// StateFileCase is one state-file validation vector. Document stays raw JSON:
+// invalid cases intentionally contain members the typed forms reject.
+type StateFileCase struct {
+	ID       string          `json:"id"`
+	Document json.RawMessage `json:"document"`
+	Expect   string          `json:"expect"`
+	Reason   string          `json:"reason,omitempty"`
 }
 
-// PatternVectors is pattern-vectors.json.
-type PatternVectors struct {
-	Cases []PatternCase `json:"cases"`
+// StateFileVectors is state-file-vectors.json.
+type StateFileVectors struct {
+	Cases []StateFileCase `json:"cases"`
 }
 
 // LoadKeys loads keys.json.
@@ -365,20 +369,6 @@ func LoadKeys() (KeyFile, error) {
 func LoadRegistry() (RegistryDocument, error) {
 	var v RegistryDocument
 	err := decodeFixture("registry.json", &v)
-	return v, err
-}
-
-// LoadDefaultPolicy loads policy.json.
-func LoadDefaultPolicy() (PolicyDocument, error) {
-	var v PolicyDocument
-	err := decodeFixture("policy.json", &v)
-	return v, err
-}
-
-// LoadWildcardPolicy loads policy-wildcard.json.
-func LoadWildcardPolicy() (PolicyDocument, error) {
-	var v PolicyDocument
-	err := decodeFixture("policy-wildcard.json", &v)
 	return v, err
 }
 
@@ -417,9 +407,9 @@ func LoadLoadVectors() (LoadVectors, error) {
 	return v, err
 }
 
-// LoadPatternVectors loads pattern-vectors.json.
-func LoadPatternVectors() (PatternVectors, error) {
-	var v PatternVectors
-	err := decodeFixture("pattern-vectors.json", &v)
+// LoadStateFileVectors loads state-file-vectors.json.
+func LoadStateFileVectors() (StateFileVectors, error) {
+	var v StateFileVectors
+	err := decodeFixture("state-file-vectors.json", &v)
 	return v, err
 }

@@ -32,14 +32,13 @@ func fail(format string, args ...any) {
 
 func main() {
 	aud := flag.String("aud", "", "audience (required)")
-	policyPath := flag.String("policy", "", "policy file (required)")
 	statePath := flag.String("state", "", "state file (required)")
 	seedHex := flag.String("server-seed-hex", "", "server Ed25519 seed, 64 hex chars (required)")
 	bootstrapTTL := flag.String("bootstrap-ttl", "", "create an admin invite with this TTL in seconds")
 	verifyOnly := flag.Bool("verify-only", false, "verify one request from stdin and exit")
 	flag.Parse()
-	if *aud == "" || *policyPath == "" || *statePath == "" || *seedHex == "" {
-		fail("--aud, --policy, --state and --server-seed-hex are required")
+	if *aud == "" || *statePath == "" || *seedHex == "" {
+		fail("--aud, --state and --server-seed-hex are required")
 	}
 
 	seed, err := hex.DecodeString(*seedHex)
@@ -55,15 +54,6 @@ func main() {
 	if err != nil {
 		fail("state file: %v", err)
 	}
-	policyData, err := os.ReadFile(*policyPath)
-	if err != nil {
-		fail("policy file: %v", err)
-	}
-	policy, err := server.ParsePolicy(policyData)
-	if err != nil {
-		fail("policy file: %v", err)
-	}
-
 	if *verifyOnly {
 		runVerifyOnly(*aud, state)
 		return
@@ -88,7 +78,6 @@ func main() {
 		Aud:    *aud,
 		State:  state,
 		Nonces: server.NewNonceStore(),
-		Policy: policy,
 		Native: server.NewNativeTools(server.NativeOptions{}),
 	})
 	if err != nil {
@@ -230,6 +219,15 @@ type trivialContent struct {
 	Content []trivialText `json:"content"`
 }
 
+type forwardedIdentity struct {
+	Kid      string `json:"kid"`
+	Name     string `json:"name"`
+	Admin    bool   `json:"admin"`
+	BodyB64U string `json:"body_b64u"`
+	Method   string `json:"method"`
+	Target   string `json:"target"`
+}
+
 type trivialEnvelope struct {
 	JSONRPC string           `json:"jsonrpc"`
 	ID      json.RawMessage  `json:"id"`
@@ -240,6 +238,61 @@ type trivialEnvelope struct {
 type trivialRPCError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+}
+
+func forwardedIdentityFor(r *http.Request, body []byte) (forwardedIdentity, bool) {
+	identity, ok := server.IdentityFromContext(r.Context())
+	if !ok {
+		return forwardedIdentity{}, false
+	}
+	kid, name, admin := identity.Kid(), identity.Name(), identity.Admin()
+	if identity.Kid() != kid || identity.Name() != name || identity.Admin() != admin {
+		return forwardedIdentity{}, false
+	}
+	target := r.RequestURI
+	if target == "" {
+		target = r.URL.RequestURI()
+	}
+	return forwardedIdentity{
+		Kid:      kid,
+		Name:     name,
+		Admin:    admin,
+		BodyB64U: jack.EncodeBase64URL(body),
+		Method:   r.Method,
+		Target:   target,
+	}, true
+}
+
+func writeIdentityError(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusInternalServerError)
+	_, _ = w.Write([]byte(`{"error":{"code":"application_identity_unavailable","message":"verified application identity unavailable"}}`))
+}
+
+type identityToolResult struct {
+	Content           []trivialText     `json:"content"`
+	StructuredContent forwardedIdentity `json:"structuredContent"`
+	IsError           bool              `json:"isError"`
+}
+
+func identityResult(identity forwardedIdentity) identityToolResult {
+	return identityToolResult{
+		Content:           []trivialText{{Type: "text", Text: "identity"}},
+		StructuredContent: identity,
+		IsError:           false,
+	}
+}
+
+func writeIdentity(w http.ResponseWriter, r *http.Request, body []byte) {
+	identity, ok := forwardedIdentityFor(r, body)
+	if !ok {
+		writeIdentityError(w)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	payload, _ := json.Marshal(identityResult(identity))
+	encoded, _ := json.Marshal(trivialEnvelope{JSONRPC: "2.0", ID: json.RawMessage("null"), Result: payload})
+	_, _ = w.Write(encoded)
 }
 
 func mcpHandler() http.Handler {
@@ -268,6 +321,10 @@ func mcpHandler() http.Handler {
 				// the signed 501 streaming_unsupported itself.
 				w.Header().Set("Content-Type", "text/event-stream")
 				_, _ = w.Write([]byte("data: hello\n\n"))
+				return
+			}
+			if r.URL.Path == "/identity" || r.URL.Path == "/a/../identity" {
+				writeIdentity(w, r, nil)
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -303,6 +360,13 @@ func mcpHandler() http.Handler {
 			_, _ = w.Write(result(in.ID, map[string]any{"tools": []map[string]string{{"name": "echo"}}}))
 		case "tools/call":
 			switch in.Params.Name {
+			case "app.identity":
+				identity, ok := forwardedIdentityFor(r, body)
+				if !ok {
+					writeIdentityError(w)
+					return
+				}
+				_, _ = w.Write(result(in.ID, identityResult(identity)))
 			case "echo":
 				var args map[string]json.RawMessage
 				if err := json.Unmarshal(in.Params.Arguments, &args); err != nil {
@@ -315,8 +379,16 @@ func mcpHandler() http.Handler {
 					return
 				}
 				_, _ = w.Write(result(in.ID, trivialContent{Content: []trivialText{{Type: "text", Text: text}}}))
-			case "logs.tail", "config.set":
-				// Policy denies these before they reach here; kept per contract.
+			case "svc.config.set", "config.set":
+				identity, ok := server.IdentityFromContext(r.Context())
+				if !ok || identity.Name() != "bob" {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusForbidden)
+					_, _ = w.Write([]byte(`{"error":{"code":"application_permission_denied","message":"application permission required"}}`))
+					return
+				}
+				_, _ = w.Write(result(in.ID, trivialContent{Content: []trivialText{{Type: "text", Text: "ok"}}}))
+			case "logs.tail":
 				_, _ = w.Write(result(in.ID, trivialContent{Content: []trivialText{{Type: "text", Text: "ok"}}}))
 			default:
 				_, _ = w.Write(notFound(in.ID))

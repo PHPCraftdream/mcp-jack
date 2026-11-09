@@ -5,7 +5,7 @@ import { MAX_BODY_BYTES, createSigningFetch, readBodyCapped } from "./transport.
 import type { SigningFetch } from "./transport.js";
 import { HTTPError, RPCError, ToolError, parseErrorBody } from "./errors.js";
 import type { Clock, NonceSource } from "./auth.js";
-import { adminInviteCreate, adminInviteList, adminInviteRevoke, adminUserCreate, adminUserGet, adminUserList, adminUserRevoke, adminUserSetScopes, enroll, rotateKey, whoAmI } from "./tools.js";
+import { adminInviteCreate, adminInviteList, adminInviteRevoke, adminUserCreate, adminUserGet, adminUserList, adminUserRevoke, adminUserSetAdmin, enroll, rotateKey, whoAmI } from "./tools.js";
 import type { EnrollResult, Entry, InviteCreateParams, InviteCreateResult, InviteListEntry, InviteRevokeResult, KidResult, UserCreateParams, WhoAmIResult } from "./tools.js";
 import type { Signer } from "./signer.js";
 import { checkDestination } from "./url-policy.js";
@@ -215,9 +215,9 @@ export class Client {
     return adminUserCreate(this, params);
   }
 
-  /** Replaces the scopes of one entry. */
-  adminUserSetScopes(kid: string, scopes: string[]): Promise<Entry> {
-    return adminUserSetScopes(this, kid, scopes);
+  /** Replaces one entry's admin flag; the protocol gates non-admin callers with admin_required. */
+  adminUserSetAdmin(kid: string, admin: boolean): Promise<Entry> {
+    return adminUserSetAdmin(this, kid, admin);
   }
 
   /** Revokes one registry entry. */

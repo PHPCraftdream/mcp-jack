@@ -10,6 +10,8 @@ use http_body_util::Full;
 use serde_json::value::RawValue;
 use tower_service::Service;
 
+use mcp_jack::server::identity::VerifiedIdentity;
+
 /// Wire types of the fixed trivial MCP handler; declaration order mirrors
 /// Go's field-order marshaling.
 #[derive(serde::Deserialize)]
@@ -71,6 +73,25 @@ struct ContentResult {
     content: [TextContent; 1],
 }
 
+#[derive(serde::Serialize)]
+struct ForwardedIdentity {
+    kid: String,
+    name: String,
+    admin: bool,
+    body_b64u: String,
+    method: String,
+    target: String,
+}
+
+#[derive(serde::Serialize)]
+struct IdentityToolResult {
+    content: [TextContent; 1],
+    #[serde(rename = "structuredContent")]
+    structured_content: ForwardedIdentity,
+    #[serde(rename = "isError")]
+    is_error: bool,
+}
+
 /// The trivial service. Clone + Send + 'static with Infallible errors and a
 /// Send future: satisfies JackService's bounds; Full<Bytes>'s Error is
 /// Infallible so it satisfies ResBody's bounds.
@@ -94,6 +115,7 @@ impl Service<http::Request<Full<Bytes>>> for TrivialService {
 /// Answers one request exactly as Go mcpHandler does.
 fn handle(req: http::Request<Full<Bytes>>) -> http::Response<Full<Bytes>> {
     let (parts, body) = req.into_parts();
+    let identity = parts.extensions.get::<VerifiedIdentity>();
     match parts.method.as_str() {
         "GET" => {
             if parts.uri.path() == "/sse" {
@@ -104,6 +126,14 @@ fn handle(req: http::Request<Full<Bytes>>) -> http::Response<Full<Bytes>> {
                     "text/event-stream",
                     Bytes::from_static(b"data: hello\n\n"),
                 );
+            }
+            if parts.uri.path() == "/identity" || parts.uri.path() == "/a/../identity" {
+                let identity = match identity {
+                    Some(identity) => identity,
+                    None => return identity_unavailable(),
+                };
+                let snapshot = identity_snapshot(identity, &[], &parts.method, &parts.uri);
+                return response_identity(snapshot);
             }
             return respond(
                 200,
@@ -157,8 +187,44 @@ fn handle(req: http::Request<Full<Bytes>>) -> http::Response<Full<Bytes>> {
                 ),
                 None => json_response(not_found(id)),
             },
-            // Policy denies these before they reach here; kept per contract.
-            Some("logs.tail" | "config.set") => result_envelope(
+            Some("app.identity") => match identity {
+                Some(identity) => result_envelope(
+                    id,
+                    &IdentityToolResult {
+                        content: [TextContent {
+                            r#type: "text",
+                            text: "identity".to_owned(),
+                        }],
+                        structured_content: identity_snapshot(
+                            identity,
+                            &bytes,
+                            &parts.method,
+                            &parts.uri,
+                        ),
+                        is_error: false,
+                    },
+                ),
+                None => identity_unavailable(),
+            },
+            Some("svc.config.set" | "config.set") => {
+                if !identity.is_some_and(|id| id.name() == "bob") {
+                    return respond(
+                        403,
+                        "application/json",
+                        Bytes::from_static(br#"{"error":{"code":"application_permission_denied","message":"application permission required"}}"#),
+                    );
+                }
+                result_envelope(
+                    id,
+                    &ContentResult {
+                        content: [TextContent {
+                            r#type: "text",
+                            text: "ok".to_owned(),
+                        }],
+                    },
+                )
+            }
+            Some("logs.tail") => result_envelope(
                 id,
                 &ContentResult {
                     content: [TextContent {
@@ -171,6 +237,50 @@ fn handle(req: http::Request<Full<Bytes>>) -> http::Response<Full<Bytes>> {
         },
         _ => json_response(not_found(id)),
     }
+}
+
+fn identity_snapshot(
+    identity: &VerifiedIdentity,
+    body: &[u8],
+    method: &http::Method,
+    uri: &http::Uri,
+) -> ForwardedIdentity {
+    let kid = identity.kid().to_owned();
+    let name = identity.name().to_owned();
+    let admin = identity.admin();
+    ForwardedIdentity {
+        kid,
+        name,
+        admin,
+        body_b64u: mcp_jack::encoding::encode_b64url(body),
+        method: method.as_str().to_owned(),
+        target: uri
+            .path_and_query()
+            .map(|path_and_query| path_and_query.as_str().to_owned())
+            .unwrap_or_else(|| uri.path().to_owned()),
+    }
+}
+
+fn identity_unavailable() -> http::Response<Full<Bytes>> {
+    respond(
+        500,
+        "application/json",
+        Bytes::from_static(br#"{"error":{"code":"application_identity_unavailable","message":"verified application identity unavailable"}}"#),
+    )
+}
+
+fn response_identity(identity: ForwardedIdentity) -> http::Response<Full<Bytes>> {
+    result_envelope(
+        None,
+        &IdentityToolResult {
+            content: [TextContent {
+                r#type: "text",
+                text: "identity".to_owned(),
+            }],
+            structured_content: identity,
+            is_error: false,
+        },
+    )
 }
 
 /// Extracts arguments.text, decoded as a JSON string; any failure is the

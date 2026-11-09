@@ -20,7 +20,7 @@ const cfgHTTPURL = "https://svc.example.test/mcp"
 const cfgHTTPStaleAud = "https://stale.example.test"
 
 func cfgHTTPOKBody() []byte {
-	return rpcResultBody(json.RawMessage(`{"kid":"kid-1","name":"n","kind":"user","scopes":[]}`))
+	return rpcResultBody(json.RawMessage(`{"kid":"kid-1","name":"n","admin":false}`))
 }
 
 type cfgHTTPRec struct {
@@ -176,7 +176,7 @@ func TestConfigHTTPPlainBaseIsSignedAndVerified(t *testing.T) {
 }
 
 func TestConfigHTTPPlainBaseRefusesUntrustedResponses(t *testing.T) {
-	tampered := rpcResultBody(json.RawMessage(`{"kid":"other","name":"n","kind":"user","scopes":[]}`))
+	tampered := rpcResultBody(json.RawMessage(`{"kid":"other","name":"n","admin":false}`))
 	cases := []struct {
 		name string
 		rep  cfgHTTPReply
@@ -195,8 +195,8 @@ func TestConfigHTTPPlainBaseRefusesUntrustedResponses(t *testing.T) {
 				t.Fatalf("WhoAmI accepted an untrusted response: %+v", res)
 			}
 			cfgHTTPJackCode(t, err, tc.code)
-			if res.KID != "" || res.Name != "" || res.Kind != "" {
-				t.Fatalf("structuredContent surfaced: %+v", res)
+			if res.KID != "" || res.Name != "" || res.Admin {
+				t.Fatalf("structuredContent surfaced decoded fields: %+v", res)
 			}
 		})
 	}
@@ -669,7 +669,7 @@ func TestConfigHTTPPermissiveCheckRedirectStillRefused(t *testing.T) {
 func TestConfigHTTPLoopbackControls(t *testing.T) {
 	srv := newTestServer(t)
 	srv.Handle = func(w http.ResponseWriter, auth jack.RequestAuth, _ []byte) {
-		srv.writeSignedJSON(w, auth, http.StatusOK, rpcResultBody(json.RawMessage(`{"kid":"`+auth.Kid+`","name":"n","kind":"user","scopes":[]}`)))
+		srv.writeSignedJSON(w, auth, http.StatusOK, rpcResultBody(json.RawMessage(`{"kid":"`+auth.Kid+`","name":"n","admin":false}`)))
 	}
 	cases := []struct {
 		name string

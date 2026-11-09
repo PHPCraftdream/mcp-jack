@@ -22,6 +22,7 @@ use mcp_jack::client::transport::{
 };
 use mcp_jack::client::url::request_target;
 use mcp_jack::encoding::{decode_b64url, decode_b64url_fixed, encode_b64url, key_id};
+use mcp_jack::server::state::StateStore;
 use mcp_jack::signing::{request_signing_string, response_signing_string};
 
 /// The fixture clock (Go: fixtureNow; every request/response fixture case pins it).
@@ -320,6 +321,59 @@ pub fn structured_matches(want: &serde_json::Value, got: &serde_json::Value) -> 
     }
 }
 
+/// The store view as the after.users expectation shape (runner rules): every
+/// registry entry as a full entry `{kid, public_key, name, admin,
+/// not_before, not_after}` — admin ALWAYS emitted, false included — sorted
+/// by name.
+pub fn after_users_json(state: &dyn StateStore) -> serde_json::Value {
+    let mut keys = state.view().keys;
+    keys.sort_by(|a, b| a.name.cmp(&b.name));
+    let users: Vec<serde_json::Value> = keys
+        .iter()
+        .map(|e| {
+            serde_json::json!({
+                "kid": e.kid,
+                "public_key": e.public_key,
+                "name": e.name,
+                "admin": e.admin,
+                "not_before": e.not_before,
+                "not_after": e.not_after,
+            })
+        })
+        .collect();
+    serde_json::Value::Array(users)
+}
+
+/// The stored invites as the after.invites expectation shape (runner rules):
+/// each record `{invite_id, admin, created_by, created_at, expires_at}` plus
+/// `"key_ttl_seconds"` ONLY when Some (absent, never null), sorted by
+/// (invite_id, created_at). Implementation-created ids are matched against
+/// the fixture's "<b64u43>" placeholder via structured_matches.
+pub fn stored_invites_sorted(state: &dyn StateStore) -> Vec<serde_json::Value> {
+    let mut invites = state.view().invites;
+    invites.sort_by(|a, b| {
+        a.invite_id
+            .cmp(&b.invite_id)
+            .then(a.created_at.cmp(&b.created_at))
+    });
+    invites
+        .iter()
+        .map(|inv| {
+            let mut obj = serde_json::json!({
+                "invite_id": inv.invite_id,
+                "admin": inv.admin,
+                "created_by": inv.created_by,
+                "created_at": inv.created_at,
+                "expires_at": inv.expires_at,
+            });
+            if let Some(ttl) = inv.key_ttl_seconds {
+                obj["key_ttl_seconds"] = serde_json::json!(ttl);
+            }
+            obj
+        })
+        .collect()
+}
+
 /// Asserts the audit expectation of one step: the event on the result and the
 /// sink's last record must match (or both be absent).
 pub fn check_audit(
@@ -351,6 +405,63 @@ pub fn check_audit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn after_state_invites_preserve_raw_ttl_members() {
+        let document = serde_json::json!({
+            "users": [{
+                "kid": "kid-a",
+                "public_key": "public-a",
+                "name": "alice",
+                "admin": false,
+                "not_before": null,
+                "not_after": null
+            }],
+            "invites": [
+                {
+                    "invite_id": "no-ttl",
+                    "admin": false,
+                    "created_by": "kid-a",
+                    "created_at": 10,
+                    "expires_at": 20
+                },
+                {
+                    "invite_id": "null-ttl",
+                    "admin": false,
+                    "created_by": "kid-a",
+                    "created_at": 10,
+                    "expires_at": 20,
+                    "key_ttl_seconds": null
+                },
+                {
+                    "invite_id": "integer-ttl",
+                    "admin": false,
+                    "created_by": "kid-a",
+                    "created_at": 10,
+                    "expires_at": 20,
+                    "key_ttl_seconds": 3600
+                }
+            ]
+        });
+        let after: super::super::fixtures::AfterState =
+            serde_json::from_value(document).expect("decode after-state fixture document");
+
+        assert_eq!(after.invites.len(), 3);
+        assert!(after.invites[0].get("key_ttl_seconds").is_none());
+        assert_eq!(
+            after.invites[1].get("key_ttl_seconds"),
+            Some(&serde_json::Value::Null)
+        );
+        assert_eq!(after.invites[2]["key_ttl_seconds"].as_i64(), Some(3600));
+        assert!(!structured_matches(
+            &serde_json::json!({"invite_id": "same"}),
+            &serde_json::json!({"invite_id": "same", "key_ttl_seconds": null})
+        ));
+        assert!(!structured_matches(
+            &serde_json::json!({"invite_id": "same", "key_ttl_seconds": null}),
+            &serde_json::json!({"invite_id": "same"})
+        ));
+    }
 
     #[test]
     fn placeholder_never_matches_literal() {

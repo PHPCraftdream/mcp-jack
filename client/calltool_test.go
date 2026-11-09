@@ -207,12 +207,12 @@ func TestCallToolErrors(t *testing.T) {
 		reply func(s *testServer, w http.ResponseWriter, auth jack.RequestAuth)
 		check func(t *testing.T, err error)
 	}{
-		{"http 403", signedErr(http.StatusForbidden, `{"error":{"code":"insufficient_scope","message":"no"}}`), func(t *testing.T, err error) {
+		{"http 403", signedErr(http.StatusForbidden, `{"error":{"code":"admin_required","message":"no"}}`), func(t *testing.T, err error) {
 			var he *HTTPError
 			if !errors.As(err, &he) {
 				t.Fatalf("err = %T (%v), want *HTTPError", err, err)
 			}
-			if he.Status != http.StatusForbidden || he.Code != "insufficient_scope" {
+			if he.Status != http.StatusForbidden || he.Code != "admin_required" {
 				t.Fatalf("HTTPError = %+v", he)
 			}
 		}},

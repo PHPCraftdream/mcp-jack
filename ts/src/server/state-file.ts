@@ -1,10 +1,15 @@
-/** Strict load and persist of the server state file; ported from Go's statefile.go. */
+/** Strict load and persist of the server state file; ported from Go's statefile.go.
+ *
+ * Admin-only contract: an entry/invite may carry an optional strict-boolean
+ * `admin` (absent means false); an invite's `key_ttl_seconds` is absent when
+ * unset and otherwise an integer in 1..31536000 — never null.
+ */
 import { randomBytes } from "node:crypto";
 import { closeSync, fsyncSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { decodeBase64URL, BadBase64UrlError, keyId } from "../encoding.js";
 import { validatePublicKey } from "../ed25519.js";
-import { validName, validScope } from "../syntax.js";
+import { validName } from "../syntax.js";
 import {
   type InviteRecord,
   type RegistryEntry,
@@ -86,63 +91,45 @@ function nullableIntField(obj: Record<string, unknown>, key: string, what: strin
   return value;
 }
 
-/** Integer field where missing or null decodes as 0 (Go's zero value). */
-function zeroIntField(obj: Record<string, unknown>, key: string, what: string): number {
-  const value = nullableIntField(obj, key, what);
-  return value === undefined ? 0 : value;
-}
-
-/** Kind field: missing or null stays undefined; decodeEntry applies the spec default (human). */
-function kindField(obj: Record<string, unknown>, what: string): string | undefined {
-  if (!Object.hasOwn(obj, "kind")) {
-    return undefined;
+/** Required nonnegative integer field; missing, null, non-integers and negatives are corrupt. */
+function requiredNonnegativeIntField(obj: Record<string, unknown>, key: string, what: string): number {
+  if (!Object.hasOwn(obj, key)) {
+    corrupt(`${what}.${key}: must be a non-negative integer`);
   }
-  const value = obj["kind"];
-  if (value === null) {
-    return undefined;
-  }
-  if (typeof value !== "string") {
-    corrupt(`${what}.kind: not a string`);
+  const value = obj[key];
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    corrupt(`${what}.${key}: must be a non-negative integer`);
   }
   return value;
 }
 
-/** Scopes field: missing or null stays undefined (both keys and invites are rejected later for that). */
-function scopesField(obj: Record<string, unknown>, what: string): string[] | undefined {
-  if (!Object.hasOwn(obj, "scopes")) {
-    return undefined;
+/** Boolean field: absent decodes as false; present value must be exactly true or false. */
+function boolField(obj: Record<string, unknown>, key: string, what: string): boolean {
+  if (!Object.hasOwn(obj, key)) {
+    return false;
   }
-  const value = obj["scopes"];
-  if (value === null) {
-    return undefined;
+  const value = obj[key];
+  if (value === true) {
+    return true;
   }
-  if (!Array.isArray(value)) {
-    corrupt(`${what}.scopes: not an array`);
+  if (value === false) {
+    return false;
   }
-  return value.map((item, i) => {
-    if (typeof item !== "string") {
-      corrupt(`${what}.scopes[${i}]: not a string`);
-    }
-    return item;
-  });
+  corrupt(`${what}.${key}: not a boolean`);
 }
 
 /** Strict per-entry decode into a RegistryEntry; no optional property ever receives undefined. */
 function decodeEntry(value: unknown, what: string): RegistryEntry {
   const obj = asObject(value, what);
-  checkKnownFields(obj, ["kid", "public_key", "name", "kind", "scopes", "not_before", "not_after"], what);
+  checkKnownFields(obj, ["kid", "public_key", "name", "admin", "not_before", "not_after"], what);
   const decoded: Mutable<RegistryEntry> = {
     kid: stringField(obj, "kid", what),
     publicKey: stringField(obj, "public_key", what),
     name: stringField(obj, "name", what),
   };
-  const kind = kindField(obj, what);
-  // spec 02 section 1: kind is "human" by default, so an omitted or null kind
-  // loads as "human" and stored entries always carry an explicit kind.
-  decoded.kind = kind ?? "human";
-  const scopes = scopesField(obj, what);
-  if (scopes !== undefined) {
-    decoded.scopes = scopes;
+  const admin = boolField(obj, "admin", what);
+  if (admin) {
+    decoded.admin = true;
   }
   const notBefore = nullableIntField(obj, "not_before", what);
   if (notBefore !== undefined) {
@@ -155,31 +142,46 @@ function decodeEntry(value: unknown, what: string): RegistryEntry {
   return decoded;
 }
 
+/** Maximum invite key TTL in seconds (spec 03 section 3.2). */
+const MAX_KEY_TTL_SECONDS = 31536000;
+
 /** Strict per-invite decode into an InviteRecord. */
 function decodeInvite(value: unknown, what: string): InviteRecord {
   const obj = asObject(value, what);
-  checkKnownFields(
-    obj,
-    ["invite_id", "scopes", "kind", "created_by", "created_at", "expires_at", "key_ttl_seconds"],
-    what,
-  );
+  checkKnownFields(obj, ["invite_id", "admin", "created_by", "created_at", "expires_at", "key_ttl_seconds"], what);
   const decoded: Mutable<InviteRecord> = {
     inviteId: stringField(obj, "invite_id", what),
     createdBy: stringField(obj, "created_by", what),
-    createdAt: zeroIntField(obj, "created_at", what),
-    expiresAt: zeroIntField(obj, "expires_at", what),
+    createdAt: requiredNonnegativeIntField(obj, "created_at", what),
+    expiresAt: requiredNonnegativeIntField(obj, "expires_at", what),
   };
-  const scopes = scopesField(obj, what);
-  if (scopes !== undefined) {
-    decoded.scopes = scopes;
+  // Invite-record validity (spec 03 section 10): non-empty strings and
+  // created_at <= expires_at; required timestamp helpers enforce nonnegative integers.
+  if (decoded.inviteId === "") {
+    corrupt(`${what}.invite_id: must be a non-empty string`);
   }
-  const kind = kindField(obj, what);
-  if (kind !== undefined) {
-    decoded.kind = kind;
+  if (decoded.createdBy === "") {
+    corrupt(`${what}.created_by: must be a non-empty string`);
   }
-  const keyTtl = nullableIntField(obj, "key_ttl_seconds", what);
-  if (keyTtl !== undefined) {
-    decoded.keyTtlSeconds = keyTtl;
+  if (decoded.createdAt > decoded.expiresAt) {
+    corrupt(`${what}.created_at: must not be after expires_at`);
+  }
+  const admin = boolField(obj, "admin", what);
+  if (admin) {
+    decoded.admin = true;
+  }
+  if (Object.hasOwn(obj, "key_ttl_seconds")) {
+    const value = obj["key_ttl_seconds"];
+    if (value === null) {
+      corrupt(`${what}.key_ttl_seconds: must be absent or an integer`);
+    }
+    if (typeof value !== "number" || !Number.isInteger(value)) {
+      corrupt(`${what}.key_ttl_seconds: must be absent or an integer`);
+    }
+    if (value < 1 || value > MAX_KEY_TTL_SECONDS) {
+      corrupt(`${what}.key_ttl_seconds: must be an integer in 1..${MAX_KEY_TTL_SECONDS}`);
+    }
+    decoded.keyTtlSeconds = value;
   }
   return decoded;
 }
@@ -195,26 +197,6 @@ function validateKeys(keys: readonly RegistryEntry[]): void {
       corrupt(`duplicate name ${k.name}`);
     }
     seenNames.add(k.name);
-    if (k.kind !== "human" && k.kind !== "agent") {
-      corrupt(`invalid kind ${JSON.stringify(k.kind ?? "")} for key ${k.kid}`);
-    }
-    if (k.scopes === undefined) {
-      corrupt(`key ${k.kid} has no scopes array`);
-    }
-    // The undefined check above narrows scopes to a present array.
-    const seenScopes = new Set<string>();
-    for (const s of k.scopes) {
-      if (!validScope(s)) {
-        corrupt(`invalid scope ${JSON.stringify(s)} for key ${k.kid}`);
-      }
-      if (seenScopes.has(s)) {
-        corrupt(`duplicate scope ${JSON.stringify(s)} for key ${k.kid}`);
-      }
-      seenScopes.add(s);
-    }
-    if (k.kind === "agent" && seenScopes.has("admin")) {
-      corrupt(`agent key ${k.kid} holds admin scope`);
-    }
     if (k.notBefore !== undefined && k.notBefore !== null && k.notBefore < 0) {
       corrupt(`negative not_before for key ${k.kid}`);
     }
@@ -255,7 +237,7 @@ function validateKeys(keys: readonly RegistryEntry[]): void {
 /**
  * Decodes a state document strictly, in Go decodeState's order so the
  * rejection classes match: parse, shape, unknown fields, version, duplicate
- * ids, invite scopes, then validateKeys. Errors carry the bare detail;
+ * ids, then validateKeys. Errors carry the bare detail;
  * openFileState prefixes them with the file path.
  */
 function decodeState(text: string): { keys: RegistryEntry[]; invites: InviteRecord[] } {
@@ -279,20 +261,14 @@ function decodeState(text: string): { keys: RegistryEntry[]; invites: InviteReco
           ? versionValue
           : corrupt("version: not an integer"));
 
-  const keysValue = Object.hasOwn(doc, "keys") ? doc["keys"] : null;
-  const keys: RegistryEntry[] =
-    keysValue === null || keysValue === undefined
-      ? [] // deliberate normalization: we always write [], Go would write null
-      : (Array.isArray(keysValue)
-          ? keysValue.map((item, i) => decodeEntry(item, `keys[${i}]`))
-          : corrupt("keys: not an array"));
-  const invitesValue = Object.hasOwn(doc, "invites") ? doc["invites"] : null;
-  const invites: InviteRecord[] =
-    invitesValue === null || invitesValue === undefined
-      ? []
-      : (Array.isArray(invitesValue)
-          ? invitesValue.map((item, i) => decodeInvite(item, `invites[${i}]`))
-          : corrupt("invites: not an array"));
+  const keysValue = doc["keys"];
+  const keys: RegistryEntry[] = Array.isArray(keysValue)
+    ? keysValue.map((item, i) => decodeEntry(item, `keys[${i}]`))
+    : corrupt("keys: not an array");
+  const invitesValue = doc["invites"];
+  const invites: InviteRecord[] = Array.isArray(invitesValue)
+    ? invitesValue.map((item, i) => decodeInvite(item, `invites[${i}]`))
+    : corrupt("invites: not an array");
 
   // Go decodes the whole document before the version check, so element
   // decoding errors surface before version errors.
@@ -313,13 +289,6 @@ function decodeState(text: string): { keys: RegistryEntry[]; invites: InviteReco
       corrupt(`duplicate invite ${v.inviteId}`);
     }
     seenInvites.add(v.inviteId);
-  }
-  // A persisted document must spell scopes out as arrays: a missing or null
-  // value is malformed input, not an empty set (spec 02 section 1).
-  for (const v of invites) {
-    if (v.scopes === undefined) {
-      corrupt(`invite ${v.inviteId} has no scopes array`);
-    }
   }
   validateKeys(keys);
   return { keys, invites };

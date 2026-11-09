@@ -12,16 +12,17 @@ set -uo pipefail
 fuzztime=${1:-30s}
 minimize=${2:-10s}
 outdir=${3:-fuzz-artifacts}
-mkdir -p "$outdir"
+if ! mkdir -p "$outdir"; then
+  echo "::error title=go-fuzz-log::cannot create artifact directory: ${outdir}" >&2
+  exit 1
+fi
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 # package + FuzzName pairs.
 targets=(
   ". FuzzParseRequestAuth"
-  ". FuzzMatchPattern"
   ". FuzzParseResponseAuth"
   "server FuzzClassifyBody"
-  "server FuzzParsePolicy"
   "client FuzzLoadProfile"
   "userkey FuzzImportEnvelopes"
   "userkey FuzzValidateCredential"

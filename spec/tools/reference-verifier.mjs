@@ -168,75 +168,81 @@ export const malleateSignature = (sig) =>
 
 const authHeaders = (headers) => headers.filter(([n]) => n.toLowerCase() === 'jack-auth').map(([, v]) => v);
 
-// ---- policy (spec 02 section 3) ----
-const globToRegExp = (pattern) =>
-  new RegExp(`^${pattern.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`, 's');
-
-function evaluatePolicy(policy, method, tool) {
-  for (const rule of policy.rules) {
-    if (!globToRegExp(rule.match.method).test(method)) continue;
-    if (rule.match.tool !== undefined && !(method === 'tools/call' && globToRegExp(rule.match.tool).test(tool ?? ''))) continue;
-    if (rule.effect === 'deny') return { effect: 'deny' };
-    return { effect: 'allow', scope: rule.scope };
-  }
-  return { effect: 'deny' };
-}
-
-export const matchPattern = (pattern, input) => globToRegExp(pattern).test(input);
-
+// ---- registry and state-file validation (spec 02 section 1, spec 03 sections 1 and 10) ----
 const hasOnly = (obj, keys) => Object.keys(obj).every((k) => keys.includes(k));
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+const unknownField = (obj, allowed) => `unknown field: ${Object.keys(obj).find((k) => !allowed.includes(k))}`;
 
-// Load-time policy validation (spec 02 section 3). Returns null when valid, else a reason.
-export function validatePolicy(doc) {
-  if (!isObj(doc) || !hasOnly(doc, ['version', 'rules']) || doc.version !== 1 || !Array.isArray(doc.rules)) return 'document';
-  for (const rule of doc.rules) {
-    if (!isObj(rule) || !hasOnly(rule, ['match', 'scope', 'effect'])) return 'unknown_field';
-    if (!isObj(rule.match) || !hasOnly(rule.match, ['method', 'tool'])) return 'unknown_field';
-    if (typeof rule.match.method !== 'string' || rule.match.method === '') return 'method';
-    if ('tool' in rule.match && (typeof rule.match.tool !== 'string' || rule.match.tool === '')) return 'tool';
-    if ('tool' in rule.match && rule.match.method !== 'tools/call') return 'tool_without_tools_call';
-    const effect = rule.effect ?? 'allow';
-    if (effect !== 'allow' && effect !== 'deny') return 'effect';
-    if (effect === 'deny') {
-      if ('scope' in rule) return 'scope_with_deny';
-    } else {
-      if (!('scope' in rule)) return 'missing_scope';
-      if (rule.scope !== null && (typeof rule.scope !== 'string' || !SCOPE_RE.test(rule.scope))) return 'malformed_scope';
-      if (rule.scope === 'admin') return 'reserved_scope';
-    }
+// Per-entry validation shared by the registry and the state file. Returns null when valid, else a reason.
+const ENTRY_FIELDS = ['kid', 'public_key', 'name', 'admin', 'not_before', 'not_after'];
+function validateEntry(e, kids, names) {
+  if (!isObj(e)) return 'document';
+  // Legacy rejection: scopes, kinds and the policy engine are gone; a legacy file is never migrated (spec 03 section 10).
+  if ('kind' in e) return 'legacy field kind';
+  if ('scopes' in e) return 'legacy field scopes';
+  if (!hasOnly(e, ENTRY_FIELDS)) return unknownField(e, ENTRY_FIELDS);
+  // Strict boolean: optional in documents, always present in results (spec 02 section 1).
+  if ('admin' in e && e.admin !== true && e.admin !== false) return 'admin must be a strict boolean';
+  const raw = strictB64u(e.public_key, 32);
+  if (!raw || validatePublicKey(raw)) return 'public_key';
+  if (e.kid !== kidOf(raw)) return 'kid_mismatch';
+  if (typeof e.name !== 'string' || !NAME_RE.test(e.name)) return 'name';
+  if (kids.has(e.kid)) return 'duplicate_kid';
+  if (names.has(e.name)) return 'duplicate_name';
+  kids.add(e.kid);
+  names.add(e.name);
+  for (const f of ['not_before', 'not_after']) {
+    if (e[f] !== undefined && e[f] !== null && (!Number.isInteger(e[f]) || e[f] < 0)) return 'validity';
   }
+  if (e.not_before != null && e.not_after != null && e.not_before >= e.not_after) return 'validity';
   return null;
 }
 
-// Load-time registry validation (spec 02 section 1, spec 03 section 2). Returns null or a reason.
+// Load-time registry validation (spec 02 section 1). Returns null when valid, else a reason.
 export function validateRegistry(doc) {
   if (!isObj(doc) || doc.version !== 1 || typeof doc.aud !== 'string' || !Array.isArray(doc.keys)) return 'document';
+  if (!hasOnly(doc, ['version', 'aud', 'keys'])) return unknownField(doc, ['version', 'aud', 'keys']);
   const kids = new Set();
   const names = new Set();
   for (const e of doc.keys) {
-    if (!isObj(e) || !hasOnly(e, ['kid', 'public_key', 'name', 'kind', 'scopes', 'not_before', 'not_after'])) return 'unknown_field';
-    const raw = strictB64u(e.public_key, 32);
-    if (!raw || validatePublicKey(raw)) return 'public_key';
-    if (e.kid !== kidOf(raw)) return 'kid_mismatch';
-    if (typeof e.name !== 'string' || !NAME_RE.test(e.name)) return 'name';
-    if (kids.has(e.kid)) return 'duplicate_kid';
-    if (names.has(e.name)) return 'duplicate_name';
-    kids.add(e.kid);
-    names.add(e.name);
-    const kind = e.kind ?? 'human';
-    if (kind !== 'human' && kind !== 'agent') return 'kind';
-    if (!Array.isArray(e.scopes) || !e.scopes.every((s) => typeof s === 'string' && SCOPE_RE.test(s)) || new Set(e.scopes).size !== e.scopes.length) return 'scopes';
-    if (kind === 'agent' && e.scopes.includes('admin')) return 'agent_admin';
-    for (const f of ['not_before', 'not_after']) {
-      if (e[f] !== undefined && e[f] !== null && (!Number.isInteger(e[f]) || e[f] < 0)) return 'validity';
-    }
-    if (e.not_before != null && e.not_after != null && e.not_before >= e.not_after) return 'validity';
+    const reason = validateEntry(e, kids, names);
+    if (reason) return reason;
   }
   return null;
 }
 
-// ---- body classification (spec 02 section 4) ----
+// Load-time state-file validation (spec 03 section 10). Returns null when valid, else a reason.
+const INVITE_FIELDS = ['invite_id', 'admin', 'created_by', 'created_at', 'expires_at', 'key_ttl_seconds'];
+export function validateStateFile(doc) {
+  if (!isObj(doc) || doc.version !== 1 || !Array.isArray(doc.keys) || !Array.isArray(doc.invites)) return 'document';
+  if (!hasOnly(doc, ['version', 'keys', 'invites'])) return unknownField(doc, ['version', 'keys', 'invites']);
+  const kids = new Set();
+  const names = new Set();
+  for (const e of doc.keys) {
+    const reason = validateEntry(e, kids, names);
+    if (reason) return reason;
+  }
+  const inviteIds = new Set();
+  for (const r of doc.invites) {
+    if (!isObj(r)) return 'document';
+    if ('kind' in r) return 'legacy field kind';
+    if ('scopes' in r) return 'legacy field scopes';
+    if (!hasOnly(r, INVITE_FIELDS)) return unknownField(r, INVITE_FIELDS);
+    if (typeof r.invite_id !== 'string' || r.invite_id === '') return 'invite_id';
+    if (typeof r.created_by !== 'string' || r.created_by === '') return 'created_by';
+    if ('admin' in r && r.admin !== true && r.admin !== false) return 'admin must be a strict boolean';
+    for (const f of ['created_at', 'expires_at']) {
+      if (!Number.isInteger(r[f]) || r[f] < 0) return f;
+    }
+    if (r.created_at > r.expires_at) return 'expires_at';
+    if (r.key_ttl_seconds !== undefined && (!Number.isInteger(r.key_ttl_seconds) || r.key_ttl_seconds < 1 || r.key_ttl_seconds > 31536000)) return 'key_ttl_seconds';
+    if (inviteIds.has(r.invite_id)) return 'duplicate_invite_id';
+    inviteIds.add(r.invite_id);
+  }
+  return null;
+}
+
+// ---- body classification (spec 02 section 2) ----
 // Strict JSON parser that keeps each number literal's source text, because the
 // integer rule of spec 03 section 3 reads the JSON text, which JSON.parse
 // cannot recover. `sources` mirrors the parsed tree with one node per value; a
@@ -344,7 +350,7 @@ function parseJSONRaw(src) {
     }
     if (c === '"') return string();
     if (src.startsWith('true', i)) { i += 4; return true; }
-    if (src.startsWith('false', i)) { i += 6; return false; }
+    if (src.startsWith('false', i)) { i += 5; return false; }
     if (src.startsWith('null', i)) { i += 4; return null; }
     return number(node);
   }
@@ -370,12 +376,12 @@ function classify(body) {
   return null;
 }
 
-// ---- registry helpers ----
 const isActive = (entry, now) => (entry.not_before ?? -Infinity) <= now && now < (entry.not_after ?? Infinity);
-const kindOf = (entry) => entry.kind ?? 'human';
 
 const NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
-const SCOPE_RE = /^[a-z][a-z0-9_]*(:[a-z0-9_]+)*$/;
+
+// The admin flag is always read through isAdmin so a mistyped value can never be confused with false.
+const isAdmin = (entry) => entry.admin === true;
 
 class Rej extends Error {
   constructor(http_status, code) {
@@ -386,10 +392,14 @@ class Rej extends Error {
 }
 const bad = () => new Rej(400, 'invalid_params');
 
+// The view normalizes admin on read: documents may omit it, results never carry it missing.
 const view = (e) => ({
-  kid: e.kid, public_key: e.public_key, name: e.name, kind: kindOf(e),
-  scopes: e.scopes, not_before: e.not_before ?? null, not_after: e.not_after ?? null,
+  kid: e.kid, public_key: e.public_key, name: e.name, admin: isAdmin(e),
+  not_before: e.not_before ?? null, not_after: e.not_after ?? null,
 });
+
+// Verified caller identity handed to the wrapped handler (spec 02 section 3).
+const identityOf = (e) => ({ kid: e.kid, name: e.name, admin: isAdmin(e) });
 
 function argObject(args) {
   if (args === undefined) return {};
@@ -397,15 +407,16 @@ function argObject(args) {
   return args;
 }
 
-function argScopes(v) {
-  if (!Array.isArray(v) || !v.every((s) => typeof s === 'string' && SCOPE_RE.test(s)) || new Set(v).size !== v.length) throw bad();
-  return v;
+function argAdmin(v) {
+  // Strict boolean: optional, defaults to false; anything else is invalid_params (spec 03 section 3).
+  if (v === undefined) return false;
+  if (v === true || v === false) return v;
+  throw bad();
 }
 
-function argKind(v) {
-  if (v === undefined) return 'human';
-  if (v !== 'human' && v !== 'agent') throw bad();
-  return v;
+function argAdminRequired(v) {
+  if (v === true || v === false) return v;
+  throw bad();
 }
 
 function argInt(v, min, max, rawText) {
@@ -429,20 +440,26 @@ function argKey(v) {
 
 // ---- protocol-native tools (spec 03) ----
 const ADMIN_TOOLS = new Set([
-  'jack.admin.user.list', 'jack.admin.user.get', 'jack.admin.user.create', 'jack.admin.user.set_scopes',
+  'jack.admin.user.list', 'jack.admin.user.get', 'jack.admin.user.create', 'jack.admin.user.set_admin',
   'jack.admin.user.revoke', 'jack.admin.invite.create', 'jack.admin.invite.list', 'jack.admin.invite.revoke',
 ]);
 const NATIVE_TOOLS = new Set(['jack.whoami', 'jack.key.rotate', 'jack.enroll', ...ADMIN_TOOLS]);
 const AUDITED = (tool) => tool === 'jack.enroll' || tool === 'jack.key.rotate' || ADMIN_TOOLS.has(tool);
 
 function activeAdmins(entries, now) {
-  return entries.filter((e) => e.scopes.includes('admin') && isActive(e, now)).length;
+  return entries.filter((e) => isAdmin(e) && isActive(e, now)).length;
 }
 
+// Last administrator (spec 03 section 4): an operation that would leave no active
+// entry with admin true is rejected, evaluated against the registry as it would be after the change.
+function leavesNoActiveAdmin(entriesAfterChange, now) {
+  return activeAdmins(entriesAfterChange, now) === 0;
+}
+
+// Unknown argument members are inert: args are read by exact member name only (spec 03 section 3).
 function nativeCall(tool, rawArgs, ctx) {
   const { state, caller, kid, ts, hooks, rawNumberText } = ctx;
   const entries = state.registry.keys;
-  const heldByCaller = (s) => caller.scopes.includes(s);
   const find = (k) => entries.find((e) => e.kid === k);
 
   if (tool === 'jack.enroll') {
@@ -455,12 +472,12 @@ function nativeCall(tool, rawArgs, ctx) {
     if (!invite) throw new Rej(403, 'invalid_invite');
     if (entries.some((e) => e.name === args.name)) throw new Rej(409, 'name_taken');
     const entry = {
-      kid, public_key: args.public_key, name: args.name, kind: invite.kind, scopes: [...invite.scopes],
+      kid, public_key: args.public_key, name: args.name, admin: invite.admin === true,
       not_before: null, not_after: invite.key_ttl_seconds ? state.now + invite.key_ttl_seconds : null,
     };
     entries.push(entry);
     state.invites.splice(state.invites.indexOf(invite), 1);
-    return { kid, name: entry.name, kind: entry.kind, scopes: entry.scopes };
+    return { kid, name: entry.name, admin: entry.admin };
   }
 
   if (tool === 'jack.whoami') {
@@ -483,8 +500,8 @@ function nativeCall(tool, rawArgs, ctx) {
     return { kid: newKid };
   }
 
-  // administration: scope check, then argument validation (spec 03 section 4)
-  if (!heldByCaller('admin')) throw new Rej(403, 'insufficient_scope');
+  // administration: the admin gate first, then argument validation (spec 03 section 4)
+  if (!isAdmin(caller)) throw new Rej(403, 'admin_required');
   const args = argObject(rawArgs);
 
   switch (tool) {
@@ -500,32 +517,26 @@ function nativeCall(tool, rawArgs, ctx) {
 
     case 'jack.admin.user.create': {
       if (typeof args.name !== 'string' || !NAME_RE.test(args.name)) throw bad();
-      const scopes = argScopes(args.scopes);
-      const kind = argKind(args.kind);
+      const admin = argAdmin(args.admin);
       const not_before = argTime(args.not_before, rawNumberText('not_before'));
       const not_after = argTime(args.not_after, rawNumberText('not_after'));
       if (not_before !== null && not_after !== null && not_before >= not_after) throw bad();
       const raw = argKey(args.public_key);
-      if (!scopes.every(heldByCaller)) throw new Rej(403, 'scope_escalation');
-      if (kind === 'agent' && scopes.includes('admin')) throw new Rej(403, 'agent_admin_forbidden');
       const newKid = kidOf(raw);
       if (entries.some((e) => e.name === args.name)) throw new Rej(409, 'name_taken');
       if (find(newKid)) throw new Rej(409, 'key_exists');
-      entries.push({ kid: newKid, public_key: args.public_key, name: args.name, kind, scopes, not_before, not_after });
+      entries.push({ kid: newKid, public_key: args.public_key, name: args.name, admin, not_before, not_after });
       return { kid: newKid };
     }
 
-    case 'jack.admin.user.set_scopes': {
+    case 'jack.admin.user.set_admin': {
       if (typeof args.kid !== 'string') throw bad();
-      const scopes = argScopes(args.scopes);
+      const admin = argAdminRequired(args.admin);
       const target = find(args.kid);
       if (!target) throw new Rej(404, 'unknown_target');
-      if (!scopes.filter((s) => !target.scopes.includes(s)).every(heldByCaller)) throw new Rej(403, 'scope_escalation');
-      if (kindOf(target) === 'agent' && scopes.includes('admin')) throw new Rej(403, 'agent_admin_forbidden');
-      if (!target.scopes.every(heldByCaller)) throw new Rej(403, 'forbidden_admin_target');
-      const after = entries.map((e) => (e === target ? { ...e, scopes } : e));
-      if (activeAdmins(after, state.now) < 1) throw new Rej(409, 'last_admin');
-      target.scopes = scopes;
+      if (isAdmin(target) && admin === false && isActive(target, state.now)
+        && leavesNoActiveAdmin(entries.filter((e) => e !== target), state.now)) throw new Rej(409, 'last_admin');
+      target.admin = admin;
       return view(target);
     }
 
@@ -533,23 +544,22 @@ function nativeCall(tool, rawArgs, ctx) {
       if (typeof args.kid !== 'string') throw bad();
       const target = find(args.kid);
       if (!target) throw new Rej(404, 'unknown_target');
-      if (!target.scopes.every(heldByCaller)) throw new Rej(403, 'forbidden_admin_target');
-      if (activeAdmins(entries.filter((e) => e !== target), state.now) < 1) throw new Rej(409, 'last_admin');
+      if (isAdmin(target) && isActive(target, state.now)
+        && leavesNoActiveAdmin(entries.filter((e) => e !== target), state.now)) throw new Rej(409, 'last_admin');
       entries.splice(entries.indexOf(target), 1);
       return { kid: target.kid };
     }
 
     case 'jack.admin.invite.create': {
-      const scopes = argScopes(args.scopes);
-      const kind = argKind(args.kind);
+      const admin = argAdmin(args.admin);
       const ttl = args.ttl_seconds === undefined ? 3600 : argInt(args.ttl_seconds, 1, 604800, rawNumberText('ttl_seconds'));
       const keyTtl = args.key_ttl_seconds === undefined ? null : argInt(args.key_ttl_seconds, 1, 31536000, rawNumberText('key_ttl_seconds'));
-      if (!scopes.every(heldByCaller)) throw new Rej(403, 'scope_escalation');
-      if (kind === 'agent' && scopes.includes('admin')) throw new Rej(403, 'agent_admin_forbidden');
       const code = hooks.newCode(state);
       const invite = {
-        invite_id: b64u(sha256(Buffer.from(code, 'base64url'))), scopes, kind, created_by: caller.kid,
-        created_at: state.now, expires_at: state.now + ttl, key_ttl_seconds: keyTtl,
+        invite_id: b64u(sha256(Buffer.from(code, 'base64url'))), admin, created_by: caller.kid,
+        created_at: state.now, expires_at: state.now + ttl,
+        // Present only when the invite sets a key expiry; null is never stored (spec 03 section 3.3).
+        ...(keyTtl !== null ? { key_ttl_seconds: keyTtl } : {}),
       };
       state.invites.push(invite);
       return { invite_id: invite.invite_id, code, expires_at: invite.expires_at };
@@ -558,7 +568,7 @@ function nativeCall(tool, rawArgs, ctx) {
     case 'jack.admin.invite.list':
       return {
         invites: state.invites.filter((i) => state.now < i.expires_at).map((i) => ({
-          invite_id: i.invite_id, scopes: i.scopes, kind: i.kind, created_by: i.created_by,
+          invite_id: i.invite_id, admin: i.admin === true, created_by: i.created_by,
           created_at: i.created_at, expires_at: i.expires_at,
         })),
       };
@@ -584,9 +594,9 @@ export const defaultHooks = {
   },
 };
 
-// ---- request verification (spec 01 section 4, spec 02 section 4, spec 03) ----
+// ---- request verification (spec 01 section 4, spec 02 section 2, spec 03) ----
 // req: { method, target, headers: [[name, value]], body_b64u }
-// state: { now, window_seconds, aud, registry: {keys}, policy: {rules}, invites, nonce_cache }
+// state: { now, window_seconds, aud, registry: {keys}, invites, nonce_cache }
 // The state is mutated by operations that change it.
 export function verifyRequest(req, state, hooks = defaultHooks) {
   const reject = (http_status, code, extra = {}) => ({ result: 'reject', http_status, code, nonce_recorded: false, ...extra });
@@ -628,11 +638,11 @@ export function verifyRequest(req, state, hooks = defaultHooks) {
   // Authorization from here on: the nonce is consumed.
   const done = (o) => ({ nonce_recorded: true, ...o });
   const fail = (http_status, code, audit) => done({ result: 'reject', http_status, code, ...(audit ? { audit } : {}) });
-  if (req.method === 'GET') return done({ result: 'accept', kid: p.kid });
+  if (req.method === 'GET') return done({ result: 'accept', kid: p.kid, identity: identityOf(caller) });
 
   const parsed = classify(body);
   if (!parsed) return fail(400, 'invalid_request');
-  if (parsed.kind === 'response') return done({ result: 'accept', kid: p.kid });
+  if (parsed.kind === 'response') return done({ result: 'accept', kid: p.kid, identity: identityOf(caller) });
 
   const { msg } = parsed;
   let tool;
@@ -657,10 +667,8 @@ export function verifyRequest(req, state, hooks = defaultHooks) {
     }
   }
 
-  const decision = evaluatePolicy(state.policy, msg.method, tool);
-  if (decision.effect === 'deny') return fail(403, 'operation_denied');
-  if (decision.scope !== null && !caller.scopes.includes(decision.scope)) return fail(403, 'insufficient_scope');
-  return done({ result: 'accept', kid: p.kid });
+  // Ordinary MCP: accepted and forwarded unchanged for any authenticated caller (spec 02 section 2).
+  return done({ result: 'accept', kid: p.kid, identity: identityOf(caller) });
 }
 
 // res: { status, headers, body_b64u }

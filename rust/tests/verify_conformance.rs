@@ -2,23 +2,21 @@
 
 mod common;
 
-use std::fs;
 use std::sync::Arc;
 
-use common::fixtures::{self, RequestCase, RequestVectors};
+use common::fixtures::{self, RequestCase};
 use common::harness;
 
 use mcp_jack::encoding::decode_b64url;
 use mcp_jack::server::audit::{AuditSink, MemoryAuditSink};
 use mcp_jack::server::native::{Native, NativeOptions};
 use mcp_jack::server::nonce::NonceStore;
-use mcp_jack::server::policy::Policy;
 use mcp_jack::server::state::{MemoryState, RegistryEntry, StateStore};
 use mcp_jack::server::verify::{Clock, Config, Request, Verifier};
 
 fn seed_registry(state: &MemoryState, registry: &fixtures::RegistryDocument) {
-    // kind omitted in a fixture means "human" (spec 02 section 1); the Go
-    // runner misses this default, the Rust side must not copy that gap.
+    // Entries pass through verbatim: admin defaults to false when absent
+    // (spec 02 section 1), not_before/not_after as written.
     state
         .update(&mut |edit| {
             for e in &registry.keys {
@@ -26,8 +24,7 @@ fn seed_registry(state: &MemoryState, registry: &fixtures::RegistryDocument) {
                     kid: e.kid.clone(),
                     public_key: e.public_key.clone(),
                     name: e.name.clone(),
-                    kind: e.kind.clone().unwrap_or_else(|| "human".to_string()),
-                    scopes: e.scopes.clone(),
+                    admin: e.admin,
                     not_before: e.not_before,
                     not_after: e.not_after,
                 });
@@ -69,6 +66,29 @@ fn check_outcome(
         label
     );
     harness::check_audit(label, &res.audit, &want.audit, sink);
+    // Counterfactual identity pair: forwarded accepts carry the verified
+    // caller identity (02 section 3); native jack.* accepts and rejections
+    // carry none. Reverting the hand-off fails the Some side; leaking
+    // identity onto native accepts or rejections fails the None side.
+    if let Some(want_ident) = &want.identity {
+        let got = res
+            .identity
+            .as_ref()
+            .unwrap_or_else(|| panic!("case {label}: forwarded accept must carry identity"));
+        assert_eq!(got.kid(), want_ident.kid, "case {label}: identity kid");
+        assert_eq!(got.name(), want_ident.name, "case {label}: identity name");
+        assert_eq!(
+            got.admin(),
+            want_ident.admin,
+            "case {label}: identity admin"
+        );
+    } else {
+        assert!(
+            res.identity.is_none(),
+            "case {label}: identity must be absent, got {:?}",
+            res.identity.as_ref().map(|i| i.name())
+        );
+    }
     if let Some(want_structured) = &want.structured {
         // Native expectations may embed the "<b64u43>" placeholder.
         assert!(
@@ -84,19 +104,13 @@ fn check_outcome(
     }
 }
 
-fn run_case(vectors: &RequestVectors, registry: &fixtures::RegistryDocument, case: &RequestCase) {
+fn run_case(
+    _vectors: &common::fixtures::RequestVectors,
+    registry: &fixtures::RegistryDocument,
+    case: &RequestCase,
+) {
     let label = &case.id;
     let body = decode_b64url(&case.request.body_b64u).expect("body_b64u");
-    let policy_file = vectors
-        .policies
-        .get(case.state.policy.as_str())
-        .unwrap_or_else(|| panic!("case {}: unknown policy {}", label, case.state.policy));
-    let bytes = fs::read(fixtures::fixture_path(policy_file))
-        .unwrap_or_else(|e| panic!("case {}: read policy {}: {}", label, policy_file, e));
-    let policy = Arc::new(
-        Policy::parse(&bytes)
-            .unwrap_or_else(|e| panic!("case {}: policy parses: {}", label, e.reason)),
-    );
 
     // Seeding at now=0 mirrors the Go runner; retain_until governs liveness
     // at the case clock.
@@ -116,7 +130,6 @@ fn run_case(vectors: &RequestVectors, registry: &fixtures::RegistryDocument, cas
         aud: case.state.aud.clone(),
         state: Arc::new(state),
         nonces: Arc::new(nonces),
-        policy,
         audit: Some(audit),
         // The real jack.* tools; OS randomness is fine here because the
         // expectations use the "<b64u43>" placeholder, never a literal code.
@@ -153,6 +166,7 @@ fn request_vectors_run() {
         "request-vectors.json has no cases"
     );
     let registry = fixtures::load_registry().expect("load registry.json");
+    let _ = &vectors.registry;
     for case in &vectors.cases {
         run_case(&vectors, &registry, case);
     }

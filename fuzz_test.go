@@ -3,10 +3,8 @@ package jack_test
 import (
 	"bytes"
 	"errors"
-	"regexp"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/PHPCraftdream/mcp-jack"
 	"github.com/PHPCraftdream/mcp-jack/spec"
@@ -139,36 +137,6 @@ func FuzzParseResponseAuth(f *testing.F) {
 		}
 		if a.TS < 0 {
 			t.Fatalf("accepted a negative ts %d", a.TS)
-		}
-	})
-}
-
-// FuzzMatchPattern compares the hand-written matcher with a regular expression
-// built from the same pattern, over valid UTF-8 (a regexp reads invalid bytes
-// as U+FFFD, the matcher compares bytes, so those inputs are not comparable).
-func FuzzMatchPattern(f *testing.F) {
-	vectors, err := spec.LoadPatternVectors()
-	if err != nil {
-		f.Fatalf("LoadPatternVectors: %v", err)
-	}
-	for _, c := range vectors.Cases {
-		f.Add(c.Pattern, c.Input)
-	}
-
-	f.Fuzz(func(t *testing.T, pattern, input string) {
-		if !utf8.ValidString(pattern) || !utf8.ValidString(input) {
-			t.Skip()
-		}
-		parts := strings.Split(pattern, "*")
-		for i := range parts {
-			parts[i] = regexp.QuoteMeta(parts[i])
-		}
-		re, err := regexp.Compile("(?s)^" + strings.Join(parts, ".*") + "$")
-		if err != nil {
-			t.Skip()
-		}
-		if got, want := jack.MatchPattern(pattern, input), re.MatchString(input); got != want {
-			t.Fatalf("MatchPattern disagrees with the independent regexp oracle")
 		}
 	})
 }

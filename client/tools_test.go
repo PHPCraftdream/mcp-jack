@@ -151,10 +151,9 @@ func TestEnrollMatchesFixture(t *testing.T) {
 	assertFixtureRequest(t, step, gotHeader, gotMethod, gotTarget, gotBody)
 
 	want := EnrollResult{
-		KID:    "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg",
-		Name:   "newbie",
-		Kind:   "human",
-		Scopes: []string{"read"},
+		KID:   "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg",
+		Name:  "newbie",
+		Admin: false,
 	}
 	if !reflect.DeepEqual(res, want) {
 		t.Errorf("EnrollResult = %+v, want %+v", res, want)
@@ -228,7 +227,7 @@ func TestWhoAmIDecodesResult(t *testing.T) {
 	srv := newTestServer(t)
 	srv.Handle = func(w http.ResponseWriter, auth jack.RequestAuth, _ []byte) {
 		srv.writeSignedJSON(w, auth, http.StatusOK, rpcResultBody(json.RawMessage(
-			`{"kid":"imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg","name":"newbie","kind":"human","scopes":["read"],"not_before":null,"not_after":null}`)))
+			`{"kid":"imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg","name":"newbie","admin":false,"not_before":null,"not_after":null}`)))
 	}
 
 	client := newFixtureClient(t, srv, seedSignerByName(t, "newbie"), "assryd677-uYrqD4v-7HYw")
@@ -242,11 +241,8 @@ func TestWhoAmIDecodesResult(t *testing.T) {
 	if res.Name != "newbie" {
 		t.Errorf("Name = %q, want newbie", res.Name)
 	}
-	if res.Kind != "human" {
-		t.Errorf("Kind = %q, want human", res.Kind)
-	}
-	if !reflect.DeepEqual(res.Scopes, []string{"read"}) {
-		t.Errorf("Scopes = %v, want [read]", res.Scopes)
+	if res.Admin {
+		t.Errorf("Admin = true, want false")
 	}
 	if res.NotBefore != nil {
 		t.Errorf("NotBefore = %v, want nil", res.NotBefore)
@@ -261,11 +257,11 @@ func TestAdminListDecodesWrappers(t *testing.T) {
 	srv.Handle = func(w http.ResponseWriter, auth jack.RequestAuth, body []byte) {
 		if strings.Contains(string(body), `"jack.admin.user.list"`) {
 			srv.writeSignedJSON(w, auth, http.StatusOK, rpcResultBody(json.RawMessage(
-				`{"users":[{"kid":"k1","public_key":"p1","name":"alice","kind":"human","scopes":["read"],"not_before":null,"not_after":1750000000}]}`)))
+				`{"users":[{"kid":"k1","public_key":"p1","name":"alice","admin":false,"not_before":null,"not_after":1750000000}]}`)))
 			return
 		}
 		srv.writeSignedJSON(w, auth, http.StatusOK, rpcResultBody(json.RawMessage(
-			`{"invites":[{"invite_id":"iv1","scopes":["read"],"kind":"human","created_by":"k1","created_at":1767225500,"expires_at":1767228600}]}`)))
+			`{"invites":[{"invite_id":"iv1","admin":false,"created_by":"k1","created_at":1767225500,"expires_at":1767228600}]}`)))
 	}
 
 	client := newFixtureClient(t, srv, seedSignerByName(t, "alice"), "assryd677-uYrqD4v-7HYw", "assryd677-uYrqD4v-7HYw")
@@ -277,8 +273,8 @@ func TestAdminListDecodesWrappers(t *testing.T) {
 	if len(users) != 1 {
 		t.Fatalf("len(users) = %d, want 1", len(users))
 	}
-	if users[0].Kind != "human" {
-		t.Errorf("users[0].Kind = %q, want human", users[0].Kind)
+	if users[0].Admin {
+		t.Errorf("users[0].Admin = true, want false")
 	}
 	if users[0].NotAfter == nil || *users[0].NotAfter != 1750000000 {
 		t.Errorf("users[0].NotAfter = %v, want 1750000000", users[0].NotAfter)
@@ -291,6 +287,9 @@ func TestAdminListDecodesWrappers(t *testing.T) {
 	if len(invites) != 1 {
 		t.Fatalf("len(invites) = %d, want 1", len(invites))
 	}
+	if invites[0].Admin {
+		t.Errorf("invites[0].Admin = true, want false")
+	}
 	if invites[0].InviteID != "iv1" {
 		t.Errorf("invites[0].InviteID = %q, want iv1", invites[0].InviteID)
 	}
@@ -302,7 +301,7 @@ func TestAdminListDecodesWrappers(t *testing.T) {
 func TestToolCallHTTPError(t *testing.T) {
 	srv := newTestServer(t)
 	srv.Handle = func(w http.ResponseWriter, auth jack.RequestAuth, _ []byte) {
-		srv.writeSignedJSON(w, auth, http.StatusForbidden, []byte(`{"error":{"code":"insufficient_scope","message":"no"}}`))
+		srv.writeSignedJSON(w, auth, http.StatusForbidden, []byte(`{"error":{"code":"admin_required","message":"no"}}`))
 	}
 
 	client := newFixtureClient(t, srv, seedSignerByName(t, "alice"), "assryd677-uYrqD4v-7HYw")
@@ -317,8 +316,8 @@ func TestToolCallHTTPError(t *testing.T) {
 	if httpErr.Status != http.StatusForbidden {
 		t.Errorf("Status = %d, want 403", httpErr.Status)
 	}
-	if httpErr.Code != "insufficient_scope" {
-		t.Errorf("Code = %q, want insufficient_scope", httpErr.Code)
+	if httpErr.Code != "admin_required" {
+		t.Errorf("Code = %q, want admin_required", httpErr.Code)
 	}
 }
 

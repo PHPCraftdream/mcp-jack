@@ -133,10 +133,14 @@ function main() {
     emit('sign-only', 'ok', null, null, { signing_string: signing, jack_auth: header, kid });
   } else if (s === 'ping') {
     ping(a, priv, kid);
-  } else if (s === 'denied-tool') {
-    signedCall('denied-tool', a, priv, kid, 'svc.config.set', null, (status, parsed) => {
-      if (status >= 200 && status < 300) emit('denied-tool', 'ok', status, null, {});
-      else emit('denied-tool', 'rejected', status, parsed?.error?.code ?? null, null);
+  } else if (s === 'app-permission-denied' || s === 'app-permission-allowed') {
+    signedCall(s, a, priv, kid, 'svc.config.set', null, (status, parsed) => {
+      if (status >= 200 && status < 300) emit(s, 'ok', status, null, { content: [{ type: 'text', text: 'ok' }] });
+      else emit(s, 'rejected', status, parsed?.error?.code ?? null, null);
+    });
+  } else if (s === 'admin-required') {
+    signedCall(s, a, priv, kid, 'jack.admin.user.list', null, (status, parsed) => {
+      emit(s, status === 403 ? 'rejected' : 'ok', status, parsed?.error?.code ?? null, null);
     });
   } else if (s === 'last-admin') {
     emit('last-admin', 'rejected', 409, 'last_admin', null);

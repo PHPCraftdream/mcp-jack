@@ -17,8 +17,8 @@ import {
   issueUserKey,
   issueUserKeyCredential,
   jackFetchHandler,
+  jackIdentity,
   keyId,
-  parsePolicy,
   serveNode,
   validateUserKeyCredentialForServer,
   verify,
@@ -72,24 +72,39 @@ async function main(): Promise<void> {
       kid: key.kid(),
       publicKey: encodeBase64URL(key.publicKey()),
       name,
-      scopes: [],
     };
     state.update((edit) => edit.putKey(entry));
   };
   addRegistryEntry(importedServerIdentity, "envelope-client");
 
+  let expectedClientKid: string | undefined;
   const verifier = new Verifier({
     aud: AUDIENCE,
     state,
     nonces: new NonceStore(),
-    policy: parsePolicy(JSON.stringify({ version: 1, rules: [{ match: { method: "tools/call", tool: "consumer.echo" }, scope: null }] })),
     now: () => NOW,
   });
   const handler = serveNode(
     jackFetchHandler(
       { verifier, serverKey: serviceKey.handoff.exportSeed() },
       async (request) => {
-        const rpc = (await request.json()) as { id?: unknown };
+        const identity = jackIdentity(request);
+        assert.ok(identity !== undefined, "wrapped handler receives the verified caller identity");
+        assert.ok(expectedClientKid !== undefined, "credential identity is imported before requests are handled");
+        assert.ok(Object.isFrozen(identity), "verified caller identity is immutable");
+        assert.strictEqual(jackIdentity(request), identity, "identity reads return the same immutable snapshot");
+        assert.deepEqual(
+          identity,
+          { kid: expectedClientKid, name: "credential-client", admin: false },
+          "wrapped handler receives the exact verified non-admin registry identity",
+        );
+        const rpc = (await request.json()) as { id?: unknown; params?: { name?: unknown } };
+        if (rpc.params?.name === "consumer.admin.only" && !identity.admin) {
+          return new Response(JSON.stringify({ error: { code: "app_denied", message: "application policy denied" } }), {
+            status: 403,
+            headers: { "content-type": "application/json" },
+          });
+        }
         return new Response(JSON.stringify({ jsonrpc: "2.0", id: rpc.id ?? null, result: { structuredContent: { echoed: true } } }), {
           headers: { "content-type": "application/json" },
         });
@@ -124,6 +139,7 @@ async function main(): Promise<void> {
       "credential import refuses a mismatched independently trusted server tuple",
     );
     const importedClient = importClientUserKeyCredential(credentialBytes, trustedServer);
+    expectedClientKid = importedClient.signer.kid();
     assert.equal(importedClient.connection.server_kid, trustedServer.server_kid, "client credential is pinned to the trusted service identity");
     addRegistryEntry(issuedCredential.publicIdentity(), "credential-client");
 
@@ -136,6 +152,13 @@ async function main(): Promise<void> {
       fetchImpl: boundedFetch,
     });
     assert.deepEqual(await workingClient.callTool("consumer.echo"), { echoed: true }, "client verifies the signed loopback response");
+    let applicationDenialVerified = false;
+    try {
+      await workingClient.callTool("consumer.admin.only");
+    } catch (error) {
+      applicationDenialVerified = error instanceof client.HTTPError && error.status === 403 && error.code === "app_denied";
+    }
+    assert.equal(applicationDenialVerified, true, "the wrapped application denies its own tool for the verified non-admin caller");
 
     const wrongPinClient = new client.Client({
       baseUrl,

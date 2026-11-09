@@ -62,6 +62,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust
@@ -70,6 +73,8 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov@0.9.1
+      - name: Rust coverage summarizer regression controls
+        run: node --test ../tools/coverage/lcov-summary.test.mjs
       - name: Create the coverage output directory
         run: mkdir -p ../coverage/rust
       - name: Run the Rust test suite with LLVM coverage (all features)

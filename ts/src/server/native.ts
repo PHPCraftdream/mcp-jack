@@ -15,7 +15,7 @@ import {
 import { validatePublicKey, verify as verifyEd25519 } from "../ed25519.js";
 import { Code, JackError } from "../errors.js";
 import { rotateProofString } from "../signing.js";
-import { validName, validScope } from "../syntax.js";
+import { validName } from "../syntax.js";
 import {
   TOOL_ADMIN_INVITE_CREATE,
   TOOL_ADMIN_INVITE_LIST,
@@ -24,7 +24,7 @@ import {
   TOOL_ADMIN_USER_GET,
   TOOL_ADMIN_USER_LIST,
   TOOL_ADMIN_USER_REVOKE,
-  TOOL_ADMIN_USER_SET_SCOPES,
+  TOOL_ADMIN_USER_SET_ADMIN,
   TOOL_ENROLL,
   TOOL_ROTATE_KEY,
   TOOL_WHOAMI,
@@ -154,36 +154,25 @@ function timeArg(args: Args, key: string): number | null {
   return v;
 }
 
-/** Array of distinct valid scopes, required. */
-function scopesArg(args: Args): string[] {
-  const node = args.get("scopes");
-  if (node === undefined || node.items === undefined) {
-    throw invalidParams();
+/** Optional admin flag: absent is false; anything but a strict JSON boolean is invalid_params. */
+function optionalAdminArg(args: Args): boolean {
+  const node = args.get("admin");
+  if (node === undefined) {
+    return false;
   }
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const item of node.items) {
-    const s = item.value;
-    if (typeof s !== "string" || !validScope(s) || seen.has(s)) {
-      throw invalidParams();
-    }
-    seen.add(s);
-    out.push(s);
+  if (node.value === true || node.value === false) {
+    return node.value;
   }
-  return out;
+  throw invalidParams();
 }
 
-/** Optional kind: absent is "human"; an explicit null or any other value is invalid (Go kindFrom). */
-function kindArg(args: Args): string {
-  const node = args.get("kind");
-  if (node === undefined) {
-    return "human";
-  }
-  const kind = node.value;
-  if (kind !== "human" && kind !== "agent") {
+/** Required admin flag: absent, null or anything but a strict JSON boolean is invalid_params. */
+function requiredAdminArg(args: Args): boolean {
+  const node = args.get("admin");
+  if (node === undefined || (node.value !== true && node.value !== false)) {
     throw invalidParams();
   }
-  return kind;
+  return node.value;
 }
 
 /** Decodes a submitted public key and applies the validity rules of spec 03 section 2. */
@@ -211,13 +200,12 @@ function publicKeyArg(args: Args): Uint8Array {
 // Shared views and helpers.
 // ---------------------------------------------------------------------------
 
-/** Snake_case full view of an entry in Go entryView field order; undefined kind normalizes to "human". */
+/** Snake_case full view of an entry in Go entryView field order; an absent admin flag normalizes to false. */
 function entryView(e: RegistryEntry): {
   kid: string;
   public_key: string;
   name: string;
-  kind: string;
-  scopes: string[];
+  admin: boolean;
   not_before: number | null;
   not_after: number | null;
 } {
@@ -225,16 +213,10 @@ function entryView(e: RegistryEntry): {
     kid: e.kid,
     public_key: e.publicKey,
     name: e.name,
-    kind: e.kind ?? "human",
-    scopes: e.scopes === undefined ? [] : [...e.scopes],
+    admin: e.admin === true,
     not_before: e.notBefore ?? null,
     not_after: e.notAfter ?? null,
   };
-}
-
-/** True when s is held by scopes (Go contains). */
-function holds(scopes: readonly string[] | undefined, want: string): boolean {
-  return scopes !== undefined && scopes.includes(want);
 }
 
 /** Whether now is inside the entry's validity interval (null bounds are unbounded). */
@@ -249,7 +231,7 @@ function entryActive(e: RegistryEntry, now: number): boolean {
 export function activeAdmins(keys: readonly RegistryEntry[], now: number): number {
   let n = 0;
   for (const e of keys) {
-    if (holds(e.scopes, "admin") && entryActive(e, now)) {
+    if (e.admin === true && entryActive(e, now)) {
       n++;
     }
   }
@@ -261,43 +243,16 @@ function inviteIdOf(rawCode: Uint8Array): string {
   return encodeBase64URL(createHash("sha256").update(Buffer.from(rawCode)).digest());
 }
 
-/** Rules 1 and 2 of spec 03 section 4 for scopes about to be added to a kind. */
-function grantable(
-  caller: RegistryEntry,
-  added: readonly string[],
-  kind: string,
-  after: readonly string[],
-): void {
-  for (const s of added) {
-    if (!holds(caller.scopes, s)) {
-      throw new JackError(403, Code.SCOPE_ESCALATION, "the key may not grant a scope it does not hold");
-    }
-  }
-  if (kind === "agent" && after.includes("admin")) {
-    throw new JackError(403, Code.AGENT_ADMIN_FORBIDDEN, "an agent key cannot hold the admin scope");
-  }
-}
-
 /** Re-reads the calling administrator inside the transaction (spec 03 section 9). */
 function currentAdmin(edit: StateEdit, c: NativeCall): RegistryEntry {
   const caller = edit.key(c.caller?.kid ?? "");
   if (caller === undefined) {
     throw new JackError(401, Code.UNKNOWN_KEY, "unknown key");
   }
-  if (!holds(caller.scopes, "admin")) {
-    throw new JackError(403, Code.INSUFFICIENT_SCOPE, "the key lacks the admin scope");
+  if (caller.admin !== true) {
+    throw new JackError(403, Code.ADMIN_REQUIRED, "the key is not an administrator");
   }
   return caller;
-}
-
-/** Protected target rule: the administrator must hold every scope the target holds. */
-function requireProtectedTarget(caller: RegistryEntry, target: RegistryEntry): void {
-  const scopes = target.scopes ?? [];
-  for (const s of scopes) {
-    if (!holds(caller.scopes, s)) {
-      throw new JackError(403, Code.FORBIDDEN_ADMIN_TARGET, "the key holds a scope the administrator lacks");
-    }
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -346,7 +301,7 @@ export class Native implements NativeTools {
       case TOOL_ADMIN_USER_LIST:
       case TOOL_ADMIN_USER_GET:
       case TOOL_ADMIN_USER_CREATE:
-      case TOOL_ADMIN_USER_SET_SCOPES:
+      case TOOL_ADMIN_USER_SET_ADMIN:
       case TOOL_ADMIN_USER_REVOKE:
       case TOOL_ADMIN_INVITE_CREATE:
       case TOOL_ADMIN_INVITE_LIST:
@@ -401,9 +356,8 @@ export class Native implements NativeTools {
         kid: c.kid,
         publicKey,
         name,
-        kind: invite.kind ?? "human",
-        scopes: invite.scopes === undefined ? [] : [...invite.scopes],
       };
+      if (invite.admin === true) enrolled.admin = true;
       if (typeof invite.keyTtlSeconds === "number") {
         enrolled.notAfter = c.now + invite.keyTtlSeconds;
       }
@@ -419,8 +373,7 @@ export class Native implements NativeTools {
       structured: {
         kid: enrolled.kid,
         name: enrolled.name,
-        kind: enrolled.kind ?? "human",
-        scopes: enrolled.scopes === undefined ? [] : [...enrolled.scopes],
+        admin: enrolled.admin === true,
       },
     };
   }
@@ -435,8 +388,7 @@ export class Native implements NativeTools {
       structured: {
         kid: v.kid,
         name: v.name,
-        kind: v.kind,
-        scopes: v.scopes,
+        admin: v.admin,
         not_before: v.not_before,
         not_after: v.not_after,
       },
@@ -485,9 +437,8 @@ export class Native implements NativeTools {
         kid: newKid,
         publicKey,
         name: current.name,
-        scopes: current.scopes === undefined ? [] : [...current.scopes],
       };
-      if (current.kind !== undefined) moved.kind = current.kind;
+      if (current.admin === true) moved.admin = true;
       if (current.notBefore !== undefined) moved.notBefore = current.notBefore;
       if (current.notAfter !== undefined) moved.notAfter = current.notAfter;
       edit.removeKey(current.kid);
@@ -498,7 +449,7 @@ export class Native implements NativeTools {
 
   /**
    * The user/invite administration tools in the check order of spec 03
-   * section 4: admin scope, arguments, key validity, target, rules,
+   * section 4: admin flag, arguments, key validity, target, rules,
    * conflicts, last administrator, then the atomic change.
    */
   private admin(c: NativeCall): NativeResult {
@@ -506,8 +457,8 @@ export class Native implements NativeTools {
       throw new JackError(401, Code.UNKNOWN_KEY, "unknown key");
     }
     // BEFORE argument parsing (Go TestAdminToolsRequireAdminBeforeArguments).
-    if (!holds(c.caller.scopes, "admin")) {
-      throw new JackError(403, Code.INSUFFICIENT_SCOPE, "the key lacks the admin scope");
+    if (c.caller.admin !== true) {
+      throw new JackError(403, Code.ADMIN_REQUIRED, "the key is not an administrator");
     }
     const args = parseArgs(c.arguments);
 
@@ -533,8 +484,8 @@ export class Native implements NativeTools {
 
       case TOOL_ADMIN_USER_CREATE:
         return this.userCreate(c, args);
-      case TOOL_ADMIN_USER_SET_SCOPES:
-        return this.userSetScopes(c, args);
+      case TOOL_ADMIN_USER_SET_ADMIN:
+        return this.userSetAdmin(c, args);
       case TOOL_ADMIN_USER_REVOKE:
         return this.userRevoke(c, args);
       case TOOL_ADMIN_INVITE_CREATE:
@@ -548,13 +499,12 @@ export class Native implements NativeTools {
   }
 
   private userCreate(c: NativeCall, args: Args): NativeResult {
-    // Order: name, scopes, kind, bounds, public key (Go userCreate).
+    // Order: name, admin, bounds, public key (Go userCreate).
     const name = strArg(args, "name");
     if (name === undefined || !validName(name)) {
       throw invalidParams();
     }
-    const scopes = scopesArg(args);
-    const kind = kindArg(args);
+    const admin = optionalAdminArg(args);
     const notBefore = timeArg(args, "not_before");
     const notAfter = timeArg(args, "not_after");
     if (notBefore !== null && notAfter !== null && notBefore >= notAfter) {
@@ -565,8 +515,7 @@ export class Native implements NativeTools {
     c.target = name;
 
     runUpdate(c.state, (edit) => {
-      const caller = currentAdmin(edit, c);
-      grantable(caller, scopes, kind, scopes);
+      currentAdmin(edit, c);
       if (edit.keyByName(name) !== undefined) {
         throw new JackError(409, Code.NAME_TAKEN, "the name is already used");
       }
@@ -577,37 +526,32 @@ export class Native implements NativeTools {
         kid,
         publicKey: strArg(args, "public_key") ?? "",
         name,
-        kind,
-        scopes: [...scopes],
         notBefore,
         notAfter,
       };
+      if (admin) entry.admin = true;
       edit.putKey(entry);
     });
     return { structured: { kid } };
   }
 
-  private userSetScopes(c: NativeCall, args: Args): NativeResult {
+  private userSetAdmin(c: NativeCall, args: Args): NativeResult {
     const kid = strArg(args, "kid");
     if (kid === undefined) {
       throw invalidParams();
     }
-    const scopes = scopesArg(args);
+    const admin = requiredAdminArg(args);
     c.target = kid;
 
     const out: { view: ReturnType<typeof entryView> | undefined } = { view: undefined };
     runUpdate(c.state, (edit) => {
-      const caller = currentAdmin(edit, c);
+      currentAdmin(edit, c);
       const target = edit.key(kid);
       if (target === undefined) {
         throw new JackError(404, Code.UNKNOWN_TARGET, "no such key");
       }
-      const targetKind = target.kind ?? "human";
-      const added = scopes.filter((s) => !holds(target.scopes, s));
-      grantable(caller, added, targetKind, scopes);
-      requireProtectedTarget(caller, target);
       // Last admin against the registry AS IT WOULD BE after the change.
-      const after = edit.keys().map((e) => (e.kid === kid ? { ...e, scopes: [...scopes] } : e));
+      const after = edit.keys().map((e) => (e.kid === kid ? { ...e, admin } : e));
       if (activeAdmins(after, c.now) < 1) {
         throw new JackError(409, Code.LAST_ADMIN, "the change would leave no active administrator");
       }
@@ -615,9 +559,8 @@ export class Native implements NativeTools {
         kid: target.kid,
         publicKey: target.publicKey,
         name: target.name,
-        scopes: [...scopes],
       };
-      if (target.kind !== undefined) updated.kind = target.kind;
+      if (admin) updated.admin = true;
       if (target.notBefore !== undefined) updated.notBefore = target.notBefore;
       if (target.notAfter !== undefined) updated.notAfter = target.notAfter;
       edit.putKey(updated);
@@ -637,12 +580,11 @@ export class Native implements NativeTools {
     c.target = kid;
 
     runUpdate(c.state, (edit) => {
-      const caller = currentAdmin(edit, c);
+      currentAdmin(edit, c);
       const target = edit.key(kid);
       if (target === undefined) {
         throw new JackError(404, Code.UNKNOWN_TARGET, "no such key");
       }
-      requireProtectedTarget(caller, target);
       const rest = edit.keys().filter((e) => e.kid !== kid);
       if (activeAdmins(rest, c.now) < 1) {
         throw new JackError(409, Code.LAST_ADMIN, "the change would leave no active administrator");
@@ -653,8 +595,7 @@ export class Native implements NativeTools {
   }
 
   private inviteCreate(c: NativeCall, args: Args): NativeResult {
-    const scopes = scopesArg(args);
-    const kind = kindArg(args);
+    const admin = optionalAdminArg(args);
     let ttl = DEFAULT_INVITE_TTL;
     if (args.has("ttl_seconds")) {
       const v = intArg(args, "ttl_seconds", 1, MAX_INVITE_TTL);
@@ -685,15 +626,13 @@ export class Native implements NativeTools {
 
     runUpdate(c.state, (edit) => {
       const caller = currentAdmin(edit, c);
-      grantable(caller, scopes, kind, scopes);
       const invite: Mutable<InviteRecord> = {
         inviteId,
-        scopes: [...scopes],
-        kind,
         createdBy: caller.kid,
         createdAt: c.now,
         expiresAt,
       };
+      if (admin) invite.admin = true;
       if (keyTtl !== undefined) {
         invite.keyTtlSeconds = keyTtl;
       }
@@ -711,8 +650,7 @@ export class Native implements NativeTools {
       structured: {
         invites: live.map((i) => ({
           invite_id: i.inviteId,
-          scopes: i.scopes === undefined ? [] : [...i.scopes],
-          kind: i.kind ?? "human",
+          admin: i.admin === true,
           created_by: i.createdBy,
           created_at: i.createdAt,
           expires_at: i.expiresAt,
@@ -755,8 +693,7 @@ export function bootstrapAdmin(
   const inviteId = inviteIdOf(drawn.raw);
   const invite: Mutable<InviteRecord> = {
     inviteId,
-    scopes: ["admin"],
-    kind: "human",
+    admin: true,
     createdBy: "bootstrap",
     createdAt: now,
     expiresAt: now + ttlSeconds,

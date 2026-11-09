@@ -1,7 +1,7 @@
 // Self-test only. Minimal stand-in for an SDK interop-server; exercises the
 // harness contract but is NOT a reference implementation and never verifies
 // request signatures in normal mode. Usage:
-//   node fake-server.mjs --aud <aud> --policy <f> --state <f> --server-seed-hex <hex> [--bootstrap-ttl <s>] [--verify-only]
+//   node fake-server.mjs --aud <aud> --state <f> --server-seed-hex <hex> [--bootstrap-ttl <s>] [--verify-only]
 import http from 'node:http';
 import { createHash, createPrivateKey, createPublicKey, sign, verify } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -90,16 +90,38 @@ function main() {
         } catch {
           rpc = null;
         }
-        // svc.config.set is always denied with 403; JACK_UNSIGNED_403 only
-        // controls whether the denial is signed, exercising the client rule
-        // that only auth-failure answers may go unsigned.
+        // Ordinary MCP tools are forwarded. Application code consumes the
+        // verified caller identity; svc.config.set is independently limited
+        // to the bob fixture identity, never by protocol-level policy.
         if (rpc && rpc.method === 'tools/call' && rpc.params?.name === 'svc.config.set') {
-          const body = Buffer.from(JSON.stringify({ error: { code: 'insufficient_scope', message: 'policy denies svc.config.set' } }), 'utf8');
-          if (process.env.JACK_UNSIGNED_403) {
-            res.writeHead(403, { 'Content-Type': 'application/json' });
-            return res.end(body);
+          const authKid = parseAuth(req.headers['jack-auth'])?.kid ?? null;
+          let entry = null;
+          try {
+            const state = JSON.parse(readFileSync(a.state, 'utf8'));
+            entry = (state.keys || []).find((k) => k.kid === authKid) ?? null;
+          } catch { entry = null; }
+          if (entry?.name !== 'bob') {
+            const body = Buffer.from(JSON.stringify({ error: { code: 'application_permission_denied', message: 'application permission required' } }), 'utf8');
+            if (process.env.JACK_UNSIGNED_403) {
+              res.writeHead(403, { 'Content-Type': 'application/json' });
+              return res.end(body);
+            }
+            return respond(res, 403, reqSig, kid, priv, body);
           }
-          return respond(res, 403, reqSig, kid, priv, body);
+          const body = Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: rpc.id ?? null, result: { content: [{ type: 'text', text: 'ok' }] } }), 'utf8');
+          return respond(res, 200, reqSig, kid, priv, body);
+        }
+        if (rpc && rpc.method === 'tools/call' && rpc.params?.name === 'jack.admin.user.list') {
+          const authKid = parseAuth(req.headers['jack-auth'])?.kid ?? null;
+          let entry = null;
+          try {
+            const state = JSON.parse(readFileSync(a.state, 'utf8'));
+            entry = (state.keys || []).find((k) => k.kid === authKid) ?? null;
+          } catch { entry = null; }
+          if (!entry?.admin) {
+            const body = Buffer.from(JSON.stringify({ error: { code: 'admin_required', message: 'administrator required' } }), 'utf8');
+            return respond(res, 403, reqSig, kid, priv, body);
+          }
         }
         // jack.whoami: answer from the actual --state file, keyed by the
         // request's Jack-Auth kid, so the client's outcome depends on server state.
@@ -114,7 +136,7 @@ function main() {
           }
           const body = Buffer.from(JSON.stringify({
             jsonrpc: '2.0', id: rpc.id ?? null,
-            result: { structuredContent: { kid: entry?.kid ?? null, name: entry?.name ?? null, not_before: entry?.not_before ?? null, not_after: entry?.not_after ?? null } },
+            result: { structuredContent: { kid: entry?.kid ?? null, name: entry?.name ?? null, admin: entry?.admin === true, not_before: entry?.not_before ?? null, not_after: entry?.not_after ?? null } },
           }), 'utf8');
           return respond(res, 200, reqSig, kid, priv, body);
         }

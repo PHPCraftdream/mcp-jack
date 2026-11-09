@@ -15,13 +15,14 @@ import { encodeBase64URL, keyId } from "../src/encoding.js";
 import { Code, JackError } from "../src/errors.js";
 import { requestSigningString } from "../src/signing.js";
 import { MemoryAuditSink, AUDIT_FAILURE } from "../src/server/audit.js";
+import { Native } from "../src/server/native.js";
 import { NonceStore } from "../src/server/nonce.js";
-import { parsePolicy } from "../src/server/policy.js";
 import { MemoryState } from "../src/server/state.js";
 import type { RegistryEntry } from "../src/server/state.js";
 import {
   Verifier,
   classifyBody,
+  TOOL_ADMIN_USER_SET_ADMIN,
   TOOL_ADMIN_USER_GET,
   TOOL_ADMIN_USER_LIST,
   TOOL_ENROLL,
@@ -35,7 +36,7 @@ import type {
   VerifyRequest,
   VerifierConfig,
 } from "../src/server/verify.js";
-import { loadDefaultPolicy, loadKeys, loadRegistry } from "./fixtures.js";
+import { loadKeys, loadRegistry } from "./fixtures.js";
 import type { TestKey } from "./fixtures.js";
 
 const NOW = 1767225600;
@@ -117,32 +118,29 @@ interface Harness {
   readonly audit: MemoryAuditSink | undefined;
 }
 
-/** One fresh harness per test: seeded registry, fresh nonces, default policy, fixed clock. */
+/** One fresh harness per test: seeded registry, fresh nonces, fixed clock. */
 function harness(opts?: { native?: NativeTools; withAudit?: boolean }): Harness {
   const state = new MemoryState();
   state.update((edit) => {
-    // exactOptionalPropertyTypes: assign kind/notBefore/notAfter only when defined.
+    // exactOptionalPropertyTypes: assign admin/notBefore/notAfter only when defined.
     for (const f of loadRegistry().keys) {
       const entry: { -readonly [K in keyof RegistryEntry]: RegistryEntry[K] } = {
         kid: f.kid,
         publicKey: f.publicKey,
         name: f.name,
-        scopes: [...f.scopes],
       };
-      if (f.kind !== undefined) entry.kind = f.kind;
+      if (f.admin !== undefined) entry.admin = f.admin;
       if (f.notBefore !== undefined) entry.notBefore = f.notBefore;
       if (f.notAfter !== undefined) entry.notAfter = f.notAfter;
       edit.putKey(entry);
     }
   });
   const nonces = new NonceStore();
-  const policy = parsePolicy(JSON.stringify(loadDefaultPolicy()));
   const audit = opts?.withAudit === true ? new MemoryAuditSink() : undefined;
   const verifier = new Verifier({
     aud: loadRegistry().aud,
     state,
     nonces,
-    policy,
     now: () => NOW,
     ...(opts?.native !== undefined ? { native: opts.native } : {}),
     ...(audit !== undefined ? { audit } : {}),
@@ -177,9 +175,9 @@ function signed(
 }
 
 /**
- * Admin-gate double for plumbing tests ONLY: records the call, sets the audit
- * target output field, then delegates (the real tools are the later native.ts
- * task).
+ * Native-call double for plumbing tests ONLY: records the call, sets the audit
+ * target output field, then delegates (the real tools live in native.ts, which
+ * does its own admin gating).
  */
 class RecordingNative implements NativeTools {
   readonly calls: NativeCall[] = [];
@@ -196,7 +194,6 @@ class RecordingNative implements NativeTools {
 }
 
 const ALICE = "alice";
-const BOB = "bob";
 const ROOT = "root";
 
 // ---------------------------------------------------------------------------
@@ -374,8 +371,8 @@ test("invalid UTF-8 is rejected before any JSON parse", () => {
   const alice = materialFor(ALICE);
   // The 0xff byte sits INSIDE the method string of an otherwise valid ping
   // request (like the request-utf8-* vectors). A lossy decoder would produce a
-  // valid "p\uFFFDng" request that the policy denies with 403 operation_denied;
-  // only the fatal decoder yields 400 invalid_request, so the expectation
+  // valid "p\uFFFDng" request that is forwarded as an ordinary accept; only
+  // the fatal decoder yields 400 invalid_request, so the expectation
   // discriminates. The signature covers the exact bytes, so authentication
   // succeeds first and the nonce is consumed.
   const body = Buffer.concat([
@@ -566,12 +563,15 @@ test("NativeCall carries what native tools need", () => {
   const res = h.verifier.verify(req);
   // The captured call.
   assert.equal(native.calls.length, 1, "one captured call");
-  const call = native.calls[0] as NativeCall;
+  const call = native.calls[0];
+  assert.ok(call !== undefined, "captured call expected");
   assert.equal(call.tool, TOOL_WHOAMI, "call.tool");
   assert.equal(call.arguments, '{"a":1}', "call.arguments raw text");
   assert.ok(call.caller !== undefined, "call.caller defined");
   assert.equal(call.caller.name, "alice", "caller.name");
-  assert.deepEqual(call.caller.scopes, ["read"], "caller.scopes");
+  assert.equal(call.caller.admin === true, false, "caller.admin (alice does not have admin true)");
+  assert.equal(call.caller.admin, undefined, "caller.admin remains absent for alice");
+  assert.equal(call.caller.notBefore, undefined, "caller.notBefore absent (unbounded)");
   assert.equal(call.kid, alice.kid, "call.kid");
   assert.equal(call.ts, NOW, "call.ts");
   assert.equal(call.now, NOW, "call.now");
@@ -662,49 +662,79 @@ test("undefined jack.* tool and missing handler are 403 without audit", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 15. Policy outcomes through the verifier.
+// 15. The identity snapshot of forwarded accepts.
 // ---------------------------------------------------------------------------
 
-test("policy outcomes through the verifier", () => {
-  const alice = materialFor(ALICE);
-  const bob = materialFor(BOB);
-  const call = (who: KeyMaterial, tool: string): { req: VerifyRequest; kid: string } =>
-    signed(who, { body: encoder.encode(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${tool}"}}`) });
+test("the identity snapshot is frozen, per-request, and survives registry changes (in-flight snapshot retained)", () => {
+  const native = new Native();
+  const h = harness({ native });
+  const root = materialFor(ROOT);
+  const lowadmin = materialFor("lowadmin");
+  // An ORDINARY tool (not jack.*): the request is forwarded with identity set.
+  const body = encoder.encode(PING);
 
-  // svc.restart requires lifecycle; alice holds only read.
-  {
-    const h = harness();
-    const res = h.verifier.verify(call(alice, "svc.restart").req);
-    assert.equal(res.accepted, false, "alice svc.restart: accepted");
-    assert.equal(res.httpStatus, 403, "alice svc.restart: status");
-    assert.equal(res.code, Code.INSUFFICIENT_SCOPE, "alice svc.restart: code");
-    assert.equal(res.nonceRecorded, true, "alice svc.restart: nonceRecorded");
-  }
-  // No rule matches other.tool: operation_denied (default deny).
-  {
-    const h = harness();
-    const res = h.verifier.verify(call(alice, "other.tool").req);
-    assert.equal(res.accepted, false, "alice other.tool: accepted");
-    assert.equal(res.httpStatus, 403, "alice other.tool: status");
-    assert.equal(res.code, Code.OPERATION_DENIED, "alice other.tool: code");
-    assert.equal(res.nonceRecorded, true, "alice other.tool: nonceRecorded");
-  }
-  // The earlier svc.danger.* deny rule beats the later svc.* allow rule.
-  {
-    const h = harness();
-    const res = h.verifier.verify(call(alice, "svc.danger.wipe").req);
-    assert.equal(res.accepted, false, "alice svc.danger.wipe: accepted");
-    assert.equal(res.httpStatus, 403, "alice svc.danger.wipe: status");
-    assert.equal(res.code, Code.OPERATION_DENIED, "alice svc.danger.wipe: code (deny wins)");
-    assert.equal(res.nonceRecorded, true, "alice svc.danger.wipe: nonceRecorded");
-  }
-  // bob holds lifecycle: svc.restart is allowed.
-  {
-    const h = harness();
-    const res = h.verifier.verify(call(bob, "svc.restart").req);
-    assert.equal(res.accepted, true, "bob svc.restart: accepted");
-    assert.equal(res.nonceRecorded, true, "bob svc.restart: nonceRecorded");
-  }
+  // (1) The first forwarded accept carries the signer's frozen snapshot.
+  const first = h.verifier.verify(signed(root, { body }).req);
+  assert.equal(first.accepted, true, "first: accepted");
+  assert.deepEqual(first.identity, { kid: root.kid, name: ROOT, admin: true }, "first: identity");
+  assert.ok(first.identity !== undefined, "first: identity defined");
+  assert.ok(Object.isFrozen(first.identity), "first: identity frozen");
+
+  // (2) A second, independent verify() call demotes the same caller through
+  // the real native tools. A second admin is added first so the demote does
+  // not trip last_admin.
+  h.state.update((edit) => {
+    edit.putKey({
+      kid: lowadmin.kid,
+      publicKey: encodeBase64URL(lowadmin.pub),
+      name: "lowadmin",
+      admin: true,
+    });
+  });
+  const demoteBody = encoder.encode(
+    `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${TOOL_ADMIN_USER_SET_ADMIN}","arguments":{"kid":"${root.kid}","admin":false}}}`,
+  );
+  const demote = h.verifier.verify(signed(root, { body: demoteBody }).req);
+  assert.equal(demote.accepted, true, "demote: accepted (native tools run their own gating)");
+  assert.equal(demote.identity, undefined, "demote: native accepts carry no identity");
+  const demoted = h.state.lookup(root.kid);
+  assert.ok(demoted, "demoted entry expected");
+  assert.equal(demoted.admin, undefined, "demote: registry entry is now non-admin");
+
+  // (3) The SAME forwarded request again, fresh nonce: the NEW result reflects
+  // the demotion, while the FIRST result's identity snapshot is unchanged.
+  const second = h.verifier.verify(signed(root, { body }).req);
+  assert.equal(second.accepted, true, "second: accepted");
+  assert.deepEqual(second.identity, { kid: root.kid, name: ROOT, admin: false }, "second: identity is the new snapshot");
+  assert.deepEqual(first.identity, { kid: root.kid, name: ROOT, admin: true }, "first: snapshot retained");
+  assert.ok(Object.isFrozen(first.identity), "first: snapshot still frozen");
+});
+
+test("request properties cannot influence the identity: it is always the signer's own registry entry", () => {
+  const h = harness();
+  const alice = materialFor(ALICE);
+  const root = materialFor(ROOT);
+
+  // An ordinary tools/call whose ARGUMENTS claim the root kid: identity must
+  // be alice's snapshot, never root's.
+  const body = encoder.encode(
+    `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"some.other.tool","arguments":{"kid":"${root.kid}","admin":true}}}`,
+  );
+  const res = h.verifier.verify(signed(alice, { body }).req);
+  assert.equal(res.accepted, true, "args spoof: accepted (ordinary tools are forwarded)");
+  assert.deepEqual(res.identity, { kid: alice.kid, name: ALICE, admin: false }, "args spoof: identity is the signer's");
+
+  // A notification (no id) carries identity too.
+  const notifBody = encoder.encode('{"jsonrpc":"2.0","method":"notifications/initialized"}');
+  const notif = h.verifier.verify(signed(alice, { body: notifBody }).req);
+  assert.equal(notif.accepted, true, "notification: accepted");
+  assert.deepEqual(notif.identity, { kid: alice.kid, name: ALICE, admin: false }, "notification: identity");
+
+  // A response object (id + result) carries identity too.
+  const respBody = encoder.encode('{"jsonrpc":"2.0","id":1,"result":{}}');
+  const resp = h.verifier.verify(signed(alice, { body: respBody }).req);
+  assert.equal(resp.accepted, true, "response: accepted");
+  assert.deepEqual(resp.identity, { kid: alice.kid, name: ALICE, admin: false }, "response: identity");
 });
 
 // ---------------------------------------------------------------------------
@@ -716,7 +746,6 @@ test("verifier config", () => {
     aud: loadRegistry().aud,
     state: new MemoryState(),
     nonces: new NonceStore(),
-    policy: parsePolicy(JSON.stringify(loadDefaultPolicy())),
     now: () => NOW,
   });
   // Empty aud throws (Go NewVerifier parity).
@@ -732,7 +761,6 @@ test("verifier config", () => {
     aud: h60.aud,
     state: h60.state,
     nonces: h60.nonces,
-    policy: parsePolicy(JSON.stringify(loadDefaultPolicy())),
     now: () => NOW,
     window: 60,
   });
@@ -743,7 +771,6 @@ test("verifier config", () => {
     aud: h0.aud,
     state: h0.state,
     nonces: h0.nonces,
-    policy: parsePolicy(JSON.stringify(loadDefaultPolicy())),
     now: () => NOW,
     window: 0,
   });

@@ -1,6 +1,7 @@
-//! Port of Go client/tools_test.go (six tests): the typed jack.* tool calls
-//! reproduce the admin-vectors fixtures byte for byte and decode their
-//! structuredContent results; error paths map to Http/Tool errors.
+//! Port of Go client/tools_test.go (six tests, plus two admin-only-wrapper
+//! additions): the typed jack.* tool calls reproduce the admin-vectors
+//! fixtures byte for byte and decode their structuredContent results; error
+//! paths map to Http/Tool errors.
 
 mod common;
 
@@ -13,7 +14,7 @@ use mcp_jack::auth_header::{format_request_auth, parse_request_auth};
 use mcp_jack::client::error::ClientError;
 use mcp_jack::client::rpc::{Client, Config};
 use mcp_jack::client::signer::{InMemorySigner, Signer};
-use mcp_jack::client::tools::EnrollResult;
+use mcp_jack::client::tools::{EnrollResult, Entry, InviteCreateParams};
 use mcp_jack::client::transport::Transport;
 use mcp_jack::encoding::{decode_b64url_fixed, encode_b64url};
 use serde_json::json;
@@ -145,15 +146,15 @@ fn enroll_matches_fixture() {
     let got = captured.lock().expect("mutex").clone().expect("captured");
     assert_fixture_request(&step, &got);
 
-    // The kid/name/kind/scopes oracle is keys.json + the fixture's
-    // expect.structured (Go hardcodes the same values).
+    // The kid/name/admin oracle is keys.json + the fixture's expect.structured
+    // (verified against admin-vectors.json enroll-ok step 0: {kid, name,
+    // admin:false}).
     assert_eq!(
         res,
         EnrollResult {
             kid: signer_by_name("newbie").kid().to_string(),
             name: "newbie".to_string(),
-            kind: "human".to_string(),
-            scopes: vec!["read".to_string()],
+            admin: false,
         }
     );
 }
@@ -213,8 +214,7 @@ fn whoami_decodes_result() {
     let structured = json!({
         "kid": newbie_kid,
         "name": "newbie",
-        "kind": "human",
-        "scopes": ["read"],
+        "admin": false,
         "not_before": null,
         "not_after": null,
     });
@@ -225,8 +225,7 @@ fn whoami_decodes_result() {
     let res = client.whoami().expect("whoami");
     assert_eq!(res.kid, newbie_kid);
     assert_eq!(res.name, "newbie");
-    assert_eq!(res.kind, "human");
-    assert_eq!(res.scopes, vec!["read".to_string()]);
+    assert!(!res.admin, "whoami admin flag decodes");
     assert_eq!(res.not_before, None);
     assert_eq!(res.not_after, None);
 }
@@ -241,8 +240,7 @@ fn admin_list_decodes_wrappers() {
                 "kid": "k1",
                 "public_key": "p1",
                 "name": "alice",
-                "kind": "human",
-                "scopes": ["read"],
+                "admin": false,
                 "not_before": null,
                 "not_after": 1750000000,
             }]
@@ -250,8 +248,7 @@ fn admin_list_decodes_wrappers() {
         let invites = json!({
             "invites": [{
                 "invite_id": "iv1",
-                "scopes": ["read"],
-                "kind": "human",
+                "admin": true,
                 "created_by": "k1",
                 "created_at": 1767225500,
                 "expires_at": 1767228600,
@@ -269,12 +266,13 @@ fn admin_list_decodes_wrappers() {
 
     let users = client.admin_user_list().expect("admin_user_list");
     assert_eq!(1, users.len());
-    assert_eq!("human", users[0].kind);
+    assert!(!users[0].admin, "user entry admin flag decodes");
     assert_eq!(Some(1750000000), users[0].not_after);
 
     let invites = client.admin_invite_list().expect("admin_invite_list");
     assert_eq!(1, invites.len());
     assert_eq!("iv1", invites[0].invite_id);
+    assert!(invites[0].admin, "invite entry admin flag decodes");
     assert_eq!(1767228600, invites[0].expires_at);
 }
 
@@ -286,7 +284,7 @@ fn tool_call_http_error() {
         srv.write_signed_json(
             auth,
             403,
-            br#"{"error":{"code":"insufficient_scope","message":"no"}}"#,
+            br#"{"error":{"code":"admin_required","message":"no"}}"#,
         )
     }));
     let client = new_fixture_client(&srv, signer_by_name("alice"), "assryd677-uYrqD4v-7HYw");
@@ -296,10 +294,104 @@ fn tool_call_http_error() {
     match err {
         ClientError::Http(h) => {
             assert_eq!(h.status, 403);
-            assert_eq!(h.code, "insufficient_scope");
+            assert_eq!(h.code, "admin_required");
         }
         other => panic!("expected ClientError::Http, got {other:?}"),
     }
+}
+
+/// Byte-for-byte wire-order pin for jack.admin.user.set_admin arguments
+/// {"kid","admin"} (spec 03 section 3.3): fixture case
+/// admin-set-admin-demote step 0, signed by ROOT (the fixture actor kid is
+/// root's). The captured bytes must equal the fixture bytes and the decoded
+/// result Entry must equal the fixture structured (full entry, admin:false).
+#[test]
+fn set_admin_matches_fixture() {
+    let step = admin_case_step("admin-set-admin-demote");
+    let structured = step
+        .expect
+        .structured
+        .clone()
+        .expect("admin-set-admin-demote expects structured");
+    let srv = TestServer::new();
+    let captured: Captured = Arc::new(Mutex::new(None));
+    install_capturing_handler(&srv, structured, Arc::clone(&captured));
+
+    let header_value = fixture_header_value(&step);
+    let root = signer_by_name("root");
+    let client = new_fixture_client(&srv, root.clone(), &fixture_nonce(&header_value));
+
+    // The fixture's arguments kid (read from the decoded fixture body, not
+    // hardcoded) names the demoted entry.
+    let target_kid = {
+        let wire: serde_json::Value =
+            serde_json::from_slice(&fixture_body(&step)).expect("fixture body decodes");
+        wire["params"]["arguments"]["kid"]
+            .as_str()
+            .expect("fixture arguments carry kid")
+            .to_string()
+    };
+    let res = client
+        .admin_user_set_admin(&target_kid, false)
+        .expect("set_admin");
+
+    let got = captured.lock().expect("mutex").clone().expect("captured");
+    assert_fixture_request(&step, &got);
+
+    assert_eq!(
+        res,
+        Entry {
+            kid: target_kid,
+            public_key: "eIG8ZZeMpm8SHo1jAeMPy5B-OC9f2JSGA0-J7GC1_YY".to_string(),
+            name: "admin2".to_string(),
+            admin: false,
+            not_before: None,
+            not_after: None,
+        }
+    );
+}
+
+/// Byte-for-byte wire pin for jack.admin.invite.create arguments
+/// {"admin":true} (spec 03 section 3.3): fixture case
+/// invite-create-admin-invite step 0, signed by root. The captured bytes
+/// must equal the fixture bytes; the invite id/code are random on a real
+/// server, so only expires_at is pinned against the fixture.
+#[test]
+fn invite_create_admin_flag_matches_fixture() {
+    let step = admin_case_step("invite-create-admin-invite");
+    let structured = step
+        .expect
+        .structured
+        .clone()
+        .expect("invite-create-admin-invite expects structured");
+    let srv = TestServer::new();
+    let captured: Captured = Arc::new(Mutex::new(None));
+    install_capturing_handler(&srv, structured, Arc::clone(&captured));
+
+    let header_value = fixture_header_value(&step);
+    let root = signer_by_name("root");
+    let client = new_fixture_client(&srv, root.clone(), &fixture_nonce(&header_value));
+
+    let res = client
+        .admin_invite_create(&InviteCreateParams {
+            admin: Some(true),
+            ttl_seconds: None,
+            key_ttl_seconds: None,
+        })
+        .expect("invite_create");
+
+    let got = captured.lock().expect("mutex").clone().expect("captured");
+    assert_fixture_request(&step, &got);
+
+    let expected_expires = step
+        .expect
+        .structured
+        .as_ref()
+        .and_then(|s| s["expires_at"].as_i64())
+        .expect("fixture structured carries expires_at");
+    assert_eq!(res.expires_at, expected_expires);
+    assert!(!res.invite_id.is_empty());
+    assert!(!res.code.is_empty());
 }
 
 /// Go: TestToolCallToolError.

@@ -2,18 +2,13 @@
 
 [![ci](https://github.com/PHPCraftdream/mcp-jack/actions/workflows/ci.yml/badge.svg)](https://github.com/PHPCraftdream/mcp-jack/actions/workflows/ci.yml)
 
-Status: early draft. The specification, the normative test fixtures and SDKs for Go, Rust and TypeScript exist. CI runs the unit and conformance tests of all three on Linux and Windows and a cross-language interop matrix of every client against every server (3 × 3). No release has been made and nothing has been audited.
+mcp-jack wraps ordinary MCP over HTTP with signed, replay-protected messages, key management, protocol auditing, and SDKs for Go, Rust, and TypeScript. The reduced contract and SDK migration are represented by baseline `b13b972`; the integrated candidate `444c69b` passed the checks recorded in readiness. Shared interop matrix acceptance, packaged-consumer evidence, and coverage/fuzz evidence were verified in GitHub CI on `444c69b` (see readiness evidence). No release has been made and nothing has been audited.
 
-## Intent
+## Contract
 
-mcp-jack is a **secure transport protocol that wraps plain MCP**. Ordinary MCP messages (JSON-RPC) travel inside it unchanged; mcp-jack adds the protection MCP lacks: who is calling, what they may do, and a record of what they did.
+Authenticated ordinary MCP requests pass through unchanged. The application authorizes them using the immutable verified caller identity `{kid, name, admin}` supplied by the server SDK; request headers and bodies cannot supply that identity. The strict-boolean `admin` flag (false by default) gates reserved `jack.admin.*` tools only. Protocol operations are audited. User `kind`, scopes, and the policy engine are removed; legacy registry/state records containing `kind` or `scopes` are rejected without migration or rewrite.
 
-A service embeds an mcp-jack server (or sits behind an mcp-jack gateway). Other programs and agents connect and can, subject to policy:
-
-- read logs and statistics;
-- read and change settings;
-- `reload` and `restart`;
-- manage users and their keys, through the protocol itself.
+An authenticated session channel is a future v0.2 direction, not an implemented feature. Server-key rotation is separate future work requiring an exact design. See [the scope review](docs/design/scope-review-2026-11-08.md).
 
 ## Why
 
@@ -29,60 +24,39 @@ Operations such as restart or a configuration change need more than "whoever rea
 
 ## Design principles (hypotheses under review)
 
-1. **Transport wrapper, not a new tool model.** The protocol carries unmodified MCP over HTTP. Three roles: a gateway in front of an unmodified MCP server, a local stdio bridge for MCP clients that know nothing about mcp-jack, and an embeddable library.
-2. **No bearer tokens.** Every request and response is signed with Ed25519, bound to the target server, a time window and a fresh nonce. Confidentiality is delegated to TLS.
-3. **Authorization is server policy.** Rules map MCP methods and tools to flat scopes (for example `read`, `config:write`, `lifecycle`, `admin`); everything else is denied.
-4. **User management is part of the protocol.** Administrators create users and invites through MCP tools; any party may generate a key pair; enrollment proves possession of the key. Servers and clients get this from the SDKs.
-5. **Private keys stay out of config files.** OS key stores, signer agents or hardware tokens; the SDKs expose a signer interface.
-6. **Audit everything.** Each call and each administrative change records the caller's key identity.
-7. **Logs are untrusted input.** A log line can contain instructions for an agent, so agents that read logs are never granted write or admin scopes.
-8. **Do not reinvent metrics and logs.** Use Prometheus and OpenTelemetry formats; the protocol only carries the request.
+1. **Transport wrapper, not a new tool model.** Ordinary MCP messages travel over HTTP unchanged.
+2. **No bearer tokens.** Each request is signed with Ed25519 and bound to the target server, a time window, and a fresh nonce; responses also carry Ed25519 signatures. TLS provides confidentiality.
+3. **Application-owned authorization.** The application authorizes requests using the immutable verified caller identity `{kid, name, admin}` supplied by the server SDK; the wrapper does not add scopes or a policy engine.
+4. **User key management proves possession.** Native user and invite tools support administrator management. Enrollment proves possession of the corresponding private key; key lifecycle is distinct from application authorization.
+5. **Private keys stay out of config files.** Prefer OS keystores, signer agents, or hardware signers; SDKs expose a signer interface.
+6. **Audit protocol operations accurately.** Record the verified caller and operation observed, distinguishing protocol activity from application-level effects.
+7. **Logs are untrusted input.** Treat log content as data, not instructions to an agent.
 
 ## Implementations
 
-| Language | Location | Content | Status |
-|---|---|---|---|
-| Go | module at the repository root (`server/`, `client/`) | server middleware, client, native tools | tests and interop run in CI |
-| Rust | [rust/](rust/README.md), crate `mcp-jack` (MSRV 1.85) | server verifier and tower layer, client, native tools, optional client HTTP transport (`client-http` feature) | tests and interop run in CI; builds on Rust 1.85 |
-| TypeScript | [ts/](ts/README.md), npm package (Node 20+, no runtime dependencies) | server verifier with Fetch and `node:http` adapters, client, native tools | tests and interop run in CI (Node 20 and 22) |
+| Language | Location | Main components |
+|---|---|---|
+| Go | repository root | `client/`, `server/`, `userkey/`, `spec/` |
+| Rust | [rust/](rust/README.md) | `mcp-jack` crate; client and server SDKs; optional client HTTP transport |
+| TypeScript | [ts/](ts/README.md) | `mcp-jack` package; client, Fetch and `node:http` server adapters |
 
-All implementations are checked against the same normative test vectors so they cannot drift apart. [interop/](interop/README.md) adds cross-language tests: a Node harness starts one server and one client executable per language and runs every scenario for all 3 × 3 server and client pairs, plus byte-exact signing checks.
+The repository-root Go package `jack` contains shared protocol primitives only; it is not the client or server SDK. `client/` owns signing/verification transport, connection profiles, and typed native-tool calls. `server/` owns verification, middleware, identity hand-off, nonce/state stores, native tools, and audit sinks. `userkey/` provides role-specific key and transfer utilities independently of the client package. `spec/` supplies fixture loaders and conformance data. This separation is intentional.
 
-### Packaging and consumer smoke (CI)
+## Checks and integration status
 
-CI also produces, without publishing: an npm tarball from the TypeScript workspace with `private: true` retained, a cargo `.crate` from rust/ with `publish = false` retained, and a staged Go module snapshot. Every artifact is inspected for its allowlisted file inventory and for byte-exact copies of the dual licence texts. Packing is not publishing: no registry credentials are used, no tags or releases are created, and versions and safety flags are unchanged. No release-ready claim is made until these consumer checks pass. Language specifics live in the per-language READMEs: [ts/](ts/README.md) (standalone npm-package consumer), [rust/](rust/README.md) (packaged crate consumer) and the Go module snapshot (documented in `tools/consumer/package-go.mjs`).
+The workflow definitions specify Go vet/tests and race tests; Rust formatting, clippy, tests, feature-isolation and MSRV checks; TypeScript typecheck/tests on supported Node and OS lanes; and fixture freshness checks. These are standing checks, not results claimed for `b13b972`.
 
-### Go layout
+Package-isolation consumers install the actual npm tarball (`private: true`), Rust `.crate` (`publish = false`), and a Go module snapshot separately. The pinned baseline is TypeScript 5.9, Go 1.22, Rust 1.85, and Node 20/22. These are baseline pins, not new measurements or green results; no versions are changed here.
 
-| Package | Content |
-|---|---|
-| `jack` (repository root) | Shared primitives: strict base64url, key ids, signing strings, `Jack-Auth` parsing, strict Ed25519 verification, public-key validation, scope and pattern matching, protocol errors |
-| `spec` | The embedded fixtures and strict typed loaders; conformance tests import it |
-| `server` | Request verifier, policy engine, `net/http` middleware, native tools (enrollment, key rotation, user and invite administration), `BootstrapAdmin`, and the nonce, state and audit stores |
-| `client` | Signer abstraction, signing and verifying `http.RoundTripper`, connection profile, typed calls for the native tools |
+The interop and credential-transfer harnesses, packaged consumers, coverage reports, and bounded Go fuzz campaign have workflow definitions in this repository. Matrix acceptance, packaged-consumer checks, coverage, and fuzz evidence for this baseline were verified in GitHub CI on `444c69b` (see readiness evidence). The current interop scenario source of truth is [`interop/scenarios.json`](interop/scenarios.json). Historical readiness measurements are explicitly tied to their earlier commit in [docs/readiness.md](docs/readiness.md).
 
-Run the checks (CI does the same; the Rust, TypeScript and interop commands are in their READMEs):
+## Specification and future work
 
-```
-go vet ./...
-go test -race ./...
-node spec/tools/gen-fixtures.mjs --check
-node interop/run.mjs --self-test
-```
-
-## Specification
-
-The draft lives in [spec/](spec/README.md): authentication, authorization, user management, an optional service-management profile, test fixtures and a reference verifier.
-
-## Open questions
-
-- Whether services will be local only or also remote.
-- Whether clients will be only our own agents or also third-party programs.
-- How services discover each other (registry or a well-known address on each).
+The contract and shared fixtures live in [spec/](spec/README.md). Q1's authenticated session channel is future v0.2 design work. Q3 server-key rotation requires a separate exact design. Service discovery remains open.
 
 ## Licence
 
-Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT licence](LICENSE-MIT) at your option. The distribution artifacts produced in CI (npm tarball, cargo crate, Go module snapshot) carry byte-exact copies of both licence texts, verified in CI.
+Licensed under either the [Apache License, Version 2.0](LICENSE-APACHE) or the [MIT licence](LICENSE-MIT), at your option.
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this work, as defined in the Apache-2.0 licence, shall be dual licensed as above, without any additional terms or conditions.
 

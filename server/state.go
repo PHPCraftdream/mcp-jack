@@ -5,36 +5,30 @@ import (
 	"sync"
 )
 
-// Principal kinds, as stored in RegistryEntry.Kind.
-const (
-	KindHuman = "human"
-	KindAgent = "agent"
-)
-
 // RegistryEntry is one registered key in the server state. JSON tags and field
-// order match the entries of spec/fixtures/registry.json; the pointer fields
-// marshal as null when nil (no omitempty). See 02-authorization.md section 1.
+// order match the entries of spec/fixtures/registry.json; the admin flag
+// marshals always (false included) and the pointer fields marshal as null
+// when nil (no omitempty). See 02-authorization.md section 1.
 type RegistryEntry struct {
-	Kid       string   `json:"kid"`
-	PublicKey string   `json:"public_key"`
-	Name      string   `json:"name"`
-	Kind      string   `json:"kind"`
-	Scopes    []string `json:"scopes"`
-	NotBefore *int64   `json:"not_before"`
-	NotAfter  *int64   `json:"not_after"`
+	Kid       string `json:"kid"`
+	PublicKey string `json:"public_key"`
+	Name      string `json:"name"`
+	Admin     bool   `json:"admin"`
+	NotBefore *int64 `json:"not_before"`
+	NotAfter  *int64 `json:"not_after"`
 }
 
-// InviteRecord is one pending invite. JSON tags and field order match the
-// state.invites records of spec/fixtures/admin-vectors.json.
-// See 03-user-management.md sections 3.2 and 9.
+// InviteRecord is one pending invite. The admin flag marshals always;
+// key_ttl_seconds is present only when set (omitempty). JSON tags and field
+// order match the state.invites records of spec/fixtures/admin-vectors.json.
+// See 03-user-management.md sections 3.2, 3.3 and 10.
 type InviteRecord struct {
-	InviteID      string   `json:"invite_id"`
-	Scopes        []string `json:"scopes"`
-	Kind          string   `json:"kind"`
-	CreatedBy     string   `json:"created_by"`
-	CreatedAt     int64    `json:"created_at"`
-	ExpiresAt     int64    `json:"expires_at"`
-	KeyTTLSeconds *int64   `json:"key_ttl_seconds"`
+	InviteID      string `json:"invite_id"`
+	Admin         bool   `json:"admin"`
+	CreatedBy     string `json:"created_by"`
+	CreatedAt     int64  `json:"created_at"`
+	ExpiresAt     int64  `json:"expires_at"`
+	KeyTTLSeconds *int64 `json:"key_ttl_seconds,omitempty"`
 }
 
 // StateView is an immutable snapshot of the store: it holds deep copies, so
@@ -100,16 +94,12 @@ func (e *StateEdit) Invites() []InviteRecord {
 	return out
 }
 
-// PutKey replaces any entry with the same Kid or appends a new one. A nil
-// Scopes slice is normalized to an empty non-nil slice so marshaled JSON
-// shows [] rather than null; no other validation is performed here (spec
-// rules are enforced by the caller's layers). The entry is cloned so the
-// store never aliases the caller's slices or timestamp pointees: a later
-// caller mutation must not change committed state outside the store mutex.
+// PutKey replaces any entry with the same Kid or appends a new one; no
+// validation is performed here (spec rules are enforced by the caller's
+// layers). The entry is cloned so the store never aliases the caller's
+// timestamp pointees: a later caller mutation must not change committed
+// state outside the store mutex.
 func (e *StateEdit) PutKey(entry RegistryEntry) {
-	if entry.Scopes == nil {
-		entry.Scopes = []string{}
-	}
 	for i := range e.keys {
 		if e.keys[i].Kid == entry.Kid {
 			e.keys[i] = cloneEntry(entry)
@@ -131,13 +121,10 @@ func (e *StateEdit) RemoveKey(kid string) bool {
 	return false
 }
 
-// PutInvite replaces any invite with the same InviteID or appends a new one.
-// A nil Scopes slice is normalized to an empty non-nil slice. The invite is
-// cloned so the store never aliases the caller's slices or TTL pointees.
+// PutInvite replaces any invite with the same InviteID or appends a new
+// one. The invite is cloned so the store never aliases the caller's TTL
+// pointees.
 func (e *StateEdit) PutInvite(invite InviteRecord) {
-	if invite.Scopes == nil {
-		invite.Scopes = []string{}
-	}
 	for i := range e.invites {
 		if e.invites[i].InviteID == invite.InviteID {
 			e.invites[i] = cloneInvite(invite)
@@ -244,10 +231,6 @@ func cloneInt64(p *int64) *int64 {
 
 func cloneEntry(entry RegistryEntry) RegistryEntry {
 	out := entry
-	if entry.Scopes != nil {
-		out.Scopes = make([]string, len(entry.Scopes))
-		copy(out.Scopes, entry.Scopes)
-	}
 	out.NotBefore = cloneInt64(entry.NotBefore)
 	out.NotAfter = cloneInt64(entry.NotAfter)
 	return out
@@ -255,10 +238,6 @@ func cloneEntry(entry RegistryEntry) RegistryEntry {
 
 func cloneInvite(invite InviteRecord) InviteRecord {
 	out := invite
-	if invite.Scopes != nil {
-		out.Scopes = make([]string, len(invite.Scopes))
-		copy(out.Scopes, invite.Scopes)
-	}
 	out.KeyTTLSeconds = cloneInt64(invite.KeyTTLSeconds)
 	return out
 }

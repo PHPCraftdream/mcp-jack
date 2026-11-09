@@ -3,7 +3,10 @@
 // SDK. Exactly one JSON result line on stdout (exit 0 for a completed
 // scenario, whatever its outcome); harness-level failures go to stderr with
 // exit 1.
+import { request as httpRequest } from "node:http";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { BadBase64UrlError, decodeBase64URL, decodeBase64URLFixed, encodeBase64URL } from "../encoding.js";
 import { Code, JackError } from "../errors.js";
 import { requestSigningString } from "../signing.js";
@@ -14,7 +17,7 @@ import type { SigningFetch } from "../client/transport.js";
 import { randomNonce, signRequest, verifyResponse } from "../client/auth.js";
 import { InMemorySigner } from "../client/signer.js";
 import { Client } from "../client/rpc.js";
-import { TOOL_ADMIN_USER_LIST, TOOL_ADMIN_USER_SET_SCOPES, TOOL_ENROLL, TOOL_WHOAMI } from "../client/tools.js";
+import { TOOL_ADMIN_USER_LIST, TOOL_ADMIN_USER_SET_ADMIN, TOOL_ENROLL, TOOL_WHOAMI } from "../client/tools.js";
 import { parseJsonRaw } from "../server/verify.js";
 
 function fatal(msg: string): never {
@@ -295,22 +298,127 @@ function rpcBody(tool: string, args?: Record<string, unknown>): Uint8Array {
 
 // rawCall signs one request with a random nonce and timestamp (ts pinned for
 // clock-skew), then sends it.
-async function rawCall(e: Env, signer: InMemorySigner, method: string, target: string, body: Uint8Array, tsOverride?: number): Promise<StepResult> {
+async function rawCall(e: Env, signer: InMemorySigner, method: string, target: string, body: Uint8Array, tsOverride?: number, rawTarget = false): Promise<StepResult> {
   const nonce = randomNonce();
   const header = signRequest(signer, e.aud, method, target, body, nonce, tsOverride ?? nowSec());
   // The request signature binds the response signing string (spec 01 section 5).
   const requestSig = parseRequestAuth([header]).sig;
-  return sendWithHeader(e, header, requestSig, method, target, body);
+  return sendWithHeader(e, header, requestSig, method, target, body, rawTarget);
+}
+
+// Uses node:http's request-line path option so the literal dot segments are
+// sent unchanged; WHATWG fetch URL parsing would normalize `/a/../identity`.
+export function rawPathRequest(
+  baseURL: string,
+  method: string,
+  target: string,
+  header: string,
+  body: Uint8Array,
+  options: { deadlineMs?: number } = {},
+): Promise<Response> {
+  const base = new URL(baseURL);
+  if (base.protocol !== "http:") return Promise.reject(new Error("raw target request requires http"));
+  const deadlineMs = options.deadlineMs ?? 15_000;
+  if (!Number.isSafeInteger(deadlineMs) || deadlineMs <= 0 || deadlineMs > 2_147_483_647) {
+    return Promise.reject(new Error("raw target request: deadline must be a positive 32-bit timer duration"));
+  }
+  return new Promise<Response>((resolve, reject) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let req: ReturnType<typeof httpRequest> | undefined;
+    const fail = (err: Error): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      reject(err);
+      req?.destroy();
+    };
+    req = httpRequest({
+      hostname: base.hostname,
+      port: base.port === "" ? 80 : Number(base.port),
+      method,
+      path: target,
+      agent: false,
+      headers: {
+        "jack-auth": header,
+        ...(method === "POST" ? { "content-type": "application/json" } : {}),
+      },
+    }, (res) => {
+      const chunks: Buffer[] = [];
+      let size = 0;
+      const failIncomplete = (): void => {
+        try {
+          finalizeRawPathResponse(res.complete, res.statusCode, res.rawHeaders, chunks);
+        } catch (err) {
+          fail(err instanceof Error ? err : new Error(String(err)));
+        }
+      };
+      res.on("data", (chunk: Buffer | string) => {
+        if (settled) return;
+        const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        if (size + data.length > 1024 * 1024) {
+          fail(new Error("raw target request: response exceeds 1 MiB"));
+          res.destroy();
+          return;
+        }
+        size += data.length;
+        chunks.push(data);
+      });
+      res.on("error", (err: Error) => {
+        if (!res.complete) failIncomplete();
+        else fail(err);
+      });
+      res.on("aborted", failIncomplete);
+      res.on("close", () => {
+        if (!res.complete) failIncomplete();
+      });
+      res.on("end", () => {
+        if (settled) return;
+        try {
+          const response = finalizeRawPathResponse(res.complete, res.statusCode, res.rawHeaders, chunks);
+          settled = true;
+          if (timer !== undefined) clearTimeout(timer);
+          resolve(response);
+          req?.destroy();
+        } catch (err) {
+          fail(err instanceof Error ? err : new Error(String(err)));
+        }
+      });
+    });
+    req.on("error", fail);
+    timer = setTimeout(() => fail(new Error("raw target request: deadline exceeded")), deadlineMs);
+    if (body.length > 0) req.end(Buffer.from(body));
+    else req.end();
+  });
+}
+
+// Shared response finalization keeps the completeness check explicit and
+// independently testable; rawPathRequest uses it on both the end and abort paths.
+export function finalizeRawPathResponse(
+  complete: boolean,
+  statusCode: number | undefined,
+  rawHeaders: readonly string[],
+  chunks: readonly Uint8Array[],
+): Response {
+  if (!complete) throw new Error("raw target request: response incomplete");
+  if (statusCode === undefined) throw new Error("raw target request: missing status");
+  const headers = new Headers();
+  for (let i = 0; i + 1 < rawHeaders.length; i += 2) {
+    const name = rawHeaders[i];
+    const value = rawHeaders[i + 1];
+    if (name !== undefined && value !== undefined) headers.append(name, value);
+  }
+  const body = Buffer.concat(chunks);
+  return new Response(body.length === 0 ? null : body, { status: statusCode, headers });
 }
 
 // sendWithHeader sends exact pre-signed bytes and classifies the response.
-async function sendWithHeader(e: Env, header: string, requestSig: string, method: string, target: string, body: Uint8Array): Promise<StepResult> {
-  const headers = new Headers();
-  headers.set("jack-auth", header);
-  if (method === "POST") headers.set("content-type", "application/json");
+async function sendWithHeader(e: Env, header: string, requestSig: string, method: string, target: string, body: Uint8Array, rawTarget = false): Promise<StepResult> {
   let resp: Response;
   try {
-    resp = await fetch(e.baseURL + target, { method, headers, ...(method === "POST" ? { body } : {}) });
+    resp = rawTarget
+      ? await rawPathRequest(e.baseURL, method, target, header, body)
+      : await fetch(e.baseURL + target, { method, headers: { "jack-auth": header, ...(method === "POST" ? { "content-type": "application/json" } : {}) }, ...(method === "POST" ? { body } : {}) });
   } catch (err) {
     return fatal(`cannot connect: ${message(err)}`);
   }
@@ -384,6 +492,18 @@ function resultFrom2xx(body: Uint8Array): StepResult {
 function rawCodeString(raw: string): string {
   return raw.replace(/^"+/, "").replace(/"+$/, "");
 }
+
+// rawSetAdmin keeps each invalid admin shape on the wire exactly as written.
+function rawSetAdmin(e: Env, adminMember: string): Promise<StepResult> {
+  const body = new TextEncoder().encode(
+    `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.user.set_admin","arguments":{"kid":"${kidOf(e, "alice")}"${adminMember}}}}`,
+  );
+  return rawCall(e, signerFor(e, "root"), "POST", "/mcp", body);
+}
+
+const IDENTITY_FORWARD_BODY = new TextEncoder().encode(
+  " { \"jsonrpc\" : \"2.0\", \"id\" : 1, \"method\" : \"tools/call\", \"params\" : { \"name\" : \"app.identity\", \"arguments\" : { \"identity\" : { \"kid\" : \"forged\", \"name\" : \"root\", \"admin\" : true } } } }\n",
+);
 
 // ---------------------------------------------------------------------------
 // Typed path: raw envelope over the SDK's signed transport, plus SDK typed
@@ -534,8 +654,52 @@ const SCENARIOS: Readonly<Record<string, (e: Env) => Promise<StepResult>>> = {
     return rawCall(e, e.primary, "POST", "/mcp", rpcBody("echo", { text }));
   },
   whoami: (e) => typedRawCall(e, signerFor(e, e.primaryName), TOOL_WHOAMI),
-  "denied-tool": (e) => rawCall(e, e.primary, "POST", "/mcp", rpcBody("svc.config.set")),
-  "unmapped-tool": (e) => rawCall(e, e.primary, "POST", "/mcp", rpcBody("other.tool")),
+  "admin-identity": (e) => typedRawCall(e, signerFor(e, "root"), TOOL_WHOAMI),
+  "app-permission-denied": (e) => rawCall(e, e.primary, "POST", "/mcp", rpcBody("svc.config.set")),
+  "app-permission-allowed": (e) => rawCall(e, e.primary, "POST", "/mcp", rpcBody("svc.config.set")),
+  "identity-forward": (e) => rawCall(e, e.primary, "POST", "/mcp", IDENTITY_FORWARD_BODY),
+  "identity-get": (e) => rawCall(e, e.primary, "GET", "/identity?x=%2F", new Uint8Array(0)),
+  "identity-dot-target": (e) => rawCall(e, e.primary, "GET", "/a/../identity?x=%2F", new Uint8Array(0), undefined, true),
+  "admin-required": (e) => typedRawCall(e, signerFor(e, e.primaryName), TOOL_ADMIN_USER_LIST),
+  "set-admin-false": async (e) => {
+    const before = await sdkStep(typedClient(e, "alice").whoAmI());
+    const failedBefore = requireIntermediate(0, false, 0, "", before.step);
+    if (failedBefore !== undefined) return failedBefore;
+    if (before.value === undefined || before.value.kid !== kidOf(e, "alice") || before.value.name !== "alice" || !before.value.admin) {
+      return { kind: "client_error", status: 0, hasStatus: false, code: "interop_assertion_failed", data: { step: 0 } };
+    }
+
+    const updated = await sdkStep(typedClient(e, "root").adminUserSetAdmin(kidOf(e, "alice"), false));
+    const failedUpdate = requireIntermediate(1, false, 0, "", updated.step);
+    if (failedUpdate !== undefined) return failedUpdate;
+    const entry = updated.value;
+    if (entry === undefined || entry.kid !== kidOf(e, "alice") || entry.name !== "alice" || entry.admin) {
+      return { kind: "client_error", status: 0, hasStatus: false, code: "interop_assertion_failed", data: { step: 1 } };
+    }
+
+    const after = await sdkStep(typedClient(e, "alice").whoAmI());
+    const failedAfter = requireIntermediate(2, false, 0, "", after.step);
+    if (failedAfter !== undefined) return failedAfter;
+    if (after.value === undefined || after.value.kid !== kidOf(e, "alice") || after.value.name !== "alice" || after.value.admin) {
+      return { kind: "client_error", status: 0, hasStatus: false, code: "interop_assertion_failed", data: { step: 2 } };
+    }
+
+    return {
+      ...updated.step,
+      data: { structuredContent: {
+        kid: entry.kid,
+        public_key: entry.publicKey,
+        name: entry.name,
+        admin: entry.admin,
+        not_before: entry.notBefore,
+        not_after: entry.notAfter,
+      } },
+    };
+  },
+  "set-admin-missing": (e) => rawSetAdmin(e, ""),
+  "set-admin-null": (e) => rawSetAdmin(e, ',"admin":null'),
+  "set-admin-string": (e) => rawSetAdmin(e, ',"admin":"false"'),
+  "set-admin-number": (e) => rawSetAdmin(e, ',"admin":0'),
   "unknown-key": (e) => rawCall(e, e.primary, "POST", "/mcp", rpcBody("svc.status")),
   replay: async (e) => {
     // Build the exact bytes and header ONCE; both sends reuse them. ping is
@@ -565,11 +729,10 @@ const SCENARIOS: Readonly<Record<string, (e: Env) => Promise<StepResult>>> = {
   "expired-key": (e) => rawCall(e, e.primary, "POST", "/mcp", rpcBody("svc.status")),
   "key-not-yet-valid": (e) => rawCall(e, e.primary, "POST", "/mcp", rpcBody("svc.status")),
   stream: (e) => rawCall(e, e.primary, "GET", "/sse", new Uint8Array(0)),
-  "agent-admin": (e) => typedRawCall(e, signerFor(e, e.primaryName), TOOL_ADMIN_USER_LIST),
   "invalid-request": (e) => rawCall(e, e.primary, "POST", "/mcp", new TextEncoder().encode("this is not JSON")),
   "unknown-native-tool": (e) => rawCall(e, e.primary, "POST", "/mcp", rpcBody("jack.admin.nuke")),
   enroll: async (e) => {
-    const inv0 = await sdkStep(typedClient(e, "root").adminInviteCreate({ scopes: ["read"] }));
+    const inv0 = await sdkStep(typedClient(e, "root").adminInviteCreate({}));
     const bad0 = requireIntermediate(0, false, 0, "", inv0.step);
     if (bad0 !== undefined) return bad0;
     const inv = inv0.value;
@@ -580,7 +743,7 @@ const SCENARIOS: Readonly<Record<string, (e: Env) => Promise<StepResult>>> = {
     return typedRawCall(e, signerFor(e, e.primaryName), TOOL_WHOAMI);
   },
   "enroll-used-invite": async (e) => {
-    const inv0 = await sdkStep(typedClient(e, "root").adminInviteCreate({ scopes: ["read"] }));
+    const inv0 = await sdkStep(typedClient(e, "root").adminInviteCreate({}));
     const bad0 = requireIntermediate(0, false, 0, "", inv0.step);
     if (bad0 !== undefined) return bad0;
     const inv = inv0.value;
@@ -606,7 +769,7 @@ const SCENARIOS: Readonly<Record<string, (e: Env) => Promise<StepResult>>> = {
     return typedRawCall(e, signerFor(e, "newbie"), TOOL_WHOAMI);
   },
   "admin-create": async (e) => {
-    const inv0 = await sdkStep(typedClient(e, "root").adminInviteCreate({ scopes: ["read"] }));
+    const inv0 = await sdkStep(typedClient(e, "root").adminInviteCreate({}));
     const bad0 = requireIntermediate(0, false, 0, "", inv0.step);
     if (bad0 !== undefined) return bad0;
     const inv = inv0.value;
@@ -615,7 +778,6 @@ const SCENARIOS: Readonly<Record<string, (e: Env) => Promise<StepResult>>> = {
       typedClient(e, "root").adminUserCreate({
         name: "dave",
         publicKey: encodeBase64URL(signerFor(e, e.primaryName).publicKey()),
-        scopes: ["read"],
       }),
     );
     const bad1 = requireIntermediate(1, false, 0, "", created1.step);
@@ -631,10 +793,13 @@ const SCENARIOS: Readonly<Record<string, (e: Env) => Promise<StepResult>>> = {
     if (bad0 !== undefined) return bad0;
     return typedRawCall(e, signerFor(e, e.primaryName), TOOL_WHOAMI);
   },
+  // The root identity is the only admin here, so demoting itself trips the
+  // last_admin guard; the expected 409 last_admin verdict stays the
+  // harness's concern.
   "last-admin": (e) =>
-    typedRawCall(e, signerFor(e, e.primaryName), TOOL_ADMIN_USER_SET_SCOPES, {
-      kid: e.primary.kid(),
-      scopes: ["read"],
+    typedRawCall(e, signerFor(e, "root"), TOOL_ADMIN_USER_SET_ADMIN, {
+      kid: signerFor(e, "root").kid(),
+      admin: false,
     }),
 };
 
@@ -684,4 +849,4 @@ function main(): void {
   );
 }
 
-main();
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();

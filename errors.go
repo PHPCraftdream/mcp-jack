@@ -48,11 +48,8 @@ const CodeUnknownServerKey = "unknown_server_key"
 // CodeInvalidRequest: body is not an acceptable JSON-RPC object, or params.name is not a string (HTTP 400).
 const CodeInvalidRequest = "invalid_request"
 
-// CodeOperationDenied: no rule allows the operation, or a deny rule matched (HTTP 403, spec 02 section 4).
+// CodeOperationDenied: the tool name is an undefined "jack."-prefixed name (HTTP 403, spec 02 section 2).
 const CodeOperationDenied = "operation_denied"
-
-// CodeInsufficientScope: a rule matched but the key lacks its scope (HTTP 403, spec 02 section 4).
-const CodeInsufficientScope = "insufficient_scope"
 
 // Table of spec 03 section 7.
 // CodeInvalidParams: an argument is missing, of the wrong type, or out of range (HTTP 400).
@@ -67,14 +64,8 @@ const CodeInvalidProof = "invalid_proof"
 // CodeInvalidInvite: invite missing, expired, used or revoked, or a bad code (HTTP 403, spec 03 section 3.2).
 const CodeInvalidInvite = "invalid_invite"
 
-// CodeScopeEscalation: an operation grants a scope the caller does not hold (HTTP 403, spec 03 section 4 rule 1).
-const CodeScopeEscalation = "scope_escalation"
-
-// CodeAgentAdminForbidden: giving an agent key the admin scope (HTTP 403, spec 03 section 4 rule 2).
-const CodeAgentAdminForbidden = "agent_admin_forbidden"
-
-// CodeForbiddenAdminTarget: modifying an entry holding a scope the admin lacks (HTTP 403, spec 03 section 4 rule 3).
-const CodeForbiddenAdminTarget = "forbidden_admin_target"
+// CodeAdminRequired: the caller is not an administrator (HTTP 403, spec 03 section 7).
+const CodeAdminRequired = "admin_required"
 
 // CodeUnknownTarget: the addressed registry entry or invite does not exist (HTTP 404, spec 03 section 7).
 const CodeUnknownTarget = "unknown_target"

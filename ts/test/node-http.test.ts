@@ -12,14 +12,13 @@ import { parseRequestAuth } from "../src/auth-header.js";
 import { MemoryAuditSink } from "../src/server/audit.js";
 import { Native } from "../src/server/native.js";
 import { NonceStore } from "../src/server/nonce.js";
-import { parsePolicy } from "../src/server/policy.js";
 import type { RegistryEntry as StateRegistryEntry } from "../src/server/state.js";
 import { MemoryState } from "../src/server/state.js";
 import { Verifier } from "../src/server/verify.js";
 import { serveNode } from "../src/server/node.js";
-import { jackFetchHandler } from "../src/server/fetch.js";
-import type { HandlerConfig } from "../src/server/fetch.js";
-import { loadDefaultPolicy, loadRegistry, type RegistryEntry as FixtureRegistryEntry } from "./fixtures.js";
+import { jackFetchHandler, jackIdentity, RAW_TARGET_SYMBOL } from "../src/server/fetch.js";
+import type { HandlerConfig, JackRequest } from "../src/server/fetch.js";
+import { loadRegistry, type RegistryEntry as FixtureRegistryEntry } from "./fixtures.js";
 import { fixtureAud, fixtureNow, seedSignerByName, generateKeypair } from "./client-harness.js";
 
 const noop = (): void => {};
@@ -40,10 +39,9 @@ function toStateEntry(e: FixtureRegistryEntry): StateRegistryEntry {
     kid: e.kid,
     publicKey: e.publicKey,
     name: e.name,
-    scopes: e.scopes,
   };
-  if (e.kind !== undefined) {
-    out.kind = e.kind;
+  if (e.admin !== undefined) {
+    out.admin = e.admin;
   }
   if (e.notBefore !== undefined) {
     out.notBefore = e.notBefore;
@@ -142,7 +140,6 @@ const verifier = new Verifier({
   aud: fixtureAud,
   state: newRegistryState(),
   nonces: new NonceStore(),
-  policy: parsePolicy(JSON.stringify(loadDefaultPolicy())),
   audit: new MemoryAuditSink(),
   native: new Native(),
   now: () => fixtureNow,
@@ -150,6 +147,22 @@ const verifier = new Verifier({
 
 const next = async (req: Request): Promise<Response> => {
   const { pathname } = new URL(req.url);
+  if (pathname === "/identity") {
+    const identity = jackIdentity(req);
+    const identityIsOwnValue =
+      identity !== undefined && Reflect.ownKeys(req).some((key) => Object.getOwnPropertyDescriptor(req, key)?.value === identity);
+    return new Response(
+      JSON.stringify({
+        rawTarget: (req as JackRequest)[RAW_TARGET_SYMBOL] ?? null,
+        pathname,
+        search: new URL(req.url).search,
+        identity: identity === undefined ? null : { kid: identity.kid, name: identity.name, admin: identity.admin },
+        identityFrozen: identity !== undefined && Object.isFrozen(identity),
+        identityIsOwnValue,
+      }),
+      { headers: { "content-type": "application/json" } },
+    );
+  }
   if (pathname === "/events") {
     return new Response("data: x\n\n", { headers: { "content-type": "text/event-stream" } });
   }
@@ -189,8 +202,8 @@ after(async () => {
 });
 
 test("E1 ping round trip over a real socket", { timeout: 5000 }, async () => {
-  // Pipeline: verify (fixture policy rule 1 allows ping with scope null; alice
-  // registered+active at fixtureNow, fresh nonce) -> forward to next -> signed
+  // Pipeline: verify authenticates alice (registered+active at fixtureNow,
+  // fresh nonce; ordinary MCP is never gated) -> forward to next -> signed
   // 200. createSigningFetch THROWS unless the response was signed by
   // serverPub at fixtureNow, so the non-throw IS the verification assertion.
   const alice = seedSignerByName("alice");
@@ -207,8 +220,9 @@ test("E1 ping round trip over a real socket", { timeout: 5000 }, async () => {
 });
 
 test("E2 whoami through the Client", { timeout: 5000 }, async () => {
-  // Pipeline: verify -> native branch (jack.whoami bypasses the policy) ->
-  // signed 200 CallToolResult; client/tools.ts maps snake_case to camelCase.
+  // Pipeline: verify -> native branch (jack.whoami is answered by the
+  // adapter) -> signed 200 CallToolResult; client/tools.ts maps snake_case to
+  // camelCase.
   const root = seedSignerByName("root");
   const client = new Client({
     baseUrl: `http://127.0.0.1:${port}/mcp`,
@@ -221,18 +235,17 @@ test("E2 whoami through the Client", { timeout: 5000 }, async () => {
   const who = await client.whoAmI();
   assert.equal(who.name, "root");
   assert.equal(who.kid, root.kid());
-  assert.equal(who.kind, "human");
+  assert.equal(who.admin, true);
   assert.equal(who.notBefore, null);
   assert.equal(who.notAfter, null);
-  assert.ok(who.scopes.includes("admin"));
 });
 
-test("E3 denied tool surfaces HTTPError after signature verification", { timeout: 5000 }, async () => {
-  // Pipeline: verify authenticates alice -> policy denies svc.restart
-  // (needs lifecycle, alice has read) -> SIGNED 403 (nonce was recorded).
-  // createSigningFetch verifies the 403 BEFORE the caller sees it, so an
-  // HTTPError (not a JackError/UnauthenticatedResponseError) proves the
-  // signature check ran.
+test("E3 denied admin tool surfaces HTTPError after signature verification", { timeout: 5000 }, async () => {
+  // Pipeline: verify authenticates alice -> the jack.admin.* gate rejects the
+  // admin tool for a non-admin -> SIGNED 403 (nonce was recorded).
+  // createSigningFetch-like client verification runs BEFORE the caller sees
+  // the answer, so an HTTPError (not a JackError/UnauthenticatedResponseError)
+  // proves the signature check ran.
   const alice = seedSignerByName("alice");
   const clientAlice = new Client({
     baseUrl: `http://127.0.0.1:${port}/mcp`,
@@ -242,10 +255,10 @@ test("E3 denied tool surfaces HTTPError after signature verification", { timeout
     clock: () => fixtureNow,
     windowSeconds: 30,
   });
-  await assert.rejects(clientAlice.callTool("svc.restart"), (err: unknown) => {
+  await assert.rejects(clientAlice.callTool("jack.admin.user.list"), (err: unknown) => {
     assert.ok(err instanceof HTTPError);
     assert.equal((err as HTTPError).status, 403);
-    assert.equal((err as HTTPError).code, "insufficient_scope");
+    assert.equal((err as HTTPError).code, "admin_required");
     return true;
   });
 });
@@ -321,6 +334,28 @@ test("E6 dot segments reach the verifier through the raw adapter", { timeout: 50
   assert.equal(res.status, 200);
   assert.equal(res.body.toString("utf-8"), nextJson);
   verifyResponse(serverPub, res.status, jackAuthValues(res.headers), sig, res.body, fixtureNow, 30);
+});
+
+test("E6b forwarded request preserves raw target beside normalized URL and private identity", { timeout: 5000 }, async () => {
+  // This uses the actual node:http adapter: a pure Fetch Request has already
+  // lost dot-segment bytes during URL parsing, so it cannot reconstruct them.
+  const alice = seedSignerByName("alice");
+  const rawTarget = "/a/../identity?x=%2F";
+  const header = signRequest(alice, fixtureAud, "GET", rawTarget, new Uint8Array(0), randomNonce(), fixtureNow);
+  const sig = parseRequestAuth([header]).sig;
+  const res = await rawRequest(port, "GET", rawTarget, { "jack-auth": header }, Buffer.alloc(0));
+
+  assert.equal(res.status, 200);
+  const body = new Uint8Array(res.body);
+  verifyResponse(serverPub, res.status, jackAuthValues(res.headers), sig, body, fixtureNow, 30);
+  assert.deepEqual(JSON.parse(res.body.toString("utf-8")), {
+    rawTarget,
+    pathname: "/identity",
+    search: "?x=%2F",
+    identity: { kid: alice.kid(), name: "alice", admin: false },
+    identityFrozen: true,
+    identityIsOwnValue: false,
+  });
 });
 
 test("E7 event-stream endpoint refused with 501", { timeout: 5000 }, async () => {

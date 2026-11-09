@@ -97,6 +97,9 @@ function makeChild(cmd, args, opts) {
   child.stdout.on('data', (d) => { stdout += d; });
   child._stderrTail = () => stderr;
   child._stdoutText = () => stdout;
+  child._closeOutcome = new Promise((resolve) => {
+    child.once('close', (code, signal) => resolve({ code, signal }));
+  });
   return child;
 }
 
@@ -155,12 +158,55 @@ function waitClose(child, timeoutMs, label, onSpawnError) {
   });
 }
 
+// Observe startup until the child emits a complete non-empty stdout line,
+// exits, reports a spawn error, or reaches the deadline. Unlike
+// firstStdoutLine, a timeout is a distinct outcome and never implies startup
+// rejection.
+function observeStartup(child, timeoutMs) {
+  return new Promise((resolve) => {
+    let buf = '';
+    let spawnError = null;
+    const done = (result) => { cleanup(); resolve(result); };
+    const onData = (d) => {
+      buf += d;
+      let idx;
+      while ((idx = buf.indexOf('\n')) !== -1) {
+        const line = buf.slice(0, idx);
+        buf = buf.slice(idx + 1);
+        if (line.trim() !== '') return done({ kind: 'line', line });
+      }
+    };
+    const onError = (e) => done({ kind: 'spawn_error', error: e });
+    const onClose = (code, signal) => done({ kind: 'close', code, signal, spawnError });
+    const timer = setTimeout(() => done({ kind: 'timeout', spawnError }), timeoutMs);
+    const cleanup = () => {
+      clearTimeout(timer);
+      child.stdout.off('data', onData);
+      child.off('error', onError);
+      child.off('close', onClose);
+    };
+    child.stdout.on('data', onData);
+    child.on('error', onError);
+    child.on('close', onClose);
+  });
+}
+
+async function stopAndWaitClose(child, timeoutMs) {
+  killTree(child);
+  let timer;
+  const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(null), timeoutMs); });
+  const closed = await Promise.race([child._closeOutcome, timeout]);
+  clearTimeout(timer);
+  return closed;
+}
+
 // ---- expected comparison ---------------------------------------------------
 
 function resolveKidPlaceholders(v, keys) {
   if (v && typeof v === 'object' && !Array.isArray(v)) {
     const ks = Object.keys(v);
     if (ks.length === 1 && ks[0] === '$kid' && typeof v.$kid === 'string') return keys[v.$kid].kid;
+    if (ks.length === 1 && ks[0] === '$base64url' && typeof v.$base64url === 'string') return Buffer.from(v.$base64url, 'utf8').toString('base64url');
     return Object.fromEntries(ks.map((k) => [k, resolveKidPlaceholders(v[k], keys)]));
   }
   if (Array.isArray(v)) return v.map((x) => resolveKidPlaceholders(x, keys));
@@ -176,7 +222,7 @@ function subsetMatches(expected, actual) {
   return expected === actual;
 }
 
-// ---- state / policy file construction --------------------------------------
+// ---- state file construction -----------------------------------------------
 
 function buildStateDoc(registry, overrides) {
   const keys = JSON.parse(JSON.stringify(registry.keys));
@@ -196,18 +242,10 @@ function buildStateDoc(registry, overrides) {
   return { version: 1, keys, invites: [] };
 }
 
-function buildPolicyDoc(policy) {
-  const doc = JSON.parse(JSON.stringify(policy));
-  // The fixture policy has no echo rule; splice one in after ping/tools-list
-  // so the echo scenario is allowed.
-  doc.rules.splice(2, 0, { match: { method: 'tools/call', tool: 'echo' }, scope: null });
-  return doc;
-}
-
 // ---- core runner ------------------------------------------------------------
 
 async function runMatrix(opts) {
-  const { clientLangs, serverLangs, targets, keys, registry, policy, scenarios, signCases, scenarioFilter, phases } = opts;
+  const { clientLangs, serverLangs, targets, keys, registry, scenarios, signCases, scenarioFilter, phases } = opts;
   const failures = [];
   const allChildren = new Set();
   let signRuns = 0;
@@ -223,14 +261,12 @@ async function runMatrix(opts) {
   const tmp = mkdtempSync(join(tmpdir(), 'mcp-jack-interop-'));
   process.on('exit', () => { try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ } });
 
-  const policyPath = join(tmp, 'policy.json');
-  writeFileSync(policyPath, JSON.stringify(buildPolicyDoc(policy), null, 2) + '\n');
   const baseStatePath = join(tmp, 'state.json');
   writeFileSync(baseStatePath, JSON.stringify(buildStateDoc(registry, null), null, 2) + '\n');
 
   const resolveServerArgv = (lang, statePath) => {
     const t = resolveTarget(targets[lang].server, 'server', `server=${lang}`);
-    return { cmd: t.cmd, args: [...t.args, '--aud', registry.aud, '--policy', policyPath, '--state', statePath, '--server-seed-hex', keys.svc.seed_hex], display: t.display };
+    return { cmd: t.cmd, args: [...t.args, '--aud', registry.aud, '--state', statePath, '--server-seed-hex', keys.svc.seed_hex], display: t.display };
   };
 
   const pinFor = (sc, readyKey) => (keys[sc.server_public_key] ? keys[sc.server_public_key].public_key : readyKey);
@@ -355,6 +391,63 @@ async function runMatrix(opts) {
       let passed = 0;
       for (const id of ordered) {
         const sc = { id, ...scenarios.scenarios[id] };
+        if (sc.legacy_state_field) {
+          const statePath = join(tmp, `legacy-${pairId}-${id}.json`);
+          const legacy = buildStateDoc(registry, null);
+          const alice = legacy.keys.find((k) => k.name === 'alice');
+          alice[sc.legacy_state_field] = sc.legacy_state_field === 'kind' ? 'human' : ['read'];
+          const stateBytes = JSON.stringify(legacy, null, 2) + '\n';
+          writeFileSync(statePath, stateBytes);
+          const t = resolveTarget(targets[server].server, 'server', `server=${server}`);
+          const child = makeChild(t.cmd, [...t.args, '--aud', registry.aud, '--state', statePath, '--server-seed-hex', keys.svc.seed_hex]);
+          allChildren.add(child);
+          let startup = await observeStartup(child, 10000);
+          let close = startup.kind === 'close' ? { code: startup.code, signal: startup.signal } : null;
+          if (startup.kind === 'line' || startup.kind === 'timeout') {
+            close = await stopAndWaitClose(child, 2000);
+          } else if (startup.kind === 'spawn_error') {
+            close = await stopAndWaitClose(child, 2000);
+          }
+          if (close) allChildren.delete(child);
+          const fieldName = sc.legacy_state_field;
+          const stderr = child._stderrTail();
+          const errorNamesField = stderr.includes(`legacy field \"${fieldName}\"`)
+            || stderr.includes(`unknown field \"${fieldName}\"`)
+            || stderr.includes(`unknown field \`${fieldName}\``);
+          const reportsStateCorrupt = stderr.includes('state_corrupt')
+            || stderr.includes('state file is corrupt')
+            || (stderr.includes('state file') && errorNamesField);
+          const expectedErrorTextPresent = sc.expected.error_contains === undefined
+            || stderr.includes(sc.expected.error_contains);
+          const startupRejected = startup.kind === 'close'
+            && startup.code !== null
+            && typeof startup.code === 'number'
+            && startup.code !== 0
+            && startup.signal === null
+            && close?.code === startup.code
+            && close.signal === null
+            && child._stdoutText().length === 0
+            && reportsStateCorrupt
+            && expectedErrorTextPresent
+            && errorNamesField
+            && readFileSync(statePath, 'utf8') === stateBytes;
+          const actual = { outcome: startupRejected ? 'startup_rejected' : 'client_error', http_status: null, code: startupRejected ? 'state_corrupt' : 'startup_acceptance_or_rewrite', data: null };
+          const expected = sc.expected;
+          if (startupRejected && actual.outcome === expected.outcome && actual.code === expected.code) {
+            passed++;
+            process.stdout.write(`PASS ${id}\n`);
+          } else {
+            const details = startup.kind === 'timeout' ? 'startup timeout (not an expected rejection)'
+              : startup.kind === 'spawn_error' ? `spawn error: ${startup.error.message}`
+              : startup.kind === 'line' ? 'server produced stdout before startup rejection'
+              : close === null ? 'child did not close after cleanup kill'
+              : !reportsStateCorrupt ? 'startup error did not identify state corruption'
+              : !errorNamesField ? `startup error did not name legacy field ${fieldName}`
+              : 'legacy state startup rejection/unchanged-bytes check failed';
+            recordFailure(id, pairLabel, expected, { failed: false, result: actual, exitCode: close?.code ?? null, stderr, reason: details });
+          }
+          continue;
+        }
         // A scenario needs its own pristine server when fresh (its steps expect
         // a state change) or when it carries registry_overrides (the override
         // must be baked into the server's state file).
@@ -366,7 +459,8 @@ async function runMatrix(opts) {
           if (check(sc, run, pairLabel)) { passed++; process.stdout.write(`PASS ${id}\n`); }
         } else {
           const statePath = join(tmp, `state-${pairId}-${id}.json`);
-          writeFileSync(statePath, JSON.stringify(buildStateDoc(registry, sc.registry_overrides), null, 2) + '\n');
+          const stateBytes = JSON.stringify(buildStateDoc(registry, sc.registry_overrides), null, 2) + '\n';
+          writeFileSync(statePath, stateBytes);
           const srv = await spawnServer(statePath, { lang: server, name: `${pairId}-${id}` });
           const argv = clientArgv(client, sc, pinFor(sc, srv.pin), srv.port);
           const run = await runClient(client, argv, `${pairLabel} ${id}`, pairLabel);
@@ -423,7 +517,7 @@ async function runMatrix(opts) {
           const label = `verify ${c.id} sign=${signLang} verify=${verifyLang}`;
           let child;
           try {
-            child = makeChild(t.cmd, [...t.args, '--verify-only', '--aud', c.aud, '--policy', policyPath, '--state', baseStatePath, '--server-seed-hex', keys.svc.seed_hex]);
+            child = makeChild(t.cmd, [...t.args, '--verify-only', '--aud', c.aud, '--state', baseStatePath, '--server-seed-hex', keys.svc.seed_hex]);
           } catch (e) {
             fail(`cannot spawn server for verify phase (${verifyLang}): ${t.display} (${e.message})`);
           }
@@ -491,7 +585,7 @@ async function selfTest() {
   process.env.JACK_READY_MODE = 'split';
   const res = await runMatrix({
     clientLangs: ['fake'], serverLangs: ['fake'], targets,
-    scenarioFilter: ['ping', 'denied-tool', 'last-admin', 'key-not-yet-valid'], phases: true, ...loaded,
+    scenarioFilter: ['ping', 'app-permission-denied', 'admin-required', 'last-admin', 'key-not-yet-valid'], phases: true, ...loaded,
   });
   ok(res.failures.length === 0, `matrix+sign+verify phases pass with fakes (${res.failures.length} failures)`);
   ok(res.serversSpawned === 3, `exactly 3 servers spawned (shared + fresh last-admin + dedicated override key-not-yet-valid), got ${res.serversSpawned}`);
@@ -541,9 +635,9 @@ async function selfTest() {
     ok(verifyExit.out.includes('FAIL verify'), 'verify-exit-2 control prints FAIL verify');
 
     // 5. Authenticated 403 without a signature must surface as client_error.
-    const unsig = await runChild(['--targets', targetsPath, '--servers', 'fake', '--clients', 'fake', '--scenario', 'denied-tool'], { JACK_UNSIGNED_403: '1' });
+    const unsig = await runChild(['--targets', targetsPath, '--servers', 'fake', '--clients', 'fake', '--scenario', 'app-permission-denied'], { JACK_UNSIGNED_403: '1' });
     ok(unsig.code === 1, `unsigned-403 control exits 1 (got ${unsig.code})`);
-    ok(unsig.out.includes('client_error'), 'unsigned-403 control reports client_error');
+    ok(unsig.out.includes('PASS app-permission-denied') === false && unsig.out.includes('client_error'), 'unsigned-403 control reports client_error');
     ok(unsig.out.includes('missing_auth'), 'unsigned-403 control reports missing_auth');
 
     // 6. Blank-line-before-ready must not confuse the ready-line parser.
@@ -573,14 +667,13 @@ function loadFixtures() {
   const keysList = readJson(join(REPO_ROOT, 'spec', 'fixtures', 'keys.json'), 'keys fixture').keys;
   const keys = Object.fromEntries(keysList.map((k) => [k.name, k]));
   const registry = readJson(join(REPO_ROOT, 'spec', 'fixtures', 'registry.json'), 'registry fixture');
-  const policy = readJson(join(REPO_ROOT, 'spec', 'fixtures', 'policy.json'), 'policy fixture');
   const scenarios = readJson(join(SCRIPT_DIR, 'scenarios.json'), 'scenarios');
   const signCases = readJson(join(SCRIPT_DIR, 'sign-cases.json'), 'sign cases');
   for (const id of Object.keys(scenarios.scenarios)) {
     const sc = scenarios.scenarios[id];
     if (!keys[sc.identity]) fail(`scenario '${id}' references unknown identity '${sc.identity}'`);
   }
-  return { keys, registry, policy, scenarios, signCases };
+  return { keys, registry, scenarios, signCases };
 }
 
 // ---- main ----------------------------------------------------------------------

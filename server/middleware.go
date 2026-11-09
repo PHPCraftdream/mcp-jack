@@ -207,6 +207,13 @@ func (h *handler) rejectInternal(w http.ResponseWriter, res Result) {
 func (h *handler) forward(w http.ResponseWriter, r *http.Request, body []byte, res Result) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
+	// Verified caller identity hand-off (spec 02 section 3): only the SDK-
+	// sealed token is stored, under an unexported context key; consumers get
+	// an immutable read view from IdentityFromContext. Forwarded requests
+	// always have a registered caller.
+	if tok, ok := sealIdentity(res.Identity); ok {
+		ctx = context.WithValue(ctx, identityContextKey{}, tok)
+	}
 	inner := r.Clone(ctx)
 	inner.Body = io.NopCloser(bytes.NewReader(body))
 	inner.ContentLength = int64(len(body))

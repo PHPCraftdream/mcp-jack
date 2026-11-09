@@ -1,6 +1,6 @@
 //! Strict state-file loading and atomic persistence (Go: server/statefile.go).
 //! See spec 02-authorization.md section 1 for the load-time entry rules and
-//! spec 03 sections 3.2 and 9 for the invite record shape.
+//! spec 03 sections 3.3 and 10 for the invite record rules.
 
 use std::collections::HashSet;
 use std::fs::OpenOptions;
@@ -13,12 +13,9 @@ use std::os::unix::fs::OpenOptionsExt;
 
 use crate::encoding::{decode_b64url_fixed, key_id};
 use crate::error::JackError;
-use crate::syntax::{valid_name, valid_scope};
+use crate::syntax::valid_name;
 
-use super::state::{
-    InviteRecord, RegistryEntry, StateData, StateEdit, StateStore, StateView, KIND_AGENT,
-    KIND_HUMAN,
-};
+use super::state::{InviteRecord, RegistryEntry, StateData, StateEdit, StateStore, StateView};
 
 /// Code carried by every strict-load and validation failure, with
 /// `http_status` 0: like Go's sentinel ErrStateCorrupt, a corrupt state file
@@ -27,12 +24,21 @@ use super::state::{
 /// audit sink. Messages include the file path (Go wraps errors with it).
 pub const CODE_STATE_CORRUPT: &str = "state_corrupt";
 
+/// Stored invite key_ttl_seconds bound (spec 03 sections 3.3 and 10).
+const MAX_KEY_TTL_SECONDS: i64 = 31_536_000;
+
 /// The on-disk document layout: version 1, keys sorted by kid, invites by
 /// invite id. `serde_json::from_str` rejects trailing data after the JSON
 /// document (Go's second Decode must return io.EOF); `deny_unknown_fields`
 /// applies recursively to the nested entries like Go's
-/// DisallowUnknownFields. A null or missing `scopes` fails at decode because
-/// the field is a required Vec — Go rejects the same two shapes explicitly.
+/// DisallowUnknownFields. LEGACY DIAGNOSTIC: a document, entry or invite
+/// record containing legacy `kind` or `scopes` fails at decode, and serde's
+/// unknown-field errors already NAME the offending member ("unknown field
+/// `kind`"); the corrupt() wrapper embeds that message verbatim, satisfying
+/// the obligation to name the member — the file is never migrated, stripped
+/// or rewritten. The same decode rejects missing required invite members,
+/// mistyped `admin`, and null or non-integer `key_ttl_seconds` (which is
+/// omitted during serialization when absent).
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StateDocument {
@@ -88,7 +94,7 @@ impl FileState {
         })?;
 
         // Same order as Go decodeState: version, duplicate kids, duplicate
-        // invite ids, then the full key validation.
+        // invite ids, then the key and invite validation.
         if doc.version != 1 {
             return Err(corrupt(format!(
                 "state file {}: unsupported version {}",
@@ -117,6 +123,8 @@ impl FileState {
             }
         }
         validate_keys(&doc.keys)
+            .map_err(|e| corrupt(format!("state file {}: {e}", path.display())))?;
+        validate_invites(&doc.invites)
             .map_err(|e| corrupt(format!("state file {}: {e}", path.display())))?;
 
         // StateData's fields are private, so load through the public edit/commit
@@ -152,10 +160,10 @@ fn corrupt(message: String) -> JackError {
 }
 
 /// Enforces the load-time entry rules of spec 02 section 1: name shape and
-/// uniqueness, kind, scope shape and distinctness, the agent/admin exclusion,
-/// validity intervals, kid = base64url(SHA-256(public_key)), and the
-/// public-key validity rules of spec 03 section 2. Scope *presence* needs no
-/// re-check: serde already rejected a missing or null `scopes` at decode.
+/// uniqueness, validity intervals, kid = base64url(SHA-256(public_key)), and
+/// the public-key validity rules of spec 03 section 2. `admin` is typed
+/// `bool`, so decode already enforced strictness (null/string/number fail at
+/// decode); no runtime check is needed.
 fn validate_keys(keys: &[RegistryEntry]) -> Result<(), JackError> {
     let mut seen_names: HashSet<&str> = HashSet::with_capacity(keys.len());
     for entry in keys {
@@ -167,33 +175,6 @@ fn validate_keys(keys: &[RegistryEntry]) -> Result<(), JackError> {
         }
         if !seen_names.insert(entry.name.as_str()) {
             return Err(corrupt(format!("duplicate name {}", entry.name)));
-        }
-        if entry.kind != KIND_HUMAN && entry.kind != KIND_AGENT {
-            return Err(corrupt(format!(
-                "invalid kind {} for key {}",
-                entry.kind, entry.kid
-            )));
-        }
-        let mut seen_scopes: HashSet<&str> = HashSet::with_capacity(entry.scopes.len());
-        for scope in &entry.scopes {
-            if !valid_scope(scope) {
-                return Err(corrupt(format!(
-                    "invalid scope {scope} for key {}",
-                    entry.kid
-                )));
-            }
-            if !seen_scopes.insert(scope.as_str()) {
-                return Err(corrupt(format!(
-                    "duplicate scope {scope} for key {}",
-                    entry.kid
-                )));
-            }
-        }
-        if entry.kind == KIND_AGENT && seen_scopes.contains("admin") {
-            return Err(corrupt(format!(
-                "agent key {} holds admin scope",
-                entry.kid
-            )));
         }
         if entry.not_before.is_some_and(|t| t < 0) {
             return Err(corrupt(format!(
@@ -222,6 +203,47 @@ fn validate_keys(keys: &[RegistryEntry]) -> Result<(), JackError> {
         // key_rejected error itself is never returned; only its message.
         if let Err(e) = crate::ed25519::validate_public_key(&public_key) {
             return Err(corrupt(format!("key {}: {}", entry.kid, e.message)));
+        }
+    }
+    Ok(())
+}
+
+/// Enforces the load-time invite rules of spec 03 sections 3.3 and 10:
+/// non-empty invite_id and created_by, non-negative created_at/expires_at
+/// with created_at <= expires_at, and key_ttl_seconds (when present) within
+/// 1..=31536000. `admin` strictness is decode-enforced (typed bool); a null
+/// key_ttl_seconds fails at decode, with a field-specific diagnostic
+/// (skip_serializing_if keeps the written form absent, never null).
+fn validate_invites(invites: &[InviteRecord]) -> Result<(), JackError> {
+    for invite in invites {
+        if invite.invite_id.is_empty() {
+            return Err(corrupt("invite_id must be non-empty".to_owned()));
+        }
+        if invite.created_by.is_empty() {
+            return Err(corrupt(format!(
+                "created_by must be non-empty for invite {}",
+                invite.invite_id
+            )));
+        }
+        if invite.created_at < 0 || invite.expires_at < 0 {
+            return Err(corrupt(format!(
+                "negative timestamp for invite {}",
+                invite.invite_id
+            )));
+        }
+        if invite.created_at > invite.expires_at {
+            return Err(corrupt(format!(
+                "created_at after expires_at for invite {}",
+                invite.invite_id
+            )));
+        }
+        if let Some(ttl) = invite.key_ttl_seconds {
+            if !(1..=MAX_KEY_TTL_SECONDS).contains(&ttl) {
+                return Err(corrupt(format!(
+                    "key_ttl_seconds out of range for invite {}",
+                    invite.invite_id
+                )));
+            }
         }
     }
     Ok(())
