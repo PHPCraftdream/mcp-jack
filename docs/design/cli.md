@@ -375,17 +375,49 @@ out of band, and never automatically resubmit a side-effecting call.
 
 ## Parent-CI sources and remaining gates
 
-The current follow-up edits are **unrun**. No executable commands, builds, tests,
-formatters, scripts, probes or git writes were performed for this follow-up.
-Parent-provided logs for exact head
-`8c769b36bdb862dca9136b73ad331915d395f73b` record Linux normal/race/coverage
+The current fixture/documentation correction is **unrun**. The Task89 follow-up
+changes the owned-output test in `internal/cli/limits_test.go` from a 900,000-byte
+response to a small reply with a saturated pipe, plus documentation.
+Historically, parent-provided logs for exact head
+`8c769b36bdb862dca9136b73ad331915d395f73b` recorded Linux normal/race/coverage
 failures in both raw input-close and output-close cases at the former
-`errors.Is(opErr, os.ErrClosed)` assertion. Those logs contain no actual error
-value/type, so the raw/public error-layer mismatch is a source-based diagnosis,
+`errors.Is(opErr, os.ErrClosed)` assertion. Those logs contained no actual error
+value/type, so the raw/public error-layer mismatch was a source-based diagnosis,
 not a newly observed runtime result. The logs were found read-only in the parent
 `.rush/stdin` directory. No production change was needed for this test-oracle
-correction. Parent CI must format-check and rerun these edits; no passing rerun
-or acceptance is claimed.
+correction. The parent reports all 32 checks SUCCESS for raw-close head
+`9b6778acaa474a162426cc918b9c1708d61acacc`, merged in
+`40e90768bb38c66f6566678ee1843afaec549508`. This is historical parent acceptance,
+not a new rerun claim or an outstanding raw-close deficiency.
+
+Parent-CI postmerge evidence for Task89 repeats across merge SHAs
+`40e90768bb38c66f6566678ee1843afaec549508`,
+`d3401c3df805f7daaa5d984370205bda5ab7399c` and
+`07aec81cfdb378c9a047ae73e45ab2714a51e5e1`:
+`.rush/stdin/cli-postmerge-40e9076-failed.log`, lines 13–22, records the race
+failure in `TestOwnedPipeBrokenOutputAndBackpressure/blocked` with
+`parent fixture synchronization timed out` and process exit 1. Additional
+parent-provided evidence in `.rush/stdin/packaging-postmerge-d3401c3-failed.log`,
+lines 13–22, records the same blocked synchronization timeout (3.05s) at
+`limits_test.go:106`, exit 1;
+`.rush/stdin/design-postmerge-07aec81-failed.log`, lines 13–22, records the broken
+case synchronization timeout (3.03s) at `limits_test.go:106`, exit 1. The repeated fixture failure is
+not limited to blocked output and does not establish a packaging or design
+cause. These excerpts contain neither the bridge Run code nor its stderr.
+The former fixture signaled handler entry before constructing its 900,000-byte
+response; its size-threshold Write signal was downstream of the real
+signing/verification and JSON pipeline. From source, `bridge.go` starts the
+unchanged 2000 ms timer before `relayFrame`: HTTP response production, SDK
+buffering/body-hash/signature verification, `connection.post` checks,
+duplicate-aware `responseObject` parsing and output all share that budget.
+Expensive pre-stdout processing exhausting it remains a source-based hypothesis,
+**not a proven runtime cause**. No production bug is established by these logs.
+This correction changes the owned-output test fixture and documentation only,
+not production, SDK, manifests or the separately accepted raw-close controls.
+Parent integration should
+transfer only reviewed hunks to fresh current main, preserving its existing
+formatting and Go 1.22 source-link updates; this source checkout is not an
+instruction to replace those paragraphs.
 
 Sources include real Unix listeners and real HTTP signing/verifying middleware,
 not solely fake round-trippers; process sources launch the parent-CI test binary
@@ -423,12 +455,48 @@ Refusal tests check exact diagnostics, so request 202 acceptance followed by an
 idle timeout
 cannot pass; verified 204/405/501 remain distinct from protocol failures. Broken
 output must yield a protocol failure; blocked output must reach its deadline.
-Both output controls require the final large-reply handler and the bridge's
-actual large Write to a retained real OS pipe to have been reached, rather than
-passing from inactivity. Focused follow-up
-sources additionally cover production preparation of initially blocking pipe
-descriptors, regular-file rejection, pending EOF with a successful final worker
-write, strict JSON-RPC error codes (null/string/fraction rejected), and invalid or
+The Task89 owned-output fixture now uses a small signed terminal `tools/list`
+reply (`id:2`, `result:{"tools":[]}`), after the normal initialize/initialized
+exchange; independent exact-cap tests are unchanged. For blocked and peer-drain
+cases, after consuming initialize it inspects `O_NONBLOCK` through
+`SyscallConn.Control` (never `File.Fd`) and fills the owned pollable `os.Pipe`
+through an actual one-byte `EAGAIN`/`EWOULDBLOCK`, accounting every filler byte.
+No reader drains that pipe before the selected action. The output wrapper
+compares the entire terminal reply plus LF, records mismatches, and probes that
+exact response with a real nonblocking `syscall.Write` on the same live file.
+Only an exact frame with no progress and response-specific would-block can
+establish the backpressure stage; an unexpectedly successful probe invalidates
+the precondition and its bytes are never delegated again. It then delegates the
+actual `File.Write`; no test channel simulates a blocked writer.
+
+The undrained case requires normal Run code 1, exact deadline stderr and a
+zero-byte closed File.Write return, with response-specific EAGAIN already
+observed; timeout before that stage fails, rather than passing as inactivity.
+The distinct broken-peer case closes the reader before the final reply,
+requires the exact frame's real syscall EPIPE, a real File.Write EPIPE/closed
+return, and code 1 with exact protocol stderr. The peer-drain positive control
+first observes the same response EAGAIN, drains exactly the zero filler, receives
+the exact final frame and successful File.Write result, then sends stdin EOF
+only after the reply is complete. It requires Run code 0, empty stderr and no
+extra output before output EOF. Atomic counts require exactly initialize,
+initialized and tools/list in order, once each, plus one terminal Write: no retry,
+skip or call-timeout increase. These controls establish real OS causes, not that
+the File.Write goroutine was already parked in the runtime poller.
+
+Stage waits distinguish events, Run results and bounded failure guards; a cached
+Run result avoids a second receive. On failure, cancellation and pipe close are
+followed by bounded close/Run/IO joins before reporting stage, syscall and Write
+error types/values, frame equality, filler and call counts, and Run code/stderr
+when joined. Stderr is captured into an immutable result only after Run returns;
+no diagnostic reads a concurrently written bytes.Buffer. A guard expiry or
+failed join is always failure, never evidence of interruption. These test sources
+remain unrun; they discriminate missing/changed output, wrong OS cause, early
+HTTP/protocol failure, idle-only timeout, retries and failure to resume on peer
+drain, without claiming to have reproduced the old runtime cause.
+
+Focused follow-up sources additionally cover production preparation of initially
+blocking pipe descriptors, regular-file rejection, pending EOF with a successful
+final worker write, strict JSON-RPC error codes (null/string/fraction rejected), and invalid or
 duplicate Native enrollment versions leaving invite/state bytes unchanged before
 a valid enrollment. The process helper now uses the same `RunProcess` preparation
 as the executable; the current follow-up edits remain unrun, and the prior

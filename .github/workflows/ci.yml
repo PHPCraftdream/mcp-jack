@@ -41,6 +41,8 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go test -race -count=1 ./...
+      - name: Repeat owned-pipe backpressure regression under race detector
+        run: go test -race -count=5 ./internal/cli -run '^TestOwnedPipeBrokenOutputAndBackpressure$'
 
   fixtures:
     name: fixtures are up to date
