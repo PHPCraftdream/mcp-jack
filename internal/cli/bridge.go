@@ -11,10 +11,33 @@ import (
 
 type frame struct {
 	body []byte
-	err  error
 }
 
-func readFrames(ctx context.Context, in io.Reader, frames chan<- frame) {
+// bridgeAdmission is owned only by the main loop, never by the reader or worker.
+// A full pending slot disables normal input, not completion or terminal input.
+type bridgeAdmission struct {
+	busy    bool
+	pending *frame
+}
+
+func (a *bridgeAdmission) input(frames <-chan frame) <-chan frame {
+	if a.pending != nil {
+		return nil
+	}
+	return frames
+}
+
+// accept is called only through input. A busy worker leaves one pending frame;
+// otherwise the caller launches the returned frame.
+func (a *bridgeAdmission) accept(f frame) *frame {
+	if a.busy {
+		a.pending = &f
+		return nil
+	}
+	return &f
+}
+
+func readFrames(ctx context.Context, in io.Reader, frames chan<- frame, terminal chan<- error) {
 	r := bufio.NewReaderSize(in, maxBody+1)
 	for {
 		b, err := r.ReadSlice('\n')
@@ -23,22 +46,40 @@ func readFrames(ctx context.Context, in io.Reader, frames chan<- frame) {
 				err = errProtocol
 			} else {
 				b = append([]byte(nil), b[:len(b)-1]...)
+				m, parseErr := object(b)
+				if parseErr != nil || text(m["method"]) == "notifications/cancelled" {
+					err = errProtocol
+				}
 			}
 		} else if err != io.EOF || len(b) != 0 {
 			err = errProtocol
 		}
-		select {
-		case frames <- frame{b, err}:
-		case <-ctx.Done():
+		if err != nil {
+			// Exactly one terminal event, independently of normal admission.
+			select {
+			case terminal <- err:
+			case <-ctx.Done():
+			}
 			return
 		}
-		if err != nil {
+		// Hold at most this ordinary frame. Later controls remain unread until
+		// it is admitted; the existing bufio capacity is unchanged.
+		select {
+		case frames <- frame{body: b}:
+		case <-ctx.Done():
 			return
 		}
 	}
 }
 
 func bridge(ctx context.Context, configPath string, streams IO) error {
+	return bridgeWithObserver(ctx, configPath, streams, nil)
+}
+
+// bridgeWithObserver runs the same loop as bridge. The optional internal observer
+// sees the evaluated ordinary-input candidate immediately before the select;
+// it must not block or mutate admission. Production callers pass nil.
+func bridgeWithObserver(ctx context.Context, configPath string, streams IO, observe func(<-chan frame, bridgeAdmission)) error {
 	if streams.In == nil || streams.Out == nil {
 		return errConfig
 	}
@@ -57,14 +98,14 @@ func bridge(ctx context.Context, configPath string, streams IO) error {
 		workers.Wait()
 	}()
 	frames := make(chan frame)
+	terminal := make(chan error)
 	workers.Add(1)
 	go func() {
 		defer workers.Done()
-		readFrames(ctx, streams.In, frames)
+		readFrames(ctx, streams.In, frames, terminal)
 	}()
 	completed := make(chan error, 1)
-	busy := false
-	var pending *frame
+	admission := bridgeAdmission{}
 	state := 0
 	timer := time.NewTimer(conn.timeout)
 	defer timer.Stop()
@@ -78,7 +119,7 @@ func bridge(ctx context.Context, configPath string, streams IO) error {
 		timer.Reset(conn.timeout)
 	}
 	launch := func(b []byte) {
-		busy = true
+		admission.busy = true
 		reset()
 		workers.Add(1)
 		go func() {
@@ -89,58 +130,42 @@ func bridge(ctx context.Context, configPath string, streams IO) error {
 		}()
 	}
 	for {
-		if !busy && pending != nil {
-			launch(pending.body)
-			pending = nil
+		if !admission.busy && admission.pending != nil {
+			launch(admission.pending.body)
+			admission.pending = nil
+		}
+		input := admission.input(frames)
+		if observe != nil {
+			observe(input, admission)
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-timer.C:
 			return context.DeadlineExceeded
-		case f := <-frames:
-			if busy {
+		case err := <-terminal:
+			if err != io.EOF || admission.pending != nil {
+				return errProtocol
+			}
+			if admission.busy {
+				// A finished write may beat EOF, but EOF with an accepted
+				// pending frame must fail even if the worker returns nil.
 				select {
 				case err := <-completed:
-					busy = false
-					if err != nil {
-						return err
-					}
+					return err
 				default:
 				}
+				cancel()
+				_ = streams.Out.Close()
+				return <-completed
 			}
-			if !busy && pending != nil {
-				return errProtocol
+			return nil
+		case f := <-input:
+			if next := admission.accept(f); next != nil {
+				launch(next.body)
 			}
-			if f.err == io.EOF {
-				if pending != nil {
-					return errProtocol
-				}
-				if busy {
-					cancel()
-					_ = streams.Out.Close()
-					return <-completed
-				}
-				return nil
-			}
-			if f.err != nil {
-				return errProtocol
-			}
-			m, parseErr := object(f.body)
-			if parseErr != nil || text(m["method"]) == "notifications/cancelled" {
-				return errProtocol
-			}
-			if busy {
-				if pending != nil {
-					return errProtocol
-				}
-				copy := f
-				pending = &copy
-				continue
-			}
-			launch(f.body)
 		case err := <-completed:
-			busy = false
+			admission.busy = false
 			if err != nil {
 				return err
 			}

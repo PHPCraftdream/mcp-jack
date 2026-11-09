@@ -31,6 +31,8 @@ jobs:
         run: mkdir -p coverage
       - name: Run the Go test suite with statement coverage
         run: go test -covermode=atomic -coverpkg=./... -coverprofile=coverage/go-cover.out ./...
+      - name: Repeat owned-pipe and admission regressions with coverage instrumentation
+        run: go test -covermode=atomic -coverpkg=./... -count=5 ./internal/cli -run '^Test(OwnedPipeBrokenOutputAndBackpressure|BridgeAdmission.*)$'
       - name: Per-function summary
         run: go tool cover -func=coverage/go-cover.out -o coverage/go-func-summary.txt
       - name: Annotated HTML report

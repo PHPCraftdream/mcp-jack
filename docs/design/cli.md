@@ -283,10 +283,24 @@ There is no official SDK dependency or official SDK test claim.
   headers are not authenticated by Jack signatures; TLS/hop trust still matters.
 
 One HTTP call/output operation runs at a time. There is at most one pending frame
-plus one bounded reader frame; additional pipelining fails explicitly rather than
-building an unbounded queue. The reader continues during a call, so a cancellation
-notification, even behind a pending ordinary frame, is observed and terminates
-with explicit unsupported failure instead of being silently queued/dropped.
+plus one bounded reader frame. When the pending slot is full, the main loop sets
+its ordinary input receive channel to nil: real channel backpressure replaces
+pipeline rejection, without growing a queue or dropping/reordering frames. Worker
+completion, context cancellation, the unchanged whole-call timer and terminal
+input remain serviceable. Only main owns admission; each worker exclusively owns
+the protocol state until its completion is received before the next launch.
+
+The reader uses separate unbuffered ordinary and terminal channels and the same
+`maxBody+1` bufio capacity. EOF, framing/read errors, malformed JSON objects and
+unsupported cancellation are routed to a single terminal event before any normal
+send; the reader then exits. Such controls immediately behind the accepted
+pending frame remain observable even while stdout is held. This is not arbitrary
+look-through: if the reader is blocked holding another ordinary frame, a later
+EOF/error/cancellation remains unread until capacity returns (or context/timeout
+closes owned IO). Nothing is silently dropped. Context cancellation releases a
+blocked channel send; owned IO close interrupts Read/Write, and cleanup joins the
+reader and worker.
+
 A complete response that has already finished writing may win a concurrent EOF
 race and complete successfully only if there is no accepted pending frame. EOF
 with a pending frame always fails, even if the current worker completes with nil;
@@ -373,11 +387,82 @@ sets Close. Fresh connections avoid net/http's reused-connection replay path.
 This does not make ambiguous effects recoverable: report failure, investigate
 out of band, and never automatically resubmit a side-effecting call.
 
+## Task89 admission correction (unrun)
+
+The new parent-provided coverage evidence,
+`.rush/stdin/backpressure-coverage-df23521-failed.log`, lines 13–23, records
+`TestOwnedPipeBrokenOutputAndBackpressure/broken` failing in 0.01s: normal Run
+code 1, exact protocol stderr, no terminal syscall or File.Write observation,
+zero terminal writes, calls `[1 0 0]`, unexpected 0, cleanup joined. The parent
+identifies current-main `df2352110ec3e4a183176551db7b5d79b538a4ce` and reports
+previously successful 32 checks and five focused repeats. Those prior results do
+not override this coverage failure and are not new execution evidence here.
+The earlier expensive-large-response hypothesis is superseded for this new
+diagnostic: it cannot explain a small-response failure before initialized or
+terminal output is reached. The log alone does not identify which admission
+branch ran.
+
+Independent inspection of the old main loop identifies two invalid admission
+paths. All initialize response bytes can reach the peer before its output Write
+returns and the worker publishes completion. A valid peer can then send
+initialized followed by tools/list: initialized occupies pending, and the next
+ordinary receive returns protocol failure while busy. If that receive instead
+consumes completion inline with pending still occupied, the other pending check
+also returns protocol failure. The correction disables that ordinary receive
+until pending is dispatched; completion is handled only by its own select arm.
+It does not serialize the peer beyond valid protocol or change signing, response
+bytes, retries, timeout budgets, dependencies or providers.
+
+Regression sources in `internal/cli/bridge_eof_test.go` retain the direct
+admission transition checks and the default `Run` signed HTTP lifecycle. A
+separate signed HTTP case uses an optional, internal per-invocation observer:
+`bridge` delegates to `bridgeWithObserver` with nil, and both execute the same
+loop. Main computes `input := admission.input(frames)`, observes that candidate
+and admission state immediately before select, and uses that same `input` in the
+ordinary receive arm. The observer reports exactly once through a buffered test
+event; it does not block main or the worker, alter admission, or add a production
+queue, public API field or global hook.
+
+The fixture consumes every initialize response byte while holding its Write
+return, then sends initialized and tools/list. Its third raw Read copies the
+complete tools frame into bufio's supplied buffer before signaling read-ahead.
+This proves bytes have been furnished to the bounded reader buffer, not that
+Read has returned or that tools has been parsed or sent. Before releasing the
+held Write, the observed-loop case requires both that signal and an actual
+pre-select checkpoint with busy true, pending exactly initialized, and evaluated
+input nil. Replacing the actual select candidate with unconditional frames makes
+that assertion fail independently of scheduling or the old inline-completion
+path. This is a static counterfactual, not an executed old/new comparison; the
+helper-only assertion is not the production-wiring oracle. No sleep, timed
+absence of a receive, or queue growth supplies the discriminator. Bounded receives
+and cleanup joins are failure guards only.
+
+Both HTTP cases require the exact three HTTP bodies in
+initialize/initialized/tools order, exact two response frames, no extra
+output/calls and joined cleanup. The unchanged default `Run` path requires code
+0 and empty diagnostics; the observed internal bridge path requires nil error.
+The default case alone is not claimed to fail every old scheduling interleaving.
+
+The existing pending-EOF regression still holds the current writer until Close
+and requires protocol failure even though that worker returns nil: terminal EOF,
+not invalid normal admission, now triggers it. Additional controls cover malformed,
+truncated, read-error and unsupported cancellation behind accepted pending while
+that writer is held. Separate context-cancellation controls require reader join
+with unreceived ordinary read-ahead and bridge join while pending is full and the
+writer is held. The causal broken/blocked/peer-drain and accepted raw-close
+sources are untouched. All changes in this correction are file-tool edits only;
+no commands, tests, formatting or builds were run. Parent integration must apply
+only reviewed hunks from this cumulative source checkout (parent source
+`42c4256`), preserving current-main integration links and formatting. The separate
+persistence blocker and its accepted deployment limitation are unchanged.
+
 ## Parent-CI sources and remaining gates
 
-The current fixture/documentation correction is **unrun**. The Task89 follow-up
-changes the owned-output test in `internal/cli/limits_test.go` from a 900,000-byte
-response to a small reply with a saturated pipe, plus documentation.
+The earlier fixture/documentation correction described below was **unrun here**.
+That Task89 follow-up changed the owned-output test in
+`internal/cli/limits_test.go` from a 900,000-byte response to a small reply with a
+saturated pipe, plus documentation; the admission correction above is a separate
+production change.
 Historically, parent-provided logs for exact head
 `8c769b36bdb862dca9136b73ad331915d395f73b` recorded Linux normal/race/coverage
 failures in both raw input-close and output-close cases at the former
@@ -410,10 +495,12 @@ signing/verification and JSON pipeline. From source, `bridge.go` starts the
 unchanged 2000 ms timer before `relayFrame`: HTTP response production, SDK
 buffering/body-hash/signature verification, `connection.post` checks,
 duplicate-aware `responseObject` parsing and output all share that budget.
-Expensive pre-stdout processing exhausting it remains a source-based hypothesis,
-**not a proven runtime cause**. No production bug is established by these logs.
-This correction changes the owned-output test fixture and documentation only,
-not production, SDK, manifests or the separately accepted raw-close controls.
+Expensive pre-stdout processing exhausting it was a source-based hypothesis,
+**not a proven runtime cause**, for those historical synchronization-only logs.
+It is superseded for the new diagnostic above; the historical excerpts alone
+established no production bug. That earlier correction changed the owned-output
+test fixture and documentation only, not production, SDK, manifests or the
+separately accepted raw-close controls.
 Parent integration should
 transfer only reviewed hunks to fresh current main, preserving its existing
 formatting and Go 1.22 source-link updates; this source checkout is not an
