@@ -1,0 +1,93 @@
+name: vulnerabilities
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Recheck advisory databases even when dependency graphs have not changed.
+  schedule:
+    - cron: '29 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go govulncheck (${{ matrix.scan }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GOTOOLCHAIN: local
+      GOFLAGS: -mod=readonly
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - scan: module
+            arguments: -format=text -scan=module
+          - scan: package
+            arguments: -format=text -scan=package -test ./...
+          - scan: symbol
+            arguments: -format=text -scan=symbol -test ./...
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: 1.22.x
+          cache: false
+      - name: Install govulncheck v1.1.4
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+      - name: Report govulncheck version
+        run: govulncheck -version
+      - name: Scan Go source in ${{ matrix.scan }} mode
+        run: govulncheck ${{ matrix.arguments }}
+
+  rust:
+    name: Rust advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # The advisory scanner's toolchain baseline is separate from product MSRV 1.85.
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+      - name: Report cargo-deny version
+        run: cargo deny --version
+      - name: Check locked all-feature dependencies for advisories
+        run: cargo deny --locked --all-features --config deny.toml check advisories
+
+  npm:
+    name: npm audit (${{ matrix.directory }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        directory: [ts, tools/license/tooling]
+    defaults:
+      run:
+        working-directory: ${{ matrix.directory }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      # Pin the audit CLI without changing the product's Node baseline or installing graph dependencies.
+      - name: Install npm CLI 10.9.4
+        run: npm install --global npm@10.9.4 --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
+      - name: Report npm version
+        run: npm --version
+      - name: Audit locked dependencies, including development and optional graphs
+        run: npm audit --package-lock-only --include=dev --include=optional --include=peer --audit-level=info --registry=https://registry.npmjs.org
