@@ -226,6 +226,12 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
       headers: new Headers(req.headers),
       ...(req.method !== "GET" && req.method !== "HEAD" && body.length > 0 ? { body } : {}),
     });
+    // Preserve the node adapter's exact authenticated target for the wrapped
+    // handler too; the Request URL itself remains URL-normalized.
+    const rawTarget = (req as JackRequest)[RAW_TARGET_SYMBOL];
+    if (rawTarget !== undefined) {
+      (restored as JackRequest)[RAW_TARGET_SYMBOL] = rawTarget;
+    }
     // Associate the verified caller identity with the restored request in
     // SDK-private storage (WeakMap): nothing on the request object to
     // discover or overwrite, and a reconstructed Request carries no

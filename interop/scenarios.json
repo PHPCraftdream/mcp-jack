@@ -1,11 +1,21 @@
 {
-  "note": "Normative expected outcomes for the interop matrix (docs/design/interop.md section 4). Identities are names from spec/fixtures/keys.json; the harness reads seeds, public keys and kids from that file at run time and this file never contains key material. fresh scenarios attempt a state change and run against a server started from a pristine state file; all other scenarios share one server per (client, server) pair. Expected data is matched as a subset: objects must contain every listed key with an equal value (recursively), arrays must be deep-equal, and an expected null requires an actual null. Any expected string of the form {\"$kid\":\"<name>\"} is replaced at run time by that fixture identity's kid.",
+  "note": "Normative interop outcomes. Expected objects are recursively matched subsets; arrays are exact. $kid placeholders use spec/fixtures/keys.json; $base64url encodes the exact UTF-8 bytes in its string value. Fresh scenarios get pristine state files.",
   "scenario_order": [
     "ping",
     "echo",
     "whoami",
-    "denied-tool",
-    "unmapped-tool",
+    "admin-identity",
+    "identity-forward",
+    "identity-get",
+    "identity-dot-target",
+    "app-permission-denied",
+    "app-permission-allowed",
+    "admin-required",
+    "set-admin-false",
+    "set-admin-missing",
+    "set-admin-null",
+    "set-admin-string",
+    "set-admin-number",
     "unknown-key",
     "replay",
     "clock-skew",
@@ -14,7 +24,6 @@
     "expired-key",
     "key-not-yet-valid",
     "stream",
-    "agent-admin",
     "invalid-request",
     "unknown-native-tool",
     "enroll",
@@ -22,7 +31,9 @@
     "rotate",
     "admin-create",
     "revoke-key",
-    "last-admin"
+    "last-admin",
+    "legacy-stored-kind",
+    "legacy-stored-scopes"
   ],
   "scenarios": {
     "ping": {
@@ -31,7 +42,7 @@
       "server_public_key": "server",
       "args": {},
       "steps": [
-        "signed POST /mcp with body {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}; verify the signed response; report the JSON-RPC result member"
+        "Sign and send a JSON-RPC ping; verify the signed response."
       ],
       "expected": {
         "outcome": "ok",
@@ -49,7 +60,7 @@
         "text": "grüß Gott – naïve café 日本語 🚀"
       },
       "steps": [
-        "signed POST /mcp tools/call of echo with arguments {\"text\":<args.text>}; proves non-ASCII body bytes hash and round-trip identically"
+        "Sign a tools/call echo request with non-ASCII text; body hash and forwarded bytes must be unchanged."
       ],
       "expected": {
         "outcome": "ok",
@@ -62,10 +73,9 @@
               "text": "grüß Gott – naïve café 日本語 🚀"
             }
           ]
-        },
-        "data_note": "the harness policy file adds one allow-any rule for the echo tool; without it the tool would be denied by the fixture policy"
+        }
       },
-      "source": "spec/fixtures/request-vectors.json:accept-utf8-body + spec/01-authentication.md section 3.1 (body hash over exact bytes) + docs/design/interop.md section 4 (echo row)"
+      "source": "spec/fixtures/request-vectors.json:accept-utf8-body; exact-byte forwarding"
     },
     "whoami": {
       "identity": "alice",
@@ -73,7 +83,7 @@
       "server_public_key": "server",
       "args": {},
       "steps": [
-        "signed POST /mcp tools/call of jack.whoami; proves the native-tool structuredContent shape"
+        "Call jack.whoami as a non-admin identity."
       ],
       "expected": {
         "outcome": "ok",
@@ -85,51 +95,285 @@
               "$kid": "alice"
             },
             "name": "alice",
-            "kind": "human",
-            "scopes": [
-              "read"
-            ],
+            "admin": false,
             "not_before": null,
             "not_after": null
           }
         }
       },
-      "source": "spec/fixtures/request-vectors.json:native-whoami + spec/fixtures/admin-vectors.json:enroll-ok step 2 (structured shape) + spec/03-user-management.md section 3.1"
+      "source": "spec/03-user-management.md:whoami"
     },
-    "denied-tool": {
+    "admin-identity": {
+      "identity": "root",
+      "fresh": false,
+      "server_public_key": "server",
+      "args": {},
+      "steps": [
+        "Call jack.whoami as the fixture administrator; the verified identity reports admin=true."
+      ],
+      "expected": {
+        "outcome": "ok",
+        "http_status": 200,
+        "code": null,
+        "data": {
+          "structuredContent": {
+            "kid": {
+              "$kid": "root"
+            },
+            "name": "root",
+            "admin": true,
+            "not_before": null,
+            "not_after": null
+          }
+        }
+      },
+      "source": "spec/03-user-management.md:whoami"
+    },
+    "identity-forward": {
       "identity": "alice",
       "fresh": false,
       "server_public_key": "server",
       "args": {},
       "steps": [
-        "signed POST /mcp tools/call of svc.config.set by a read-only key",
-        "the rejection response is signed by the server: the client verifies it; an unsigned or invalid signature makes this scenario client_error instead"
+        "Forward an ordinary app.identity MCP request with deliberately forged identity arguments and noncanonical JSON whitespace. The application handler must see the immutable verified alice identity and exactly the original request bytes, method, and target."
+      ],
+      "expected": {
+        "outcome": "ok",
+        "http_status": 200,
+        "code": null,
+        "data": {
+          "content": [
+            {
+              "type": "text",
+              "text": "identity"
+            }
+          ],
+          "structuredContent": {
+            "kid": {
+              "$kid": "alice"
+            },
+            "name": "alice",
+            "admin": false,
+            "body_b64u": {
+              "$base64url": " { \"jsonrpc\" : \"2.0\", \"id\" : 1, \"method\" : \"tools/call\", \"params\" : { \"name\" : \"app.identity\", \"arguments\" : { \"identity\" : { \"kid\" : \"forged\", \"name\" : \"root\", \"admin\" : true } } } }\n"
+            },
+            "method": "POST",
+            "target": "/mcp"
+          },
+          "isError": false
+        }
+      },
+      "source": "spec/02-authorization.md:verified application identity and exact request forwarding"
+    },
+    "identity-get": {
+      "identity": "alice",
+      "fresh": false,
+      "server_public_key": "server",
+      "args": {},
+      "steps": [
+        "Send an authenticated GET with an escaped query target; the application handler must receive the verified identity and exact method/target."
+      ],
+      "expected": {
+        "outcome": "ok",
+        "http_status": 200,
+        "code": null,
+        "data": {
+          "structuredContent": {
+            "kid": {
+              "$kid": "alice"
+            },
+            "name": "alice",
+            "admin": false,
+            "body_b64u": "",
+            "method": "GET",
+            "target": "/identity?x=%2F"
+          }
+        }
+      },
+      "source": "spec/02-authorization.md:verified application identity and exact request forwarding"
+    },
+    "identity-dot-target": {
+      "identity": "alice",
+      "fresh": false,
+      "server_public_key": "server",
+      "args": {},
+      "steps": [
+        "Send an authenticated GET with a literal dot-segment path and escaped query target; the application handler must receive the verified identity and exact method/target without client-side URL normalization."
+      ],
+      "expected": {
+        "outcome": "ok",
+        "http_status": 200,
+        "code": null,
+        "data": {
+          "structuredContent": {
+            "kid": {
+              "$kid": "alice"
+            },
+            "name": "alice",
+            "admin": false,
+            "body_b64u": "",
+            "method": "GET",
+            "target": "/a/../identity?x=%2F"
+          }
+        }
+      },
+      "source": "spec/02-authorization.md:verified application identity and exact request forwarding"
+    },
+    "app-permission-denied": {
+      "identity": "root",
+      "fresh": false,
+      "server_public_key": "server",
+      "args": {},
+      "steps": [
+        "Call ordinary MCP tool svc.config.set as protocol administrator root. The application handler denies root because protocol admin status does not grant this independent application permission."
       ],
       "expected": {
         "outcome": "rejected",
         "http_status": 403,
-        "code": "insufficient_scope",
+        "code": "application_permission_denied",
         "data": null
       },
-      "source": "spec/fixtures/request-vectors.json:authz-read-key-config-set + spec/02-authorization.md section 4",
+      "source": "spec/02-authorization.md:ordinary MCP forwarding and app-owned authorization",
       "response_signature": "required"
     },
-    "unmapped-tool": {
+    "app-permission-allowed": {
+      "identity": "bob",
+      "fresh": false,
+      "server_public_key": "server",
+      "args": {},
+      "steps": [
+        "Call ordinary MCP tool svc.config.set as non-admin bob. The application handler grants this independent application permission using verified identity; protocol admin status is not required."
+      ],
+      "expected": {
+        "outcome": "ok",
+        "http_status": 200,
+        "code": null,
+        "data": {
+          "content": [
+            {
+              "type": "text",
+              "text": "ok"
+            }
+          ]
+        }
+      },
+      "source": "spec/02-authorization.md:ordinary MCP forwarding and app-owned authorization"
+    },
+    "admin-required": {
       "identity": "alice",
       "fresh": false,
       "server_public_key": "server",
       "args": {},
       "steps": [
-        "signed POST /mcp tools/call of other.tool, which matches no policy rule (deny by default)",
-        "the rejection response is signed by the server: the client verifies it; an unsigned or invalid signature makes this scenario client_error instead"
+        "Call jack.admin.user.list as a registered non-admin identity; protocol-native administration is denied."
       ],
       "expected": {
         "outcome": "rejected",
         "http_status": 403,
-        "code": "operation_denied",
+        "code": "admin_required",
         "data": null
       },
-      "source": "spec/fixtures/request-vectors.json:authz-unmapped-tool + spec/02-authorization.md section 4",
+      "source": "spec/03-user-management.md:admin gate",
+      "response_signature": "required"
+    },
+    "set-admin-false": {
+      "identity": "root",
+      "fresh": true,
+      "server_public_key": "server",
+      "registry_overrides": {
+        "alice": {
+          "admin": true
+        }
+      },
+      "args": {},
+      "steps": [
+        "Start with alice already admin=true and root still an active admin. As alice, call typed jack.whoami and assert kid, name and admin=true; as root, call typed jack.admin.user.set_admin with required admin=false and assert the returned alice entry; then authenticate again as alice with typed jack.whoami and assert admin=false. Report the full structuredContent returned by set_admin."
+      ],
+      "expected": {
+        "outcome": "ok",
+        "http_status": 200,
+        "code": null,
+        "data": {
+          "structuredContent": {
+            "kid": {
+              "$kid": "alice"
+            },
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice",
+            "admin": false,
+            "not_before": null,
+            "not_after": null
+          }
+        }
+      },
+      "source": "spec/03-user-management.md:set_admin required boolean and verified admin state transition"
+    },
+    "set-admin-missing": {
+      "identity": "root",
+      "fresh": false,
+      "server_public_key": "server",
+      "args": {},
+      "steps": [
+        "Send a raw jack.admin.user.set_admin call with the admin member omitted; expect invalid_params."
+      ],
+      "expected": {
+        "outcome": "rejected",
+        "http_status": 400,
+        "code": "invalid_params",
+        "data": null
+      },
+      "source": "spec/03-user-management.md:set_admin required strict boolean",
+      "response_signature": "required"
+    },
+    "set-admin-null": {
+      "identity": "root",
+      "fresh": false,
+      "server_public_key": "server",
+      "args": {},
+      "steps": [
+        "Send a raw jack.admin.user.set_admin call with admin=null; expect invalid_params."
+      ],
+      "expected": {
+        "outcome": "rejected",
+        "http_status": 400,
+        "code": "invalid_params",
+        "data": null
+      },
+      "source": "spec/03-user-management.md:set_admin required strict boolean",
+      "response_signature": "required"
+    },
+    "set-admin-string": {
+      "identity": "root",
+      "fresh": false,
+      "server_public_key": "server",
+      "args": {},
+      "steps": [
+        "Send a raw jack.admin.user.set_admin call with admin=\"false\"; expect invalid_params."
+      ],
+      "expected": {
+        "outcome": "rejected",
+        "http_status": 400,
+        "code": "invalid_params",
+        "data": null
+      },
+      "source": "spec/03-user-management.md:set_admin required strict boolean",
+      "response_signature": "required"
+    },
+    "set-admin-number": {
+      "identity": "root",
+      "fresh": false,
+      "server_public_key": "server",
+      "args": {},
+      "steps": [
+        "Send a raw jack.admin.user.set_admin call with admin=0; expect invalid_params."
+      ],
+      "expected": {
+        "outcome": "rejected",
+        "http_status": 400,
+        "code": "invalid_params",
+        "data": null
+      },
+      "source": "spec/03-user-management.md:set_admin required strict boolean",
       "response_signature": "required"
     },
     "unknown-key": {
@@ -138,7 +382,7 @@
       "server_public_key": "server",
       "args": {},
       "steps": [
-        "mallory (a valid key that is not in the registry) signs POST /mcp tools/call of svc.status"
+        "A valid but unregistered key signs a tools/call request."
       ],
       "expected": {
         "outcome": "rejected",
@@ -146,7 +390,7 @@
         "code": "unknown_key",
         "data": null
       },
-      "source": "spec/fixtures/request-vectors.json:unknown-key + spec/01-authentication.md section 4 step 4"
+      "source": "spec/fixtures/request-vectors.json:unknown-key"
     },
     "replay": {
       "identity": "alice",
@@ -154,8 +398,7 @@
       "server_public_key": "server",
       "args": {},
       "steps": [
-        "step 0: alice signs POST /mcp with the JSON-RPC request {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"} (policy allows ping; the fixed handler answers it) and must be accepted (intermediate step)",
-        "step 1: the client re-sends the exact same request bytes and reports the second response"
+        "Send one signed ping, then replay exactly the same signed bytes and report the second response."
       ],
       "expected": {
         "outcome": "rejected",
@@ -163,7 +406,7 @@
         "code": "replayed_nonce",
         "data": null
       },
-      "source": "spec/fixtures/request-vectors.json:replay-live-entry + spec/01-authentication.md section 4 step 8"
+      "source": "spec/fixtures/request-vectors.json:replay-live-entry"
     },
     "clock-skew": {
       "identity": "alice",
@@ -171,7 +414,7 @@
       "server_public_key": "server",
       "args": {},
       "steps": [
-        "alice signs POST /mcp tools/call of svc.status with ts = now - 120 s (outside the default 30 s window)"
+        "Sign a request with a timestamp 120 seconds old, outside the default 30 second window."
       ],
       "expected": {
         "outcome": "rejected",
@@ -179,7 +422,7 @@
         "code": "timestamp_out_of_window",
         "data": null
       },
-      "source": "spec/fixtures/request-vectors.json:ts-too-old + spec/01-authentication.md section 4 step 6 (default window 30 s)"
+      "source": "spec/fixtures/request-vectors.json:ts-too-old"
     },
     "tampered-body": {
       "identity": "alice",
@@ -187,7 +430,7 @@
       "server_public_key": "server",
       "args": {},
       "steps": [
-        "alice signs the body {\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"svc.restart\"}} but sends it with the final byte (0x7D '}') replaced by 0x7C '|'"
+        "Sign a JSON body, then mutate its final byte before sending."
       ],
       "expected": {
         "outcome": "rejected",
@@ -195,7 +438,7 @@
         "code": "bad_signature",
         "data": null
       },
-      "source": "spec/fixtures/request-vectors.json:sig-tampered-body + spec/01-authentication.md section 4 step 7 (signature precedes body parsing)"
+      "source": "spec/fixtures/request-vectors.json:sig-tampered-body"
     },
     "bad-server-key": {
       "identity": "alice",
@@ -203,7 +446,7 @@
       "server_public_key": "mallory",
       "args": {},
       "steps": [
-        "alice signs a normal ping; the client pins mallory's public key as the server key, so the signed response fails client verification"
+        "Pin the wrong server key; reject the otherwise valid signed ping response."
       ],
       "expected": {
         "outcome": "client_error",
@@ -211,7 +454,7 @@
         "code": "unknown_server_key",
         "data": null
       },
-      "source": "spec/01-authentication.md section 5 step 4 (unknown_server_key is client-side, no HTTP status) + errors.go CodeUnknownServerKey"
+      "source": "spec/01-authentication.md:response verification"
     },
     "expired-key": {
       "identity": "frank",
@@ -219,7 +462,7 @@
       "server_public_key": "server",
       "args": {},
       "steps": [
-        "frank's registry entry has not_after 1767224600 (in the past); frank signs POST /mcp tools/call of svc.status"
+        "Sign with the expired fixture key."
       ],
       "expected": {
         "outcome": "rejected",
@@ -227,7 +470,7 @@
         "code": "key_inactive",
         "data": null
       },
-      "source": "spec/fixtures/request-vectors.json:key-expired + spec/01-authentication.md section 4 step 5 + spec/fixtures/registry.json (frank not_after in the past)"
+      "source": "spec/fixtures/registry.json:frank not_after"
     },
     "key-not-yet-valid": {
       "identity": "erin",
@@ -240,7 +483,7 @@
       },
       "args": {},
       "steps": [
-        "the harness writes this scenario's state file with erin's not_before shifted to now + 3600 s; erin signs POST /mcp tools/call of svc.status"
+        "Write state with erin not_before set to now+3600, then sign a request."
       ],
       "expected": {
         "outcome": "rejected",
@@ -248,7 +491,7 @@
         "code": "key_inactive",
         "data": null
       },
-      "source": "spec/fixtures/request-vectors.json:key-not-yet-valid + spec/01-authentication.md section 4 step 5"
+      "source": "spec/01-authentication.md:key validity"
     },
     "stream": {
       "identity": "alice",
@@ -256,8 +499,7 @@
       "server_public_key": "server",
       "args": {},
       "steps": [
-        "alice signs GET /sse (empty body); the wrapped handler answers text/event-stream and the wrapper refuses it",
-        "the rejection response is signed by the server: the client verifies it; an unsigned or invalid signature makes this scenario client_error instead"
+        "Sign GET /sse; refuse the event-stream response with a signed 501."
       ],
       "expected": {
         "outcome": "rejected",
@@ -265,25 +507,7 @@
         "code": "streaming_unsupported",
         "data": null
       },
-      "source": "docs/design/interop.md section 1 non-goals and section 4 (stream row) + server/middleware.go line 170 (501 streaming_unsupported when the wrapped answer is text/event-stream)",
-      "response_signature": "required"
-    },
-    "agent-admin": {
-      "identity": "agentx",
-      "fresh": false,
-      "server_public_key": "server",
-      "args": {},
-      "steps": [
-        "agentx (kind agent, scopes read) signs POST /mcp tools/call of jack.admin.user.list",
-        "the rejection response is signed by the server: the client verifies it; an unsigned or invalid signature makes this scenario client_error instead"
-      ],
-      "expected": {
-        "outcome": "rejected",
-        "http_status": 403,
-        "code": "insufficient_scope",
-        "data": null
-      },
-      "source": "spec/fixtures/request-vectors.json:native-admin-denied-for-agent-key + spec/03-user-management.md section 4 rule 1 (admin check runs first)",
+      "source": "server streaming boundary",
       "response_signature": "required"
     },
     "invalid-request": {
@@ -292,8 +516,7 @@
       "server_public_key": "server",
       "args": {},
       "steps": [
-        "alice signs POST /mcp with the body this is not JSON (valid signature, unparseable body)",
-        "the rejection response is signed by the server: the client verifies it; an unsigned or invalid signature makes this scenario client_error instead"
+        "Sign an unparseable request body."
       ],
       "expected": {
         "outcome": "rejected",
@@ -301,7 +524,7 @@
         "code": "invalid_request",
         "data": null
       },
-      "source": "spec/fixtures/request-vectors.json:request-invalid-json + spec/02-authorization.md section 4",
+      "source": "spec/01-authentication.md:body validation",
       "response_signature": "required"
     },
     "unknown-native-tool": {
@@ -310,8 +533,7 @@
       "server_public_key": "server",
       "args": {},
       "steps": [
-        "root (admin) signs POST /mcp tools/call of jack.admin.nuke, an undefined jack.-prefixed tool",
-        "the rejection response is signed by the server: the client verifies it; an unsigned or invalid signature makes this scenario client_error instead"
+        "Call an undefined jack.-prefixed tool as root."
       ],
       "expected": {
         "outcome": "rejected",
@@ -319,7 +541,7 @@
         "code": "operation_denied",
         "data": null
       },
-      "source": "spec/fixtures/admin-vectors.json:admin-unknown-native-tool + spec/fixtures/request-vectors.json:native-unknown-tool-not-opened-by-policy + spec/03-user-management.md section 1",
+      "source": "spec/03-user-management.md:native tool boundary",
       "response_signature": "required"
     },
     "enroll": {
@@ -328,9 +550,7 @@
       "server_public_key": "server",
       "args": {},
       "steps": [
-        "step 0: root signs jack.admin.invite.create with arguments {\"scopes\":[\"read\"]}; must succeed; the client takes result.structuredContent.code (intermediate step)",
-        "step 1: the NEW key (newbie, the primary identity) signs tools/call of jack.enroll with arguments {\"code\":<step 0 code>,\"name\":\"newbie\",\"public_key\":<newbie public key>}; must succeed (intermediate step)",
-        "step 2: newbie signs jack.whoami and the client reports it"
+        "Root creates a default invite (admin omitted); newbie enrolls with it and calls whoami."
       ],
       "expected": {
         "outcome": "ok",
@@ -342,14 +562,11 @@
               "$kid": "newbie"
             },
             "name": "newbie",
-            "kind": "human",
-            "scopes": [
-              "read"
-            ]
+            "admin": false
           }
         }
       },
-      "source": "spec/fixtures/admin-vectors.json:enroll-ok + spec/fixtures/admin-vectors.json:invite-create-ok"
+      "source": "spec/03-user-management.md:default invite admin=false"
     },
     "enroll-used-invite": {
       "identity": "newbie2",
@@ -357,10 +574,7 @@
       "server_public_key": "server",
       "args": {},
       "steps": [
-        "step 0: root signs jack.admin.invite.create with arguments {\"scopes\":[\"read\"]}; must succeed; client takes result.structuredContent.code (intermediate step)",
-        "step 1: newbie signs jack.enroll with that code and name \"newbie\"; must succeed, consuming the invite (intermediate step)",
-        "step 2: newbie2 (the primary identity) signs jack.enroll with the SAME code and name \"newbie2\"; the client reports it",
-        "the rejection response is signed by the server: the client verifies it; an unsigned or invalid signature makes this scenario client_error instead"
+        "Create a default invite, enroll newbie, then attempt to reuse the code for newbie2."
       ],
       "expected": {
         "outcome": "rejected",
@@ -368,7 +582,7 @@
         "code": "invalid_invite",
         "data": null
       },
-      "source": "spec/fixtures/admin-vectors.json:enroll-code-reuse + spec/03-user-management.md section 3.2 step 6 (single-use invite)",
+      "source": "spec/03-user-management.md:single-use invite",
       "response_signature": "required"
     },
     "rotate": {
@@ -377,9 +591,7 @@
       "server_public_key": "server",
       "args": {},
       "steps": [
-        "step 0: alice signs jack.key.rotate with arguments {\"public_key\":<newbie public key>,\"proof\":<newbie's signature over 'mcp-jack/v1/rotate', aud, alice kid, newbie kid, header ts, LF-joined>}; must succeed (intermediate step)",
-        "step 1: the OLD alice key signs jack.whoami and must now be rejected with 401 unknown_key (intermediate step)",
-        "step 2: the NEW key (newbie seed) signs jack.whoami and the client reports it; the entry kept name and scopes"
+        "Rotate alice to newbie's key with a valid proof, verify the old key is rejected, and report whoami using the new key."
       ],
       "expected": {
         "outcome": "ok",
@@ -391,16 +603,13 @@
               "$kid": "newbie"
             },
             "name": "alice",
-            "kind": "human",
-            "scopes": [
-              "read"
-            ],
+            "admin": false,
             "not_before": null,
             "not_after": null
           }
         }
       },
-      "source": "spec/fixtures/admin-vectors.json:rotate-ok + spec/03-user-management.md section 3.1 (rotate proof string)"
+      "source": "spec/03-user-management.md:key rotation"
     },
     "admin-create": {
       "identity": "newbie2",
@@ -408,10 +617,7 @@
       "server_public_key": "server",
       "args": {},
       "steps": [
-        "step 0: root signs jack.admin.invite.create with arguments {\"scopes\":[\"read\"]}; must succeed; client takes result.structuredContent.code (intermediate step)",
-        "step 1: root signs jack.admin.user.create with arguments {\"name\":\"dave\",\"public_key\":<newbie2 public key>,\"scopes\":[\"read\"]}; must succeed (intermediate step)",
-        "step 2: newbie signs jack.enroll with the step 0 code and name \"newbie\"; must succeed (intermediate step)",
-        "step 3: the new key (newbie2 seed, registered as dave) signs jack.whoami and the client reports it"
+        "Root creates a default invite and directly creates dave with admin omitted; enroll newbie and report dave's whoami."
       ],
       "expected": {
         "outcome": "ok",
@@ -423,16 +629,13 @@
               "$kid": "newbie2"
             },
             "name": "dave",
-            "kind": "human",
-            "scopes": [
-              "read"
-            ],
+            "admin": false,
             "not_before": null,
             "not_after": null
           }
         }
       },
-      "source": "spec/fixtures/admin-vectors.json:admin-create-ok + spec/fixtures/admin-vectors.json:invite-create-ok + spec/fixtures/admin-vectors.json:enroll-ok"
+      "source": "spec/03-user-management.md:default user admin=false"
     },
     "revoke-key": {
       "identity": "bob",
@@ -440,8 +643,7 @@
       "server_public_key": "server",
       "args": {},
       "steps": [
-        "step 0: root signs jack.admin.user.revoke with arguments {\"kid\":<bob kid>}; must succeed (intermediate step)",
-        "step 1: bob (the revoked key, the primary identity) signs jack.whoami and the client reports it"
+        "Root revokes bob; bob's subsequent request is rejected as unknown_key."
       ],
       "expected": {
         "outcome": "rejected",
@@ -449,7 +651,7 @@
         "code": "unknown_key",
         "data": null
       },
-      "source": "spec/fixtures/admin-vectors.json:admin-revoke-ok + spec/02-authorization.md section 1 (revocation is removal of the entry) + spec/01-authentication.md section 4 step 4"
+      "source": "spec/03-user-management.md:key revocation"
     },
     "last-admin": {
       "identity": "root",
@@ -457,8 +659,7 @@
       "server_public_key": "server",
       "args": {},
       "steps": [
-        "root is the only active admin in the fixture registry; root signs jack.admin.user.set_scopes with arguments {\"kid\":<root kid>,\"scopes\":[\"read\"]}, demoting itself",
-        "the rejection response is signed by the server: the client verifies it; an unsigned or invalid signature makes this scenario client_error instead"
+        "Root calls jack.admin.user.set_admin with required boolean admin=false for its own key; the last-active-admin guard rejects it."
       ],
       "expected": {
         "outcome": "rejected",
@@ -466,8 +667,42 @@
         "code": "last_admin",
         "data": null
       },
-      "source": "spec/fixtures/admin-vectors.json:admin-set-scopes-last-admin + spec/03-user-management.md section 4 rule 4",
+      "source": "spec/03-user-management.md:last-active-admin and required boolean admin",
       "response_signature": "required"
+    },
+    "legacy-stored-kind": {
+      "identity": "alice",
+      "fresh": true,
+      "server_public_key": "server",
+      "legacy_state_field": "kind",
+      "steps": [
+        "Start each SDK server with a stored key containing legacy kind=human; startup must fail with the state-corrupt error naming kind and leave the state bytes unchanged."
+      ],
+      "expected": {
+        "outcome": "startup_rejected",
+        "http_status": null,
+        "code": "state_corrupt",
+        "error_contains": "kind",
+        "data": null
+      },
+      "source": "spec/02-authorization.md:removed identity kind state field"
+    },
+    "legacy-stored-scopes": {
+      "identity": "alice",
+      "fresh": true,
+      "server_public_key": "server",
+      "legacy_state_field": "scopes",
+      "steps": [
+        "Start each SDK server with a stored key containing legacy scopes=[read]; startup must fail with the state-corrupt error naming scopes and leave the state bytes unchanged."
+      ],
+      "expected": {
+        "outcome": "startup_rejected",
+        "http_status": null,
+        "code": "state_corrupt",
+        "error_contains": "scopes",
+        "data": null
+      },
+      "source": "spec/02-authorization.md:removed identity scopes state field"
     }
   }
 }

@@ -4,7 +4,7 @@
 // Run with: node --test tools/coverage/go-summary.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseProfile } from "./go-summary.mjs";
+import { parseProfile, groupFor } from "./go-summary.mjs";
 
 // Builds a two-block profile for one file: block A (lines 1..2, 3 stmts) is
 // hit, block B (lines 3..4, 5 stmts) is unhit.
@@ -15,6 +15,13 @@ function twoBlockProfile() {
     "example.com/pkg/a.go:3.2,4.3 5 0",
   ].join("\n");
 }
+
+test("Go interop package paths classify with and without a leading slash", () => {
+  assert.equal(groupFor("interop/go/client/main.go"), "interop");
+  assert.equal(groupFor("github.com/PHPCraftdream/mcp-jack/interop/go/server/main.go"), "interop");
+  assert.equal(groupFor("/workspace/interop/go/client/main.go"), "interop");
+  assert.equal(groupFor("github.com/PHPCraftdream/mcp-jack/server/server.go"), "product");
+});
 
 test("valid two-block profile parses", () => {
   // Block A: startLine 1, endLine 2, numStmt 3, count 1 -> covered.

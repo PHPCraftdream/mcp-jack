@@ -4,7 +4,15 @@
 // Run with: node --test tools/coverage/lcov-summary.test.mjs
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseLcov } from "./lcov-summary.mjs";
+import { parseLcov, groupFor, normalizeSf } from "./lcov-summary.mjs";
+
+test("Rust src/bin interop paths classify correctly in relative and absolute forms", () => {
+  assert.equal(groupFor("src/bin/interop_server.rs"), "interop");
+  assert.equal(groupFor("src/bin/interop/scenarios.rs"), "interop");
+  assert.equal(groupFor("src/client/auth.rs"), "product");
+  assert.equal(normalizeSf("/workspace/project/rust/src/bin/interop_server.rs"), "src/bin/interop_server.rs");
+  assert.equal(groupFor(normalizeSf("D:\\work\\project\\rust\\src\\bin\\interop_transfer.rs")), "interop");
+});
 
 test("valid single record with two DA lines parses", () => {
   // Two DA lines: line 12 covered, line 14 uncovered.

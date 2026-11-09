@@ -184,8 +184,6 @@ func main() {
 		Kid:       imported.Signer.KID(),
 		PublicKey: jack.EncodeBase64URL(imported.Signer.PublicKey()),
 		Name:      "consumer-smoke",
-		Kind:      server.KindHuman,
-		Scopes:    []string{},
 	}
 	err = state.Update(func(edit *server.StateEdit) error {
 		edit.PutKey(entry)
@@ -195,17 +193,10 @@ func main() {
 		fail("register key", err)
 	}
 
-	// Minimal policy: allow tools/call consumer.echo for any authenticated key.
-	policyJSON := `{"version":1,"rules":[{"match":{"method":"tools/call","tool":"consumer.echo"},"scope":null}]}`
-	policy, err := server.ParsePolicy([]byte(policyJSON))
-	if err != nil {
-		fail("parse policy", err)
-	}
 	verifier, err := server.NewVerifier(server.Config{
 		Aud:    aud,
 		State:  state,
 		Nonces: server.NewNonceStore(),
-		Policy: policy,
 		Now:    func() int64 { return fixedSec },
 	})
 	if err != nil {
@@ -215,6 +206,15 @@ func main() {
 	// (c) Real loopback client/server. The wrapped handler echoes a
 	// structuredContent payload exactly like the TS smoke's upstream server.
 	echoNext := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		caller, ok := server.IdentityFromContext(r.Context())
+		if !ok {
+			fail("wrapped handler verified identity missing", nil)
+			return
+		}
+		if caller.Kid() != imported.Signer.KID() || caller.Name() != "consumer-smoke" || caller.Admin() {
+			fail("wrapped handler verified identity mismatch", nil)
+			return
+		}
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err != nil {
 			http.Error(w, "bad body", http.StatusBadRequest)
@@ -223,9 +223,18 @@ func main() {
 		var req struct {
 			ID     int64  `json:"id"`
 			Method string `json:"method"`
+			Params struct {
+				Name string `json:"name"`
+			} `json:"params"`
 		}
-		if err := json.Unmarshal(body, &req); err != nil || req.Method != "tools/call" {
+		if err := json.Unmarshal(body, &req); err != nil || req.Method != "tools/call" || req.Params.Name == "" {
 			http.Error(w, "unsupported", http.StatusBadRequest)
+			return
+		}
+		if req.Params.Name == "consumer.admin.only" && !caller.Admin() {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"code": "app_denied", "message": "application policy denied"}})
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -276,6 +285,13 @@ func main() {
 	}
 	expect(echoed.Echoed, "echo payload")
 
+	// The wrapped application, not Jack's protocol gate, denies this non-admin tool.
+	err = verified.CallTool(ctx, "consumer.admin.only", nil, nil)
+	var appDenied *client.HTTPError
+	if !errors.As(err, &appDenied) || appDenied.Status != http.StatusForbidden || appDenied.Code != "app_denied" {
+		fail("application denial control", nil)
+	}
+
 	// Wrong pin: pin the client's own key; the response is signed by the
 	// service key, so verification fails with unknown_server_key.
 	wrongPinned, err := client.NewClient(client.Config{
@@ -320,5 +336,5 @@ func main() {
 		fail("shutdown", err)
 	}
 
-	fmt.Println("PASS: go consumer smoke (key lifecycle, credential flow, signed loopback round trip, wrong pin, tamper)")
+	fmt.Println("PASS: go consumer smoke (key lifecycle, credential flow, signed loopback round trip, verified identity, application denial, wrong pin, tamper)")
 }

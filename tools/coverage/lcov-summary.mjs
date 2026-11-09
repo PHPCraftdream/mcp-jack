@@ -14,7 +14,7 @@ const GROUPS = ["product", "helper", "interop"];
 // published API); tests/ is test support (cargo-llvm-cov excludes tests/ by
 // default anyway — classify defensively, never invent); everything under
 // src/ is product.
-function groupFor(filePath) {
+export function groupFor(filePath) {
   if (filePath.startsWith("src/bin/")) return "interop";
   if (filePath.startsWith("tests/")) return "helper";
   if (filePath.startsWith("src/")) return "product";
@@ -30,10 +30,11 @@ function roundPct(covered, total) {
 // (src/client/auth.rs) but absolute paths appear on some setups; normalize by
 // keeping everything after the last `rust/` segment, then classify on
 // forward slashes.
-function normalizeSf(sfPath) {
+export function normalizeSf(sfPath) {
+  const normalized = sfPath.replaceAll("\\", "/");
   const marker = "rust/";
-  const index = sfPath.lastIndexOf(marker);
-  return index === -1 ? sfPath.replaceAll("\\", "/") : sfPath.slice(index + marker.length);
+  const index = normalized.lastIndexOf(marker);
+  return index === -1 ? normalized : normalized.slice(index + marker.length);
 }
 
 export function parseLcov(text) {
@@ -112,7 +113,8 @@ function groupSummary(files) {
 function renderTxt(json) {
   const lines = [
     "Rust line/region coverage via cargo-llvm-cov (LLVM source-based coverage); branch coverage requires an unstable nightly flag and is not reported.",
-    "cargo-llvm-cov excludes vendored sources and tests/ by default; src/bin/* are interop helper executables.",
+    "cargo-llvm-cov excludes vendored sources and tests/ by default; rust/src/bin/interop/* binaries are included when built by the all-features coverage run and their LCOV source records are grouped as interop.",
+    "Scope: only SF records emitted for the rust package are measured; separate Go and TypeScript interop executables and external processes are not measured by this report.",
   ];
   for (const group of GROUPS) {
     const g = json.groups[group];
@@ -150,6 +152,8 @@ if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === path.res
     tool: "cargo-llvm-cov (LLVM source-based coverage)",
     mode: null,
     generatedBy: GENERATED_BY,
+    coverageScope:
+      "Only SF records emitted by cargo-llvm-cov for the rust package are measured. rust/src/bin/interop/* paths emitted by the all-features run are grouped as interop; separate Go and TypeScript executables and external processes are not measured by this report.",
     groups: groupSummary(files),
     total: { ...allTotal, pct: roundPct(allTotal.linesCovered, allTotal.linesTotal) },
     files,

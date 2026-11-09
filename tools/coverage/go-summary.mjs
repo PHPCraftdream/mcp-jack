@@ -10,11 +10,11 @@ const GENERATED_BY = "tools/coverage/go-summary.mjs";
 const MAX_UNCOVERED = 200;
 const GROUPS = ["product", "helper", "interop"];
 
-// Group rules on the import-qualified path string: the interop Go module
-// lives under interop/go/, spec/ holds shared fixture/spec helper code, and
-// everything else (including root-package files) is product.
-function groupFor(filePath) {
-  if (filePath.includes("/interop/go/")) return "interop";
+// Group rules on the import-qualified path string: the root-module interop Go
+// packages live under interop/go/, spec/ holds shared fixture/spec helper code,
+// and everything else (including root-package files) is product.
+export function groupFor(filePath) {
+  if (filePath.startsWith("interop/go/") || filePath.includes("/interop/go/")) return "interop";
   if (filePath.includes("/spec/")) return "helper";
   return "product";
 }
@@ -133,6 +133,7 @@ function renderTxt(json) {
   const lines = [
     "Statement percentages follow go tool cover semantics: covered statements / total statements from the block data.",
     "Line percentages are a custom line-span approximation (NOT the tool's statement metric); they drive the uncovered-line lists.",
+    "Scope: only files in the supplied profile are measured; root-module interop Go packages under interop/go/ are included when present in the root ./... profile.",
   ];
   for (const group of GROUPS) {
     const g = json.groups[group];
@@ -179,6 +180,8 @@ if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === path.res
     generatedBy: GENERATED_BY,
     metricNote:
       "Statements follow go tool cover semantics (numStmt-weighted); line percentages are a custom line-span approximation used to list uncovered lines.",
+    coverageScope:
+      "Only Go blocks present in the supplied profile are measured. The root-module workflow runs go test ./... and includes the interop Go packages under interop/go/; no separate nested Go module is claimed.",
     groups: groupSummary(files),
     total: {
       ...allTotal,

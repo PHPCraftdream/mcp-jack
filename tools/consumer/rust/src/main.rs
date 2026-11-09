@@ -17,20 +17,21 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::Arc;
 
-use mcp_jack::auth_header::{ResponseAuth, format_response_auth};
+use mcp_jack::auth_header::{format_response_auth, ResponseAuth};
 use mcp_jack::client::error::ClientError as ClientErr;
 use mcp_jack::client::rpc;
 use mcp_jack::client::signer::Signer;
 use mcp_jack::client::transport::{HttpRequest, HttpResponse, Transport, TransportError};
 use mcp_jack::encoding::{encode_b64url, key_id};
+#[cfg(feature = "server-http")]
+use mcp_jack::server::identity::VerifiedIdentity;
 use mcp_jack::server::nonce::NonceStore;
-use mcp_jack::server::policy::Policy;
 use mcp_jack::server::state::{MemoryState, RegistryEntry, StateEdit, StateStore};
 use mcp_jack::server::verify::{Config as VerifierConfig, Request as VerifyRequest, Verifier};
 use mcp_jack::signing::response_signing_string;
 use mcp_jack::user_key::{
-    ClientSigningKey, ConnectionData, ExpectedIdentity, UserKeyError, client as uk_client,
-    server as uk_server,
+    client as uk_client, server as uk_server, ClientSigningKey, ConnectionData, ExpectedIdentity,
+    UserKeyError,
 };
 
 const AUD: &str = "https://svc.example.test";
@@ -39,10 +40,16 @@ const NOW: i64 = 1_800_000_000;
 /// The loopback base URL. Port 1 is never dialed: the LoopbackTransport only
 /// uses the URL for the origin-form request target.
 const BASE_URL: &str = "http://127.0.0.1:1/mcp";
+#[cfg(feature = "server-http")]
+const ADMIN_URL: &str = "http://127.0.0.1:1/mcp/admin";
 const TOOL: &str = "consumer.echo";
 
 fn check(cond: bool, label: &'static str) -> Result<(), String> {
-    if cond { Ok(()) } else { Err(label.to_string()) }
+    if cond {
+        Ok(())
+    } else {
+        Err(label.to_string())
+    }
 }
 
 fn expect_client_err<T>(
@@ -95,6 +102,17 @@ impl Transport for LoopbackTransport {
                 body: vec![],
             });
         }
+        // Exercise the verifier's immutable registry snapshot on an ordinary
+        // MCP request; authorization beyond Jack's admin-only native tools is
+        // owned by the consumer application.
+        let identity = result.identity.as_ref().ok_or_else(|| {
+            TransportError::Client("accepted request lacked verified identity".to_string())
+        })?;
+        if identity.kid() != result.kid || identity.name() != "consumer-smoke" || identity.admin() {
+            return Err(TransportError::Client(
+                "verifier returned an unexpected identity snapshot".to_string(),
+            ));
+        }
         // The rpc layer decodes the response `id` field but never compares it
         // to the request id (rust/src/client/rpc.rs: JsonRpcResponse.id is
         // decoded with #[allow(dead_code)] and unread on the happy path), so
@@ -145,17 +163,10 @@ fn register(state: &Arc<MemoryState>, entry: RegistryEntry) -> Result<(), String
 }
 
 fn verifier_for(state: Arc<MemoryState>) -> Result<Verifier, String> {
-    let policy = Arc::new(
-        Policy::parse(
-            br#"{"version":1,"rules":[{"match":{"method":"tools/call","tool":"consumer.echo"},"scope":null}]}"#,
-        )
-        .map_err(|e| format!("policy parse failed: {e}"))?,
-    );
     Verifier::new(VerifierConfig {
         aud: AUD.to_string(),
         state,
         nonces: Arc::new(NonceStore::new()),
-        policy,
         audit: None,
         native: None,
         window_seconds: 0,
@@ -305,7 +316,8 @@ fn section_c(
         service_signer: Arc::clone(&service_signer),
     });
 
-    // Happy path: signed request, policy-allowed tool, signed response.
+    // Happy path: signed ordinary MCP request, authenticated and forwarded,
+    // with a signed response.
     // Pin the clock to NOW so request/response timestamps share the same 30s window.
     let mut cfg = connection.client_config(
         Arc::clone(&signer_arc),
@@ -744,6 +756,18 @@ fn section_e(client_signer: Arc<dyn Signer>, wrong_pin: &ClientSigningKey) -> Re
             ..Default::default()
         },
     )?;
+    let admin_key = ClientSigningKey::generate()
+        .map_err(|e| format!("admin client key generate failed: {e}"))?;
+    register(
+        &state,
+        RegistryEntry {
+            kid: admin_key.kid().to_string(),
+            public_key: encode_b64url(&admin_key.public_key()),
+            name: "consumer-admin".to_string(),
+            admin: true,
+            ..Default::default()
+        },
+    )?;
     let verifier = Arc::new(verifier_for(Arc::clone(&state))?);
     let layer = JackLayer::new(HandlerConfig {
         verifier,
@@ -751,13 +775,53 @@ fn section_e(client_signer: Arc<dyn Signer>, wrong_pin: &ClientSigningKey) -> Re
         max_body_bytes: 0,
         max_response_bytes: 0,
     });
-    // In-process inner service: the layer verifies, authorizes and signs; the
-    // inner service echoes a static CallToolResult-shaped JSON-RPC response.
+    // The layer verifies and forwards; the wrapped application owns ordinary
+    // MCP authorization and reads the immutable verified identity extension.
+    let expected_kid = client_signer.kid().to_string();
+    let admin_kid = admin_key.kid().to_string();
     let service = layer.layer(tower::service_fn(
-        |_req: http::Request<Full<Bytes>>| async move {
-            Ok::<_, Infallible>(http::Response::new(Full::new(Bytes::from_static(
-                br#"{"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"echoed":true}}}"#,
-            ))))
+        move |req: http::Request<Full<Bytes>>| {
+            let expected_kid = expected_kid.clone();
+            let admin_kid = admin_kid.clone();
+            async move {
+                let (parts, _body) = req.into_parts();
+                let identity = parts.extensions.get::<VerifiedIdentity>().cloned();
+                let authorized = match (parts.uri.path(), identity.as_ref()) {
+                    ("/mcp", Some(identity)) => {
+                        identity.kid() == expected_kid.as_str()
+                            && identity.name() == "consumer-smoke"
+                            && !identity.admin()
+                    }
+                    ("/mcp/admin", Some(identity)) => {
+                        identity.kid() == admin_kid.as_str()
+                            && identity.name() == "consumer-admin"
+                            && identity.admin()
+                    }
+                    _ => false,
+                };
+                let (status, response_body) = if authorized {
+                    (
+                        http::StatusCode::OK,
+                        Bytes::from_static(
+                            br#"{"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"echoed":true}}}"#,
+                        ),
+                    )
+                } else {
+                    (
+                        http::StatusCode::FORBIDDEN,
+                        Bytes::from_static(
+                            br#"{"error":{"code":"consumer_forbidden","message":"application authorization denied"}}"#,
+                        ),
+                    )
+                };
+                Ok::<_, Infallible>(
+                    http::Response::builder()
+                        .status(status)
+                        .header("Content-Type", "application/json")
+                        .body(Full::new(response_body))
+                        .expect("static application response is valid"),
+                )
+            }
         },
     ));
     let layer_transport: Arc<dyn Transport> = Arc::new(LayerTransport {
@@ -783,6 +847,57 @@ fn section_e(client_signer: Arc<dyn Signer>, wrong_pin: &ClientSigningKey) -> Re
     check(
         matches!(value.get("echoed"), Some(v) if v.as_bool() == Some(true)),
         "adapter structuredContent.echoed must be true",
+    )?;
+
+    // The application checks its protected route from the verifier's typed
+    // extension, not from request-supplied identity fields. The POST body
+    // claims admin=true but the non-admin identity is still refused.
+    let admin_route_cfg = rpc::Config {
+        base_url: ADMIN_URL.to_string(),
+        aud: AUD.to_string(),
+        signer: Arc::clone(&client_signer),
+        server_key: service_pub,
+        transport: Arc::clone(&layer_transport),
+        now: Some(Arc::new(|| NOW)),
+        nonce: None,
+        window_seconds: 0,
+    };
+    let admin_route_client = rpc::Client::new(admin_route_cfg)
+        .map_err(|e| format!("admin-route client build failed: {e}"))?;
+    let err = expect_client_err(
+        admin_route_client.call_tool_raw_str(TOOL, Some(r#"{"identity":{"admin":true}}"#)),
+        "non-admin application route must be denied",
+    )?;
+    check(
+        matches!(
+            &err,
+            ClientErr::Http(http)
+                if http.status == 403 && http.code == "consumer_forbidden"
+        ),
+        "application-owned admin operation must be denied using verified identity",
+    )?;
+
+    // A separately registered administrator is allowed by the consumer's own
+    // route policy; the same protected endpoint then reaches the application.
+    let admin_signer: Arc<dyn Signer> = Arc::new(admin_key);
+    let admin_cfg = rpc::Config {
+        base_url: ADMIN_URL.to_string(),
+        aud: AUD.to_string(),
+        signer: admin_signer,
+        server_key: service_pub,
+        transport: Arc::clone(&layer_transport),
+        now: Some(Arc::new(|| NOW)),
+        nonce: None,
+        window_seconds: 0,
+    };
+    let admin_client =
+        rpc::Client::new(admin_cfg).map_err(|e| format!("admin client build failed: {e}"))?;
+    let admin_value = admin_client
+        .call_tool_raw_str(TOOL, Some("{}"))
+        .map_err(|e| format!("application admin-route call failed: {e}"))?;
+    check(
+        matches!(admin_value.get("echoed"), Some(v) if v.as_bool() == Some(true)),
+        "application admin operation must accept a verified administrator",
     )?;
 
     // Wrong server pin through the same adapter: response verification must

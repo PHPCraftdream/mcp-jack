@@ -436,11 +436,27 @@ var scenarios = map[string]func(*env) stepResult{
 	"whoami": func(e *env) stepResult {
 		return e.typedRawCall(e.signer(e.primaryName), client.ToolWhoAmI, nil)
 	},
-	"denied-tool": func(e *env) stepResult {
+	"admin-identity": func(e *env) stepResult {
+		return e.typedRawCall(e.signer("root"), client.ToolWhoAmI, nil)
+	},
+	"app-permission-denied": func(e *env) stepResult {
 		return e.rawCall(e.primary, http.MethodPost, "/mcp", rpcBody(1, "svc.config.set", nil), nil, "")
 	},
-	"unmapped-tool": func(e *env) stepResult {
-		return e.rawCall(e.primary, http.MethodPost, "/mcp", rpcBody(1, "other.tool", nil), nil, "")
+	"app-permission-allowed": func(e *env) stepResult {
+		return e.rawCall(e.primary, http.MethodPost, "/mcp", rpcBody(1, "svc.config.set", nil), nil, "")
+	},
+	"identity-forward": func(e *env) stepResult {
+		body := []byte(" { \"jsonrpc\" : \"2.0\", \"id\" : 1, \"method\" : \"tools/call\", \"params\" : { \"name\" : \"app.identity\", \"arguments\" : { \"identity\" : { \"kid\" : \"forged\", \"name\" : \"root\", \"admin\" : true } } } }\n")
+		return e.rawCall(e.primary, http.MethodPost, "/mcp", body, nil, "")
+	},
+	"identity-get": func(e *env) stepResult {
+		return e.rawCall(e.primary, http.MethodGet, "/identity?x=%2F", nil, nil, "")
+	},
+	"identity-dot-target": func(e *env) stepResult {
+		return e.rawCall(e.primary, http.MethodGet, "/a/../identity?x=%2F", nil, nil, "")
+	},
+	"admin-required": func(e *env) stepResult {
+		return e.typedRawCall(e.signer(e.primaryName), client.ToolAdminUserList, nil)
 	},
 	"unknown-key": func(e *env) stepResult {
 		return e.rawCall(e.primary, http.MethodPost, "/mcp", rpcBody(1, "svc.status", nil), nil, "")
@@ -505,9 +521,6 @@ var scenarios = map[string]func(*env) stepResult{
 	"stream": func(e *env) stepResult {
 		return e.rawCall(e.primary, http.MethodGet, "/sse", nil, nil, "")
 	},
-	"agent-admin": func(e *env) stepResult {
-		return e.typedRawCall(e.signer(e.primaryName), client.ToolAdminUserList, nil)
-	},
 	"invalid-request": func(e *env) stepResult {
 		return e.rawCall(e.primary, http.MethodPost, "/mcp", []byte("this is not JSON"), nil, "")
 	},
@@ -516,7 +529,7 @@ var scenarios = map[string]func(*env) stepResult{
 	},
 	"enroll": func(e *env) stepResult {
 		ctx := context.Background()
-		inv, err := e.typed("root").AdminInviteCreate(ctx, client.InviteCreateParams{Scopes: []string{"read"}})
+		inv, err := e.typed("root").AdminInviteCreate(ctx, client.InviteCreateParams{})
 		if out, ok := requireIntermediate(0, false, 0, "", e.sdkStep(nil, err)); !ok {
 			return out
 		}
@@ -528,7 +541,7 @@ var scenarios = map[string]func(*env) stepResult{
 	},
 	"enroll-used-invite": func(e *env) stepResult {
 		ctx := context.Background()
-		inv, err := e.typed("root").AdminInviteCreate(ctx, client.InviteCreateParams{Scopes: []string{"read"}})
+		inv, err := e.typed("root").AdminInviteCreate(ctx, client.InviteCreateParams{})
 		if out, ok := requireIntermediate(0, false, 0, "", e.sdkStep(nil, err)); !ok {
 			return out
 		}
@@ -557,14 +570,13 @@ var scenarios = map[string]func(*env) stepResult{
 	},
 	"admin-create": func(e *env) stepResult {
 		ctx := context.Background()
-		inv, err := e.typed("root").AdminInviteCreate(ctx, client.InviteCreateParams{Scopes: []string{"read"}})
+		inv, err := e.typed("root").AdminInviteCreate(ctx, client.InviteCreateParams{})
 		if out, ok := requireIntermediate(0, false, 0, "", e.sdkStep(nil, err)); !ok {
 			return out
 		}
 		_, err = e.typed("root").AdminUserCreate(ctx, client.UserCreateParams{
 			Name:      "dave",
 			PublicKey: jack.EncodeBase64URL(e.signer(e.primaryName).PublicKey()),
-			Scopes:    []string{"read"},
 		})
 		if out, ok := requireIntermediate(1, false, 0, "", e.sdkStep(nil, err)); !ok {
 			return out
@@ -584,9 +596,51 @@ var scenarios = map[string]func(*env) stepResult{
 		return e.typedRawCall(e.signer(e.primaryName), client.ToolWhoAmI, nil)
 	},
 	"last-admin": func(e *env) stepResult {
-		return e.typedRawCall(e.signer(e.primaryName), client.ToolAdminUserSetScopes, map[string]any{
-			"kid":    e.primary.KID(),
-			"scopes": []string{"read"},
-		})
+		_, err := e.typed("root").AdminUserSetAdmin(context.Background(), e.kid("root"), false)
+		return e.sdkStep(nil, err)
 	},
+	"set-admin-false": func(e *env) stepResult {
+		ctx := context.Background()
+		before, err := e.typed("alice").WhoAmI(ctx)
+		if out, ok := requireIntermediate(0, false, 0, "", e.sdkStep(nil, err)); !ok {
+			return out
+		}
+		if before.KID != e.kid("alice") || before.Name != "alice" || !before.Admin {
+			return stepResult{kind: "client_error", code: "interop_assertion_failed", data: map[string]int{"step": 0}}
+		}
+
+		result, err := e.typed("root").AdminUserSetAdmin(ctx, e.kid("alice"), false)
+		if out, ok := requireIntermediate(1, false, 0, "", e.sdkStep(nil, err)); !ok {
+			return out
+		}
+		if result.KID != e.kid("alice") || result.Name != "alice" || result.Admin {
+			return stepResult{kind: "client_error", code: "interop_assertion_failed", data: map[string]int{"step": 1}}
+		}
+
+		after, err := e.typed("alice").WhoAmI(ctx)
+		if out, ok := requireIntermediate(2, false, 0, "", e.sdkStep(nil, err)); !ok {
+			return out
+		}
+		if after.KID != e.kid("alice") || after.Name != "alice" || after.Admin {
+			return stepResult{kind: "client_error", code: "interop_assertion_failed", data: map[string]int{"step": 2}}
+		}
+		return e.sdkStep(map[string]any{"structuredContent": result}, nil)
+	},
+	"set-admin-missing": func(e *env) stepResult {
+		return e.rawSetAdmin("")
+	},
+	"set-admin-null": func(e *env) stepResult {
+		return e.rawSetAdmin(`,"admin":null`)
+	},
+	"set-admin-string": func(e *env) stepResult {
+		return e.rawSetAdmin(`,"admin":"false"`)
+	},
+	"set-admin-number": func(e *env) stepResult {
+		return e.rawSetAdmin(`,"admin":0`)
+	},
+}
+
+func (e *env) rawSetAdmin(adminMember string) stepResult {
+	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.user.set_admin","arguments":{"kid":"` + e.kid("alice") + `"` + adminMember + `}}}`)
+	return e.rawCall(e.signer("root"), http.MethodPost, "/mcp", body, nil, "")
 }

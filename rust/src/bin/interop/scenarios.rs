@@ -357,8 +357,18 @@ pub fn run(env: &Env, scenario: &str) -> ! {
         "ping" => ping(env),
         "echo" => echo(env),
         "whoami" => whoami(env),
-        "denied-tool" => denied_tool(env),
-        "unmapped-tool" => unmapped_tool(env),
+        "admin-identity" => admin_identity(env),
+        "app-permission-denied" => app_permission_denied(env),
+        "app-permission-allowed" => app_permission_allowed(env),
+        "identity-forward" => identity_forward(env),
+        "identity-get" => identity_get(env),
+        "identity-dot-target" => identity_dot_target(env),
+        "admin-required" => admin_required(env),
+        "set-admin-missing" => set_admin_missing(env),
+        "set-admin-null" => set_admin_null(env),
+        "set-admin-string" => set_admin_string(env),
+        "set-admin-number" => set_admin_number(env),
+        "set-admin-false" => set_admin_false(env),
         "unknown-key" => unknown_key(env),
         "replay" => replay(env),
         "clock-skew" => clock_skew(env),
@@ -367,7 +377,6 @@ pub fn run(env: &Env, scenario: &str) -> ! {
         "expired-key" => expired_key(env),
         "key-not-yet-valid" => key_not_yet_valid(env),
         "stream" => stream(env),
-        "agent-admin" => agent_admin(env),
         "invalid-request" => invalid_request(env),
         "unknown-native-tool" => unknown_native_tool(env),
         "enroll" => enroll(env),
@@ -414,7 +423,12 @@ fn whoami(e: &Env) -> StepResult {
     e.typed_raw_call(e.primary.as_ref(), TOOL_WHOAMI, None)
 }
 
-fn denied_tool(e: &Env) -> StepResult {
+fn admin_identity(e: &Env) -> StepResult {
+    let root = e.signer("root");
+    e.typed_raw_call(root.as_ref(), TOOL_WHOAMI, None)
+}
+
+fn app_permission_denied(e: &Env) -> StepResult {
     e.raw_call(
         e.primary.as_ref(),
         "POST",
@@ -425,15 +439,124 @@ fn denied_tool(e: &Env) -> StepResult {
     )
 }
 
-fn unmapped_tool(e: &Env) -> StepResult {
+fn app_permission_allowed(e: &Env) -> StepResult {
     e.raw_call(
         e.primary.as_ref(),
         "POST",
         "/mcp",
-        &rpc_body(1, "other.tool", None),
+        &rpc_body(1, "svc.config.set", None),
         None,
         None,
     )
+}
+
+fn identity_forward(e: &Env) -> StepResult {
+    let body = b" { \"jsonrpc\" : \"2.0\", \"id\" : 1, \"method\" : \"tools/call\", \"params\" : { \"name\" : \"app.identity\", \"arguments\" : { \"identity\" : { \"kid\" : \"forged\", \"name\" : \"root\", \"admin\" : true } } } }\n";
+    e.raw_call(e.primary.as_ref(), "POST", "/mcp", body, None, None)
+}
+
+fn identity_get(e: &Env) -> StepResult {
+    e.raw_call(
+        e.primary.as_ref(),
+        "GET",
+        "/identity?x=%2F",
+        &[],
+        None,
+        None,
+    )
+}
+
+fn identity_dot_target(e: &Env) -> StepResult {
+    e.raw_call(
+        e.primary.as_ref(),
+        "GET",
+        "/a/../identity?x=%2F",
+        &[],
+        None,
+        None,
+    )
+}
+
+fn admin_required(e: &Env) -> StepResult {
+    e.typed_raw_call(e.primary.as_ref(), TOOL_ADMIN_USER_LIST, None)
+}
+
+fn raw_set_admin(e: &Env, admin_member: &str) -> StepResult {
+    let mut body = format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{{\"name\":\"jack.admin.user.set_admin\",\"arguments\":{{\"kid\":\"{}\"",
+        e.kid("alice")
+    )
+    .into_bytes();
+    body.extend_from_slice(admin_member.as_bytes());
+    body.extend_from_slice(b"}}}");
+    let root = e.signer("root");
+    e.raw_call(root.as_ref(), "POST", "/mcp", &body, None, None)
+}
+
+fn set_admin_missing(e: &Env) -> StepResult {
+    raw_set_admin(e, "")
+}
+
+fn set_admin_null(e: &Env) -> StepResult {
+    raw_set_admin(e, ",\"admin\":null")
+}
+
+fn set_admin_string(e: &Env) -> StepResult {
+    raw_set_admin(e, ",\"admin\":\"false\"")
+}
+
+fn set_admin_number(e: &Env) -> StepResult {
+    raw_set_admin(e, ",\"admin\":0")
+}
+
+fn set_admin_false(e: &Env) -> StepResult {
+    let before = match e.typed("alice").whoami() {
+        Ok(who) => who,
+        Err(err) => return e.sdk_step(Err(err)),
+    };
+    if before.kid != e.kid("alice") || before.name != "alice" || !before.admin {
+        return assertion_failure(0);
+    }
+
+    let entry = match e.typed("root").admin_user_set_admin(&e.kid("alice"), false) {
+        Ok(entry) => entry,
+        Err(err) => return e.sdk_step(Err(err)),
+    };
+    if entry.kid != e.kid("alice") || entry.name != "alice" || entry.admin {
+        return assertion_failure(1);
+    }
+
+    let after = match e.typed("alice").whoami() {
+        Ok(who) => who,
+        Err(err) => return e.sdk_step(Err(err)),
+    };
+    if after.kid != e.kid("alice") || after.name != "alice" || after.admin {
+        return assertion_failure(2);
+    }
+
+    let data = serde_json::json!({
+        "structuredContent": {
+            "kid": entry.kid,
+            "public_key": entry.public_key,
+            "name": entry.name,
+            "admin": entry.admin,
+            "not_before": entry.not_before,
+            "not_after": entry.not_after,
+        }
+    });
+    StepResult::ok(serde_json::value::to_raw_value(&data).expect("json value serializes"))
+}
+
+fn assertion_failure(step: usize) -> StepResult {
+    StepResult {
+        kind: Outcome::ClientError,
+        status: None,
+        code: Some("interop_assertion_failed".to_owned()),
+        data: Some(
+            serde_json::value::to_raw_value(&serde_json::json!({"step": step}))
+                .expect("json value serializes"),
+        ),
+    }
 }
 
 fn unknown_key(e: &Env) -> StepResult {
@@ -573,10 +696,6 @@ fn stream(e: &Env) -> StepResult {
     e.raw_call(e.primary.as_ref(), "GET", "/sse", &[], None, None)
 }
 
-fn agent_admin(e: &Env) -> StepResult {
-    e.typed_raw_call(e.primary.as_ref(), TOOL_ADMIN_USER_LIST, None)
-}
-
 fn invalid_request(e: &Env) -> StepResult {
     e.raw_call(
         e.primary.as_ref(),
@@ -699,9 +818,6 @@ fn revoke_key(e: &Env) -> StepResult {
 }
 
 fn last_admin(e: &Env) -> StepResult {
-    // kid,admin is alphabetical, so json!'s Value map keeps spec order; this
-    // set_admin either trips the last-admin rule or strips the caller's own
-    // admin flag (interop/scenarios.json).
     let args = serde_json::json!({
         "kid": e.primary.kid(),
         "admin": false,

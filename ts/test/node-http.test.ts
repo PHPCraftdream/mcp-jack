@@ -16,8 +16,8 @@ import type { RegistryEntry as StateRegistryEntry } from "../src/server/state.js
 import { MemoryState } from "../src/server/state.js";
 import { Verifier } from "../src/server/verify.js";
 import { serveNode } from "../src/server/node.js";
-import { jackFetchHandler } from "../src/server/fetch.js";
-import type { HandlerConfig } from "../src/server/fetch.js";
+import { jackFetchHandler, jackIdentity, RAW_TARGET_SYMBOL } from "../src/server/fetch.js";
+import type { HandlerConfig, JackRequest } from "../src/server/fetch.js";
 import { loadRegistry, type RegistryEntry as FixtureRegistryEntry } from "./fixtures.js";
 import { fixtureAud, fixtureNow, seedSignerByName, generateKeypair } from "./client-harness.js";
 
@@ -147,6 +147,22 @@ const verifier = new Verifier({
 
 const next = async (req: Request): Promise<Response> => {
   const { pathname } = new URL(req.url);
+  if (pathname === "/identity") {
+    const identity = jackIdentity(req);
+    const identityIsOwnValue =
+      identity !== undefined && Reflect.ownKeys(req).some((key) => Object.getOwnPropertyDescriptor(req, key)?.value === identity);
+    return new Response(
+      JSON.stringify({
+        rawTarget: (req as JackRequest)[RAW_TARGET_SYMBOL] ?? null,
+        pathname,
+        search: new URL(req.url).search,
+        identity: identity === undefined ? null : { kid: identity.kid, name: identity.name, admin: identity.admin },
+        identityFrozen: identity !== undefined && Object.isFrozen(identity),
+        identityIsOwnValue,
+      }),
+      { headers: { "content-type": "application/json" } },
+    );
+  }
   if (pathname === "/events") {
     return new Response("data: x\n\n", { headers: { "content-type": "text/event-stream" } });
   }
@@ -318,6 +334,28 @@ test("E6 dot segments reach the verifier through the raw adapter", { timeout: 50
   assert.equal(res.status, 200);
   assert.equal(res.body.toString("utf-8"), nextJson);
   verifyResponse(serverPub, res.status, jackAuthValues(res.headers), sig, res.body, fixtureNow, 30);
+});
+
+test("E6b forwarded request preserves raw target beside normalized URL and private identity", { timeout: 5000 }, async () => {
+  // This uses the actual node:http adapter: a pure Fetch Request has already
+  // lost dot-segment bytes during URL parsing, so it cannot reconstruct them.
+  const alice = seedSignerByName("alice");
+  const rawTarget = "/a/../identity?x=%2F";
+  const header = signRequest(alice, fixtureAud, "GET", rawTarget, new Uint8Array(0), randomNonce(), fixtureNow);
+  const sig = parseRequestAuth([header]).sig;
+  const res = await rawRequest(port, "GET", rawTarget, { "jack-auth": header }, Buffer.alloc(0));
+
+  assert.equal(res.status, 200);
+  const body = new Uint8Array(res.body);
+  verifyResponse(serverPub, res.status, jackAuthValues(res.headers), sig, body, fixtureNow, 30);
+  assert.deepEqual(JSON.parse(res.body.toString("utf-8")), {
+    rawTarget,
+    pathname: "/identity",
+    search: "?x=%2F",
+    identity: { kid: alice.kid(), name: "alice", admin: false },
+    identityFrozen: true,
+    identityIsOwnValue: false,
+  });
 });
 
 test("E7 event-stream endpoint refused with 501", { timeout: 5000 }, async () => {

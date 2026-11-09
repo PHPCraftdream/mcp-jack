@@ -10,7 +10,8 @@ import { requestSigningString } from "../signing.js";
 import { parseRequestAuth } from "../auth-header.js";
 import type { RequestAuth } from "../auth-header.js";
 import { InMemorySigner } from "../client/signer.js";
-import { jackFetchHandler } from "../server/fetch.js";
+import { jackFetchHandler, jackIdentity, RAW_TARGET_SYMBOL } from "../server/fetch.js";
+import type { JackRequest } from "../server/fetch.js";
 import { bootstrapAdmin, Native } from "../server/native.js";
 import { NonceStore } from "../server/nonce.js";
 import { openFileState } from "../server/state-file.js";
@@ -195,7 +196,17 @@ async function runVerifyOnly(aud: string, state: FileState): Promise<void> {
 
 async function mcpHandler(req: Request): Promise<Response> {
   if (req.method === "GET") {
-    if (new URL(req.url).pathname === "/sse") {
+    const url = new URL(req.url);
+    if (url.pathname === "/identity") {
+      const identity = forwardedIdentity(req, new Uint8Array(0));
+      if (identity === undefined) return identityUnavailable();
+      return jsonBody(JSON.stringify({
+        jsonrpc: "2.0",
+        id: null,
+        result: identityResult(identity),
+      }));
+    }
+    if (url.pathname === "/sse") {
       // Finite SSE answer; the wrapper refuses the event-stream answer on
       // its header and replies with the signed 501 streaming_unsupported.
       return new Response("data: hello\n\n", { headers: { "content-type": "text/event-stream" } });
@@ -204,10 +215,10 @@ async function mcpHandler(req: Request): Promise<Response> {
     return jsonBody('{"jsonrpc":"2.0","id":null,"result":{}}');
   }
   const body = new Uint8Array(await req.arrayBuffer());
-  return answerRpc(body);
+  return answerRpc(body, req);
 }
 
-function answerRpc(body: Uint8Array): Response {
+function answerRpc(body: Uint8Array, req: Request): Response {
   let parsed: ReturnType<typeof parseJsonRaw>;
   try {
     parsed = parseJsonRaw(new TextDecoder().decode(body));
@@ -229,19 +240,24 @@ function answerRpc(body: Uint8Array): Response {
     case "tools/list":
       return jsonBody(envelopeResult(idText, '{"tools":[{"name":"echo"}]}'));
     case "tools/call":
-      return answerToolCall(members, idText);
+      return answerToolCall(members, idText, req, body);
     default:
       return jsonBody(envelopeError(idText));
   }
 }
 
-function answerToolCall(members: ReadonlyMap<string, RawJsonNode>, idText: string): Response {
+function answerToolCall(members: ReadonlyMap<string, RawJsonNode>, idText: string, req: Request, body: Uint8Array): Response {
   const paramsMembers = members.get("params")?.members;
   const nameNode = paramsMembers?.get("name");
   if (nameNode === undefined || typeof nameNode.value !== "string") {
     return jsonBody(envelopeError(idText));
   }
   switch (nameNode.value) {
+    case "app.identity": {
+      const identity = forwardedIdentity(req, body);
+      if (identity === undefined) return identityUnavailable();
+      return jsonBody(envelopeResult(idText, JSON.stringify(identityResult(identity))));
+    }
     case "echo": {
       const textNode = paramsMembers?.get("arguments")?.members?.get("text");
       if (textNode === undefined || typeof textNode.value !== "string") {
@@ -249,15 +265,74 @@ function answerToolCall(members: ReadonlyMap<string, RawJsonNode>, idText: strin
       }
       return jsonBody(envelopeResult(idText, `{"content":[{"type":"text","text":${JSON.stringify(textNode.value)}}]}`));
     }
+    case "svc.config.set":
+    case "config.set": {
+      const identity = jackIdentity(req);
+      if (identity?.name !== "bob") {
+        return new Response(JSON.stringify({ error: { code: "application_permission_denied", message: "application permission required" } }), {
+          status: 403,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return jsonBody(envelopeResult(idText, '{"content":[{"type":"text","text":"ok"}]}'));
+    }
     case "logs.tail":
-    case "config.set":
-      // Ordinary forwarded tools under the admin-only contract: no tool
-      // denies exist, so the fixed handler answers both with a trivial ok
-      // per contract.
       return jsonBody(envelopeResult(idText, '{"content":[{"type":"text","text":"ok"}]}'));
     default:
       return jsonBody(envelopeError(idText));
   }
+}
+
+type ForwardedIdentity = {
+  kid: string;
+  name: string;
+  admin: boolean;
+  body_b64u: string;
+  method: string;
+  target: string;
+};
+
+function forwardedIdentity(req: Request, body: Uint8Array): ForwardedIdentity | undefined {
+  const identity = jackIdentity(req);
+  if (identity === undefined || jackIdentity(req) !== identity || !Object.isFrozen(identity)) return undefined;
+  const kid = identity.kid;
+  const name = identity.name;
+  const admin = identity.admin;
+  if (identity.kid !== kid || identity.name !== name || identity.admin !== admin) return undefined;
+  const rawTarget = (req as JackRequest)[RAW_TARGET_SYMBOL];
+  let target: string;
+  if (rawTarget !== undefined) {
+    target = rawTarget;
+  } else {
+    const url = new URL(req.url);
+    target = url.pathname + url.search;
+  }
+  return {
+    kid,
+    name,
+    admin,
+    body_b64u: encodeBase64URL(body),
+    method: req.method,
+    target,
+  };
+}
+
+function identityResult(identity: ForwardedIdentity): {
+  content: [{ type: "text"; text: string }];
+  structuredContent: ForwardedIdentity;
+  isError: false;
+} {
+  return {
+    content: [{ type: "text", text: "identity" }],
+    structuredContent: identity,
+    isError: false,
+  };
+}
+
+function identityUnavailable(): Response {
+  return new Response(JSON.stringify({
+    error: { code: "application_identity_unavailable", message: "verified application identity unavailable" },
+  }), { status: 500, headers: { "content-type": "application/json" } });
 }
 
 // Envelopes are composed by string so the field order and the RAW id text

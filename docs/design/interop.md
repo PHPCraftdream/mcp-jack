@@ -1,121 +1,33 @@
 # Design: cross-language interoperability tests
 
-Status: implemented; kept as the design record, with the decisions as built pinned in [../../interop/README.md](../../interop/README.md). Scope: Go, Rust and TypeScript, client and server.
+Status: Go, Rust and TypeScript SDKs implement the reduced admin-only identity contract in baseline `b13b972`; shared interop matrix acceptance remains pending parent CI. The scenario source of truth is [`interop/scenarios.json`](../../interop/scenarios.json). The harness exercises verified-identity forwarding through ordinary handlers and malformed required-boolean admin-input controls. No harness result is claimed here.
 
-## 1. Goal and acceptance
+## Contract and boundaries
 
-Every client SDK works against every server SDK. With three languages that is a 3 x 3 matrix of (client, server) pairs, including the same-language diagonal.
+CI builds the client and server executables for each language; the harness runs cross-language pairs. Current SDK behavior is ordinary MCP pass-through after authentication, immutable verified identity `{kid, name, admin}` at the wrapped handler, and protocol `admin` gating only reserved `jack.admin.*` tools. Application authorization is independent. Legacy user/state `kind` or `scopes` data is rejected without migration or rewrite; no policy engine participates.
 
-Acceptance:
+Preserve these cross-language properties in the matrix:
 
-1. A harness runs every scenario of section 4 for every pair and fails on the first deviation from the expected outcome.
-2. A byte-exactness check proves that the three SDKs produce identical signed bytes for identical inputs (section 5), so a future fourth implementation can be checked without running a pair.
-3. CI runs the matrix on Linux; each failing pair is named in the output.
+- Exact request body bytes are signed; deterministic signing vectors pin signing-string and header bytes.
+- Request authentication includes strict key/signature validation, freshness and replay defense. Verification-only signing controls use fixed time and nonce inputs and therefore do not substitute for live checks.
+- Response signatures are mandatory for authenticated responses, including application errors. Only protocol-defined authentication-failure 401 responses may be unsigned.
+- Clients trust a separately pinned server identity; no TOFU or silent pin replacement.
+- Administrative state changes retain last-active-admin protection.
+- The test server's ordinary-MCP application decision must use the verified handler identity, not a protocol policy or request-supplied identity.
 
-Non-goals: performance, long-running soak tests, interop with third-party MCP clients, streaming (refused with 501 in v0.1).
+The current server CLI is `interop-server --aud <aud> --state <file> --server-seed-hex <64 hex>` with optional `--bootstrap-ttl <seconds>` or `--verify-only`; it takes no policy-file input. `--verify-only` checks fixed signing cases while omitting time-window and nonce validation. Client CLI and current case details are documented in [the harness README](../../interop/README.md); that document uses the scenario source as the source of truth.
 
-## 2. What is needed first
+## Layout and independent transfer contract
 
-Design-time note: when this was written only a Go client existed; the Rust and TypeScript client SDKs have since been built (see `rust/README.md` and `ts/README.md`). The matrix needed a Rust client SDK and a TypeScript client SDK, both mirroring `client/` (signer, request signing, response verification, typed native-tool calls, connection profile). Client SDK scope is the Go client's: no stdio bridge, no gateway.
+Language harness sources are `interop/go/{server,client,transfer}/`, `rust/src/bin/interop*.rs`, and `ts/src/interop/`. They are outside the public SDK APIs. `interop/run.mjs` coordinates request scenarios and signing controls; `interop/transfer.mjs` separately coordinates user-key transfer. The latter's envelope, strict import, independent trust tuple, and role-isolated key surfaces remain governed by [user-keys.md](user-keys.md) and its fixtures. Do not conflate its envelope `type` discriminator with the removed user `kind` field.
 
-## 3. Contract between the harness and the SDKs
-
-Each language ships two small executables, built from its SDK and living outside the library API:
-
-- `interop-server`: a server built from the SDK `NewHandler`/`JackLayer`/`jackFetchHandler` in front of a fixed, trivial MCP handler (below).
-- `interop-client`: a client built from the SDK that runs one named scenario and prints a result.
-
-The harness (`interop/run.mjs`, Node, no dependencies) builds nothing itself: CI builds the six executables first, then the harness spawns them from paths given on the command line or in `interop/targets.json` (relative paths, no machine paths).
-
-### 3.1 interop-server
-
-```
-interop-server --aud <aud> --policy <file> --state <file> --server-seed-hex <64 hex> [--bootstrap-ttl <seconds>] [--verify-only]
-```
-
-- Listens on `127.0.0.1:0` (plain HTTP; TLS is the environment's job) and prints exactly one line to stdout when ready: `{"ready":true,"port":<n>,"server_public_key":"<b64u>","server_kid":"<kid>"}`. Nothing else on stdout.
-- The state file is a copy of `spec/fixtures/registry.json` in the SDK's `FileState` format, written by the harness into a fresh temp directory per run (no shared state between runs). The on-disk format is pinned: `{"version":1,"keys":[...],"invites":[]}` — registry entries as in `registry.json` but without any `aud` field (the aud travels via `--aud`); the server loads it strictly like `server/statefile.go` (unknown fields, duplicate kid/name, invalid entries rejected at load). The harness composes the policy file as `spec/fixtures/policy.json` plus one inserted allow-any rule for the tool `echo` (without it the echo scenario is denied by the fixture policy). The server uses the spec default time window (30 s).
-- `--verify-only` (no listening): reads exactly one JSON object from stdin `{"method":"POST","target":"/mcp","jack_auth":"v1 kid=...,ts=...,nonce=...,sig=...","body_b64u":"..."}`, checks request-auth steps 1-4 and 7 of spec 01 section 4 (grammar, version, kid lookup, strict Ed25519 signature over exact body bytes) and skips steps 5/6/8 (validity, time window, nonce) because the sign cases use fixed `ts` values 0 and 999999999999. Prints one stdout line `{"verify":"accept","kid":"<kid>"}` or `{"verify":"reject","code":"<code>"}` and exits 0 either way. Exit codes: 0 on SIGTERM/stdin close, nonzero on startup failure (bad flags, unreadable state/policy).
-- When `--bootstrap-ttl` is given, the server creates an admin invite through the SDK's `BootstrapAdmin` and prints it on stderr as `{"bootstrap_invite":"<code>"}`; the harness does not use the bootstrap invite; scenarios mint invites through the protocol (an admin signs `jack.admin.invite.create`).
-- The wrapped MCP handler is the same in every language and fixed by this document; every answer is a full JSON-RPC envelope. `POST` with a JSON-RPC body answers by method: `ping` -> `{"jsonrpc":"2.0","id":<id>,"result":{}}`; `tools/list` -> `{"jsonrpc":"2.0","id":<id>,"result":{"tools":[{"name":"echo"}]}}`; `tools/call` of `echo` -> `{"jsonrpc":"2.0","id":<id>,"result":{"content":[{"type":"text","text":<arguments.text verbatim>}]}}`; `tools/call` of `logs.tail` and `config.set` -> `{"jsonrpc":"2.0","id":<id>,"result":{"content":[{"type":"text","text":"ok"}]}}` (policy decides who may call them); anything else -> JSON-RPC error `-32601`. A `GET /sse` is finite: the wrapped handler answers `Content-Type: text/event-stream`, writes exactly one SSE event (`data: hello` plus a blank line) and closes within 1 second; the wrapper refuses the event-stream answer and responds instead with the signed `501 {"error":{"code":"streaming_unsupported",...}}`.
-- Exits on SIGTERM/stdin close; the harness kills only the PID it spawned.
-
-### 3.2 interop-client
-
-```
-interop-client --url <base> --seed-hex <64 hex> --server-public-key <b64u> --aud <aud> --scenario <name> [--seeds <file>] [--ts <n>] [--nonce <b64u>] [--arg k=v ...]
-```
-
-Prints one JSON object to stdout and exits 0 on a completed scenario, whether the scenario's outcome is success or an expected protocol rejection; exit 1 only for a harness-level failure (cannot connect, crash). The object is `{"scenario":"<name>","outcome":"ok"|"rejected"|"client_error","http_status":<n|null>,"code":"<code|null>","data":<json|null>}`. Outcome semantics: `ok` = accepted with a verified response signature (`data` = the JSON-RPC `result` member verbatim); `rejected` = server rejection (`http_status`/`code` from the wire, `data` null; the client verifies the response signature of every response except answers to requests that failed authentication — only the 401 family with the spec 01 section 4 codes may be unsigned, every 2xx and 400/403/404/409/501 must carry a valid signature, and a missing or invalid signature there is `client_error`, with an absent header being `missing_auth` per spec 01 section 5); `client_error` = client-side response-verification failure per spec 01 section 5 (`http_status` null, `data` null). `--seeds` is always passed by the harness (the path of `spec/fixtures/keys.json` itself, opened read-only; nothing is copied) so multi-step scenarios can sign individual steps with non-primary identities; `--seed-hex` is the primary identity. `--ts`/`--nonce` are sign-only only; `sign-only` never touches the network and its output `data` is `{"signing_string":...,"jack_auth":...,"kid":...}`. In a multi-step scenario a failing intermediate step yields `client_error` with that step's status/code and `data` `{"step":<0-based index>}`, still exit 0; the final step's result is compared.
-
-## 4. Scenarios (the same list for every pair)
-
-Expected outcomes live in `interop/scenarios.json`, which is normative; each scenario cites its source (request/admin vectors, spec sections, fixtures). Full list, in `scenario_order`: 
-
-| Scenario | What it proves | Expected |
-|---|---|---|
-| `ping` | signed request and signed response round trip, unmodified MCP passes through | ok |
-| `echo` | body bytes with non-ASCII text hash identically | ok, text equals input |
-| `whoami` | native tool, `structuredContent` shape | ok, kid and scopes as registered |
-| `denied-tool` | a `read` key calls `svc.config.set` | rejected, 403 `insufficient_scope` |
-| `unmapped-tool` | a tool matching no policy rule | rejected, 403 `operation_denied` |
-| `unknown-key` | a key not in the registry | rejected, 401 `unknown_key` |
-| `replay` | the client re-sends the exact bytes of an accepted request | second answer rejected, 401 `replayed_nonce` (needs a client `--replay` mode that re-sends raw bytes) |
-| `clock-skew` | the client signs with `ts` 120 s in the past | rejected, 401 `timestamp_out_of_window` |
-| `tampered-body` | the client changes one body byte after signing | rejected, 401 `bad_signature` |
-| `bad-server-key` | the client pins a wrong server key | `client_error`, response not trusted |
-| `expired-key` | registry entry with `not_after` in the past | rejected, 401 `key_inactive` |
-| `key-not-yet-valid` | `not_before` shifted to now + 3600 s via `registry_overrides` (dedicated server) | rejected, 401 `key_inactive` |
-| `stream` | `GET /sse` | rejected, 501 `streaming_unsupported` |
-| `agent-admin` | an agent key calls an admin native tool | rejected, 403 `insufficient_scope` |
-| `invalid-request` | valid signature, unparseable body | rejected, 400 `invalid_request` |
-| `unknown-native-tool` | an undefined `jack.`-prefixed tool | rejected, 403 `operation_denied` |
-| `enroll` (fresh) | invite -> new key enrolls -> whoami with the new key | ok |
-| `enroll-used-invite` (fresh) | re-using a consumed invite | rejected, 403 `invalid_invite` |
-| `rotate` (fresh) | key rotation with proof, old key dead, new key works | ok |
-| `admin-create` (fresh) | admin creates a user and an invite, the new user enrolls | ok |
-| `revoke-key` (fresh) | admin revokes a key, the key is dead | rejected, 401 `unknown_key` |
-| `last-admin` (fresh) | demoting the last admin | rejected, 409 `last_admin` (code exactly as in spec 03) |
-
-A scenario is fresh (runs against a pristine server) exactly when its steps expect a state change: `enroll`, `enroll-used-invite`, `rotate`, `admin-create`, `revoke-key`, `last-admin`. A scenario with `registry_overrides` (currently `key-not-yet-valid`) also runs against a dedicated pristine server, so the overrides are baked into that server's state file. Scenarios that need an admin start from the registry admin key of the fixtures.
-
-## 5. Byte-exactness check
-
-`interop-client --scenario sign-only` with fixed `--ts`, `--nonce`, method, target, body and seed prints the request `Jack-Auth` header and the signing string as the JSON `data` triple `{signing_string, jack_auth, kid}`. Ed25519 is deterministic, so all three SDKs must print identical bytes. The harness compares every output against the oracle in `interop/sign-cases.json` (8 cases: empty body, ASCII body, multibyte body, body with NUL and newline, percent-encoded query target, long target, `ts` 0 and `ts` 999999999999; generated by `interop/tools/gen-sign-cases.mjs`, which has a `--check` mode). The harness also cross-verifies every (signing, verifying) language pair through `interop-server`'s `--verify-only` flag (prints accept/reject for a header+body without serving), including one tampered-body control per pair (the final body byte XOR 0x01 must reject with `bad_signature`). This catches drift that the fixtures cannot: fixtures pin outcomes, this pins bytes.
-
-## 6. Layout
-
-```
-interop/
-  README.md          how to run, how to add a language
-  scenarios.json     expected outcomes (normative)
-  sign-cases.json    byte-exactness inputs (generated by tools/gen-sign-cases.mjs)
-  run.mjs            matrix harness (also --self-test)
-  tools/             gen-sign-cases.mjs, fake-server.mjs, fake-client.mjs (self-test fakes)
-  go/        cmd mains (package main under the Go module)
-  rust/      bin target(s) in the crate or a tiny sibling crate path-depending on it
-  ts/        two scripts compiled with the package
-```
-
-Go: `interop/go/server/main.go`, `interop/go/client/main.go` inside the existing module (imports the SDK packages). Rust: `rust/src/bin/` behind a cargo feature `interop` so `cargo build` for library users is unaffected. TypeScript: `ts/src/interop/{server,client}.ts`, compiled by the package build, run with `node`.
-
-## 7. CI
-
-One job `interop` on ubuntu, as built in `.github/workflows/ci.yml`: build the Go executables, `cargo build --locked --release --features interop` (`interop` enables `http`), `npm ci --no-audit --no-fund` + `npm run build` for the TypeScript package, then `node interop/run.mjs`. Before building the SDKs, CI (and any implementer) can run the harness's dependency-free self-test: `node interop/run.mjs --self-test`. The job declares `needs: [go, rust, ts, fixtures]`, so a unit-test or fixture failure is reported first.
-
-## 8. Risks and decisions
-
-- Adding Rust and TypeScript client SDKs enlarges scope; they are necessary, a pair matrix without them reduces to Go-client x three servers.
-- HTTP client for the Rust `interop-client`: `ureq` as an optional dependency of the `interop` feature only (blocking, small, no async runtime), not in the library's default dependencies. TypeScript uses the built-in `fetch`; Go uses `net/http`.
-- Scenario `replay` and `tampered-body` need raw-byte control in the client; the SDK clients expose a low-level `sign_request` for this, and the interop client uses it directly instead of its high-level transport.
-- Determinism: nonces and timestamps are injected in `sign-only`; in live scenarios real clocks and random nonces are used, and all processes run on the same machine clock.
-- Ports and temp directories are per run; nothing is shared between scenarios, so the matrix can later run in parallel.
+Shared harness matrix acceptance, packaged-consumer checks, and coverage/fuzz evidence for baseline `b13b972` remain pending parent CI. Q1 session-channel work is future v0.2 design, not implemented. Q3 server-key rotation requires a separate exact design and is not implemented.
 
 ## 9. Client URL policy
 
 Spec 01 section 1 requires HTTPS for every non-loopback connection. The Go, Rust and TypeScript client SDKs enforce one conservative, literal-only policy on the destination URL, pinned by `spec/fixtures/client-url-policy.json` (a table of `{name, url, allow}` cases, with an optional `parse_reject` field, that all three SDK test suites run). The table is the normative test oracle for the SDK URL policy, but it is hand-maintained: it is not a generated protocol vector, is not produced by `spec/tools/gen-fixtures.mjs` and is not covered by its `--check`. This section is its prose.
 
-The policy is a pure function of the raw URL string. It is applied before any URL-library parsing or normalisation and only accepts or refuses: it never rewrites the URL.
+The policy is a pure function of the raw URL string. For raw-string entry points it is applied before any URL-library parsing or normalisation and only accepts or refuses: it never rewrites the URL. APIs given an already-parsed URL or Request can only check that object's serialized URL; they cannot recover the original spelling, as detailed in 9.4.
 
 1. Refuse if the string is empty, contains any byte `<= 0x20`, `0x7f` or `>= 0x80`, or contains a backslash anywhere.
 2. The scheme must be `http` or `https` (ASCII case-insensitive), followed by `://`.
@@ -152,6 +64,6 @@ Per row, each runner exercises three entry paths:
 2. Public constructors and profile loaders (Go `NewClient`/`LoadProfile`/`NewClientFromProfile`, Rust `Client::new`/`load_profile`/`from_profile`, TS `new Client`/`loadProfile`/`validateProfile`/`clientFromProfile`): `allow=false` must be refused with the policy error before any signing or transport call; `allow=true` must succeed, except rows listing that SDK in `parse_reject`, which must fail with a non-policy (generic parse) error.
 3. Low-level signing transport (Go `Transport.RoundTrip`, Rust `SigningTransport::round_trip`, TS `createSigningFetch`): `allow=false` means zero signer uses and zero inner transport/fetch calls; `allow=true` reaches the inner spy exactly once.
 
-Go limitation: `Transport` sees only the already-parsed `req.URL`, so rows the Go parser rejects (`http.NewRequest` fails) or normalises (percent-decoded host, dropped or escaped path or fragment bytes) cannot be presented to `RoundTrip` as the raw string. The Go runner classifies each row explicitly as parser-rejected, refused-at-transport or parser-normalised, and asserts that the pre-parser policy rejects the raw string in every `allow=false` case. TS `createSigningFetch` checks URL and Request inputs on their WHATWG-normalised `href` (a string input is checked as given).
+Go limitation: `Transport` sees only the already-parsed `req.URL`, so rows the Go parser rejects (`http.NewRequest` fails) or normalises (percent-decoded host, dropped or escaped path or fragment bytes) cannot be presented to `RoundTrip` as the raw string. The Go runner classifies each row explicitly as parser-rejected, refused-at-transport or parser-normalised, and asserts that the pre-parser policy rejects the raw string in every `allow=false` case. TypeScript `createSigningFetch` checks URL and Request inputs on their WHATWG-normalised `href` (`Request.url` or `URL.href`); a string input is checked as given. In server-side pure Fetch handling, `Request.url` is normalized and cannot recover the original target spelling. The `node:http` adapter preserves the exact received origin-form target in the exported `RAW_TARGET_SYMBOL` through verification and copies it to the reconstructed request for forwarding. This adapter metadata is separate from SDK-private identity storage in the WeakMap, which remains unaffected; pure Fetch cannot recover the original target.
 
 Fragments are never signed. In TS, the comparison of the response URL against the request URL ignores the fragment.
