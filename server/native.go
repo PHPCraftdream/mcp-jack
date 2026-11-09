@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
@@ -111,39 +112,39 @@ func timeFrom(raw json.RawMessage) (*int64, bool) {
 	return &v, true
 }
 
-// scopesFrom decodes an array of distinct valid scopes.
-func scopesFrom(raw json.RawMessage) ([]string, bool) {
-	if len(raw) == 0 || isJSONNull(raw) {
-		return nil, false
-	}
-	var items []json.RawMessage
-	if err := json.Unmarshal(raw, &items); err != nil {
-		return nil, false
-	}
-	out := make([]string, 0, len(items))
-	seen := make(map[string]bool, len(items))
-	for _, item := range items {
-		s, ok := jsonString(item)
-		if !ok || !jack.ValidScope(s) || seen[s] {
-			return nil, false
-		}
-		seen[s] = true
-		out = append(out, s)
-	}
-	return out, true
+// isJSONNull reports whether raw is the JSON null literal.
+func isJSONNull(raw json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
 }
 
-// kindFrom decodes the optional kind; absent means human.
-func kindFrom(a argMap) (string, bool) {
-	raw, present := a["kind"]
-	if !present {
-		return KindHuman, true
-	}
-	kind, ok := jsonString(raw)
-	if !ok || (kind != KindHuman && kind != KindAgent) {
+// jsonString decodes raw only when it is a JSON string; encoding/json would
+// also accept null for a string target, which the protocol must not.
+func jsonString(raw json.RawMessage) (string, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '"' {
 		return "", false
 	}
-	return kind, true
+	var s string
+	if err := json.Unmarshal(trimmed, &s); err != nil {
+		return "", false
+	}
+	return s, true
+}
+
+// adminFrom decodes an optional admin flag (spec 03 section 3): absent is
+// false; when present it must be a strict JSON boolean — null, a string or a
+// number is invalid.
+func adminFrom(raw json.RawMessage) (bool, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	switch {
+	case len(raw) == 0:
+		return false, true
+	case bytes.Equal(trimmed, []byte("true")):
+		return true, true
+	case bytes.Equal(trimmed, []byte("false")):
+		return false, true
+	}
+	return false, false
 }
 
 // publicKeyFrom decodes a submitted public key and applies the validity rules
@@ -160,58 +161,20 @@ func publicKeyFrom(raw json.RawMessage) ([]byte, *jack.Error) {
 	return key, nil
 }
 
-type entryView struct {
-	Kid       string   `json:"kid"`
-	PublicKey string   `json:"public_key"`
-	Name      string   `json:"name"`
-	Kind      string   `json:"kind"`
-	Scopes    []string `json:"scopes"`
-	NotBefore *int64   `json:"not_before"`
-	NotAfter  *int64   `json:"not_after"`
-}
-
-// kindOrHuman applies the default kind of records that do not carry one.
-func kindOrHuman(kind string) string {
-	if kind == "" {
-		return KindHuman
-	}
-	return kind
-}
-
-func viewOf(e RegistryEntry) entryView {
-	scopes := e.Scopes
-	if scopes == nil {
-		scopes = []string{}
-	}
-	return entryView{Kid: e.Kid, PublicKey: e.PublicKey, Name: e.Name, Kind: kindOrHuman(e.Kind), Scopes: scopes, NotBefore: e.NotBefore, NotAfter: e.NotAfter}
-}
-
 type inviteView struct {
-	InviteID  string   `json:"invite_id"`
-	Scopes    []string `json:"scopes"`
-	Kind      string   `json:"kind"`
-	CreatedBy string   `json:"created_by"`
-	CreatedAt int64    `json:"created_at"`
-	ExpiresAt int64    `json:"expires_at"`
+	InviteID  string `json:"invite_id"`
+	Admin     bool   `json:"admin"`
+	CreatedBy string `json:"created_by"`
+	CreatedAt int64  `json:"created_at"`
+	ExpiresAt int64  `json:"expires_at"`
 }
 
-func inviteKind(i InviteRecord) string { return kindOrHuman(i.Kind) }
-
-func contains(items []string, want string) bool {
-	for _, s := range items {
-		if s == want {
-			return true
-		}
-	}
-	return false
-}
-
-// activeAdmins counts entries that hold admin and are active at now
-// (spec 03 section 4 rule 4).
+// activeAdmins counts entries with admin that are active at now (spec 03
+// section 4 rule 2).
 func activeAdmins(keys []RegistryEntry, now int64) int {
 	n := 0
 	for _, k := range keys {
-		if contains(k.Scopes, "admin") && entryActive(k, now) {
+		if k.Admin && entryActive(k, now) {
 			n++
 		}
 	}
@@ -232,7 +195,7 @@ func (n *Native) Call(c *NativeCall) (NativeResult, *jack.Error) {
 		return n.whoami(c)
 	case ToolRotateKey:
 		return n.rotate(c)
-	case ToolAdminUserList, ToolAdminUserGet, ToolAdminUserCreate, ToolAdminUserSetScopes, ToolAdminUserRevoke,
+	case ToolAdminUserList, ToolAdminUserGet, ToolAdminUserCreate, ToolAdminUserSetAdmin, ToolAdminUserRevoke,
 		ToolAdminInviteCreate, ToolAdminInviteList, ToolAdminInviteRevoke:
 		return n.admin(c)
 	}
@@ -277,8 +240,7 @@ func (n *Native) enroll(c *NativeCall) (NativeResult, *jack.Error) {
 			return perr(409, jack.CodeKeyExists, "the key is already registered")
 		}
 		enrolled = RegistryEntry{
-			Kid: c.Kid, PublicKey: publicKey, Name: name, Kind: inviteKind(invite),
-			Scopes: invite.Scopes,
+			Kid: c.Kid, PublicKey: publicKey, Name: name, Admin: invite.Admin,
 		}
 		if invite.KeyTTLSeconds != nil {
 			notAfter := c.Now + *invite.KeyTTLSeconds
@@ -292,7 +254,7 @@ func (n *Native) enroll(c *NativeCall) (NativeResult, *jack.Error) {
 		return NativeResult{}, asJackError(err)
 	}
 	return NativeResult{Structured: map[string]any{
-		"kid": enrolled.Kid, "name": enrolled.Name, "kind": enrolled.Kind, "scopes": enrolled.Scopes,
+		"kid": enrolled.Kid, "name": enrolled.Name, "admin": enrolled.Admin,
 	}}, nil
 }
 
@@ -303,9 +265,9 @@ func (n *Native) whoami(c *NativeCall) (NativeResult, *jack.Error) {
 	if _, jerr := parseArgs(c.Arguments); jerr != nil {
 		return NativeResult{}, jerr
 	}
-	v := viewOf(*c.Caller)
+	v := *c.Caller
 	return NativeResult{Structured: map[string]any{
-		"kid": v.Kid, "name": v.Name, "kind": v.Kind, "scopes": v.Scopes,
+		"kid": v.Kid, "name": v.Name, "admin": v.Admin,
 		"not_before": v.NotBefore, "not_after": v.NotAfter,
 	}}, nil
 }
@@ -359,14 +321,14 @@ func (n *Native) rotate(c *NativeCall) (NativeResult, *jack.Error) {
 }
 
 // admin runs the user and invite administration tools in the check order of
-// spec 03 section 4: admin scope, arguments, key validity, target, rules,
-// conflicts, last administrator, then the atomic change.
+// spec 03 section 4: admin flag, arguments, key validity, target, conflicts,
+// last administrator, then the atomic change.
 func (n *Native) admin(c *NativeCall) (NativeResult, *jack.Error) {
 	if c.Caller == nil {
 		return NativeResult{}, perr(401, jack.CodeUnknownKey, "unknown key")
 	}
-	if !contains(c.Caller.Scopes, "admin") {
-		return NativeResult{}, perr(403, jack.CodeInsufficientScope, "the key lacks the admin scope")
+	if !c.Caller.Admin {
+		return NativeResult{}, perr(403, jack.CodeAdminRequired, "the caller is not an administrator")
 	}
 	args, jerr := parseArgs(c.Arguments)
 	if jerr != nil {
@@ -377,11 +339,7 @@ func (n *Native) admin(c *NativeCall) (NativeResult, *jack.Error) {
 	case ToolAdminUserList:
 		keys := c.State.View().Keys
 		sort.Slice(keys, func(i, j int) bool { return keys[i].Name < keys[j].Name })
-		users := make([]entryView, len(keys))
-		for i, k := range keys {
-			users[i] = viewOf(k)
-		}
-		return NativeResult{Structured: map[string]any{"users": users}}, nil
+		return NativeResult{Structured: map[string]any{"users": keys}}, nil
 
 	case ToolAdminUserGet:
 		kid, ok := args.str("kid")
@@ -393,12 +351,12 @@ func (n *Native) admin(c *NativeCall) (NativeResult, *jack.Error) {
 		if !found {
 			return NativeResult{}, perr(404, jack.CodeUnknownTarget, "no such key")
 		}
-		return NativeResult{Structured: viewOf(entry)}, nil
+		return NativeResult{Structured: entry}, nil
 
 	case ToolAdminUserCreate:
 		return n.userCreate(c, args)
-	case ToolAdminUserSetScopes:
-		return n.userSetScopes(c, args)
+	case ToolAdminUserSetAdmin:
+		return n.userSetAdmin(c, args)
 	case ToolAdminUserRevoke:
 		return n.userRevoke(c, args)
 	case ToolAdminInviteCreate:
@@ -412,30 +370,16 @@ func (n *Native) admin(c *NativeCall) (NativeResult, *jack.Error) {
 }
 
 // currentAdmin re-reads the calling administrator inside a transaction, so a
-// concurrent change to its scopes is honored (spec 03 section 9).
+// concurrent change to its admin flag is honored (spec 03 section 9).
 func currentAdmin(e *StateEdit, c *NativeCall) (RegistryEntry, *jack.Error) {
 	caller, ok := e.Key(c.Caller.Kid)
 	if !ok {
 		return RegistryEntry{}, perr(401, jack.CodeUnknownKey, "unknown key")
 	}
-	if !contains(caller.Scopes, "admin") {
-		return RegistryEntry{}, perr(403, jack.CodeInsufficientScope, "the key lacks the admin scope")
+	if !caller.Admin {
+		return RegistryEntry{}, perr(403, jack.CodeAdminRequired, "the caller is not an administrator")
 	}
 	return caller, nil
-}
-
-// grantable applies rules 1 and 2 of spec 03 section 4 to scopes about to be
-// added to an entry of the given kind.
-func grantable(caller RegistryEntry, added []string, kind string, after []string) *jack.Error {
-	for _, s := range added {
-		if !contains(caller.Scopes, s) {
-			return perr(403, jack.CodeScopeEscalation, "the key may not grant a scope it does not hold")
-		}
-	}
-	if kind == KindAgent && contains(after, "admin") {
-		return perr(403, jack.CodeAgentAdminForbidden, "an agent key cannot hold the admin scope")
-	}
-	return nil
 }
 
 func (n *Native) userCreate(c *NativeCall, args argMap) (NativeResult, *jack.Error) {
@@ -443,12 +387,8 @@ func (n *Native) userCreate(c *NativeCall, args argMap) (NativeResult, *jack.Err
 	if !ok || !jack.ValidName(name) {
 		return NativeResult{}, invalidParams()
 	}
-	scopes, ok := scopesFrom(args["scopes"])
-	if !ok {
-		return NativeResult{}, invalidParams()
-	}
-	kind, ok := kindFrom(args)
-	if !ok {
+	admin, okAdmin := adminFrom(args["admin"])
+	if !okAdmin {
 		return NativeResult{}, invalidParams()
 	}
 	notBefore, okFrom := timeFrom(args["not_before"])
@@ -468,11 +408,7 @@ func (n *Native) userCreate(c *NativeCall, args argMap) (NativeResult, *jack.Err
 	c.Target = name
 
 	err := c.State.Update(func(e *StateEdit) error {
-		caller, jerr := currentAdmin(e, c)
-		if jerr != nil {
-			return jerr
-		}
-		if jerr := grantable(caller, scopes, kind, scopes); jerr != nil {
+		if _, jerr := currentAdmin(e, c); jerr != nil {
 			return jerr
 		}
 		if _, taken := e.KeyByName(name); taken {
@@ -481,7 +417,7 @@ func (n *Native) userCreate(c *NativeCall, args argMap) (NativeResult, *jack.Err
 		if _, exists := e.Key(kid); exists {
 			return perr(409, jack.CodeKeyExists, "the key is already registered")
 		}
-		e.PutKey(RegistryEntry{Kid: kid, PublicKey: publicKey, Name: name, Kind: kind, Scopes: scopes, NotBefore: notBefore, NotAfter: notAfter})
+		e.PutKey(RegistryEntry{Kid: kid, PublicKey: publicKey, Name: name, Admin: admin, NotBefore: notBefore, NotAfter: notAfter})
 		return nil
 	})
 	if err != nil {
@@ -490,39 +426,28 @@ func (n *Native) userCreate(c *NativeCall, args argMap) (NativeResult, *jack.Err
 	return NativeResult{Structured: map[string]any{"kid": kid}}, nil
 }
 
-func (n *Native) userSetScopes(c *NativeCall, args argMap) (NativeResult, *jack.Error) {
+// userSetAdmin implements jack.admin.user.set_admin (spec 03 section 3.3):
+// the admin argument is REQUIRED — absent, null or non-boolean is
+// invalid_params — and the last-administrator rule is evaluated against the
+// registry as it would be after the change (spec 03 section 4 rule 2).
+func (n *Native) userSetAdmin(c *NativeCall, args argMap) (NativeResult, *jack.Error) {
 	kid, okKid := args.str("kid")
-	scopes, okScopes := scopesFrom(args["scopes"])
-	if !okKid || !okScopes {
+	admin, okAdmin := adminFrom(args["admin"])
+	if !okKid || !okAdmin || len(args["admin"]) == 0 {
 		return NativeResult{}, invalidParams()
 	}
 	c.Target = kid
 
 	var updated RegistryEntry
 	err := c.State.Update(func(e *StateEdit) error {
-		caller, jerr := currentAdmin(e, c)
-		if jerr != nil {
+		if _, jerr := currentAdmin(e, c); jerr != nil {
 			return jerr
 		}
 		target, found := e.Key(kid)
 		if !found {
 			return perr(404, jack.CodeUnknownTarget, "no such key")
 		}
-		var added []string
-		for _, s := range scopes {
-			if !contains(target.Scopes, s) {
-				added = append(added, s)
-			}
-		}
-		if jerr := grantable(caller, added, kindOrHuman(target.Kind), scopes); jerr != nil {
-			return jerr
-		}
-		for _, s := range target.Scopes {
-			if !contains(caller.Scopes, s) {
-				return perr(403, jack.CodeForbiddenAdminTarget, "the key holds a scope the administrator lacks")
-			}
-		}
-		target.Scopes = scopes
+		target.Admin = admin
 		after := e.Keys()
 		for i := range after {
 			if after[i].Kid == kid {
@@ -539,7 +464,7 @@ func (n *Native) userSetScopes(c *NativeCall, args argMap) (NativeResult, *jack.
 	if err != nil {
 		return NativeResult{}, asJackError(err)
 	}
-	return NativeResult{Structured: viewOf(updated)}, nil
+	return NativeResult{Structured: updated}, nil
 }
 
 func (n *Native) userRevoke(c *NativeCall, args argMap) (NativeResult, *jack.Error) {
@@ -550,18 +475,11 @@ func (n *Native) userRevoke(c *NativeCall, args argMap) (NativeResult, *jack.Err
 	c.Target = kid
 
 	err := c.State.Update(func(e *StateEdit) error {
-		caller, jerr := currentAdmin(e, c)
-		if jerr != nil {
+		if _, jerr := currentAdmin(e, c); jerr != nil {
 			return jerr
 		}
-		target, found := e.Key(kid)
-		if !found {
+		if _, found := e.Key(kid); !found {
 			return perr(404, jack.CodeUnknownTarget, "no such key")
-		}
-		for _, s := range target.Scopes {
-			if !contains(caller.Scopes, s) {
-				return perr(403, jack.CodeForbiddenAdminTarget, "the key holds a scope the administrator lacks")
-			}
 		}
 		var rest []RegistryEntry
 		for _, k := range e.Keys() {
@@ -597,11 +515,7 @@ func (n *Native) newInviteCode() (code, inviteID string, err error) {
 }
 
 func (n *Native) inviteCreate(c *NativeCall, args argMap) (NativeResult, *jack.Error) {
-	scopes, ok := scopesFrom(args["scopes"])
-	if !ok {
-		return NativeResult{}, invalidParams()
-	}
-	kind, ok := kindFrom(args)
+	admin, ok := adminFrom(args["admin"])
 	if !ok {
 		return NativeResult{}, invalidParams()
 	}
@@ -632,11 +546,8 @@ func (n *Native) inviteCreate(c *NativeCall, args argMap) (NativeResult, *jack.E
 		if jerr != nil {
 			return jerr
 		}
-		if jerr := grantable(caller, scopes, kind, scopes); jerr != nil {
-			return jerr
-		}
 		e.PutInvite(InviteRecord{
-			InviteID: inviteID, Scopes: scopes, Kind: kind, CreatedBy: caller.Kid,
+			InviteID: inviteID, Admin: admin, CreatedBy: caller.Kid,
 			CreatedAt: c.Now, ExpiresAt: expiresAt, KeyTTLSeconds: keyTTL,
 		})
 		return nil
@@ -662,12 +573,8 @@ func (n *Native) inviteList(c *NativeCall) (NativeResult, *jack.Error) {
 	})
 	out := make([]inviteView, len(live))
 	for i, v := range live {
-		scopes := v.Scopes
-		if scopes == nil {
-			scopes = []string{}
-		}
 		out[i] = inviteView{
-			InviteID: v.InviteID, Scopes: scopes, Kind: inviteKind(v), CreatedBy: v.CreatedBy,
+			InviteID: v.InviteID, Admin: v.Admin, CreatedBy: v.CreatedBy,
 			CreatedAt: v.CreatedAt, ExpiresAt: v.ExpiresAt,
 		}
 	}
@@ -699,8 +606,8 @@ func (n *Native) inviteRevoke(c *NativeCall, args argMap) (NativeResult, *jack.E
 }
 
 // BootstrapAdmin creates the first administrator's invite out of band (spec 03
-// section 5): one single-use invite for the admin scope and the human kind,
-// valid for ttlSeconds. It returns the invite code, which exists nowhere else.
+// section 5): one single-use admin invite, valid for ttlSeconds. It returns
+// the invite code, which exists nowhere else.
 // It is a local operation, not an MCP tool; call it from the service's own
 // start-up or an operator command, never from a network handler.
 func BootstrapAdmin(state StateStore, now, ttlSeconds int64, opts NativeOptions) (string, error) {
@@ -714,7 +621,7 @@ func BootstrapAdmin(state StateStore, now, ttlSeconds int64, opts NativeOptions)
 	}
 	err = state.Update(func(e *StateEdit) error {
 		e.PutInvite(InviteRecord{
-			InviteID: inviteID, Scopes: []string{"admin"}, Kind: KindHuman, CreatedBy: "bootstrap",
+			InviteID: inviteID, Admin: true, CreatedBy: "bootstrap",
 			CreatedAt: now, ExpiresAt: now + ttlSeconds,
 		})
 		return nil

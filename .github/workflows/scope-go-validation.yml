@@ -1,0 +1,32 @@
+name: scope Go validation
+
+on:
+  push:
+    branches: [scope-integration-1108]
+
+permissions:
+  contents: read
+
+jobs:
+  go-sdk:
+    name: scope Go SDK (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Vet SDK packages
+        run: go vet . ./client/... ./server/... ./spec/... ./userkey/...
+      - name: Run SDK conformance and unit tests
+        run: go test -count=1 -timeout=5m . ./client/... ./server/... ./spec/... ./userkey/...
+      - name: Run SDK race tests
+        if: runner.os == 'Linux'
+        run: go test -race -count=1 -timeout=5m . ./client/... ./server/... ./spec/... ./userkey/...

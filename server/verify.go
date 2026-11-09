@@ -15,25 +15,25 @@ import (
 const DefaultWindow = 30
 
 // Names of the protocol-native tools (spec 03). Tools with the "jack." prefix
-// never reach the policy.
+// never reach the wrapped handler.
 const (
-	ToolEnroll             = "jack.enroll"
-	ToolWhoAmI             = "jack.whoami"
-	ToolRotateKey          = "jack.key.rotate"
-	ToolAdminUserList      = "jack.admin.user.list"
-	ToolAdminUserGet       = "jack.admin.user.get"
-	ToolAdminUserCreate    = "jack.admin.user.create"
-	ToolAdminUserSetScopes = "jack.admin.user.set_scopes"
-	ToolAdminUserRevoke    = "jack.admin.user.revoke"
-	ToolAdminInviteCreate  = "jack.admin.invite.create"
-	ToolAdminInviteList    = "jack.admin.invite.list"
-	ToolAdminInviteRevoke  = "jack.admin.invite.revoke"
+	ToolEnroll            = "jack.enroll"
+	ToolWhoAmI            = "jack.whoami"
+	ToolRotateKey         = "jack.key.rotate"
+	ToolAdminUserList     = "jack.admin.user.list"
+	ToolAdminUserGet      = "jack.admin.user.get"
+	ToolAdminUserCreate   = "jack.admin.user.create"
+	ToolAdminUserSetAdmin = "jack.admin.user.set_admin"
+	ToolAdminUserRevoke   = "jack.admin.user.revoke"
+	ToolAdminInviteCreate = "jack.admin.invite.create"
+	ToolAdminInviteList   = "jack.admin.invite.list"
+	ToolAdminInviteRevoke = "jack.admin.invite.revoke"
 )
 
 var nativeTools = map[string]bool{
 	ToolEnroll: true, ToolWhoAmI: true, ToolRotateKey: true,
 	ToolAdminUserList: true, ToolAdminUserGet: true, ToolAdminUserCreate: true,
-	ToolAdminUserSetScopes: true, ToolAdminUserRevoke: true,
+	ToolAdminUserSetAdmin: true, ToolAdminUserRevoke: true,
 	ToolAdminInviteCreate: true, ToolAdminInviteList: true, ToolAdminInviteRevoke: true,
 }
 
@@ -94,8 +94,6 @@ type Config struct {
 	State StateStore
 	// Nonces records seen (kid, nonce) pairs.
 	Nonces *NonceStore
-	// Policy maps MCP operations to scopes.
-	Policy *Policy
 	// Audit receives audit events for protocol-native admin calls; optional.
 	Audit AuditSink
 	// Native implements the jack.* tools; when nil every jack.* tool is denied.
@@ -120,8 +118,6 @@ func NewVerifier(cfg Config) (*Verifier, error) {
 		return nil, errors.New("server: Config.State must be set")
 	case cfg.Nonces == nil:
 		return nil, errors.New("server: Config.Nonces must be set")
-	case cfg.Policy == nil:
-		return nil, errors.New("server: Config.Policy must be set")
 	}
 	if cfg.Window <= 0 {
 		cfg.Window = DefaultWindow
@@ -149,6 +145,12 @@ type Result struct {
 	Accepted bool
 	// Kid is the authenticated key id (empty when authentication failed).
 	Kid string
+	// Identity is the verified caller identity (spec 02 section 3): exactly
+	// the {kid, name, admin} of the caller's registry entry at verification
+	// time. It is set whenever the caller is a registered key and is handed
+	// to the wrapped handler on forwarded accepts; native jack.* calls never
+	// reach the wrapped handler.
+	Identity Identity
 	// HTTPStatus, Code and Message describe a rejection.
 	HTTPStatus int
 	Code       string
@@ -246,8 +248,13 @@ func (v *Verifier) Verify(req Request) Result {
 	return v.authorize(req, auth, now, callerPtr, res)
 }
 
-// authorize is step 9: body shape, protocol-native tools, policy.
+// authorize is step 9: body shape, protocol-native tools, the admin gate for
+// jack.admin.*, and forwarding of everything else unchanged (spec 02 sections
+// 2-3).
 func (v *Verifier) authorize(req Request, auth jack.RequestAuth, now int64, caller *RegistryEntry, res Result) Result {
+	if caller != nil {
+		res.Identity = snapshotOf(*caller)
+	}
 	fail := func(status int, code, message string) Result {
 		res.HTTPStatus, res.Code, res.Message = status, code, message
 		return res
@@ -307,24 +314,8 @@ func (v *Verifier) authorize(req Request, auth jack.RequestAuth, now int64, call
 		// registry entry, and it was handled above.
 		return fail(401, jack.CodeUnknownKey, "unknown key")
 	}
-	d := v.cfg.Policy.Evaluate(msg.method, msg.tool, msg.hasTool)
-	if !d.Allowed {
-		return fail(403, jack.CodeOperationDenied, "operation is not permitted")
-	}
-	if d.Scope != nil && !hasScope(caller.Scopes, *d.Scope) {
-		return fail(403, jack.CodeInsufficientScope, "the key lacks the required scope")
-	}
 	res.Accepted = true
 	return res
-}
-
-func hasScope(scopes []string, want string) bool {
-	for _, s := range scopes {
-		if s == want {
-			return true
-		}
-	}
-	return false
 }
 
 // enrollmentKey implements the one exception to "unknown key is rejected"

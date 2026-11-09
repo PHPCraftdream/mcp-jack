@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -81,8 +82,8 @@ type harness struct {
 	server  ed25519.PrivateKey
 }
 
-// newHarness wires a verifier over the fixture registry and default policy in
-// front of a wrapped handler produced by wrap.
+// newHarness wires a verifier over the fixture registry in front of a
+// wrapped handler produced by wrap.
 func newHarness(t *testing.T, maxBody int64, wrap func(w http.ResponseWriter, r *http.Request)) *harness {
 	t.Helper()
 	registry, err := spec.LoadRegistry()
@@ -92,7 +93,7 @@ func newHarness(t *testing.T, maxBody int64, wrap func(w http.ResponseWriter, r 
 	h := &harness{next: new(atomic.Int32), seen: new([]byte), audit: NewMemoryAuditSink(), native: &fakeNative{}, server: testPrivateKey(t, "svc")}
 	v, err := NewVerifier(Config{
 		Aud: "https://svc.example.test", State: registryFromFixture(t, registry), Nonces: NewNonceStore(),
-		Policy: loadTestPolicy(t, "policy.json"), Audit: h.audit, Native: h.native,
+		Audit: h.audit, Native: h.native,
 		Now: func() int64 { return testNow },
 	})
 	if err != nil {
@@ -191,18 +192,81 @@ func TestMiddlewareUnauthenticatedIsRejectedUnsigned(t *testing.T) {
 	}
 }
 
-func TestMiddlewareSignsAuthorizationRejection(t *testing.T) {
+// TestMiddlewareSignsAdminGateRejection checks a non-admin calling an admin
+// tool through the REAL native implementation: the native gate rejects before
+// argument parsing with admin_required, the rejection is signed, the wrapped
+// handler is not reached, the gate rejection reaches the tool layer and is
+// audited (spec 03 section 8), and the durable state is unchanged.
+func TestMiddlewareSignsAdminGateRejection(t *testing.T) {
+	registry, err := spec.LoadRegistry()
+	if err != nil {
+		t.Fatalf("LoadRegistry: %v", err)
+	}
+	st := registryFromFixture(t, registry)
+	audit := NewMemoryAuditSink()
+	v, err := NewVerifier(Config{
+		Aud: "https://svc.example.test", State: st, Nonces: NewNonceStore(),
+		Audit: audit, Native: NewNativeTools(NativeOptions{}),
+		Now: func() int64 { return testNow },
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	serverKey := testPrivateKey(t, "svc")
+	nextCalls := 0
+	handler, err := NewHandler(HandlerConfig{Verifier: v, ServerKey: serverKey},
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			nextCalls++
+			okHandler(w, r)
+		}))
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	aliceKey := testPrivateKey(t, "alice")
+	before := st.View()
+	req, sig := signedRequest(t, aliceKey, "POST", "/mcp", toolCallBody("jack.admin.user.list"))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden || errorCode(t, rec) != jack.CodeAdminRequired {
+		t.Fatalf("got %d %s", rec.Code, rec.Body.String())
+	}
+	assertSigned(t, rec, serverKey, sig)
+	if nextCalls != 0 {
+		t.Fatal("the wrapped handler must not be reached")
+	}
+	events := audit.Events()
+	if len(events) != 1 {
+		t.Fatalf("audit events = %d, want 1", len(events))
+	}
+	e := events[0]
+	wantKid := jack.KeyID(aliceKey.Public().(ed25519.PublicKey))
+	if e.Tool != "jack.admin.user.list" || e.Outcome != AuditFailure || e.Code != jack.CodeAdminRequired || e.ActorName != "alice" || e.ActorKid != wantKid {
+		t.Fatalf("audit event = %+v, want the audited admin_required gate rejection", e)
+	}
+	if !reflect.DeepEqual(st.View(), before) {
+		t.Fatal("the rejected admin tool call mutated the durable state")
+	}
+}
+
+// TestMiddlewareSignsUndefinedNativeToolRejection checks a call for an
+// undefined jack.* tool: operation_denied, signed, no forwarding, and no
+// audit event (it is not a tool call the protocol knows).
+func TestMiddlewareSignsUndefinedNativeToolRejection(t *testing.T) {
 	h := newHarness(t, 0, okHandler)
-	req, sig := signedRequest(t, testPrivateKey(t, "alice"), "POST", "/mcp", toolCallBody("svc.restart"))
+	req, sig := signedRequest(t, testPrivateKey(t, "root"), "POST", "/mcp", toolCallBody("jack.nonsense"))
 	rec := httptest.NewRecorder()
 	h.handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusForbidden || errorCode(t, rec) != jack.CodeInsufficientScope {
+	if rec.Code != http.StatusForbidden || errorCode(t, rec) != jack.CodeOperationDenied {
 		t.Fatalf("got %d %s", rec.Code, rec.Body.String())
 	}
 	assertSigned(t, rec, h.server, sig)
 	if h.next.Load() != 0 {
 		t.Fatal("the wrapped handler must not be reached")
+	}
+	if events := h.audit.Events(); len(events) != 0 {
+		t.Fatalf("audit events = %d, want none for an undefined jack.* tool", len(events))
 	}
 }
 
@@ -291,7 +355,7 @@ func TestVerifierDeniesNativeToolsWithoutAnImplementation(t *testing.T) {
 	}
 	v, err := NewVerifier(Config{
 		Aud: "https://svc.example.test", State: registryFromFixture(t, registry), Nonces: NewNonceStore(),
-		Policy: loadTestPolicy(t, "policy-wildcard.json"), Now: func() int64 { return testNow },
+		Now: func() int64 { return testNow },
 	})
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)

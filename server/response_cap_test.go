@@ -27,7 +27,6 @@ func newCapHarness(t *testing.T, maxBody, maxResp int64, wrap func(w http.Respon
 	h := &harness{next: new(atomic.Int32), seen: new([]byte), audit: NewMemoryAuditSink(), native: &fakeNative{}, server: testPrivateKey(t, "svc")}
 	v, err := NewVerifier(Config{
 		Aud: "https://svc.example.test", State: registryFromFixture(t, registry), Nonces: NewNonceStore(),
-		Policy: loadTestPolicy(t, "policy.json"), Audit: h.audit, Native: h.native,
 		Now: func() int64 { return testNow },
 	})
 	if err != nil {
@@ -279,7 +278,6 @@ func TestNewHandlerRejectsNegativeMaxResponseBytes(t *testing.T) {
 	}
 	v, err := NewVerifier(Config{
 		Aud: "https://svc.example.test", State: registryFromFixture(t, registry), Nonces: NewNonceStore(),
-		Policy: loadTestPolicy(t, "policy.json"), Audit: NewMemoryAuditSink(), Native: &fakeNative{},
 		Now: func() int64 { return testNow },
 	})
 	if err != nil {

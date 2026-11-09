@@ -9,46 +9,43 @@ import (
 
 // Protocol-native tool names (spec 03).
 const (
-	ToolEnroll             = "jack.enroll"
-	ToolWhoAmI             = "jack.whoami"
-	ToolRotateKey          = "jack.key.rotate"
-	ToolAdminUserList      = "jack.admin.user.list"
-	ToolAdminUserGet       = "jack.admin.user.get"
-	ToolAdminUserCreate    = "jack.admin.user.create"
-	ToolAdminUserSetScopes = "jack.admin.user.set_scopes"
-	ToolAdminUserRevoke    = "jack.admin.user.revoke"
-	ToolAdminInviteCreate  = "jack.admin.invite.create"
-	ToolAdminInviteList    = "jack.admin.invite.list"
-	ToolAdminInviteRevoke  = "jack.admin.invite.revoke"
+	ToolEnroll            = "jack.enroll"
+	ToolWhoAmI            = "jack.whoami"
+	ToolRotateKey         = "jack.key.rotate"
+	ToolAdminUserList     = "jack.admin.user.list"
+	ToolAdminUserGet      = "jack.admin.user.get"
+	ToolAdminUserCreate   = "jack.admin.user.create"
+	ToolAdminUserSetAdmin = "jack.admin.user.set_admin"
+	ToolAdminUserRevoke   = "jack.admin.user.revoke"
+	ToolAdminInviteCreate = "jack.admin.invite.create"
+	ToolAdminInviteList   = "jack.admin.invite.list"
+	ToolAdminInviteRevoke = "jack.admin.invite.revoke"
 )
 
 // Entry is one registry key entry (spec 03 sections 3.3).
 type Entry struct {
-	KID       string   `json:"kid"`
-	PublicKey string   `json:"public_key"`
-	Name      string   `json:"name"`
-	Kind      string   `json:"kind"`
-	Scopes    []string `json:"scopes"`
-	NotBefore *int64   `json:"not_before"`
-	NotAfter  *int64   `json:"not_after"`
+	KID       string `json:"kid"`
+	PublicKey string `json:"public_key"`
+	Name      string `json:"name"`
+	Admin     bool   `json:"admin"`
+	NotBefore *int64 `json:"not_before"`
+	NotAfter  *int64 `json:"not_after"`
 }
 
 // WhoAmIResult describes the calling key (spec 03 section 3.3).
 type WhoAmIResult struct {
-	KID       string   `json:"kid"`
-	Name      string   `json:"name"`
-	Kind      string   `json:"kind"`
-	Scopes    []string `json:"scopes"`
-	NotBefore *int64   `json:"not_before"`
-	NotAfter  *int64   `json:"not_after"`
+	KID       string `json:"kid"`
+	Name      string `json:"name"`
+	Admin     bool   `json:"admin"`
+	NotBefore *int64 `json:"not_before"`
+	NotAfter  *int64 `json:"not_after"`
 }
 
 // EnrollResult describes the key just enrolled via an invite (spec 03 section 3.2).
 type EnrollResult struct {
-	KID    string   `json:"kid"`
-	Name   string   `json:"name"`
-	Kind   string   `json:"kind"`
-	Scopes []string `json:"scopes"`
+	KID   string `json:"kid"`
+	Name  string `json:"name"`
+	Admin bool   `json:"admin"`
 }
 
 // KidResult reports the kid of the affected registry entry.
@@ -65,12 +62,11 @@ type InviteCreateResult struct {
 
 // InviteListEntry is one live invite (spec 03 section 3.3).
 type InviteListEntry struct {
-	InviteID  string   `json:"invite_id"`
-	Scopes    []string `json:"scopes"`
-	Kind      string   `json:"kind"`
-	CreatedBy string   `json:"created_by"`
-	CreatedAt int64    `json:"created_at"`
-	ExpiresAt int64    `json:"expires_at"`
+	InviteID  string `json:"invite_id"`
+	Admin     bool   `json:"admin"`
+	CreatedBy string `json:"created_by"`
+	CreatedAt int64  `json:"created_at"`
+	ExpiresAt int64  `json:"expires_at"`
 }
 
 // InviteRevokeResult confirms a revoked invite.
@@ -80,20 +76,18 @@ type InviteRevokeResult struct {
 
 // UserCreateParams are the arguments of jack.admin.user.create.
 type UserCreateParams struct {
-	Name      string   `json:"name"`
-	PublicKey string   `json:"public_key"`
-	Scopes    []string `json:"scopes"`
-	Kind      string   `json:"kind,omitempty"`
-	NotBefore *int64   `json:"not_before,omitempty"`
-	NotAfter  *int64   `json:"not_after,omitempty"`
+	Name      string `json:"name"`
+	PublicKey string `json:"public_key"`
+	Admin     *bool  `json:"admin,omitempty"`
+	NotBefore *int64 `json:"not_before,omitempty"`
+	NotAfter  *int64 `json:"not_after,omitempty"`
 }
 
 // InviteCreateParams are the arguments of jack.admin.invite.create.
 type InviteCreateParams struct {
-	Scopes        []string `json:"scopes"`
-	Kind          string   `json:"kind,omitempty"`
-	TTLSeconds    *int64   `json:"ttl_seconds,omitempty"`
-	KeyTTLSeconds *int64   `json:"key_ttl_seconds,omitempty"`
+	Admin         *bool  `json:"admin,omitempty"`
+	TTLSeconds    *int64 `json:"ttl_seconds,omitempty"`
+	KeyTTLSeconds *int64 `json:"key_ttl_seconds,omitempty"`
 }
 
 // enrollArguments is ordered code,name,public_key (spec 03 section 3.2).
@@ -199,14 +193,15 @@ func (c *Client) AdminUserCreate(ctx context.Context, p UserCreateParams) (KidRe
 	return out, nil
 }
 
-// AdminUserSetScopes replaces the scopes of one entry.
-func (c *Client) AdminUserSetScopes(ctx context.Context, kid string, scopes []string) (Entry, error) {
+// AdminUserSetAdmin sets the admin flag of one entry (spec 03 section 3.3).
+// The admin argument is REQUIRED on the wire: it marshals always.
+func (c *Client) AdminUserSetAdmin(ctx context.Context, kid string, admin bool) (Entry, error) {
 	args := struct {
-		Kid    string   `json:"kid"`
-		Scopes []string `json:"scopes"`
-	}{Kid: kid, Scopes: scopes}
+		Kid   string `json:"kid"`
+		Admin bool   `json:"admin"`
+	}{Kid: kid, Admin: admin}
 	var out Entry
-	if err := c.call(ctx, nil, ToolAdminUserSetScopes, args, &out); err != nil {
+	if err := c.call(ctx, nil, ToolAdminUserSetAdmin, args, &out); err != nil {
 		return Entry{}, err
 	}
 	return out, nil

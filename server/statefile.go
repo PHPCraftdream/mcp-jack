@@ -43,8 +43,11 @@ var _ StateStore = (*FileState)(nil)
 
 // OpenFileState loads the state file at path. A missing file yields an empty
 // store; an existing file must decode strictly (unknown fields rejected, no
-// trailing data, version 1, no duplicate Kid or InviteID) or a corrupt error
-// wrapping ErrStateCorrupt is returned together with a nil store.
+// trailing data, version 1, no duplicate Kid or InviteID, strict admin
+// booleans, legacy kind/scopes fields rejected) or a corrupt error wrapping
+// ErrStateCorrupt is returned together with a nil store. Legacy documents are
+// never migrated, stripped or rewritten; a failed load never writes the file
+// (spec 02 section 1, 03 section 10).
 func OpenFileState(path string) (*FileState, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -63,6 +66,30 @@ func OpenFileState(path string) (*FileState, error) {
 }
 
 func decodeState(data []byte) (*stateDocument, error) {
+	// Strict-typing pass on raw JSON, before the typed decode: legacy fields
+	// are rejected, never migrated (spec 02 section 1, 03 section 10); admin
+	// must be a strict JSON boolean; key_ttl_seconds must be absent or an
+	// integer in range.
+	var raw struct {
+		Keys    []map[string]json.RawMessage `json:"keys"`
+		Invites []map[string]json.RawMessage `json:"invites"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrStateCorrupt, err)
+	}
+	if raw.Keys == nil {
+		return nil, fmt.Errorf("%w: keys must be an array", ErrStateCorrupt)
+	}
+	if raw.Invites == nil {
+		return nil, fmt.Errorf("%w: invites must be an array", ErrStateCorrupt)
+	}
+	if err := validateRawKeys(raw.Keys); err != nil {
+		return nil, err
+	}
+	if err := validateRawInvites(raw.Invites); err != nil {
+		return nil, err
+	}
+
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 
@@ -91,44 +118,97 @@ func decodeState(data []byte) (*stateDocument, error) {
 		}
 		seenInvites[v.InviteID] = true
 	}
-	// A persisted document must spell scopes out as arrays: a missing or null
-	// value is malformed input, not an empty set (spec 02 section 1).
-	for _, v := range doc.Invites {
-		if v.Scopes == nil {
-			return nil, fmt.Errorf("%w: invite %s has no scopes array", ErrStateCorrupt, v.InviteID)
-		}
-	}
-	// spec 02 section 1: kind defaults to human. A plain string field decodes
-	// an omitted, an explicit-null and an explicit-"" kind all as "", so a
-	// pointer-typed shadow pass tells them apart: only omitted and null
-	// normalize to human; an explicit "" stays and validateKeys rejects it.
-	// Stored-registry rule only: a null kind in tool arguments stays
-	// invalid_params (spec 03).
-	var shadow struct {
-		Keys []struct {
-			Kind *string `json:"kind"`
-		} `json:"keys"`
-	}
-	if err := json.Unmarshal(data, &shadow); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrStateCorrupt, err)
-	}
-	for i := range doc.Keys {
-		if doc.Keys[i].Kind == "" && (i >= len(shadow.Keys) || shadow.Keys[i].Kind == nil) {
-			doc.Keys[i].Kind = KindHuman
-		}
-	}
 	if err := validateKeys(doc.Keys); err != nil {
 		return nil, err
 	}
 	return &doc, nil
 }
 
+// validateRawKeys enforces the raw-JSON rules of 02-authorization.md section
+// 1: no legacy kind/scopes fields, and admin present only as a strict JSON
+// boolean (absent decodes false).
+func validateRawKeys(keys []map[string]json.RawMessage) error {
+	for _, m := range keys {
+		kid, _ := jsonString(m["kid"])
+		for _, legacy := range []string{"kind", "scopes"} {
+			if _, has := m[legacy]; has {
+				return fmt.Errorf("%w: legacy field %q in a registry entry (key %s); the server does not migrate, strip or rewrite legacy documents", ErrStateCorrupt, legacy, kid)
+			}
+		}
+		if raw, has := m["admin"]; has {
+			trimmed := bytes.TrimSpace(raw)
+			if !bytes.Equal(trimmed, []byte("true")) && !bytes.Equal(trimmed, []byte("false")) {
+				return fmt.Errorf("%w: key %s: admin must be a strict JSON boolean", ErrStateCorrupt, kid)
+			}
+		}
+	}
+	return nil
+}
+
+// validateRawInvites enforces the raw-JSON rules of 03-user-management.md
+// section 10: no legacy kind/scopes fields, admin only as a strict JSON
+// boolean, non-empty string invite_id/created_by, integer created_at/expires_at
+// with created_at <= expires_at, and key_ttl_seconds absent or an integer in
+// 1..31536000, never null.
+func validateRawInvites(invites []map[string]json.RawMessage) error {
+	for _, m := range invites {
+		inviteID, _ := jsonString(m["invite_id"])
+		for _, legacy := range []string{"kind", "scopes"} {
+			if _, has := m[legacy]; has {
+				return fmt.Errorf("%w: legacy field %q in an invite record (invite %s); the server does not migrate, strip or rewrite legacy documents", ErrStateCorrupt, legacy, inviteID)
+			}
+		}
+		if raw, has := m["admin"]; has {
+			trimmed := bytes.TrimSpace(raw)
+			if !bytes.Equal(trimmed, []byte("true")) && !bytes.Equal(trimmed, []byte("false")) {
+				return fmt.Errorf("%w: invite %s: admin must be a strict JSON boolean", ErrStateCorrupt, inviteID)
+			}
+		}
+		for _, member := range []string{"invite_id", "created_by"} {
+			s, ok := jsonString(m[member])
+			if !ok || s == "" {
+				return fmt.Errorf("%w: invite %s: %s must be a non-empty string", ErrStateCorrupt, inviteID, member)
+			}
+		}
+		var createdAt, expiresAt int64
+		for _, ts := range []struct {
+			member string
+			value  *int64
+		}{{"created_at", &createdAt}, {"expires_at", &expiresAt}} {
+			raw, has := m[ts.member]
+			if !has || isJSONNull(raw) {
+				return fmt.Errorf("%w: invite %s: %s must be an integer, not missing or null", ErrStateCorrupt, inviteID, ts.member)
+			}
+			// Decoding into int64 rejects fractional, exponent and string forms
+			// (spec 03 section 3 integer rule); null was excluded above.
+			if err := json.Unmarshal(raw, ts.value); err != nil {
+				return fmt.Errorf("%w: invite %s: %s must be an integer", ErrStateCorrupt, inviteID, ts.member)
+			}
+		}
+		if createdAt < 0 || expiresAt < 0 || createdAt > expiresAt {
+			return fmt.Errorf("%w: invite %s: created_at and expires_at must be non-negative integers with created_at <= expires_at", ErrStateCorrupt, inviteID)
+		}
+		if raw, has := m["key_ttl_seconds"]; has {
+			if isJSONNull(raw) {
+				return fmt.Errorf("%w: invite %s: key_ttl_seconds must be absent or an integer, never null", ErrStateCorrupt, inviteID)
+			}
+			var ttl int64
+			if err := json.Unmarshal(raw, &ttl); err != nil {
+				return fmt.Errorf("%w: invite %s: key_ttl_seconds must be an integer", ErrStateCorrupt, inviteID)
+			}
+			if ttl < 1 || ttl > 31536000 {
+				return fmt.Errorf("%w: invite %s: key_ttl_seconds must be in 1..31536000", ErrStateCorrupt, inviteID)
+			}
+		}
+	}
+	return nil
+}
+
 // validateKeys enforces the load-time entry rules of 02-authorization.md
-// section 1: name shape and uniqueness, kind, scope shape and distinctness,
-// the agent/admin exclusion, validity intervals, kid = base64url(SHA-256(
-// public_key)), and the public-key validity rules of 03 section 2.
-// A missing or null kind never reaches this check: decodeState defaults it to
-// human (spec 02 section 1).
+// section 1: name shape and uniqueness, validity intervals, kid =
+// base64url(SHA-256(public_key)), and the public-key validity rules of 03
+// section 2. The strict raw-JSON checks (legacy fields, admin spelling) run
+// earlier in decodeState.
 func validateKeys(keys []RegistryEntry) error {
 	seenNames := make(map[string]bool, len(keys))
 	for i := range keys {
@@ -140,25 +220,6 @@ func validateKeys(keys []RegistryEntry) error {
 			return fmt.Errorf("%w: duplicate name %s", ErrStateCorrupt, k.Name)
 		}
 		seenNames[k.Name] = true
-		if k.Kind != KindHuman && k.Kind != KindAgent {
-			return fmt.Errorf("%w: invalid kind %q for key %s", ErrStateCorrupt, k.Kind, k.Kid)
-		}
-		if k.Scopes == nil {
-			return fmt.Errorf("%w: key %s has no scopes array", ErrStateCorrupt, k.Kid)
-		}
-		seenScopes := make(map[string]bool, len(k.Scopes))
-		for _, s := range k.Scopes {
-			if !jack.ValidScope(s) {
-				return fmt.Errorf("%w: invalid scope %q for key %s", ErrStateCorrupt, s, k.Kid)
-			}
-			if seenScopes[s] {
-				return fmt.Errorf("%w: duplicate scope %q for key %s", ErrStateCorrupt, s, k.Kid)
-			}
-			seenScopes[s] = true
-		}
-		if k.Kind == KindAgent && seenScopes["admin"] {
-			return fmt.Errorf("%w: agent key %s holds admin scope", ErrStateCorrupt, k.Kid)
-		}
 		if k.NotBefore != nil && *k.NotBefore < 0 {
 			return fmt.Errorf("%w: negative not_before for key %s", ErrStateCorrupt, k.Kid)
 		}
