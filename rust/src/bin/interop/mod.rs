@@ -39,7 +39,7 @@ pub fn hex_decode_32(s: &str) -> Result<[u8; 32], String> {
         return Err(format!("expected 64 hex chars, got {}", b.len()));
     }
     let mut out = [0u8; 32];
-    for (i, pair) in b.chunks_exact(2).enumerate() {
+    for (i, pair) in b.as_chunks::<2>().0.iter().enumerate() {
         let hi = hex_val(pair[0])?;
         let lo = hex_val(pair[1])?;
         out[i] = (hi << 4) | lo;
