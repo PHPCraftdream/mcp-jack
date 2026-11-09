@@ -266,7 +266,7 @@ func TestMiddlewareIdentitySnapshotSurvivesInFlightRegistryChange(t *testing.T) 
 
 	// A request started after the demotion must see the new state.
 	after := &identityProbe{}
-	h2, err := NewHandler(HandlerConfig{Verifier: v, ServerKey: testPrivateKey(t, "svc")}, after.handle)
+	h2, err := NewHandler(HandlerConfig{Verifier: v, ServerKey: testPrivateKey(t, "svc")}, http.HandlerFunc(after.handle))
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}
@@ -300,7 +300,7 @@ func TestMiddlewareConcurrentIdentityForwarding(t *testing.T) {
 		t.Fatalf("NewVerifier: %v", err)
 	}
 	probe := &identityProbe{}
-	h, err := NewHandler(HandlerConfig{Verifier: v, ServerKey: testPrivateKey(t, "svc")}, probe.handle)
+	h, err := NewHandler(HandlerConfig{Verifier: v, ServerKey: testPrivateKey(t, "svc")}, http.HandlerFunc(probe.handle))
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}
