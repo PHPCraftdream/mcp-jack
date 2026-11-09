@@ -54,7 +54,7 @@ const manifest = await readFile(manifestPath, "utf8");
 // boundary contract and must not drift silently.
 if (!/^publish\s*=\s*false$/m.test(manifest)) fail("rust/Cargo.toml must keep publish = false");
 if (!/^version\s*=\s*"0\.1\.0"$/m.test(manifest)) fail('rust/Cargo.toml version must remain "0.1.0"');
-if (!/^rust-version\s*=\s*"1\.85"$/m.test(manifest)) fail('rust/Cargo.toml rust-version must remain "1.85"');
+if (!/^rust-version\s*=\s*"1\.88"$/m.test(manifest)) fail('rust/Cargo.toml rust-version must remain "1.88"');
 if (!/^license\s*=\s*"MIT OR Apache-2\.0"$/m.test(manifest)) fail('rust/Cargo.toml license must remain "MIT OR Apache-2.0"');
 
 const stageTarget = path.join(stageDir, "target");

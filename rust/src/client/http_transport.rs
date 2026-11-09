@@ -134,15 +134,16 @@ struct TaskHandle(Arc<Mutex<TaskState>>);
 struct TaskState {
     closed: bool,
     overflow: bool,
+    late_spawn: bool,
     tasks: JoinSet<Result<(), TransportError>>,
 }
-impl hickory_resolver::proto::runtime::Spawn for TaskHandle {
-    fn spawn_bg<F>(&mut self, f: F)
-    where
-        F: Future<Output = Result<(), hickory_resolver::proto::ProtoError>> + Send + 'static,
-    {
+impl hickory_resolver::net::runtime::Spawn for TaskHandle {
+    // hickory-net 0.26.1 background DNS futures return unit; lookup errors are
+    // surfaced by lookup_ip, while driver join errors are collected here.
+    fn spawn_bg(&mut self, future: impl Future<Output = ()> + Send + 'static) {
         let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
         if state.closed {
+            state.late_spawn = true;
             return;
         }
         if state.tasks.len() >= MAX_OWNED_TASKS {
@@ -150,22 +151,21 @@ impl hickory_resolver::proto::runtime::Spawn for TaskHandle {
             return;
         }
         state.tasks.spawn(async move {
-            f.await.map_err(|e| {
-                TransportError::Transport(format!("jack client: http transport: DNS task: {e}"))
-            })
+            future.await;
+            Ok(())
         });
     }
 }
 #[derive(Clone)]
 struct OwnedRuntime(
-    hickory_resolver::proto::runtime::TokioRuntimeProvider,
+    hickory_resolver::net::runtime::TokioRuntimeProvider,
     TaskHandle,
 );
-impl hickory_resolver::proto::runtime::RuntimeProvider for OwnedRuntime {
+impl hickory_resolver::net::runtime::RuntimeProvider for OwnedRuntime {
     type Handle = TaskHandle;
-    type Timer=<hickory_resolver::proto::runtime::TokioRuntimeProvider as hickory_resolver::proto::runtime::RuntimeProvider>::Timer;
-    type Udp=<hickory_resolver::proto::runtime::TokioRuntimeProvider as hickory_resolver::proto::runtime::RuntimeProvider>::Udp;
-    type Tcp=<hickory_resolver::proto::runtime::TokioRuntimeProvider as hickory_resolver::proto::runtime::RuntimeProvider>::Tcp;
+    type Timer = <hickory_resolver::net::runtime::TokioRuntimeProvider as hickory_resolver::net::runtime::RuntimeProvider>::Timer;
+    type Udp = <hickory_resolver::net::runtime::TokioRuntimeProvider as hickory_resolver::net::runtime::RuntimeProvider>::Udp;
+    type Tcp = <hickory_resolver::net::runtime::TokioRuntimeProvider as hickory_resolver::net::runtime::RuntimeProvider>::Tcp;
     fn create_handle(&self) -> Self::Handle {
         self.1.clone()
     }
@@ -175,16 +175,29 @@ impl hickory_resolver::proto::runtime::RuntimeProvider for OwnedRuntime {
         b: Option<SocketAddr>,
         c: Option<Duration>,
     ) -> Pin<Box<dyn Send + Future<Output = io::Result<Self::Tcp>>>> {
-        hickory_resolver::proto::runtime::RuntimeProvider::connect_tcp(&self.0, a, b, c)
+        hickory_resolver::net::runtime::RuntimeProvider::connect_tcp(&self.0, a, b, c)
     }
     fn bind_udp(
         &self,
         a: SocketAddr,
         b: SocketAddr,
     ) -> Pin<Box<dyn Send + Future<Output = io::Result<Self::Udp>>>> {
-        hickory_resolver::proto::runtime::RuntimeProvider::bind_udp(&self.0, a, b)
+        hickory_resolver::net::runtime::RuntimeProvider::bind_udp(&self.0, a, b)
     }
 }
+
+fn record_task_result(
+    failures: &mut Vec<String>,
+    result: Result<Result<(), TransportError>, tokio::task::JoinError>,
+) {
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => failures.push(format!("owned task returned an error: {error}")),
+        Err(error) if !error.is_cancelled() => failures.push(format!("owned task failed: {error}")),
+        Err(_) => {}
+    }
+}
+
 async fn drain(owner: &Arc<Mutex<TaskState>>) -> Result<(), TransportError> {
     let (mut tasks, overflow) = {
         let mut state = owner.lock().unwrap_or_else(|e| e.into_inner());
@@ -194,36 +207,72 @@ async fn drain(owner: &Arc<Mutex<TaskState>>) -> Result<(), TransportError> {
             state.overflow,
         )
     };
-    tasks.abort_all();
-    let mut panic = None;
-    while let Some(result) = tasks.join_next().await {
-        if let Err(error) = result {
-            if !error.is_cancelled() && panic.is_none() {
-                panic = Some(error.to_string());
-            }
-        }
+    let mut failures = Vec::new();
+    // Collect failures already completed before aborting still-running children.
+    while let Some(result) = tasks.try_join_next() {
+        record_task_result(&mut failures, result);
     }
-    if let Some(error) = panic {
-        return Err(TransportError::Transport(format!(
-            "jack client: http transport: owned task failed: {error}"
-        )));
+    tasks.abort_all();
+    while let Some(result) = tasks.join_next().await {
+        record_task_result(&mut failures, result);
     }
     if overflow {
-        return Err(TransportError::Transport(
-            "jack client: http transport: owned task limit exceeded".into(),
-        ));
+        failures.push("owned task limit exceeded".into());
     }
-    Ok(())
+    if owner.lock().unwrap_or_else(|e| e.into_inner()).late_spawn {
+        failures.push("task spawn attempted after owner closure".into());
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(TransportError::Transport(format!(
+            "jack client: http transport: cleanup failed: {}",
+            failures.join("; ")
+        )))
+    }
 }
+
+fn map_resolver_build_error(error: impl std::fmt::Display) -> TransportError {
+    TransportError::Transport(format!("jack client: http transport: resolver: {error}"))
+}
+fn append_cleanup_failure(primary: TransportError, cleanup: TransportError) -> TransportError {
+    let suffix = format!("; cleanup failure: {cleanup}");
+    match primary {
+        TransportError::Transport(message) => TransportError::Transport(message + &suffix),
+        TransportError::Client(message) => TransportError::Client(message + &suffix),
+        // Typed errors have no secondary-diagnostic channel; keep their primary
+        // classification and payload rather than flattening them into Transport.
+        TransportError::Streaming => TransportError::Streaming,
+        TransportError::Unauthenticated(error) => TransportError::Unauthenticated(error),
+        TransportError::Protocol(error) => TransportError::Protocol(error),
+    }
+}
+
+fn finish_operation<T>(
+    operation: Result<T, TransportError>,
+    cleanup: Result<(), TransportError>,
+) -> Result<T, TransportError> {
+    match (operation, cleanup) {
+        (Ok(response), Ok(())) => Ok(response),
+        (Ok(_), Err(cleanup)) => Err(cleanup),
+        (Err(primary), Ok(())) => Err(primary),
+        (Err(primary), Err(cleanup)) => Err(append_cleanup_failure(primary, cleanup)),
+    }
+}
+
 trait Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
 impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send> Io for T {}
+
+fn checked_deadline(started: Instant, timeout: Duration) -> Result<Instant, TransportError> {
+    started.checked_add(timeout).ok_or_else(|| {
+        TransportError::Client("jack client: http transport: deadline overflow".into())
+    })
+}
 
 impl Transport for HttpTransport {
     fn round_trip(&self, req: HttpRequest) -> Result<HttpResponse, TransportError> {
         let started = Instant::now();
-        let deadline = started.checked_add(self.timeout).ok_or_else(|| {
-            TransportError::Client("jack client: http transport: deadline overflow".into())
-        })?;
+        let deadline = checked_deadline(started, self.timeout)?;
         crate::client::url::validate_base_url(&req.url)
             .map_err(|e| TransportError::Client(e.to_string()))?;
         let target = crate::client::url::request_target(&req.url)
@@ -343,8 +392,51 @@ impl Transport for HttpTransport {
         })?
     }
 }
-/// The operation is terminal: dropping it drops in-flight I/O, then the owned
-/// task registry is closed, aborted, and joined. It is not retryable or resumable.
+
+/// The operation is terminal: the spawned operation is aborted and joined at
+/// the deadline, followed by abort-and-join of every registered child task.
+/// cancel-safe: NO — dropping this future would bypass its owned-task joins.
+async fn run_owned<T, F>(
+    owner: Arc<Mutex<TaskState>>,
+    deadline: Instant,
+    operation_future: F,
+) -> Result<T, TransportError>
+where
+    T: Send + 'static,
+    F: Future<Output = Result<T, TransportError>> + Send + 'static,
+{
+    let mut operation = tokio::spawn(operation_future);
+    let operation_result =
+        match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), &mut operation)
+            .await
+        {
+            Ok(Ok(result)) => result,
+            Ok(Err(error)) => Err(TransportError::Transport(format!(
+                "jack client: http transport: operation task failed: {error}"
+            ))),
+            Err(_) => {
+                operation.abort();
+                let joined = operation.await;
+                Err(match joined {
+                    Err(error) if error.is_cancelled() => TransportError::Transport(
+                        "jack client: http transport: absolute round-trip timeout exceeded".into(),
+                    ),
+                    Err(error) => TransportError::Transport(format!(
+                        "jack client: http transport: operation task failed during timeout: {error}"
+                    )),
+                    Ok(Err(error)) => error,
+                    Ok(Ok(_)) => TransportError::Transport(
+                        "jack client: http transport: absolute round-trip timeout exceeded".into(),
+                    ),
+                })
+            }
+        };
+    let cleanup = drain(&owner).await;
+    finish_operation(operation_result, cleanup)
+}
+
+/// This awaits the complete HTTP operation under the shared absolute deadline.
+/// cancel-safe: NO — dropping it would discard the operation's owned cleanup.
 async fn run(
     request: http::Request<Full<Bytes>>,
     destination: http::Uri,
@@ -355,68 +447,30 @@ async fn run(
     let owner = Arc::new(Mutex::new(TaskState {
         closed: false,
         overflow: false,
+        late_spawn: false,
         tasks: JoinSet::new(),
     }));
     let operation_owner = owner.clone();
-    let mut operation = tokio::spawn(async move {
+    run_owned(owner, deadline, async move {
         let provider = OwnedRuntime(
-            hickory_resolver::proto::runtime::TokioRuntimeProvider::new(),
+            hickory_resolver::net::runtime::TokioRuntimeProvider::new(),
             TaskHandle(operation_owner.clone()),
         );
-        let mut resolver = hickory_resolver::Resolver::builder_with_config(
-            dns.config,
-            hickory_resolver::name_server::GenericConnector::new(provider),
-        )
-        .with_options(dns.options)
-        .build();
+        let mut resolver = hickory_resolver::Resolver::builder_with_config(dns.config, provider)
+            .with_options(dns.options)
+            .build()
+            .map_err(map_resolver_build_error)?;
         resolver.set_hosts(dns.hosts);
         perform(request, destination, roots, resolver, operation_owner).await
-    });
-    let operation_result =
-        match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), &mut operation)
-            .await
-        {
-            Ok(Ok(result)) => Some(result),
-            Ok(Err(error)) => Some(Err(TransportError::Transport(format!(
-                "jack client: http transport: operation task failed: {error}"
-            )))),
-            Err(_) => {
-                operation.abort();
-                let joined = operation.await;
-                Some(Err(match joined {
-                    Err(error) if error.is_cancelled() => TransportError::Transport(
-                        "jack client: http transport: absolute round-trip timeout exceeded".into(),
-                    ),
-                    Err(error) => TransportError::Transport(format!(
-                    "jack client: http transport: operation task failed during timeout: {error}"
-                )),
-                    Ok(Err(error)) => error,
-                    Ok(Ok(_)) => TransportError::Transport(
-                        "jack client: http transport: absolute round-trip timeout exceeded".into(),
-                    ),
-                }))
-            }
-        };
-    let cleanup = drain(&owner).await;
-    match operation_result.expect("operation result is always set") {
-        Err(error) => {
-            let _ = cleanup;
-            Err(error)
-        }
-        Ok(response) => {
-            cleanup?;
-            Ok(response)
-        }
-    }
+    })
+    .await
 }
 
 async fn perform(
     request: http::Request<Full<Bytes>>,
     destination: http::Uri,
     roots: Arc<RootCertStore>,
-    resolver: hickory_resolver::Resolver<
-        hickory_resolver::name_server::GenericConnector<OwnedRuntime>,
-    >,
+    resolver: hickory_resolver::Resolver<OwnedRuntime>,
     owner: Arc<Mutex<TaskState>>,
 ) -> Result<HttpResponse, TransportError> {
     let auth = destination.authority().ok_or_else(|| {
@@ -502,7 +556,9 @@ async fn perform(
         })?;
     {
         let mut state = owner.lock().unwrap_or_else(|e| e.into_inner());
-        if state.tasks.len() >= MAX_OWNED_TASKS {
+        if state.closed {
+            state.late_spawn = true;
+        } else if state.tasks.len() >= MAX_OWNED_TASKS {
             state.overflow = true;
         } else {
             state.tasks.spawn(async move {
@@ -514,10 +570,13 @@ async fn perform(
             });
         }
     }
-    if owner.lock().unwrap_or_else(|e| e.into_inner()).overflow {
-        return Err(TransportError::Transport(
-            "jack client: http transport: owned task limit exceeded".into(),
-        ));
+    {
+        let state = owner.lock().unwrap_or_else(|e| e.into_inner());
+        if state.closed || state.overflow {
+            return Err(TransportError::Transport(
+                "jack client: http transport: owned task limit exceeded".into(),
+            ));
+        }
     }
     let response = sender.send_request(request).await.map_err(|e| {
         TransportError::Transport(format!("jack client: http transport: HTTP request: {e}"))
@@ -566,12 +625,37 @@ async fn perform(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hickory_resolver::{
-        config::{NameServerConfig, ResolverConfig, ResolverOpts},
-        proto::{op::Message, xfer::Protocol},
+    use hickory_resolver::config::{NameServerConfig, ResolverConfig, ResolverOpts};
+    use hickory_resolver::proto::{
+        op::{Message, OpCode},
+        serialize::binary::{BinEncodable, BinEncoder},
     };
     use std::net::UdpSocket;
     use tokio::sync::{mpsc, oneshot};
+
+    fn owner() -> Arc<Mutex<TaskState>> {
+        Arc::new(Mutex::new(TaskState {
+            closed: false,
+            overflow: false,
+            late_spawn: false,
+            tasks: JoinSet::new(),
+        }))
+    }
+
+    fn test_dns_config(peer: SocketAddr) -> ResolverConfig {
+        let mut nameserver = NameServerConfig::udp(peer.ip());
+        nameserver.connections[0].port = peer.port();
+        ResolverConfig::from_parts(None, vec![], vec![nameserver])
+    }
+
+    fn test_task_state(overflow: bool) -> Arc<Mutex<TaskState>> {
+        Arc::new(Mutex::new(TaskState {
+            closed: false,
+            overflow,
+            late_spawn: false,
+            tasks: JoinSet::new(),
+        }))
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn stalled_dns_obeys_deadline_and_releases_socket() {
@@ -589,11 +673,7 @@ mod tests {
             })
             .await
         });
-        let config = ResolverConfig::from_parts(
-            None,
-            vec![],
-            vec![NameServerConfig::new(peer_addr, Protocol::Udp)],
-        );
+        let config = test_dns_config(peer_addr);
         let mut options = ResolverOpts::default();
         options.use_hosts_file = hickory_resolver::config::ResolveHosts::Never;
         options.cache_size = 0;
@@ -645,7 +725,7 @@ mod tests {
             matches!(result, Ok(Ok(Err(TransportError::Transport(message)))) if message.contains("absolute round-trip timeout exceeded"))
         );
         let (message, source) = parsed.expect("valid captured DNS query");
-        assert_eq!(message.queries()[0].name().to_utf8(), "dns-timeout.test.");
+        assert_eq!(message.queries[0].name().to_utf8(), "dns-timeout.test.");
         assert!(UdpSocket::bind(source).is_ok());
     }
 
@@ -658,19 +738,15 @@ mod tests {
 
     #[tokio::test]
     async fn task_owner_drain_aborts_and_closes_spawn_control() {
-        let owner = Arc::new(Mutex::new(TaskState {
-            closed: false,
-            overflow: false,
-            tasks: JoinSet::new(),
-        }));
+        let owner = owner();
         let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (entered_tx, entered_rx) = oneshot::channel();
         let mark = DropMark(dropped.clone());
         let mut handle = TaskHandle(owner.clone());
-        hickory_resolver::proto::runtime::Spawn::spawn_bg(&mut handle, async move {
+        hickory_resolver::net::runtime::Spawn::spawn_bg(&mut handle, async move {
             let _mark = mark;
             let _ = entered_tx.send(());
-            std::future::pending::<Result<(), hickory_resolver::proto::ProtoError>>().await
+            std::future::pending::<()>().await;
         });
         let entered = tokio::time::timeout(Duration::from_secs(1), entered_rx).await;
         let drained = drain(&owner).await;
@@ -680,6 +756,315 @@ mod tests {
         let state = owner.lock().unwrap();
         assert!(state.closed);
         assert!(state.tasks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn owned_task_error_and_primary_error_survive_cleanup() {
+        let owner = owner();
+        let (completed_tx, completed_rx) = oneshot::channel();
+        owner.lock().unwrap().tasks.spawn(async move {
+            let _ = completed_tx.send(());
+            Err(TransportError::Transport("driver failure".into()))
+        });
+        completed_rx
+            .await
+            .expect("failing task completed before cleanup");
+        let cleanup = drain(&owner).await;
+        assert!(
+            matches!(cleanup, Err(TransportError::Transport(message)) if message.contains("driver failure"))
+        );
+
+        let result = finish_operation::<HttpResponse>(
+            Err(TransportError::Transport("primary operation error".into())),
+            Err(TransportError::Transport("task cleanup error".into())),
+        );
+        assert_eq!(
+            result,
+            Err(TransportError::Transport(
+                "primary operation error; cleanup failure: task cleanup error".into()
+            ))
+        );
+
+        let client_transport_result = finish_operation::<()>(
+            Err(TransportError::Client("client primary error".into())),
+            Err(TransportError::Transport("client cleanup error".into())),
+        );
+        assert_eq!(
+            client_transport_result,
+            Err(TransportError::Client(
+                "client primary error; cleanup failure: client cleanup error".into()
+            ))
+        );
+        let client_result = client_transport_result.map_err(ClientError::from);
+        assert_eq!(
+            client_result,
+            Err(ClientError::Client(
+                "client primary error; cleanup failure: client cleanup error".into()
+            ))
+        );
+    }
+
+    #[test]
+    fn typed_primary_classification_and_payload_survive_cleanup() {
+        let cleanup = TransportError::Transport("cleanup diagnostic".into());
+
+        let streaming =
+            finish_operation::<()>(Err(TransportError::Streaming), Err(cleanup.clone()));
+        assert_eq!(streaming, Err(TransportError::Streaming));
+        assert_eq!(
+            streaming.map_err(ClientError::from),
+            Err(ClientError::Streaming)
+        );
+
+        let unauthenticated =
+            TransportError::Unauthenticated(crate::client::error::UnauthenticatedResponseError {
+                status: 401,
+            });
+        let result = finish_operation::<()>(Err(unauthenticated.clone()), Err(cleanup.clone()));
+        assert_eq!(result, Err(unauthenticated));
+        assert_eq!(
+            ClientError::from(result.unwrap_err()),
+            ClientError::Unauthenticated(crate::client::error::UnauthenticatedResponseError {
+                status: 401,
+            })
+        );
+
+        let protocol_payload = crate::error::JackError::new(0, "bad_signature", "exact payload");
+        let protocol = TransportError::Protocol(protocol_payload.clone());
+        let result = finish_operation::<()>(Err(protocol.clone()), Err(cleanup));
+        assert_eq!(result, Err(protocol));
+        let client_error = ClientError::from(result.unwrap_err());
+        assert_eq!(
+            client_error,
+            ClientError::Protocol(protocol_payload.clone())
+        );
+        let source =
+            std::error::Error::source(&client_error).expect("protocol source is preserved");
+        assert_eq!(
+            source.downcast_ref::<crate::error::JackError>(),
+            Some(&protocol_payload)
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn run_owned_joins_failed_and_pending_tasks_with_typed_primary() {
+        let owner = owner();
+
+        let (failed_tx, failed_rx) = oneshot::channel();
+        owner.lock().unwrap().tasks.spawn(async move {
+            let _ = failed_tx.send(());
+            Err(TransportError::Transport("completed child failure".into()))
+        });
+        failed_rx
+            .await
+            .expect("child completed before operation ends");
+
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let marker = DropMark(dropped.clone());
+        let (pending_tx, pending_rx) = oneshot::channel();
+        owner.lock().unwrap().tasks.spawn(async move {
+            let _marker = marker;
+            let _ = pending_tx.send(());
+            std::future::pending::<()>().await;
+            Ok(())
+        });
+        pending_rx
+            .await
+            .expect("pending child started before cleanup");
+
+        let result = run_owned::<(), _>(
+            owner.clone(),
+            Instant::now() + Duration::from_secs(60),
+            async { Err(TransportError::Streaming) },
+        )
+        .await;
+        assert_eq!(result, Err(TransportError::Streaming));
+        assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+        let state = owner.lock().unwrap();
+        assert!(state.closed);
+        assert!(state.tasks.is_empty());
+    }
+
+    #[test]
+    fn deadline_overflow_is_reported_instead_of_wrapping_or_panicking() {
+        let error = checked_deadline(Instant::now(), Duration::MAX).unwrap_err();
+        assert!(
+            matches!(error, TransportError::Client(message) if message.contains("deadline overflow"))
+        );
+    }
+
+    #[tokio::test]
+    async fn closed_spawn_and_task_overflow_are_reported() {
+        let closed_owner = owner();
+        assert!(drain(&closed_owner).await.is_ok());
+        let mut handle = TaskHandle(closed_owner.clone());
+        hickory_resolver::net::runtime::Spawn::spawn_bg(&mut handle, async {});
+        let late_spawn = drain(&closed_owner).await;
+        assert!(matches!(
+            late_spawn,
+            Err(TransportError::Transport(message)) if message.contains("after owner closure")
+        ));
+
+        let overflow_state = test_task_state(true);
+        let overflow = drain(&overflow_state).await;
+        assert!(matches!(
+            overflow,
+            Err(TransportError::Transport(message)) if message.contains("task limit exceeded")
+        ));
+
+        let overflow_owner = owner();
+        let dropped = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (started_tx, mut started_rx) = mpsc::channel(MAX_OWNED_TASKS);
+        let mut handle = TaskHandle(overflow_owner.clone());
+        for _ in 0..=MAX_OWNED_TASKS {
+            let dropped = dropped.clone();
+            let started_tx = started_tx.clone();
+            hickory_resolver::net::runtime::Spawn::spawn_bg(&mut handle, async move {
+                struct CountDrop(Arc<std::sync::atomic::AtomicUsize>);
+                impl Drop for CountDrop {
+                    fn drop(&mut self) {
+                        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
+                let _drop = CountDrop(dropped);
+                let _ = started_tx.send(()).await;
+                std::future::pending::<()>().await;
+            });
+        }
+        drop(started_tx);
+        for _ in 0..MAX_OWNED_TASKS {
+            started_rx.recv().await.expect("each admitted task starts");
+        }
+        {
+            let state = overflow_owner.lock().unwrap();
+            assert_eq!(state.tasks.len(), MAX_OWNED_TASKS);
+            assert!(state.overflow);
+        }
+        let cleanup = drain(&overflow_owner).await;
+        assert!(matches!(
+            cleanup,
+            Err(TransportError::Transport(message)) if message.contains("task limit exceeded")
+        ));
+        assert_eq!(
+            dropped.load(std::sync::atomic::Ordering::SeqCst),
+            MAX_OWNED_TASKS
+        );
+    }
+
+    #[tokio::test]
+    async fn simulated_resolver_error_mapper_and_cleanup_unit_joins_owned_tasks() {
+        let owner = owner();
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let marker = DropMark(dropped.clone());
+        let task_owner = owner.clone();
+        let result = run_owned::<(), _>(
+            owner,
+            Instant::now() + Duration::from_secs(60),
+            async move {
+                let (entered_tx, entered_rx) = oneshot::channel();
+                hickory_resolver::net::runtime::Spawn::spawn_bg(
+                    &mut TaskHandle(task_owner),
+                    async move {
+                        let _marker = marker;
+                        let _ = entered_tx.send(());
+                        std::future::pending::<()>().await;
+                    },
+                );
+                entered_rx
+                    .await
+                    .expect("owned task started before injecting the mapped resolver error");
+                let injected_error = hickory_resolver::net::NetError::from(
+                    "injected mapped resolver error".to_owned(),
+                );
+                Err(map_resolver_build_error(injected_error))
+            },
+        )
+        .await;
+        assert!(
+            matches!(result, Err(TransportError::Transport(message)) if message.contains("injected mapped resolver error"))
+        );
+        assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn injected_hosts_snapshot_is_used_when_system_hosts_are_disabled() {
+        let owner = owner();
+        let provider = OwnedRuntime(
+            hickory_resolver::net::runtime::TokioRuntimeProvider::new(),
+            TaskHandle(owner.clone()),
+        );
+        let mut options = ResolverOpts::default();
+        options.use_hosts_file = hickory_resolver::config::ResolveHosts::Never;
+        options.ip_strategy = hickory_resolver::config::LookupIpStrategy::Ipv4Only;
+        options.cache_size = 0;
+        let mut resolver = hickory_resolver::Resolver::builder_with_config(
+            ResolverConfig::from_parts(None, vec![], vec![]),
+            provider,
+        )
+        .with_options(options)
+        .build()
+        .expect("empty upstream configuration builds");
+        let mut hosts = hickory_resolver::Hosts::default();
+        hosts
+            .read_hosts_conf(&b"127.0.0.42 hosts-only.test\n"[..])
+            .expect("fixture hosts parse");
+        resolver.set_hosts(Arc::new(hosts));
+        let result = resolver
+            .lookup_ip("hosts-only.test.")
+            .await
+            .expect("injected hosts resolves without upstream DNS");
+        assert_eq!(
+            result.iter().collect::<Vec<_>>(),
+            vec!["127.0.0.42".parse::<IpAddr>().unwrap()]
+        );
+        assert!(drain(&owner).await.is_ok());
+    }
+
+    // Pinned Hickory source: `BinEncoder` uses a Vec candidate table capped at
+    // 64; `Name::emit` separately caps compression attempts at 120. Not DNSSEC evidence.
+    #[test]
+    fn encoder_caps_compression_candidates_and_compression_attempts() {
+        let mut bytes = Vec::new();
+        let mut ranges = Vec::new();
+        {
+            let mut encoder = BinEncoder::new(&mut bytes);
+            for index in 0..65 {
+                let name =
+                    hickory_resolver::proto::rr::Name::from_ascii(format!("candidate-{index}."))
+                        .expect("valid fixture name");
+                let start = encoder.offset();
+                name.emit(&mut encoder).expect("encode candidate");
+                ranges.push((start, encoder.offset() - 1));
+            }
+            assert_eq!(
+                encoder.get_label_pointer(ranges[0].0, ranges[0].1),
+                Some(ranges[0].0 as u16)
+            );
+            assert_eq!(
+                encoder.get_label_pointer(ranges[63].0, ranges[63].1),
+                Some(ranges[63].0 as u16)
+            );
+            assert_eq!(encoder.get_label_pointer(ranges[64].0, ranges[64].1), None);
+        }
+
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = BinEncoder::new(&mut bytes);
+            let first = hickory_resolver::proto::rr::Name::from_ascii("n0.").unwrap();
+            first.emit(&mut encoder).expect("encode first name");
+            for _ in 1..119 {
+                first.emit(&mut encoder).expect("encode repeated name");
+            }
+            let start = encoder.offset();
+            first.emit(&mut encoder).expect("encode repeated name");
+            let encoded = encoder.slice_of(start, encoder.offset());
+            assert_eq!(encoded, &[0xc0, 0]);
+
+            let start = encoder.offset();
+            first.emit(&mut encoder).expect("encode repeated name");
+            let encoded = encoder.slice_of(start, encoder.offset());
+            assert_eq!(encoded, &[2, b'n', b'0', 0]);
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -715,12 +1100,17 @@ mod tests {
                 tokio::select! {
                     received = dns.recv_from(&mut buf) => if let Ok((len, peer)) = received {
                         let request = Message::from_vec(&buf[..len]).unwrap();
-                        let _ = query_tx.send(request.queries()[0].name().to_utf8()).await;
+                        let _ = query_tx.send(request.queries[0].name().to_utf8()).await;
                         let name = Name::from_ascii("dns-positive.test.").unwrap();
-                        let mut reply = Message::new();
-                        reply.set_id(request.id()).set_message_type(MessageType::Response).set_recursion_desired(true).set_recursion_available(true);
+                        let mut reply = Message::new(
+                            request.metadata.id,
+                            MessageType::Response,
+                            OpCode::Query,
+                        );
+                        reply.metadata.recursion_desired = true;
+                        reply.metadata.recursion_available = true;
                         reply.add_query(Query::query(name.clone(), RecordType::A));
-                        reply.add_answer(Record::from_rdata(name, 30, RData::A(hickory_resolver::proto::rr::rdata::A(std::net::Ipv4Addr::LOCALHOST))));
+                        reply.add_answer(Record::from_rdata(name, 30, RData::A(hickory_resolver::proto::rr::rdata::A::new(127, 0, 0, 1))));
                         let _ = dns.send_to(&reply.to_vec().unwrap(), peer).await;
                     },
                     _ = &mut stop_dns_rx => {},
@@ -747,11 +1137,7 @@ mod tests {
                 }
             }).await
         });
-        let config = ResolverConfig::from_parts(
-            None,
-            vec![],
-            vec![NameServerConfig::new(dns_addr, Protocol::Udp)],
-        );
+        let config = test_dns_config(dns_addr);
         let mut options = ResolverOpts::default();
         options.use_hosts_file = hickory_resolver::config::ResolveHosts::Never;
         options.cache_size = 0;

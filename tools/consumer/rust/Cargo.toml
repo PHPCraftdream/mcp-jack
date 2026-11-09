@@ -2,14 +2,14 @@
 name = "mcp-jack-consumer-smoke"
 version = "0.0.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 publish = false
 
-# MSRV-aware resolver (v3); cargo 1.85 supports edition 2024 + rust-version.
+# MSRV-aware resolver (v3); cargo 1.88 supports edition 2024 + rust-version.
 [dependencies]
 # The dependency points at the EXTRACTED .crate artifact staged by
 # verify-rust.mjs (never the live checkout), with the product lockfile
-# ignored: the consumer resolves its own graph fresh on Rust 1.85.
+# ignored: the consumer resolves its own graph fresh on Rust 1.88.
 mcp-jack = { path = "../vendor/mcp-jack-0.1.0", default-features = false }
 
 # Harness-only supporting deps permitted by task scope; the SDK dep itself
