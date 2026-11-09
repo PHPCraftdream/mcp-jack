@@ -17,50 +17,44 @@ function writable<T>(value: T): Writable<T> {
 
 /** Synthetic entry; MemoryState never validates, so no real keys are needed. */
 function testKey(kid: string, name: string): RegistryEntry {
-  return { kid, publicKey: `pk-${kid}`, name, kind: "human", scopes: ["read"] };
+  return { kid, publicKey: `pk-${kid}`, name };
 }
 
-test("registry entry with no bounds serializes with null bounds", () => {
-  const entry: RegistryEntry = { kid: "k1", publicKey: "pk", name: "alice", kind: "human", scopes: ["read"] };
+test("registry entry with no bounds serializes with null bounds and a false admin", () => {
+  const entry: RegistryEntry = { kid: "k1", publicKey: "pk", name: "alice" };
   assert.equal(
     JSON.stringify(serializeRegistryEntry(entry)),
-    `{"kid":"k1","public_key":"pk","name":"alice","kind":"human","scopes":["read"],"not_before":null,"not_after":null}`,
+    `{"kid":"k1","public_key":"pk","name":"alice","admin":false,"not_before":null,"not_after":null}`,
   );
 });
 
-test("invite record with no ttl serializes with null key_ttl_seconds", () => {
+test("invite record with no ttl omits key_ttl_seconds and writes a false admin", () => {
   const inv: InviteRecord = {
     inviteId: "i1",
-    scopes: ["read"],
-    kind: "human",
     createdBy: "root",
     createdAt: 1767225500,
     expiresAt: 1767228600,
   };
   assert.equal(
     JSON.stringify(serializeInviteRecord(inv)),
-    `{"invite_id":"i1","scopes":["read"],"kind":"human","created_by":"root","created_at":1767225500,"expires_at":1767228600,"key_ttl_seconds":null}`,
+    `{"invite_id":"i1","admin":false,"created_by":"root","created_at":1767225500,"expires_at":1767228600}`,
   );
 });
 
-test("set bounds and ttl serialize as numbers", () => {
+test("set bounds and ttl serialize as numbers and the ttl member comes last", () => {
   const entry: RegistryEntry = {
     kid: "k1",
     publicKey: "pk",
     name: "alice",
-    kind: "human",
-    scopes: ["read"],
     notBefore: 1767225500,
     notAfter: 1767229200,
   };
   assert.equal(
     JSON.stringify(serializeRegistryEntry(entry)),
-    `{"kid":"k1","public_key":"pk","name":"alice","kind":"human","scopes":["read"],"not_before":1767225500,"not_after":1767229200}`,
+    `{"kid":"k1","public_key":"pk","name":"alice","admin":false,"not_before":1767225500,"not_after":1767229200}`,
   );
   const inv: InviteRecord = {
     inviteId: "i1",
-    scopes: ["read"],
-    kind: "human",
     createdBy: "root",
     createdAt: 1767225500,
     expiresAt: 1767228600,
@@ -68,20 +62,45 @@ test("set bounds and ttl serialize as numbers", () => {
   };
   assert.equal(
     JSON.stringify(serializeInviteRecord(inv)),
-    `{"invite_id":"i1","scopes":["read"],"kind":"human","created_by":"root","created_at":1767225500,"expires_at":1767228600,"key_ttl_seconds":3600}`,
+    `{"invite_id":"i1","admin":false,"created_by":"root","created_at":1767225500,"expires_at":1767228600,"key_ttl_seconds":3600}`,
   );
 });
 
-test("scopes omitted through putKey normalize to []", () => {
+test("member-presence rule: an entry without admin stays without the member in memory while serialization writes false", () => {
   const store = new MemoryState();
   const entry = testKey("k1", "alice");
-  const { scopes: _omit, ...withoutScopes } = entry;
-  store.update((e) => e.putKey(withoutScopes));
+  assert.equal("admin" in entry, false, "the literal must not carry admin");
+  store.update((e) => e.putKey(entry));
   const view = store.view();
   const got = view.keys[0];
   assert.ok(got, "expected one key");
-  assert.deepEqual(got.scopes, []);
-  assert.equal(JSON.stringify(serializeRegistryEntry(got).scopes), "[]");
+  // In memory the member is ABSENT (never normalized to false) ...
+  assert.deepEqual(Object.keys(got), ["kid", "publicKey", "name"]);
+  assert.equal("admin" in got, false);
+  // ... but the wire form always carries admin: false.
+  assert.equal(JSON.stringify(serializeRegistryEntry(got)), `{"kid":"k1","public_key":"pk-k1","name":"alice","admin":false,"not_before":null,"not_after":null}`);
+
+  // A stored true persists as true, both in memory and on the wire.
+  store.update((e) => e.putKey({ kid: "k2", publicKey: "pk-k2", name: "root", admin: true }));
+  const admin = store.lookup("k2");
+  assert.ok(admin, "admin entry expected");
+  assert.equal(admin.admin, true);
+  assert.equal(
+    JSON.stringify(serializeRegistryEntry(admin)),
+    `{"kid":"k2","public_key":"pk-k2","name":"root","admin":true,"not_before":null,"not_after":null}`,
+  );
+});
+
+test("member-presence rule for invites: absent admin stays absent in memory, serialization writes false", () => {
+  const store = new MemoryState();
+  store.update((e) => e.putInvite({ inviteId: "i1", createdBy: "root", createdAt: 0, expiresAt: 0 }));
+  const inv = store.view().invites[0];
+  assert.ok(inv, "expected one invite");
+  assert.deepEqual(Object.keys(inv), ["inviteId", "createdBy", "createdAt", "expiresAt"]);
+  assert.equal(
+    JSON.stringify(serializeInviteRecord(inv)),
+    `{"invite_id":"i1","admin":false,"created_by":"root","created_at":0,"expires_at":0}`,
+  );
 });
 
 test("put and get by kid and by name", () => {
@@ -103,7 +122,7 @@ test("put and get by kid and by name", () => {
 test("putkey replaces on same kid", () => {
   const store = new MemoryState();
   const entry = testKey("k1", "alice");
-  const replaced: RegistryEntry = { ...entry, name: "alice2", scopes: ["read", "write"] };
+  const replaced: RegistryEntry = { ...entry, name: "alice2", admin: true };
   store.update((e) => {
     e.putKey(entry);
     e.putKey(replaced);
@@ -113,7 +132,7 @@ test("putkey replaces on same kid", () => {
   const got = view.keys[0];
   assert.ok(got);
   assert.equal(got.name, "alice2");
-  assert.equal(got.scopes?.length, 2);
+  assert.equal(got.admin, true);
 });
 
 test("remove returns false when absent", () => {
@@ -162,32 +181,28 @@ test("edit getters are deep copies", () => {
     const got = e.key(k.kid);
     assert.ok(got, "Key(kid) not found");
     writable(got).name = "MUTATED";
-    const scopes = got.scopes;
-    assert.ok(scopes, "scopes expected");
-    writable(scopes)[0] = "MUTATED";
+    writable(got).notAfter = 999;
   });
   const view = store.view();
   const got = view.keys[0];
   assert.ok(got);
   assert.equal(got.name, "alice");
-  assert.equal(got.scopes?.[0], "read");
+  assert.equal(got.notAfter, undefined);
 });
 
 test("enroll flow consumes an invite and adds a key atomically", () => {
   const store = new MemoryState();
   const admin = testKey("kid-admin", "root");
   store.update((e) => {
-    e.putInvite({ inviteId: "i1", scopes: ["read"], createdBy: "root", createdAt: 0, expiresAt: 0 });
+    e.putInvite({ inviteId: "i1", createdBy: "root", createdAt: 0, expiresAt: 0 });
     e.putKey(admin);
   });
   const enrolled = testKey("kid-new", "bob");
-  const { scopes: _omit, ...enrolledRest } = enrolled;
   store.update((e) => {
     const inv = e.invite("i1");
     assert.ok(inv, "invite missing");
     e.removeInvite("i1");
-    const invScopes = inv.scopes;
-    e.putKey(invScopes === undefined ? enrolledRest : { ...enrolledRest, scopes: invScopes });
+    e.putKey(inv.admin === true ? { ...enrolled, admin: true } : enrolled);
   });
   const view = store.view();
   assert.equal(view.keys.length, 2);
@@ -223,9 +238,7 @@ test("view is a copy: mutations never reach the store", () => {
   const first = view.keys[0];
   assert.ok(first);
   writable(first).name = "MUTATED";
-  const scopes = first.scopes;
-  assert.ok(scopes);
-  writable(scopes)[0] = "MUTATED";
+  writable(first).admin = true;
   view.keys.push(testKey("kid-2", "mallory"));
   view.invites.push({ inviteId: "i1", createdBy: "root", createdAt: 0, expiresAt: 0 });
 
@@ -234,7 +247,7 @@ test("view is a copy: mutations never reach the store", () => {
   const got = after.keys[0];
   assert.ok(got);
   assert.equal(got.name, "alice");
-  assert.equal(got.scopes?.[0], "read");
+  assert.equal("admin" in got, false);
   assert.equal(after.invites.length, 0);
 });
 
@@ -255,37 +268,43 @@ test("view pointee isolation: notAfter mutations do not leak", () => {
 
 test("putKey input isolation: caller mutations do not leak into the store", () => {
   const store = new MemoryState();
-  const entry: RegistryEntry = { ...testKey("kid-1", "alice"), notBefore: 5 };
+  const entry: RegistryEntry = { ...testKey("kid-1", "alice"), admin: true, notBefore: 5 };
   store.update((e) => e.putKey(entry));
-  const scopes = entry.scopes;
-  assert.ok(scopes);
-  writable(scopes)[0] = "admin";
-  writable(scopes).push("extra");
+  // Mutate the caller's ORIGINAL object after putKey: the store must keep
+  // what was there at put time (deep-copied at the input boundary).
+  writable(entry).admin = false;
   writable(entry).notBefore = 0;
   const got = store.view().keys[0];
   assert.ok(got);
-  assert.deepEqual(got.scopes, ["read"]);
+  assert.equal(got.admin, true);
   assert.equal(got.notBefore, 5);
 
   const store2 = new MemoryState();
   const inv: InviteRecord = {
     inviteId: "i1",
-    scopes: ["read"],
     createdBy: "root",
     createdAt: 0,
     expiresAt: 0,
     keyTtlSeconds: 3600,
   };
   store2.update((e) => e.putInvite(inv));
-  const invScopes = inv.scopes;
-  assert.ok(invScopes);
-  writable(invScopes)[0] = "admin";
-  writable(invScopes).push("extra");
   writable(inv).keyTtlSeconds = 0;
   const gotInv = store2.view().invites[0];
   assert.ok(gotInv);
-  assert.deepEqual(gotInv.scopes, ["read"]);
   assert.equal(gotInv.keyTtlSeconds, 3600);
+});
+
+test("a returned view clone does not alias the store either", () => {
+  const store = new MemoryState();
+  store.update((e) => e.putKey({ ...testKey("kid-1", "alice"), admin: true }));
+  const clone = store.lookup("kid-1");
+  assert.ok(clone, "lookup expected");
+  writable(clone).admin = false;
+  writable(clone).name = "MUTATED";
+  const got = store.view().keys[0];
+  assert.ok(got);
+  assert.equal(got.admin, true);
+  assert.equal(got.name, "alice");
 });
 
 test("rollback discards the edit; caller mutation after commit does not leak", () => {

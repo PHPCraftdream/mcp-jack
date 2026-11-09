@@ -1,6 +1,8 @@
 /**
  * The request verifier: header grammar, key lookup, time window, signature,
- * nonce and policy, in spec check order (spec 01 section 4, spec 02 section 4).
+ * nonce, in spec check order (spec 01 section 4, spec 02 section 4). On accept
+ * it hands the handler a frozen JackIdentity — the verification-time registry
+ * snapshot of the caller.
  *
  * CENTRAL DESIGN DECISION — raw JSON source text.
  * `JSON.parse` loses the raw text of numbers and members, but spec 03 section 3
@@ -23,7 +25,6 @@ import { requestSigningString } from "../signing.js";
 import type { AuditEvent, AuditSink } from "./audit.js";
 import { AUDIT_FAILURE, AUDIT_SUCCESS } from "./audit.js";
 import type { NonceStore } from "./nonce.js";
-import type { Policy } from "./policy.js";
 import type { RegistryEntry, StateStore } from "./state.js";
 
 // One shared strict UTF-8 decoder: a decode failure is exactly "not valid
@@ -271,7 +272,7 @@ function isPlainObject(v: JsonValue): boolean {
  * of the EXACT bytes happens BEFORE any JSON parse (JSON.parse would silently
  * replace invalid bytes). All member lookups go through the members MAP, never
  * `value.__proto__`-style access, so a tool literally named "__proto__"
- * (fixture authz-proto-tool-name) flows to the policy like any other name and
+ * (fixture authz-proto-tool-name) flows through classification like any other name and
  * a "__proto__" member cannot alias another member's path. Returns undefined
  * when the body is not an acceptable JSON-RPC object. An empty POST has no
  * jsonrpc member and is rejected here.
@@ -336,17 +337,34 @@ export function classifyBody(body: Uint8Array): RpcMessage | undefined {
 // the real tools are a LATER task.
 // ---------------------------------------------------------------------------
 
+/**
+ * Verified caller identity: a snapshot of the registry entry taken at
+ * verification time. Frozen, so it is immutable to consumers; an in-flight
+ * handler keeps the snapshot and registry changes affect only subsequent
+ * requests.
+ */
+export interface JackIdentity {
+  readonly kid: string;
+  readonly name: string;
+  readonly admin: boolean;
+}
+
+/** Internal: builds the frozen identity snapshot from the entry authentication used. */
+function identitySnapshot(entry: RegistryEntry): JackIdentity {
+  return Object.freeze({ kid: entry.kid, name: entry.name, admin: entry.admin === true });
+}
+
 /** Timestamp acceptance window in seconds (spec 01 section 4). */
 export const DEFAULT_WINDOW = 30;
 
-/** Names of the protocol-native tools (spec 03); "jack."-prefixed tools never reach the policy. */
+/** Names of the protocol-native tools (spec 03). */
 export const TOOL_ENROLL = "jack.enroll";
 export const TOOL_WHOAMI = "jack.whoami";
 export const TOOL_ROTATE_KEY = "jack.key.rotate";
 export const TOOL_ADMIN_USER_LIST = "jack.admin.user.list";
 export const TOOL_ADMIN_USER_GET = "jack.admin.user.get";
 export const TOOL_ADMIN_USER_CREATE = "jack.admin.user.create";
-export const TOOL_ADMIN_USER_SET_SCOPES = "jack.admin.user.set_scopes";
+export const TOOL_ADMIN_USER_SET_ADMIN = "jack.admin.user.set_admin";
 export const TOOL_ADMIN_USER_REVOKE = "jack.admin.user.revoke";
 export const TOOL_ADMIN_INVITE_CREATE = "jack.admin.invite.create";
 export const TOOL_ADMIN_INVITE_LIST = "jack.admin.invite.list";
@@ -359,7 +377,7 @@ const NATIVE_TOOLS: ReadonlySet<string> = new Set([
   TOOL_ADMIN_USER_LIST,
   TOOL_ADMIN_USER_GET,
   TOOL_ADMIN_USER_CREATE,
-  TOOL_ADMIN_USER_SET_SCOPES,
+  TOOL_ADMIN_USER_SET_ADMIN,
   TOOL_ADMIN_USER_REVOKE,
   TOOL_ADMIN_INVITE_CREATE,
   TOOL_ADMIN_INVITE_LIST,
@@ -451,6 +469,12 @@ export interface VerifyResult {
   readonly native: boolean;
   /** undefined unless a native tool call succeeded. */
   readonly structured: unknown;
+  /**
+   * The caller's identity snapshot, set ONLY when the request is forwarded to
+   * the wrapped handler (accepted and not a native tool); undefined for native
+   * accepts and every rejection.
+   */
+  readonly identity: JackIdentity | undefined;
   readonly audit: AuditEvent | undefined;
 }
 
@@ -459,7 +483,6 @@ export interface VerifierConfig {
   readonly aud: string;
   readonly state: StateStore;
   readonly nonces: NonceStore;
-  readonly policy: Policy;
   /** Optional sink. */
   readonly audit?: AuditSink;
   /** When undefined every jack.* tool is 403 operation_denied. */
@@ -484,6 +507,7 @@ interface ResultBuilder {
   tool: string;
   native: boolean;
   structured: unknown;
+  identity: JackIdentity | undefined;
   audit: AuditEvent | undefined;
 }
 
@@ -499,23 +523,20 @@ export class Verifier {
   private readonly aud: string;
   private readonly state: StateStore;
   private readonly nonces: NonceStore;
-  private readonly policy: Policy;
   private readonly audit: AuditSink | undefined;
   private readonly native: NativeTools | undefined;
   private readonly window: number;
   private readonly now: () => number;
 
-  /** Throws when aud is "" or state/nonces/policy/now are missing (Go NewVerifier parity). */
+  /** Throws when aud is "" or state/nonces/now are missing (Go NewVerifier parity). */
   constructor(cfg: VerifierConfig) {
     if (cfg.aud === "") throw new Error("server: VerifierConfig.aud must be non-empty");
     if (cfg.state === undefined) throw new Error("server: VerifierConfig.state must be set");
     if (cfg.nonces === undefined) throw new Error("server: VerifierConfig.nonces must be set");
-    if (cfg.policy === undefined) throw new Error("server: VerifierConfig.policy must be set");
     if (cfg.now === undefined) throw new Error("server: VerifierConfig.now must be set");
     this.aud = cfg.aud;
     this.state = cfg.state;
     this.nonces = cfg.nonces;
-    this.policy = cfg.policy;
     this.audit = cfg.audit;
     this.native = cfg.native;
     this.window = cfg.window === undefined || cfg.window <= 0 ? DEFAULT_WINDOW : cfg.window;
@@ -609,6 +630,7 @@ export class Verifier {
       tool: "",
       native: false,
       structured: undefined,
+      identity: undefined,
       audit: undefined,
     };
     const done = this.authorize(req, auth, now, caller, b);
@@ -624,13 +646,15 @@ export class Verifier {
       tool: done.tool,
       native: done.native,
       structured: done.structured,
+      identity: done.identity,
       audit: done.audit,
     };
   }
 
   /**
-   * Step 9: body shape, protocol-native tools, policy. `b` already carries
-   * kid/nonceRecorded/requestSig at the caller; this sets the rest of it.
+   * Step 9: body shape, protocol-native tools, ordinary MCP forwarding. `b`
+   * already carries kid/nonceRecorded/requestSig at the caller; this sets the
+   * rest of it.
    */
   private authorize(
     req: VerifyRequest,
@@ -652,6 +676,11 @@ export class Verifier {
     // verbs is the HTTP adapter's job (later task).
     if (req.method === "GET") {
       b.accepted = true;
+      // GET is enrollment-exempt (POST-only), so caller is defined in practice;
+      // kept defensive: identity only when a registry entry authenticated.
+      if (caller !== undefined) {
+        b.identity = identitySnapshot(caller);
+      }
       return b;
     }
 
@@ -665,13 +694,17 @@ export class Verifier {
       // A client answering a server-initiated request: authorized by
       // authentication alone.
       b.accepted = true;
+      if (caller !== undefined) {
+        b.identity = identitySnapshot(caller);
+      }
       return b;
     }
     if (msg.hasTool) {
       b.tool = msg.tool;
     }
 
-    // NATIVE: "jack."-prefixed tools never reach the policy.
+    // NATIVE: "jack."-prefixed tools are handled by the native implementation,
+    // which does its own admin gating.
     if (msg.hasTool && msg.tool.startsWith("jack.")) {
       b.native = true;
       if (!isNativeTool(msg.tool) || this.native === undefined) {
@@ -733,20 +766,15 @@ export class Verifier {
       }
     }
 
-    // POLICY: everything else.
+    // ORDINARY MCP: any authenticated caller is forwarded unchanged; admin
+    // gating happens inside the native implementation, never here.
     if (caller === undefined) {
       // Unreachable: only a jack.enroll request passes step 2 without a
       // registry entry, and it went through the native branch. Kept
       // defensive like Go.
       return fail(401, Code.UNKNOWN_KEY, "unknown key");
     }
-    const d = this.policy.evaluate(msg.method, msg.hasTool ? msg.tool : undefined);
-    if (!d.allowed) {
-      return fail(403, Code.OPERATION_DENIED, "operation is not permitted");
-    }
-    if (d.scope !== null && !(caller.scopes ?? []).includes(d.scope)) {
-      return fail(403, Code.INSUFFICIENT_SCOPE, "the key lacks the required scope");
-    }
+    b.identity = identitySnapshot(caller);
     b.accepted = true;
     return b;
   }
@@ -810,6 +838,7 @@ function rejected(httpStatus: number, code: string, message: string): VerifyResu
     tool: "",
     native: false,
     structured: undefined,
+    identity: undefined,
     audit: undefined,
   };
 }

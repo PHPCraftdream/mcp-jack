@@ -11,7 +11,7 @@ export const TOOL_ROTATE_KEY = "jack.key.rotate";
 export const TOOL_ADMIN_USER_LIST = "jack.admin.user.list";
 export const TOOL_ADMIN_USER_GET = "jack.admin.user.get";
 export const TOOL_ADMIN_USER_CREATE = "jack.admin.user.create";
-export const TOOL_ADMIN_USER_SET_SCOPES = "jack.admin.user.set_scopes";
+export const TOOL_ADMIN_USER_SET_ADMIN = "jack.admin.user.set_admin";
 export const TOOL_ADMIN_USER_REVOKE = "jack.admin.user.revoke";
 export const TOOL_ADMIN_INVITE_CREATE = "jack.admin.invite.create";
 export const TOOL_ADMIN_INVITE_LIST = "jack.admin.invite.list";
@@ -22,8 +22,7 @@ export interface Entry {
   kid: string;
   publicKey: string;
   name: string;
-  kind: string;
-  scopes: string[];
+  admin: boolean;
   notBefore: number | null;
   notAfter: number | null;
 }
@@ -32,8 +31,7 @@ export interface Entry {
 export interface WhoAmIResult {
   kid: string;
   name: string;
-  kind: string;
-  scopes: string[];
+  admin: boolean;
   notBefore: number | null;
   notAfter: number | null;
 }
@@ -42,8 +40,7 @@ export interface WhoAmIResult {
 export interface EnrollResult {
   kid: string;
   name: string;
-  kind: string;
-  scopes: string[];
+  admin: boolean;
 }
 
 /** Reports the kid of the affected registry entry. */
@@ -61,8 +58,7 @@ export interface InviteCreateResult {
 /** One live invite (spec 03 section 3.3). */
 export interface InviteListEntry {
   inviteId: string;
-  scopes: string[];
-  kind: string;
+  admin: boolean;
   createdBy: string;
   createdAt: number;
   expiresAt: number;
@@ -77,16 +73,14 @@ export interface InviteRevokeResult {
 export interface UserCreateParams {
   name: string;
   publicKey: string;
-  scopes: string[];
-  kind?: string;
+  admin?: boolean;
   notBefore?: number;
   notAfter?: number;
 }
 
 /** Arguments of jack.admin.invite.create. */
 export interface InviteCreateParams {
-  scopes: string[];
-  kind?: string;
+  admin?: boolean;
   ttlSeconds?: number;
   keyTtlSeconds?: number;
 }
@@ -107,15 +101,12 @@ function asInt(v: JsonValue | undefined, field: string): number {
   return v;
 }
 
-/** Decodes a JSON string-array field: null counts as an empty array (Go: missing slice field). */
-function asStringArray(v: JsonValue | undefined, field: string): string[] {
-  if (v === null || v === undefined) {
-    return [];
+/** Decodes a JSON boolean field, throwing on any other type. */
+function asBool(v: JsonValue | undefined, field: string): boolean {
+  if (typeof v !== "boolean") {
+    throw new Error(`jack client: field ${field} must be a boolean`);
   }
-  if (!Array.isArray(v)) {
-    throw new Error(`jack client: field ${field} must be an array of strings`);
-  }
-  return v.map((item) => asString(item, field));
+  return v;
 }
 
 /** Decodes an optional integer field: absent or null -> null, else asInt. */
@@ -126,13 +117,12 @@ function nullableInt(v: JsonValue | undefined, field: string): number | null {
   return asInt(v, field);
 }
 
-/** Decodes the common kid/name/kind/scopes/validity entry fields. */
-function decodeEntryFields(v: { readonly [key: string]: JsonValue }): { kid: string; name: string; kind: string; scopes: string[]; notBefore: number | null; notAfter: number | null } {
+/** Decodes the common kid/name/admin/validity entry fields. */
+function decodeEntryFields(v: { readonly [key: string]: JsonValue }): { kid: string; name: string; admin: boolean; notBefore: number | null; notAfter: number | null } {
   return {
     kid: asString(v["kid"], "kid"),
     name: asString(v["name"], "name"),
-    kind: asString(v["kind"], "kind"),
-    scopes: asStringArray(v["scopes"], "scopes"),
+    admin: asBool(v["admin"], "admin"),
     notBefore: nullableInt(v["not_before"], "not_before"),
     notAfter: nullableInt(v["not_after"], "not_after"),
   };
@@ -146,8 +136,7 @@ export function enroll(client: Client, code: string, name: string, newSigner: Si
     return {
       kid: asString(rec["kid"], "kid"),
       name: asString(rec["name"], "name"),
-      kind: asString(rec["kind"], "kind"),
-      scopes: asStringArray(rec["scopes"], "scopes"),
+      admin: asBool(rec["admin"], "admin"),
     };
   });
 }
@@ -190,13 +179,12 @@ export function adminUserGet(client: Client, kid: string): Promise<Entry> {
 
 /** AdminUserCreate registers a key directly as an admin operation. */
 export function adminUserCreate(client: Client, params: UserCreateParams): Promise<KidResult> {
-  // One literal, field order matching the Go struct byte for byte; kind is
-  // omitted when empty (Go omitempty), validity bounds when absent.
+  // One literal, field order matching the Go struct byte for byte; admin is
+  // omitted when unset (Go omitempty), validity bounds when absent.
   const args = {
     name: params.name,
     public_key: params.publicKey,
-    scopes: params.scopes,
-    ...(params.kind !== undefined && params.kind !== "" ? { kind: params.kind } : {}),
+    ...(params.admin !== undefined ? { admin: params.admin } : {}),
     ...(params.notBefore !== undefined ? { not_before: params.notBefore } : {}),
     ...(params.notAfter !== undefined ? { not_after: params.notAfter } : {}),
   };
@@ -206,9 +194,9 @@ export function adminUserCreate(client: Client, params: UserCreateParams): Promi
   });
 }
 
-/** AdminUserSetScopes replaces the scopes of one entry. */
-export function adminUserSetScopes(client: Client, kid: string, scopes: string[]): Promise<Entry> {
-  return client.callWith(TOOL_ADMIN_USER_SET_SCOPES, { kid, scopes }, client.signer).then(decodeEntryResult);
+/** AdminUserSetAdmin replaces one entry's admin flag. */
+export function adminUserSetAdmin(client: Client, kid: string, admin: boolean): Promise<Entry> {
+  return client.callWith(TOOL_ADMIN_USER_SET_ADMIN, { kid, admin }, client.signer).then(decodeEntryResult);
 }
 
 /** AdminUserRevoke revokes one registry entry. */
@@ -222,8 +210,7 @@ export function adminUserRevoke(client: Client, kid: string): Promise<KidResult>
 /** AdminInviteCreate mints an invite. */
 export function adminInviteCreate(client: Client, params: InviteCreateParams): Promise<InviteCreateResult> {
   const args = {
-    scopes: params.scopes,
-    ...(params.kind !== undefined && params.kind !== "" ? { kind: params.kind } : {}),
+    ...(params.admin !== undefined ? { admin: params.admin } : {}),
     ...(params.ttlSeconds !== undefined ? { ttl_seconds: params.ttlSeconds } : {}),
     ...(params.keyTtlSeconds !== undefined ? { key_ttl_seconds: params.keyTtlSeconds } : {}),
   };
@@ -249,8 +236,7 @@ export function adminInviteList(client: Client): Promise<InviteListEntry[]> {
       const rec2 = requireRecord(item);
       return {
         inviteId: asString(rec2["invite_id"], "invite_id"),
-        scopes: asStringArray(rec2["scopes"], "scopes"),
-        kind: asString(rec2["kind"], "kind"),
+        admin: asBool(rec2["admin"], "admin"),
         createdBy: asString(rec2["created_by"], "created_by"),
         createdAt: asInt(rec2["created_at"], "created_at"),
         expiresAt: asInt(rec2["expires_at"], "expires_at"),

@@ -12,7 +12,6 @@ export * from "./server/fetch.js";
 export * from "./server/native.js";
 export * from "./server/node.js";
 export * from "./server/nonce.js";
-export * from "./server/policy.js";
 export * from "./server/state-file.js";
 export * from "./server/state.js";
 export * from "./server/verify.js";

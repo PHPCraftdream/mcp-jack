@@ -12,7 +12,6 @@ const verifier = new Verifier({
   aud: "https://svc.example.test",
   state,
   nonces: new NonceStore(),
-  policy: parsePolicy(policyJson),
   native: new Native(),
   now: () => Math.floor(Date.now() / 1000),
 });
@@ -22,6 +21,8 @@ const next = async (req: Request): Promise<Response> => {
 };
 const handle = jackFetchHandler({ verifier, serverKey: seed, maxBodyBytes: 1 << 20, maxResponseBytes: 1 << 20 }, next);
 ```
+
+The verified caller identity is handed to `next` as a frozen `{ kid, name, admin }` snapshot associated with the forwarded `Request` in SDK-private storage (a `WeakMap`, not an own property of the request) — so handler code can neither discover, replace, nor copy the association onto another `Request` — and reads it only through the exported accessor `jackIdentity(req)`. There is no exported storage symbol and no setter, so an identity can only come from a request that actually verified — request headers, body and query members cannot influence it. The snapshot is per-request: an in-flight handler retains the one it received, and registry changes (including a demotion through `jack.admin.user.set_admin`) affect only subsequent requests. The single `admin` boolean gates only the `jack.admin.*` tools (`403 admin_required`); ordinary MCP traffic is forwarded for every registered, active key, and legacy state files carrying `kind`/`scopes` members are rejected at load, never migrated.
 
 ```ts
 // Node: serve the same handler from a real socket.
@@ -46,7 +47,7 @@ Redirects are never followed: `redirect: "error"` is always passed to the fetch,
 
 ```
 npm run build
-node ts/dist/interop/server.js --aud <aud> --policy <file> --state <file> --server-seed-hex <64 hex> [--bootstrap-ttl <seconds>] [--verify-only]
+node ts/dist/interop/server.js --aud <aud> --state <file> --server-seed-hex <64 hex> [--bootstrap-ttl <seconds>] [--verify-only]
 node ts/dist/interop/client.js --url <base-url> --seed-hex <64 hex> --server-public-key <b64u> --aud <aud> --scenario <name> [--seeds <file>] [--ts <n>] [--nonce <b64u>] [--arg k=v]...
 ```
 

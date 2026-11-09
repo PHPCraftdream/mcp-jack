@@ -1,4 +1,12 @@
-/** Strict typed loaders for the shared normative fixtures in spec/fixtures, mirroring spec/spec.go (test-only). */
+/**
+ * Strict typed loaders for the shared normative fixtures in spec/fixtures,
+ * mirroring the admin-only contract of spec/tests/README.md (test-only):
+ * forwarded accepts carry the frozen verified-identity snapshot
+ * (`expect.identity` = {kid, name, admin}) and every sequence step's
+ * `expect.after` is the FULL durable state (users with admin/bounds always
+ * present; invites as records, implementation-created ids scrubbed to
+ * "<b64u43>").
+ */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,13 +37,13 @@ export interface KeyFile {
   readonly keys: readonly TestKey[];
 }
 
-/** One key of a registry document; kind and validity bounds may be omitted or null (unbounded). */
+/** One key of a registry document; admin is a strict boolean when present and validity bounds may be omitted or null (unbounded). */
 export interface RegistryEntry {
   readonly kid: string;
   readonly publicKey: string;
   readonly name: string;
-  readonly kind?: string | null;
-  readonly scopes: readonly string[];
+  /** Absent means not an admin (false); when present it must be exactly true or false. */
+  readonly admin?: boolean;
   readonly notBefore?: number | null;
   readonly notAfter?: number | null;
 }
@@ -45,12 +53,6 @@ export interface RegistryDocument {
   readonly version: number;
   readonly aud: string;
   readonly keys: readonly RegistryEntry[];
-}
-
-/** PolicyDocument is policy.json / policy-wildcard.json with rules left as raw JSON values: policy parsing is a later step. */
-export interface PolicyDocument {
-  readonly version: number;
-  readonly rules: readonly JsonValue[];
 }
 
 /** One [name, value] pair; the list form keeps repeated headers representable. */
@@ -71,7 +73,6 @@ export interface RequestState {
   readonly now: number;
   readonly windowSeconds: number;
   readonly aud: string;
-  readonly policy: string;
   readonly nonceCache: readonly NonceCacheEntry[];
 }
 
@@ -92,27 +93,44 @@ export interface AuditExpect {
   readonly actorKid: string;
 }
 
-/** UserSummary is one entry of an after.users expectation. */
-export interface UserSummary {
-  readonly name: string;
+/** AfterUser is one entry of an after.users expectation: the FULL durable user entry, admin and bounds always present. */
+export interface AfterUser {
   readonly kid: string;
-  readonly kind: string;
-  readonly scopes: readonly string[];
-  readonly notBefore?: number | null;
-  readonly notAfter?: number | null;
+  readonly publicKey: string;
+  readonly name: string;
+  readonly admin: boolean;
+  readonly notBefore: number | null;
+  readonly notAfter: number | null;
 }
 
-/** AfterState summarizes the sequence state after a step ran. */
+/** AfterInvite is one entry of an after.invites expectation: a full invite record; key_ttl_seconds is absent when unset, never null. */
+export interface AfterInvite {
+  readonly inviteId: string;
+  readonly admin: boolean;
+  readonly createdBy: string;
+  readonly createdAt: number;
+  readonly expiresAt: number;
+  readonly keyTtlSeconds?: number;
+}
+
+/** AfterState is the full durable state after a sequence step ran. */
 export interface AfterState {
-  readonly users: readonly UserSummary[];
-  readonly invites: number;
+  readonly users: readonly AfterUser[];
+  readonly invites: readonly AfterInvite[];
 }
 
-/** Expect is the shared outcome expectation; structured stays raw JSON because its shape varies per tool. */
+/** Expect is the shared outcome expectation; structured stays raw JSON because its shape varies per tool.
+ *
+ * identity is the frozen {kid, name, admin} snapshot a forwarded accept hands to the wrapped
+ * handler; kid/http_status/code carry an explicit JSON null in fixtures where they do not apply,
+ * and a null decodes as ABSENT here. audit keeps code as string|null: null means the event has
+ * no code field, which is asserted, not dropped.
+ */
 export interface Expect {
   readonly result: string;
   readonly kid?: string;
   readonly structured?: JsonValue;
+  readonly identity?: { readonly kid: string; readonly name: string; readonly admin: boolean };
   readonly httpStatus?: number;
   readonly code?: string;
   readonly audit?: AuditExpect;
@@ -135,22 +153,21 @@ export interface RequestCase {
   readonly debug: Debug;
 }
 
-/** RequestVectors is request-vectors.json; policies maps a case's state.policy name to the file that holds it. */
+/** RequestVectors is request-vectors.json. */
 export interface RequestVectors {
   readonly registry: string;
-  readonly policies: { readonly [name: string]: string };
   readonly cases: readonly RequestCase[];
 }
 
-/** InviteRecord is a stored invite in a sequence state; keyTtlSeconds is null when the key never expires. */
+/** InviteRecord is a stored invite in a sequence state; keyTtlSeconds is absent when unset, never null. */
 export interface InviteRecord {
   readonly inviteId: string;
-  readonly scopes: readonly string[];
-  readonly kind?: string | null;
+  /** Absent means not an admin invite (false); strict boolean when present. */
+  readonly admin?: boolean;
   readonly createdBy: string;
   readonly createdAt: number;
   readonly expiresAt: number;
-  readonly keyTtlSeconds?: number | null;
+  readonly keyTtlSeconds?: number;
 }
 
 /** SequenceState is the initial state of an admin sequence case. */
@@ -239,21 +256,20 @@ export interface LoadCase {
 
 /** LoadVectors is load-vectors.json. */
 export interface LoadVectors {
-  readonly policies: readonly LoadCase[];
   readonly registries: readonly LoadCase[];
 }
 
-/** PatternCase is one policy pattern matching vector; * matches any run of characters including none and newlines. */
-export interface PatternCase {
+/** StateFileCase is one state-file load-time validation vector; document stays raw JSON because the invalid cases are intentionally untypeable. */
+export interface StateFileCase {
   readonly id: string;
-  readonly pattern: string;
-  readonly input: string;
-  readonly match: boolean;
+  readonly document: JsonValue;
+  readonly expect: string;
+  readonly reason?: string;
 }
 
-/** PatternVectors is pattern-vectors.json. */
-export interface PatternVectors {
-  readonly cases: readonly PatternCase[];
+/** StateFileVectors is state-file-vectors.json. */
+export interface StateFileVectors {
+  readonly cases: readonly StateFileCase[];
 }
 
 let cachedRoot: string | undefined;
@@ -441,16 +457,15 @@ function decodeKeyFile(entry: JsonValue, what: string): KeyFile {
 
 function decodeRegistryEntry(entry: JsonValue, what: string): RegistryEntry {
   const obj = asObject(entry, what);
-  rejectUnknownKeys(obj, ["kid", "public_key", "name", "kind", "scopes", "not_before", "not_after"], what);
+  rejectUnknownKeys(obj, ["kid", "public_key", "name", "admin", "not_before", "not_after"], what);
   const decoded: Mutable<RegistryEntry> = {
     kid: asString(requireField(obj, "kid", what), `${what}.kid`),
     publicKey: asString(requireField(obj, "public_key", what), `${what}.public_key`),
     name: asString(requireField(obj, "name", what), `${what}.name`),
-    scopes: asStringArray(requireField(obj, "scopes", what), `${what}.scopes`),
   };
-  const kind = optNullableString(obj, "kind", `${what}.kind`);
-  if (kind !== undefined) {
-    decoded.kind = kind;
+  const admin = optBool(obj, "admin", `${what}.admin`);
+  if (admin !== undefined) {
+    decoded.admin = admin;
   }
   const notBefore = optNullableInt(obj, "not_before", `${what}.not_before`);
   if (notBefore !== undefined) {
@@ -475,15 +490,6 @@ function decodeRegistryDocument(entry: JsonValue, what: string): RegistryDocumen
   };
 }
 
-function decodePolicyDocument(entry: JsonValue, what: string): PolicyDocument {
-  const obj = asObject(entry, what);
-  rejectUnknownKeys(obj, ["version", "rules"], what);
-  return {
-    version: asInt(requireField(obj, "version", what), `${what}.version`),
-    rules: asArray(requireField(obj, "rules", what), `${what}.rules`),
-  };
-}
-
 function decodeNonceCacheEntry(entry: JsonValue, what: string): NonceCacheEntry {
   const obj = asObject(entry, what);
   rejectUnknownKeys(obj, ["kid", "nonce", "retain_until"], what);
@@ -496,12 +502,11 @@ function decodeNonceCacheEntry(entry: JsonValue, what: string): NonceCacheEntry 
 
 function decodeRequestState(entry: JsonValue, what: string): RequestState {
   const obj = asObject(entry, what);
-  rejectUnknownKeys(obj, ["now", "window_seconds", "aud", "policy", "nonce_cache"], what);
+  rejectUnknownKeys(obj, ["now", "window_seconds", "aud", "nonce_cache"], what);
   return {
     now: asInt(requireField(obj, "now", what), `${what}.now`),
     windowSeconds: asInt(requireField(obj, "window_seconds", what), `${what}.window_seconds`),
     aud: asString(requireField(obj, "aud", what), `${what}.aud`),
-    policy: asString(requireField(obj, "policy", what), `${what}.policy`),
     nonceCache: asArray(requireField(obj, "nonce_cache", what), `${what}.nonce_cache`).map((item, index) =>
       decodeNonceCacheEntry(item, `${what}.nonce_cache[${index}]`),
     ),
@@ -539,22 +544,33 @@ function decodeAuditExpect(entry: JsonValue, what: string): AuditExpect {
   return decoded;
 }
 
-function decodeUserSummary(entry: JsonValue, what: string): UserSummary {
+function decodeAfterUser(entry: JsonValue, what: string): AfterUser {
   const obj = asObject(entry, what);
-  rejectUnknownKeys(obj, ["name", "kid", "kind", "scopes", "not_before", "not_after"], what);
-  const decoded: Mutable<UserSummary> = {
-    name: asString(requireField(obj, "name", what), `${what}.name`),
+  rejectUnknownKeys(obj, ["kid", "public_key", "name", "admin", "not_before", "not_after"], what);
+  return {
     kid: asString(requireField(obj, "kid", what), `${what}.kid`),
-    kind: asString(requireField(obj, "kind", what), `${what}.kind`),
-    scopes: asStringArray(requireField(obj, "scopes", what), `${what}.scopes`),
+    publicKey: asString(requireField(obj, "public_key", what), `${what}.public_key`),
+    name: asString(requireField(obj, "name", what), `${what}.name`),
+    admin: asBool(requireField(obj, "admin", what), `${what}.admin`),
+    notBefore: optNullableInt(obj, "not_before", `${what}.not_before`) ?? null,
+    notAfter: optNullableInt(obj, "not_after", `${what}.not_after`) ?? null,
   };
-  const notBefore = optNullableInt(obj, "not_before", `${what}.not_before`);
-  if (notBefore !== undefined) {
-    decoded.notBefore = notBefore;
-  }
-  const notAfter = optNullableInt(obj, "not_after", `${what}.not_after`);
-  if (notAfter !== undefined) {
-    decoded.notAfter = notAfter;
+}
+
+function decodeAfterInvite(entry: JsonValue, what: string): AfterInvite {
+  const obj = asObject(entry, what);
+  rejectUnknownKeys(obj, ["invite_id", "admin", "created_by", "created_at", "expires_at", "key_ttl_seconds"], what);
+  const decoded: Mutable<AfterInvite> = {
+    inviteId: asString(requireField(obj, "invite_id", what), `${what}.invite_id`),
+    admin: asBool(requireField(obj, "admin", what), `${what}.admin`),
+    createdBy: asString(requireField(obj, "created_by", what), `${what}.created_by`),
+    createdAt: asInt(requireField(obj, "created_at", what), `${what}.created_at`),
+    expiresAt: asInt(requireField(obj, "expires_at", what), `${what}.expires_at`),
+  };
+  // key_ttl_seconds: absent or an integer; null is a decode error naming the field.
+  const keyTtlSeconds = optInt(obj, "key_ttl_seconds", `${what}.key_ttl_seconds`);
+  if (keyTtlSeconds !== undefined) {
+    decoded.keyTtlSeconds = keyTtlSeconds;
   }
   return decoded;
 }
@@ -564,9 +580,11 @@ function decodeAfterState(entry: JsonValue, what: string): AfterState {
   rejectUnknownKeys(obj, ["users", "invites"], what);
   return {
     users: asArray(requireField(obj, "users", what), `${what}.users`).map((item, index) =>
-      decodeUserSummary(item, `${what}.users[${index}]`),
+      decodeAfterUser(item, `${what}.users[${index}]`),
     ),
-    invites: asInt(requireField(obj, "invites", what), `${what}.invites`),
+    invites: asArray(requireField(obj, "invites", what), `${what}.invites`).map((item, index) =>
+      decodeAfterInvite(item, `${what}.invites[${index}]`),
+    ),
   };
 }
 
@@ -574,26 +592,35 @@ function decodeExpect(entry: JsonValue, what: string): Expect {
   const obj = asObject(entry, what);
   rejectUnknownKeys(
     obj,
-    ["result", "kid", "structured", "http_status", "code", "audit", "nonce_recorded", "after"],
+    ["result", "kid", "structured", "identity", "http_status", "code", "audit", "nonce_recorded", "after"],
     what,
   );
   const decoded: Mutable<Expect> = {
     result: asString(requireField(obj, "result", what), `${what}.result`),
   };
-  const kid = optString(obj, "kid", `${what}.kid`);
-  if (kid !== undefined) {
+  // kid/http_status/code are explicit null in fixtures where they do not apply: a null decodes as ABSENT.
+  const kid = optNullableString(obj, "kid", `${what}.kid`);
+  if (kid !== undefined && kid !== null) {
     decoded.kid = kid;
   }
   const structured = optionalField(obj, "structured", `${what}.structured`);
   if (structured !== undefined) {
     decoded.structured = structured;
   }
-  const httpStatus = optInt(obj, "http_status", `${what}.http_status`);
-  if (httpStatus !== undefined) {
+  const identity = optObject(obj, "identity", `${what}.identity`);
+  if (identity !== undefined) {
+    decoded.identity = {
+      kid: asString(requireField(identity, "kid", `${what}.identity`), `${what}.identity.kid`),
+      name: asString(requireField(identity, "name", `${what}.identity`), `${what}.identity.name`),
+      admin: asBool(requireField(identity, "admin", `${what}.identity`), `${what}.identity.admin`),
+    };
+  }
+  const httpStatus = optNullableInt(obj, "http_status", `${what}.http_status`);
+  if (httpStatus !== undefined && httpStatus !== null) {
     decoded.httpStatus = httpStatus;
   }
-  const code = optString(obj, "code", `${what}.code`);
-  if (code !== undefined) {
+  const code = optNullableString(obj, "code", `${what}.code`);
+  if (code !== undefined && code !== null) {
     decoded.code = code;
   }
   const audit = optObject(obj, "audit", `${what}.audit`);
@@ -638,19 +665,9 @@ function decodeRequestCase(entry: JsonValue, what: string): RequestCase {
 
 function decodeRequestVectors(entry: JsonValue, what: string): RequestVectors {
   const obj = asObject(entry, what);
-  rejectUnknownKeys(obj, ["registry", "policies", "cases"], what);
-  const policiesObj = asObject(requireField(obj, "policies", what), `${what}.policies`);
-  const policies: { [name: string]: string } = {};
-  for (const policyName of Object.keys(policiesObj)) {
-    const fileName = policiesObj[policyName];
-    if (fileName === undefined) {
-      throw new Error(`${what}.policies: key "${policyName}" is not valid JSON`);
-    }
-    policies[policyName] = asString(fileName, `${what}.policies["${policyName}"]`);
-  }
+  rejectUnknownKeys(obj, ["registry", "cases"], what);
   return {
     registry: asString(requireField(obj, "registry", what), `${what}.registry`),
-    policies,
     cases: asArray(requireField(obj, "cases", what), `${what}.cases`).map((item, index) =>
       decodeRequestCase(item, `${what}.cases[${index}]`),
     ),
@@ -659,19 +676,19 @@ function decodeRequestVectors(entry: JsonValue, what: string): RequestVectors {
 
 function decodeInviteRecord(entry: JsonValue, what: string): InviteRecord {
   const obj = asObject(entry, what);
-  rejectUnknownKeys(obj, ["invite_id", "scopes", "kind", "created_by", "created_at", "expires_at", "key_ttl_seconds"], what);
+  rejectUnknownKeys(obj, ["invite_id", "admin", "created_by", "created_at", "expires_at", "key_ttl_seconds"], what);
   const decoded: Mutable<InviteRecord> = {
     inviteId: asString(requireField(obj, "invite_id", what), `${what}.invite_id`),
-    scopes: asStringArray(requireField(obj, "scopes", what), `${what}.scopes`),
     createdBy: asString(requireField(obj, "created_by", what), `${what}.created_by`),
     createdAt: asInt(requireField(obj, "created_at", what), `${what}.created_at`),
     expiresAt: asInt(requireField(obj, "expires_at", what), `${what}.expires_at`),
   };
-  const kind = optNullableString(obj, "kind", `${what}.kind`);
-  if (kind !== undefined) {
-    decoded.kind = kind;
+  const admin = optBool(obj, "admin", `${what}.admin`);
+  if (admin !== undefined) {
+    decoded.admin = admin;
   }
-  const keyTtlSeconds = optNullableInt(obj, "key_ttl_seconds", `${what}.key_ttl_seconds`);
+  // key_ttl_seconds: absent or an integer; null is a decode error naming the field.
+  const keyTtlSeconds = optInt(obj, "key_ttl_seconds", `${what}.key_ttl_seconds`);
   if (keyTtlSeconds !== undefined) {
     decoded.keyTtlSeconds = keyTtlSeconds;
   }
@@ -680,12 +697,11 @@ function decodeInviteRecord(entry: JsonValue, what: string): InviteRecord {
 
 function decodeSequenceState(entry: JsonValue, what: string): SequenceState {
   const obj = asObject(entry, what);
-  rejectUnknownKeys(obj, ["now", "window_seconds", "aud", "policy", "nonce_cache", "registry", "invites"], what);
+  rejectUnknownKeys(obj, ["now", "window_seconds", "aud", "nonce_cache", "registry", "invites"], what);
   return {
     now: asInt(requireField(obj, "now", what), `${what}.now`),
     windowSeconds: asInt(requireField(obj, "window_seconds", what), `${what}.window_seconds`),
     aud: asString(requireField(obj, "aud", what), `${what}.aud`),
-    policy: asString(requireField(obj, "policy", what), `${what}.policy`),
     nonceCache: asArray(requireField(obj, "nonce_cache", what), `${what}.nonce_cache`).map((item, index) =>
       decodeNonceCacheEntry(item, `${what}.nonce_cache[${index}]`),
     ),
@@ -850,34 +866,35 @@ function decodeLoadCase(entry: JsonValue, what: string): LoadCase {
 
 function decodeLoadVectors(entry: JsonValue, what: string): LoadVectors {
   const obj = asObject(entry, what);
-  rejectUnknownKeys(obj, ["policies", "registries"], what);
+  rejectUnknownKeys(obj, ["registries"], what);
   return {
-    policies: asArray(requireField(obj, "policies", what), `${what}.policies`).map((item, index) =>
-      decodeLoadCase(item, `${what}.policies[${index}]`),
-    ),
     registries: asArray(requireField(obj, "registries", what), `${what}.registries`).map((item, index) =>
       decodeLoadCase(item, `${what}.registries[${index}]`),
     ),
   };
 }
 
-function decodePatternCase(entry: JsonValue, what: string): PatternCase {
+function decodeStateFileCase(entry: JsonValue, what: string): StateFileCase {
   const obj = asObject(entry, what);
-  rejectUnknownKeys(obj, ["id", "pattern", "input", "match"], what);
-  return {
+  rejectUnknownKeys(obj, ["id", "document", "expect", "reason"], what);
+  const decoded: Mutable<StateFileCase> = {
     id: asString(requireField(obj, "id", what), `${what}.id`),
-    pattern: asString(requireField(obj, "pattern", what), `${what}.pattern`),
-    input: asString(requireField(obj, "input", what), `${what}.input`),
-    match: asBool(requireField(obj, "match", what), `${what}.match`),
+    document: requireField(obj, "document", what),
+    expect: asString(requireField(obj, "expect", what), `${what}.expect`),
   };
+  const reason = optString(obj, "reason", `${what}.reason`);
+  if (reason !== undefined) {
+    decoded.reason = reason;
+  }
+  return decoded;
 }
 
-function decodePatternVectors(entry: JsonValue, what: string): PatternVectors {
+function decodeStateFileVectors(entry: JsonValue, what: string): StateFileVectors {
   const obj = asObject(entry, what);
   rejectUnknownKeys(obj, ["cases"], what);
   return {
     cases: asArray(requireField(obj, "cases", what), `${what}.cases`).map((item, index) =>
-      decodePatternCase(item, `${what}.cases[${index}]`),
+      decodeStateFileCase(item, `${what}.cases[${index}]`),
     ),
   };
 }
@@ -890,16 +907,6 @@ export function loadKeys(): KeyFile {
 /** registry.json. */
 export function loadRegistry(): RegistryDocument {
   return decodeRegistryDocument(fixture("registry.json"), "registry.json");
-}
-
-/** policy.json. */
-export function loadDefaultPolicy(): PolicyDocument {
-  return decodePolicyDocument(fixture("policy.json"), "policy.json");
-}
-
-/** policy-wildcard.json. */
-export function loadWildcardPolicy(): PolicyDocument {
-  return decodePolicyDocument(fixture("policy-wildcard.json"), "policy-wildcard.json");
 }
 
 /** request-vectors.json. */
@@ -927,9 +934,9 @@ export function loadLoadVectors(): LoadVectors {
   return decodeLoadVectors(fixture("load-vectors.json"), "load-vectors.json");
 }
 
-/** pattern-vectors.json. */
-export function loadPatternVectors(): PatternVectors {
-  return decodePatternVectors(fixture("pattern-vectors.json"), "pattern-vectors.json");
+/** state-file-vectors.json. */
+export function loadStateFileVectors(): StateFileVectors {
+  return decodeStateFileVectors(fixture("state-file-vectors.json"), "state-file-vectors.json");
 }
 
 // ---------------------------------------------------------------------------

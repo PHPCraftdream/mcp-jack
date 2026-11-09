@@ -3,15 +3,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   loadAdminVectors,
-  loadDefaultPolicy,
   loadKeyVectors,
   loadKeys,
   loadLoadVectors,
-  loadPatternVectors,
   loadRegistry,
   loadRequestVectors,
   loadResponseVectors,
-  loadWildcardPolicy,
+  loadStateFileVectors,
 } from "./fixtures.js";
 
 function assertUnique(ids: readonly string[], what: string): void {
@@ -31,31 +29,18 @@ test("registry.json loads", () => {
   assertUnique(registry.keys.map((entry) => entry.kid), "registry kids");
 });
 
-test("policy.json loads", () => {
-  const policy = loadDefaultPolicy();
-  assert.ok(policy.rules.length >= 8, "expected at least 8 default policy rules");
-  assert.ok(Number.isInteger(policy.version), "policy version must be an integer");
-});
-
-test("policy-wildcard.json loads", () => {
-  const policy = loadWildcardPolicy();
-  assert.ok(policy.rules.length >= 1, "expected at least 1 wildcard policy rule");
-  assert.ok(Number.isInteger(policy.version), "policy version must be an integer");
-});
-
 test("request-vectors.json loads", () => {
   const vectors = loadRequestVectors();
-  assert.ok(vectors.cases.length >= 79, "expected at least 79 request cases");
+  assert.ok(vectors.cases.length >= 85, "expected at least 85 request cases");
   assertUnique(vectors.cases.map((entry) => entry.id), "request case ids");
-  assert.ok(Object.keys(vectors.policies).length >= 2, "expected at least 2 named policies");
 });
 
 test("admin-vectors.json loads", () => {
   const vectors = loadAdminVectors();
-  assert.ok(vectors.cases.length >= 71, "expected at least 71 admin cases");
+  assert.ok(vectors.cases.length >= 94, "expected at least 94 admin cases");
   assertUnique(vectors.cases.map((entry) => entry.id), "admin case ids");
   const steps = vectors.cases.reduce((sum, entry) => sum + entry.steps.length, 0);
-  assert.ok(steps >= 95, "expected at least 95 admin steps in total");
+  assert.ok(steps >= 100, "expected at least 100 admin steps in total");
 });
 
 test("response-vectors.json loads", () => {
@@ -72,14 +57,12 @@ test("key-vectors.json loads", () => {
 
 test("load-vectors.json loads", () => {
   const vectors = loadLoadVectors();
-  assert.ok(vectors.policies.length >= 17, "expected at least 17 policy load cases");
-  assert.ok(vectors.registries.length >= 15, "expected at least 15 registry load cases");
-  assertUnique(vectors.policies.map((entry) => entry.id), "policy load case ids");
+  assert.ok(vectors.registries.length >= 19, "expected at least 19 registry load cases");
   assertUnique(vectors.registries.map((entry) => entry.id), "registry load case ids");
 });
 
-test("pattern-vectors.json loads", () => {
-  const vectors = loadPatternVectors();
-  assert.ok(vectors.cases.length >= 22, "expected at least 22 pattern cases");
-  assertUnique(vectors.cases.map((entry) => entry.id), "pattern case ids");
+test("state-file-vectors.json loads", () => {
+  const vectors = loadStateFileVectors();
+  assert.ok(vectors.cases.length >= 18, "expected at least 18 state-file cases");
+  assertUnique(vectors.cases.map((entry) => entry.id), "state-file case ids");
 });

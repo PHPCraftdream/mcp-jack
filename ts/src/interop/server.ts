@@ -3,7 +3,6 @@
 // ever written: the ready line in serve mode or the --verify-only verdict;
 // every diagnostic goes to stderr.
 import { createServer } from "node:http";
-import { readFileSync } from "node:fs";
 import { BadBase64UrlError, decodeBase64URL, decodeBase64URLFixed, encodeBase64URL } from "../encoding.js";
 import { verify as verifyEd25519 } from "../ed25519.js";
 import { Code, JackError } from "../errors.js";
@@ -14,8 +13,6 @@ import { InMemorySigner } from "../client/signer.js";
 import { jackFetchHandler } from "../server/fetch.js";
 import { bootstrapAdmin, Native } from "../server/native.js";
 import { NonceStore } from "../server/nonce.js";
-import { parsePolicy } from "../server/policy.js";
-import type { Policy } from "../server/policy.js";
 import { openFileState } from "../server/state-file.js";
 import type { FileState } from "../server/state-file.js";
 import { parseJsonRaw, Verifier } from "../server/verify.js";
@@ -37,17 +34,16 @@ function message(err: unknown): string {
 
 interface Flags {
   aud: string;
-  policyPath: string;
   statePath: string;
   serverSeedHex: string;
   bootstrapTtl: string;
   verifyOnly: boolean;
 }
 
-const VALUE_FLAGS: ReadonlySet<string> = new Set(["aud", "policy", "state", "server-seed-hex", "bootstrap-ttl"]);
+const VALUE_FLAGS: ReadonlySet<string> = new Set(["aud", "state", "server-seed-hex", "bootstrap-ttl"]);
 
 function parseFlags(argv: readonly string[]): Flags {
-  const flags: Flags = { aud: "", policyPath: "", statePath: "", serverSeedHex: "", bootstrapTtl: "", verifyOnly: false };
+  const flags: Flags = { aud: "", statePath: "", serverSeedHex: "", bootstrapTtl: "", verifyOnly: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] as string;
     const name = arg.startsWith("--") ? arg.slice(2) : arg.length > 1 && arg.startsWith("-") ? arg.slice(1) : null;
@@ -61,7 +57,6 @@ function parseFlags(argv: readonly string[]): Flags {
     if (value === undefined) fail(`--${name} requires a value`);
     i += 1;
     if (name === "aud") flags.aud = value;
-    else if (name === "policy") flags.policyPath = value;
     else if (name === "state") flags.statePath = value;
     else if (name === "server-seed-hex") flags.serverSeedHex = value;
     else flags.bootstrapTtl = value;
@@ -85,20 +80,6 @@ function loadState(path: string): FileState {
     return openFileState(path);
   } catch (err) {
     return fail(`state file: ${message(err)}`);
-  }
-}
-
-function loadPolicy(path: string): Policy {
-  let data: Buffer;
-  try {
-    data = readFileSync(path);
-  } catch (err) {
-    return fail(`policy file: ${message(err)}`);
-  }
-  try {
-    return parsePolicy(data);
-  } catch (err) {
-    return fail(`policy file: ${message(err)}`);
   }
 }
 
@@ -270,8 +251,9 @@ function answerToolCall(members: ReadonlyMap<string, RawJsonNode>, idText: strin
     }
     case "logs.tail":
     case "config.set":
-      // Unmapped by the harness policy, so both answer 403 before reaching
-      // here; kept per contract.
+      // Ordinary forwarded tools under the admin-only contract: no tool
+      // denies exist, so the fixed handler answers both with a trivial ok
+      // per contract.
       return jsonBody(envelopeResult(idText, '{"content":[{"type":"text","text":"ok"}]}'));
     default:
       return jsonBody(envelopeError(idText));
@@ -307,7 +289,7 @@ function createBootstrapInvite(state: FileState, ttlText: string): string {
   }
 }
 
-function serve(flags: Flags, seed: Uint8Array, state: FileState, policy: Policy, signer: InMemorySigner): void {
+function serve(flags: Flags, seed: Uint8Array, state: FileState, signer: InMemorySigner): void {
   const nowSec = (): number => Math.floor(Date.now() / 1000);
   if (flags.bootstrapTtl !== "") {
     // Printed on stderr; the harness never uses the bootstrap invite.
@@ -318,7 +300,6 @@ function serve(flags: Flags, seed: Uint8Array, state: FileState, policy: Policy,
     aud: flags.aud,
     state,
     nonces: new NonceStore(),
-    policy,
     native: new Native(),
     now: nowSec,
   });
@@ -353,18 +334,17 @@ function serve(flags: Flags, seed: Uint8Array, state: FileState, policy: Policy,
 
 function main(): void {
   const flags = parseFlags(process.argv.slice(2));
-  if (flags.aud === "" || flags.policyPath === "" || flags.statePath === "" || flags.serverSeedHex === "") {
-    fail("--aud, --policy, --state and --server-seed-hex are required");
+  if (flags.aud === "" || flags.statePath === "" || flags.serverSeedHex === "") {
+    fail("--aud, --state and --server-seed-hex are required");
   }
   const seed = decodeSeed(flags.serverSeedHex);
   const signer = new InMemorySigner(seed); // deterministic server key from the seed
   const state = loadState(flags.statePath);
-  const policy = loadPolicy(flags.policyPath);
   if (flags.verifyOnly) {
     void runVerifyOnly(flags.aud, state).catch((err) => fail(`unexpected error: ${message(err)}`));
     return;
   }
-  serve(flags, seed, state, policy, signer);
+  serve(flags, seed, state, signer);
 }
 
 main();

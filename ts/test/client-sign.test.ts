@@ -67,15 +67,15 @@ function matchedAcceptCases(): MatchedCase[] {
 
 test("signRequest reproduces every derivable accept fixture header", () => {
   const matched = matchedAcceptCases();
-  // Pinned derivation: request-vectors.json carries 22 accept cases (16 early
-  // cases + native-whoami + native-admin-list + native-wildcard-policy-other-
-  // tool + the duplicate-member accepts dup-method-first-deny-last-allow,
+  // Pinned derivation: request-vectors.json carries 23 accept cases (the 17
+  // accept-* cases + admin-gate-admin-accept + whoami-nonadmin and whoami-admin
+  // + the duplicate-member accepts dup-method-tools-call-first-invalid,
   // dup-tool-name-first-deny-last-allow and dup-jsonrpc-first-wrong-last-
   // right); every one has a canonical header, a keys.json kid and decodable
   // nonce/body, so the matcher must not hide any of them. The duplicate-
   // member accepts re-sign the exact duplicate-bearing bytes: a signer that
   // re-serializes the body fails here (spec 02 section 4, README D13).
-  assert.equal(matched.length, 22, "the matcher must derive every accept case");
+  assert.equal(matched.length, 23, "the matcher must derive every accept case");
   assert.ok(matched.length > 0, "no derivable accept cases matched");
   for (const m of matched) {
     // The clock is the header's own ts (auth.ts), not tc.state.now.

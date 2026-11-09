@@ -83,7 +83,7 @@ test("enroll matches the fixture", async () => {
   const fixtureHeader = step.request.headers.find((pair) => pair.name.toLowerCase() === "jack-auth");
   assert.ok(fixtureHeader !== undefined, "the fixture carries a Jack-Auth header");
   assert.equal(server.lastRequest?.header, fixtureHeader.value, "captured header equals the fixture header");
-  assert.deepStrictEqual(res, { kid: "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg", name: "newbie", kind: "human", scopes: ["read"] });
+  assert.deepStrictEqual(res, { kid: "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg", name: "newbie", admin: false });
 });
 
 test("rotate matches the fixture", async () => {
@@ -124,15 +124,14 @@ test("whoami decodes the canned result", async () => {
       auth,
       200,
       utf8('{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"ok"}],"isError":false,"structuredContent":' +
-        '{"kid":"imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg","name":"newbie","kind":"human","scopes":["read"],"not_before":null,"not_after":null}' +
+        '{"kid":"imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg","name":"newbie","admin":false,"not_before":null,"not_after":null}' +
         "}}"),
     );
   const client = newFixtureClient(server, seedSignerByName("newbie"), "assryd677-uYrqD4v-7HYw");
   const res = await client.whoAmI();
   assert.equal(res.kid, "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg", "kid");
   assert.equal(res.name, "newbie", "name");
-  assert.equal(res.kind, "human", "kind");
-  assert.deepStrictEqual(res.scopes, ["read"], "scopes");
+  assert.equal(res.admin, false, "admin");
   assert.equal(res.notBefore, null, "notBefore");
   assert.equal(res.notAfter, null, "notAfter");
 });
@@ -146,7 +145,7 @@ test("admin list decodes the wrappers", async () => {
         auth,
         200,
         utf8('{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"ok"}],"isError":false,"structuredContent":' +
-          '{"users":[{"kid":"k1","public_key":"p1","name":"alice","kind":"human","scopes":["read"],"not_before":null,"not_after":1750000000}]}' +
+          '{"users":[{"kid":"k1","public_key":"p1","name":"alice","admin":false,"not_before":null,"not_after":1750000000}]}' +
           "}}"),
       );
     }
@@ -154,7 +153,7 @@ test("admin list decodes the wrappers", async () => {
       auth,
       200,
       utf8('{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"ok"}],"isError":false,"structuredContent":' +
-        '{"invites":[{"invite_id":"iv1","scopes":["read"],"kind":"human","created_by":"k1","created_at":1767225500,"expires_at":1767228600}]}' +
+        '{"invites":[{"invite_id":"iv1","admin":false,"created_by":"k1","created_at":1767225500,"expires_at":1767228600}]}' +
         "}}"),
     );
   };
@@ -177,7 +176,7 @@ test("admin list decodes the wrappers", async () => {
   assert.equal(users.length, 1, "len(users)");
   const user = users[0];
   assert.ok(user !== undefined, "users is empty");
-  assert.equal(user.kind, "human", "users[0].kind");
+  assert.equal(user.admin, false, "users[0].admin");
   assert.equal(user.notAfter, 1750000000, "users[0].notAfter");
   assert.equal(user.notBefore, null, "users[0].notBefore");
 
@@ -186,6 +185,7 @@ test("admin list decodes the wrappers", async () => {
   const invite = invites[0];
   assert.ok(invite !== undefined, "invites is empty");
   assert.equal(invite.inviteId, "iv1", "invites[0].inviteId");
+  assert.equal(invite.admin, false, "invites[0].admin");
   assert.equal(invite.expiresAt, 1767228600, "invites[0].expiresAt");
 });
 
@@ -194,26 +194,26 @@ test("adminUserCreate serializes and decodes", async () => {
   server.handle = (auth) => server.writeSignedJSON(auth, 200, rpcResultBody('{"kid":"k-new"}'));
   const alice = seedSignerByName("alice");
   const client = newFixtureClient(server, alice, "assryd677-uYrqD4v-7HYw");
-  const res = await client.adminUserCreate({ name: "dave", publicKey: "71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ", scopes: ["read", "lifecycle"] });
-  // Argument field order pins the Go struct (name, public_key, scopes); kind
-  // and the validity bounds are absent here, exercising the omitempty branch.
+  const res = await client.adminUserCreate({ name: "dave", publicKey: "71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ", admin: true });
+  // Argument field order pins the Go struct (name, public_key, admin); the
+  // validity bounds are absent here, exercising the omitempty branch.
   assertSignedRequest(
     server,
     alice,
-    '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.user.create","arguments":{"name":"dave","public_key":"71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ","scopes":["read","lifecycle"]}}}',
+    '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.user.create","arguments":{"name":"dave","public_key":"71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ","admin":true}}}',
   );
   assert.deepStrictEqual(res, { kid: "k-new" });
 });
 
-test("adminUserSetScopes serializes and decodes", async () => {
+test("adminUserSetAdmin serializes and decodes", async () => {
   const server = newTestServer();
   server.handle = (auth) =>
-    server.writeSignedJSON(auth, 200, rpcResultBody('{"kid":"k1","public_key":"p1","name":"alice","kind":"human","scopes":["read","write"],"not_before":null,"not_after":1750000000}'));
+    server.writeSignedJSON(auth, 200, rpcResultBody('{"kid":"k1","public_key":"p1","name":"alice","admin":true,"not_before":null,"not_after":1750000000}'));
   const alice = seedSignerByName("alice");
   const client = newFixtureClient(server, alice, "assryd677-uYrqD4v-7HYw");
-  const res = await client.adminUserSetScopes("k1", ["read", "write"]);
-  assertSignedRequest(server, alice, '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.user.set_scopes","arguments":{"kid":"k1","scopes":["read","write"]}}}');
-  assert.deepStrictEqual(res, { kid: "k1", publicKey: "p1", name: "alice", kind: "human", scopes: ["read", "write"], notBefore: null, notAfter: 1750000000 });
+  const res = await client.adminUserSetAdmin("k1", true);
+  assertSignedRequest(server, alice, '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.user.set_admin","arguments":{"kid":"k1","admin":true}}}');
+  assert.deepStrictEqual(res, { kid: "k1", publicKey: "p1", name: "alice", admin: true, notBefore: null, notAfter: 1750000000 });
 });
 
 test("adminUserRevoke serializes and decodes", async () => {
@@ -231,9 +231,9 @@ test("adminInviteCreate serializes and decodes", async () => {
   server.handle = (auth) => server.writeSignedJSON(auth, 200, rpcResultBody('{"invite_id":"iv9","code":"CjvNqZF4P3z5UkoiYbBNcLfh5a8kNRxMLHUf9BLhErk","expires_at":1767229200}'));
   const alice = seedSignerByName("alice");
   const client = newFixtureClient(server, alice, "assryd677-uYrqD4v-7HYw");
-  const res = await client.adminInviteCreate({ scopes: ["read"], kind: "human", ttlSeconds: 3600 });
-  // Go struct order for the optional fields: kind, ttl_seconds, key_ttl_seconds.
-  assertSignedRequest(server, alice, '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.invite.create","arguments":{"scopes":["read"],"kind":"human","ttl_seconds":3600}}}');
+  const res = await client.adminInviteCreate({ admin: true, ttlSeconds: 3600 });
+  // Go struct order for the optional fields: admin, ttl_seconds, key_ttl_seconds.
+  assertSignedRequest(server, alice, '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.invite.create","arguments":{"admin":true,"ttl_seconds":3600}}}');
   assert.deepStrictEqual(res, { inviteId: "iv9", code: "CjvNqZF4P3z5UkoiYbBNcLfh5a8kNRxMLHUf9BLhErk", expiresAt: 1767229200 });
 });
 
@@ -249,11 +249,11 @@ test("adminInviteRevoke serializes and decodes", async () => {
 
 test("http error surfaces status and code", async () => {
   const server = newTestServer();
-  server.handle = (auth) => server.writeSignedJSON(auth, 403, utf8('{"error":{"code":"insufficient_scope","message":"no"}}'));
+  server.handle = (auth) => server.writeSignedJSON(auth, 403, utf8('{"error":{"code":"admin_required","message":"no"}}'));
   const client = newFixtureClient(server, seedSignerByName("alice"), "assryd677-uYrqD4v-7HYw");
   await assert.rejects(
     client.adminUserGet("k1"),
-    (err: unknown) => err instanceof HTTPError && err.status === 403 && err.code === "insufficient_scope",
+    (err: unknown) => err instanceof HTTPError && err.status === 403 && err.code === "admin_required",
   );
 });
 

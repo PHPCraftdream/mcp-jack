@@ -14,7 +14,7 @@ import type { SigningFetch } from "../client/transport.js";
 import { randomNonce, signRequest, verifyResponse } from "../client/auth.js";
 import { InMemorySigner } from "../client/signer.js";
 import { Client } from "../client/rpc.js";
-import { TOOL_ADMIN_USER_LIST, TOOL_ADMIN_USER_SET_SCOPES, TOOL_ENROLL, TOOL_WHOAMI } from "../client/tools.js";
+import { TOOL_ADMIN_USER_LIST, TOOL_ADMIN_USER_SET_ADMIN, TOOL_ENROLL, TOOL_WHOAMI } from "../client/tools.js";
 import { parseJsonRaw } from "../server/verify.js";
 
 function fatal(msg: string): never {
@@ -534,8 +534,6 @@ const SCENARIOS: Readonly<Record<string, (e: Env) => Promise<StepResult>>> = {
     return rawCall(e, e.primary, "POST", "/mcp", rpcBody("echo", { text }));
   },
   whoami: (e) => typedRawCall(e, signerFor(e, e.primaryName), TOOL_WHOAMI),
-  "denied-tool": (e) => rawCall(e, e.primary, "POST", "/mcp", rpcBody("svc.config.set")),
-  "unmapped-tool": (e) => rawCall(e, e.primary, "POST", "/mcp", rpcBody("other.tool")),
   "unknown-key": (e) => rawCall(e, e.primary, "POST", "/mcp", rpcBody("svc.status")),
   replay: async (e) => {
     // Build the exact bytes and header ONCE; both sends reuse them. ping is
@@ -569,7 +567,7 @@ const SCENARIOS: Readonly<Record<string, (e: Env) => Promise<StepResult>>> = {
   "invalid-request": (e) => rawCall(e, e.primary, "POST", "/mcp", new TextEncoder().encode("this is not JSON")),
   "unknown-native-tool": (e) => rawCall(e, e.primary, "POST", "/mcp", rpcBody("jack.admin.nuke")),
   enroll: async (e) => {
-    const inv0 = await sdkStep(typedClient(e, "root").adminInviteCreate({ scopes: ["read"] }));
+    const inv0 = await sdkStep(typedClient(e, "root").adminInviteCreate({}));
     const bad0 = requireIntermediate(0, false, 0, "", inv0.step);
     if (bad0 !== undefined) return bad0;
     const inv = inv0.value;
@@ -580,7 +578,7 @@ const SCENARIOS: Readonly<Record<string, (e: Env) => Promise<StepResult>>> = {
     return typedRawCall(e, signerFor(e, e.primaryName), TOOL_WHOAMI);
   },
   "enroll-used-invite": async (e) => {
-    const inv0 = await sdkStep(typedClient(e, "root").adminInviteCreate({ scopes: ["read"] }));
+    const inv0 = await sdkStep(typedClient(e, "root").adminInviteCreate({}));
     const bad0 = requireIntermediate(0, false, 0, "", inv0.step);
     if (bad0 !== undefined) return bad0;
     const inv = inv0.value;
@@ -606,7 +604,7 @@ const SCENARIOS: Readonly<Record<string, (e: Env) => Promise<StepResult>>> = {
     return typedRawCall(e, signerFor(e, "newbie"), TOOL_WHOAMI);
   },
   "admin-create": async (e) => {
-    const inv0 = await sdkStep(typedClient(e, "root").adminInviteCreate({ scopes: ["read"] }));
+    const inv0 = await sdkStep(typedClient(e, "root").adminInviteCreate({}));
     const bad0 = requireIntermediate(0, false, 0, "", inv0.step);
     if (bad0 !== undefined) return bad0;
     const inv = inv0.value;
@@ -615,7 +613,6 @@ const SCENARIOS: Readonly<Record<string, (e: Env) => Promise<StepResult>>> = {
       typedClient(e, "root").adminUserCreate({
         name: "dave",
         publicKey: encodeBase64URL(signerFor(e, e.primaryName).publicKey()),
-        scopes: ["read"],
       }),
     );
     const bad1 = requireIntermediate(1, false, 0, "", created1.step);
@@ -631,10 +628,13 @@ const SCENARIOS: Readonly<Record<string, (e: Env) => Promise<StepResult>>> = {
     if (bad0 !== undefined) return bad0;
     return typedRawCall(e, signerFor(e, e.primaryName), TOOL_WHOAMI);
   },
+  // The root identity is the only admin here, so demoting itself trips the
+  // last_admin guard; the expected 409 last_admin verdict stays the
+  // harness's concern.
   "last-admin": (e) =>
-    typedRawCall(e, signerFor(e, e.primaryName), TOOL_ADMIN_USER_SET_SCOPES, {
+    typedRawCall(e, signerFor(e, e.primaryName), TOOL_ADMIN_USER_SET_ADMIN, {
       kid: e.primary.kid(),
-      scopes: ["read"],
+      admin: false,
     }),
 };
 

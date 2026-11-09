@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -14,7 +14,7 @@ import type { InviteRecord } from "../src/server/state.js";
 import { FileState, StateCorruptError, openFileState } from "../src/server/state-file.js";
 import { decodeBase64URL, encodeBase64URL, keyId } from "../src/encoding.js";
 import { validatePublicKey } from "../src/ed25519.js";
-import { loadKeys } from "./fixtures.js";
+import { loadKeys, loadStateFileVectors } from "./fixtures.js";
 
 /**
  * Builds a registry entry with a real Ed25519 public key derived from id, and
@@ -33,8 +33,6 @@ function stateTestKey(id: string, name: string): RegistryEntry {
     kid: keyId(pub),
     publicKey: encodeBase64URL(pub),
     name,
-    kind: "human",
-    scopes: ["read"],
   };
 }
 
@@ -44,8 +42,6 @@ function fixtureKeys(): RegistryEntry[] {
     kid: k.kid,
     publicKey: k.publicKey,
     name: k.name,
-    kind: "human",
-    scopes: ["read"],
   }));
 }
 
@@ -53,12 +49,15 @@ function fixtureKeys(): RegistryEntry[] {
 function fixturePair(): [RegistryEntry, RegistryEntry] {
   const keys = fixtureKeys();
   assert.ok(keys.length >= 2, "keys.json needs at least two keys");
-  return [keys[0] as RegistryEntry, keys[1] as RegistryEntry];
+  const first = keys[0];
+  const second = keys[1];
+  assert.ok(first !== undefined && second !== undefined, "keys.json needs at least two keys");
+  return [first, second];
 }
 
 /** A valid invite for document-level invite cases. */
 function testInvite(inviteId: string): InviteRecord {
-  return { inviteId, scopes: ["read"], kind: "human", createdBy: "root", createdAt: 1767225500, expiresAt: 1767228600 };
+  return { inviteId, createdBy: "root", createdAt: 1767225500, expiresAt: 1767228600 };
 }
 
 /** New temp directory cleaned up when the test ends. */
@@ -117,6 +116,7 @@ test("missing state file starts empty", (t) => {
   assert.deepEqual(view.keys, []);
   assert.deepEqual(view.invites, []);
   assert.ok(store instanceof FileState);
+  assert.deepEqual(readdirSync(dir), [], "opening a missing file must not create it");
 
   const entry = stateTestKey("k1", "alice");
   store.update((e) => {
@@ -131,6 +131,63 @@ test("missing state file starts empty", (t) => {
   assert.equal(doc.version, 1);
   assert.equal(doc.keys.length, 1);
   assert.equal(doc.invites.length, 1);
+});
+
+test("explicit empty collection arrays load as empty state", (t) => {
+  const dir = tempDir(t);
+  const store = openFileState(writeDoc(dir, JSON.stringify({ version: 1, keys: [], invites: [] })));
+  assert.deepEqual(store.view(), { keys: [], invites: [] });
+});
+
+test("missing collection arrays and non-arrays are corrupt without a store or file rewrite", (t) => {
+  const cases: readonly { label: string; absent?: true; value?: unknown }[] = [
+    { label: "absent", absent: true },
+    { label: "null", value: null },
+    { label: "string", value: "not-an-array" },
+    { label: "number", value: 1 },
+    { label: "boolean", value: true },
+    { label: "object", value: {} },
+  ];
+
+  for (const member of ["keys", "invites"] as const) {
+    for (const invalid of cases) {
+      const dir = tempDir(t);
+      const doc: Record<string, unknown> = { version: 1, keys: [], invites: [] };
+      if (invalid.absent) {
+        delete doc[member];
+      } else {
+        doc[member] = invalid.value;
+      }
+      const path = writeDoc(dir, JSON.stringify(doc));
+      const before = readFileSync(path);
+      const holder: { store: FileState | undefined } = { store: undefined };
+      assert.throws(
+        () => {
+          holder.store = openFileState(path);
+        },
+        (err: unknown) => err instanceof StateCorruptError && err.message.includes(`${member}: not an array`),
+        `${member} ${invalid.label} must be rejected with a member-specific error`,
+      );
+      assert.equal(holder.store, undefined, `${member} ${invalid.label} must not return a usable store`);
+      assert.deepEqual(readFileSync(path), before, `${member} ${invalid.label} must leave raw bytes unchanged`);
+    }
+  }
+});
+
+test("an empty state writes explicit collection arrays and reloads", (t) => {
+  const dir = tempDir(t);
+  const path = join(dir, "state.json");
+  const store = openFileState(path);
+  assert.equal(existsSync(path), false, "opening a missing file must not create it");
+
+  store.update(() => {});
+  const raw: unknown = JSON.parse(readFileSync(path, "utf8"));
+  assert.ok(typeof raw === "object" && raw !== null && !Array.isArray(raw), "written state must be an object");
+  assert.ok("keys" in raw && Array.isArray(raw.keys), "writer must emit keys as an array");
+  assert.ok("invites" in raw && Array.isArray(raw.invites), "writer must emit invites as an array");
+  assert.equal(raw.keys.length, 0);
+  assert.equal(raw.invites.length, 0);
+  assert.deepEqual(openFileState(path).view(), { keys: [], invites: [] });
 });
 
 test("file state round trip is sorted, indented and newline-terminated", (t) => {
@@ -213,29 +270,279 @@ test("load rejects a duplicate name", (t) => {
   assertLoadCorrupt(dir, testDoc([{ ...entry, name: "same" }, { ...other, name: "same" }]));
 });
 
-test("load rejects a kind that is neither human nor agent", (t) => {
+// ---------------------------------------------------------------------------
+// The strict-boolean admin field.
+// ---------------------------------------------------------------------------
+
+/** Swaps the serialized entry's `"admin":false` member for an arbitrary JSON value. */
+function entryAdmin(entry: RegistryEntry, json: string): string {
+  return testDoc([entry]).replace(`"admin":false`, `"admin":${json}`);
+}
+
+/** Same for the serialized invite. */
+function inviteAdmin(invite: InviteRecord, json: string): string {
+  return testDoc([], [invite]).replace(`"admin":false`, `"admin":${json}`);
+}
+
+test("load rejects an entry admin of the string \"true\"", (t) => {
   const dir = tempDir(t);
   const [entry] = fixturePair();
-  assertLoadCorrupt(dir, testDoc([{ ...entry, kind: "robot" }]));
+  assertLoadCorrupt(dir, entryAdmin(entry, '"true"'));
 });
 
-test("load rejects an uppercase scope", (t) => {
+test("load rejects an entry admin of the number 1", (t) => {
   const dir = tempDir(t);
   const [entry] = fixturePair();
-  assertLoadCorrupt(dir, testDoc([{ ...entry, scopes: ["Read"] }]));
+  assertLoadCorrupt(dir, entryAdmin(entry, "1"));
 });
 
-test("load rejects a scope with an empty segment", (t) => {
+test("load rejects an entry admin of null", (t) => {
   const dir = tempDir(t);
   const [entry] = fixturePair();
-  assertLoadCorrupt(dir, testDoc([{ ...entry, scopes: ["a::b"] }]));
+  assertLoadCorrupt(dir, entryAdmin(entry, "null"));
 });
 
-test("load rejects duplicate scopes", (t) => {
+test("an entry without admin loads as non-admin", (t) => {
   const dir = tempDir(t);
   const [entry] = fixturePair();
-  assertLoadCorrupt(dir, testDoc([{ ...entry, scopes: ["read", "read"] }]));
+  const doc = testDoc([entry]).replace(`"admin":false,`, "");
+  const got = openFileState(writeDoc(dir, doc)).lookup(entry.kid);
+  assert.ok(got, "entry expected");
+  assert.equal(got.admin, undefined);
 });
+
+test("an entry with admin true loads as admin", (t) => {
+  const dir = tempDir(t);
+  const [entry] = fixturePair();
+  const got = openFileState(writeDoc(dir, testDoc([{ ...entry, admin: true }]))).lookup(entry.kid);
+  assert.ok(got, "entry expected");
+  assert.equal(got.admin, true);
+});
+
+test("an invite without admin loads as non-admin", (t) => {
+  const dir = tempDir(t);
+  const doc = testDoc([], [testInvite("i1")]).replace(`"admin":false,`, "");
+  const got = openFileState(writeDoc(dir, doc)).view().invites[0];
+  assert.ok(got, "invite expected");
+  assert.equal(got.admin, undefined);
+});
+
+test("an invite with admin true loads as admin", (t) => {
+  const dir = tempDir(t);
+  const got = openFileState(writeDoc(dir, testDoc([], [{ ...testInvite("i1"), admin: true }]))).view().invites[0];
+  assert.ok(got, "invite expected");
+  assert.equal(got.admin, true);
+});
+
+test("load rejects an invite admin of the string \"true\"", (t) => {
+  const dir = tempDir(t);
+  assertLoadCorrupt(dir, inviteAdmin(testInvite("i1"), '"true"'));
+});
+
+test("load rejects an invite admin of the number 1", (t) => {
+  const dir = tempDir(t);
+  assertLoadCorrupt(dir, inviteAdmin(testInvite("i1"), "1"));
+});
+
+test("load rejects an invite admin of null", (t) => {
+  const dir = tempDir(t);
+  assertLoadCorrupt(dir, inviteAdmin(testInvite("i1"), "null"));
+});
+
+// ---------------------------------------------------------------------------
+// Required invite timestamps and identifiers (spec 03 section 10).
+// ---------------------------------------------------------------------------
+
+const rawValidInvite: Record<string, unknown> = {
+  invite_id: "i1",
+  created_by: "root",
+  created_at: 100,
+  expires_at: 200,
+};
+
+/** Writes an invite document and requires a named rejection without changing its raw bytes. */
+function assertInviteRejectedUnchanged(t: { after(fn: () => void): unknown }, rawInvite: Record<string, unknown>, member: string): void {
+  const dir = tempDir(t);
+  const doc = JSON.stringify({ version: 1, keys: [], invites: [rawInvite] });
+  const path = writeDoc(dir, doc);
+  const before = readFileSync(path);
+  assert.throws(
+    () => openFileState(path),
+    (err: unknown) => err instanceof StateCorruptError && err.message.includes(`invites[0].${member}`),
+    `expected an error naming invites[0].${member}`,
+  );
+  assert.deepEqual(readFileSync(path), before, "the failed load must not rewrite the file");
+}
+
+test("invite timestamps are required nonnegative integers", (t) => {
+  const invalidValues: readonly unknown[] = [null, "100", true, 1.5, -1];
+  for (const field of ["created_at", "expires_at"] as const) {
+    for (const value of invalidValues) {
+      assertInviteRejectedUnchanged(t, { ...rawValidInvite, [field]: value }, field);
+    }
+    const missing: Record<string, unknown> = { ...rawValidInvite };
+    delete missing[field];
+    assertInviteRejectedUnchanged(t, missing, field);
+  }
+
+  assertInviteRejectedUnchanged(t, { ...rawValidInvite, invite_id: "" }, "invite_id");
+  const missingId: Record<string, unknown> = { ...rawValidInvite };
+  delete missingId["invite_id"];
+  assertInviteRejectedUnchanged(t, missingId, "invite_id");
+  assertInviteRejectedUnchanged(t, { ...rawValidInvite, invite_id: null }, "invite_id");
+  assertInviteRejectedUnchanged(t, { ...rawValidInvite, invite_id: 1 }, "invite_id");
+
+  assertInviteRejectedUnchanged(t, { ...rawValidInvite, created_by: "" }, "created_by");
+  const missingCreator: Record<string, unknown> = { ...rawValidInvite };
+  delete missingCreator["created_by"];
+  assertInviteRejectedUnchanged(t, missingCreator, "created_by");
+  assertInviteRejectedUnchanged(t, { ...rawValidInvite, created_by: null }, "created_by");
+  assertInviteRejectedUnchanged(t, { ...rawValidInvite, created_by: false }, "created_by");
+  assertInviteRejectedUnchanged(t, { ...rawValidInvite, created_at: 201, expires_at: 200 }, "created_at");
+});
+
+test("valid raw invites accept zero/equal and 100/200 timestamps", (t) => {
+  const dir = tempDir(t);
+  for (const [createdAt, expiresAt] of [[0, 0], [100, 200]] as const) {
+    const rawInvite: Record<string, unknown> = { ...rawValidInvite, created_at: createdAt, expires_at: expiresAt };
+    const path = writeDoc(dir, JSON.stringify({ version: 1, keys: [], invites: [rawInvite] }));
+    const invite = openFileState(path).view().invites[0];
+    assert.ok(invite, "invite expected");
+    assert.equal(invite.inviteId, "i1");
+    assert.equal(invite.createdAt, createdAt);
+    assert.equal(invite.expiresAt, expiresAt);
+  }
+});
+
+/** Appends a raw key_ttl_seconds JSON value to the serialized invite (valid JSON — the object brace is preserved). */
+function inviteKeyTtl(invite: InviteRecord, json: string): string {
+  return testDoc([], [invite]).replace(
+    `"expires_at":${invite.expiresAt}}`,
+    `"expires_at":${invite.expiresAt},"key_ttl_seconds":${json}}`,
+  );
+}
+
+/** Checks the JSON value before requiring a named TTL rejection and untouched bytes. */
+function assertTtlRejected(t: { after(fn: () => void): unknown }, json: string, expected: unknown): void {
+  const dir = tempDir(t);
+  const doc = inviteKeyTtl(testInvite("i1"), json);
+  const parsed: unknown = JSON.parse(doc);
+  assert.ok(typeof parsed === "object" && parsed !== null && !Array.isArray(parsed), "raw state document must be an object");
+  assert.ok("invites" in parsed && Array.isArray(parsed.invites), "raw invites must be an array");
+  assert.equal(parsed.invites.length, 1, "raw state document must contain one invite");
+  const rawInvite: unknown = parsed.invites[0];
+  assert.ok(typeof rawInvite === "object" && rawInvite !== null && !Array.isArray(rawInvite), "raw invite must be an object");
+  assert.ok("key_ttl_seconds" in rawInvite, "raw invite must contain key_ttl_seconds");
+  assert.ok(Object.hasOwn(rawInvite, "key_ttl_seconds"), "raw invite must own key_ttl_seconds");
+  assert.deepEqual(rawInvite.key_ttl_seconds, expected, "the raw JSON has the intended TTL value");
+  const path = writeDoc(dir, doc);
+  const before = readFileSync(path);
+  assert.throws(
+    () => openFileState(path),
+    (err: unknown) => err instanceof StateCorruptError && err.message.includes("invites[0].key_ttl_seconds"),
+    "expected an error naming invites[0].key_ttl_seconds",
+  );
+  assert.deepEqual(readFileSync(path), before, "the failed load must not rewrite the file");
+}
+
+test("load rejects an invite key_ttl_seconds of null", (t) => {
+  assertTtlRejected(t, "null", null);
+});
+
+test("load rejects an invite key_ttl_seconds of 0", (t) => {
+  assertTtlRejected(t, "0", 0);
+});
+
+test("load rejects an invite key_ttl_seconds above the maximum", (t) => {
+  assertTtlRejected(t, "31536001", 31536001);
+});
+
+test("the same document shape with an in-range key_ttl_seconds loads: the rejections above are the TTL guard", (t) => {
+  const dir = tempDir(t);
+  const got = openFileState(writeDoc(dir, inviteKeyTtl(testInvite("i1"), "3600"))).view().invites[0];
+  assert.ok(got, "invite expected");
+  assert.equal(got.keyTtlSeconds, 3600);
+});
+
+test("an invite key_ttl_seconds of 1 loads", (t) => {
+  const dir = tempDir(t);
+  const got = openFileState(writeDoc(dir, testDoc([], [{ ...testInvite("i1"), keyTtlSeconds: 1 }]))).view().invites[0];
+  assert.ok(got, "invite expected");
+  assert.equal(got.keyTtlSeconds, 1);
+});
+
+test("an invite key_ttl_seconds of 31536000 loads", (t) => {
+  const dir = tempDir(t);
+  const got = openFileState(writeDoc(dir, testDoc([], [{ ...testInvite("i1"), keyTtlSeconds: 31536000 }]))).view().invites[0];
+  assert.ok(got, "invite expected");
+  assert.equal(got.keyTtlSeconds, 31536000);
+});
+
+test("a default invite keeps key_ttl_seconds absent through a rewrite, never null", (t) => {
+  const dir = tempDir(t);
+  const path = join(dir, "state.json");
+  const original = testDoc([], [testInvite("i1")]).replace(`"admin":false,`, "");
+  const store = openFileState(writeDoc(dir, original));
+  const inv = store.view().invites[0];
+  assert.ok(inv, "invite expected");
+  // The in-memory record has no TTL member at all — undefined, never null.
+  assert.equal(inv.keyTtlSeconds, undefined);
+  assert.equal("keyTtlSeconds" in inv, false);
+
+  // A no-op update rewrites the file; the member must stay ABSENT in the text.
+  store.update(() => {});
+  const rewritten = readFileSync(path, "utf8");
+  assert.ok(!rewritten.includes("key_ttl_seconds"), `key_ttl_seconds leaked into the rewrite: ${rewritten}`);
+  // And the round trip preserves the absence.
+  const reloaded = openFileState(path).view().invites[0];
+  assert.ok(reloaded, "reloaded invite expected");
+  assert.equal(reloaded.keyTtlSeconds, undefined);
+});
+
+// ---------------------------------------------------------------------------
+// Legacy kind/scopes members are unknown fields: rejected with the member
+// named, and a failed load NEVER touches the file.
+// ---------------------------------------------------------------------------
+
+/** Asserts openFileState rejects doc naming `member`, and the raw file bytes are byte-identical after the failed load. */
+function assertLegacyRejected(t: { after(fn: () => void): unknown }, doc: string, member: string): void {
+  const dir = tempDir(t);
+  const path = writeDoc(dir, doc);
+  const before = readFileSync(path, "utf8");
+  assert.throws(
+    () => openFileState(path),
+    (err: unknown) =>
+      err instanceof StateCorruptError && (err as Error).message.includes(`unknown field "${member}"`),
+    `expected a rejection naming ${member}`,
+  );
+  assert.equal(readFileSync(path, "utf8"), before, "the failed load must not rewrite the file");
+}
+
+test("legacy entry kind is an unknown field and the file stays untouched", (t) => {
+  const [entry] = fixturePair();
+  const doc = testDoc([entry]).replace(`"name":"${entry.name}","admin"`, `"name":"${entry.name}","kind":"human","admin"`);
+  assertLegacyRejected(t, doc, "kind");
+});
+
+test("legacy entry scopes is an unknown field and the file stays untouched", (t) => {
+  const [entry] = fixturePair();
+  const doc = testDoc([entry]).replace(`"name":"${entry.name}","admin"`, `"name":"${entry.name}","scopes":["read"],"admin"`);
+  assertLegacyRejected(t, doc, "scopes");
+});
+
+test("legacy invite kind is an unknown field and the file stays untouched", (t) => {
+  const doc = testDoc([], [testInvite("i1")]).replace(`"invite_id":"i1","admin"`, `"invite_id":"i1","kind":"human","admin"`);
+  assertLegacyRejected(t, doc, "kind");
+});
+
+test("legacy invite scopes is an unknown field and the file stays untouched", (t) => {
+  const doc = testDoc([], [testInvite("i1")]).replace(`"invite_id":"i1","admin"`, `"invite_id":"i1","scopes":["read"],"admin"`);
+  assertLegacyRejected(t, doc, "scopes");
+});
+
+// ---------------------------------------------------------------------------
+// Unchanged rejection classes.
+// ---------------------------------------------------------------------------
 
 test("load rejects the identity public key even with a matching kid", (t) => {
   const dir = tempDir(t);
@@ -244,24 +551,6 @@ test("load rejects the identity public key even with a matching kid", (t) => {
   const identity = new Uint8Array(32);
   identity[0] = 1;
   assertLoadCorrupt(dir, testDoc([{ ...entry, publicKey: encodeBase64URL(identity), kid: keyId(identity) }]));
-});
-
-test("load rejects a key whose scopes field is missing", (t) => {
-  const dir = tempDir(t);
-  const [entry] = fixturePair();
-  assertLoadCorrupt(dir, testDoc([entry]).replace('"scopes":["read"],', ""));
-});
-
-test("load rejects a key whose scopes field is null", (t) => {
-  const dir = tempDir(t);
-  const [entry] = fixturePair();
-  assertLoadCorrupt(dir, testDoc([entry]).replace('"scopes":["read"]', '"scopes":null'));
-});
-
-test("load rejects an agent key holding admin", (t) => {
-  const dir = tempDir(t);
-  const [entry] = fixturePair();
-  assertLoadCorrupt(dir, testDoc([{ ...entry, kind: "agent", scopes: ["admin"] }]));
 });
 
 test("load rejects a negative not_before", (t) => {
@@ -304,19 +593,6 @@ test("load rejects a duplicate invite id", (t) => {
   assertLoadCorrupt(dir, testDoc([], [testInvite("i1"), testInvite("i1")]));
 });
 
-test("load rejects an invite whose scopes field is missing", (t) => {
-  const dir = tempDir(t);
-  // Keys stay empty so the surgery hits the invite's scopes, not a key's.
-  const doc = testDoc([], [testInvite("i1")]);
-  assertLoadCorrupt(dir, doc.replace('"scopes":["read"],', ""));
-});
-
-test("load rejects an invite whose scopes field is null", (t) => {
-  const dir = tempDir(t);
-  const doc = testDoc([], [testInvite("i1")]);
-  assertLoadCorrupt(dir, doc.replace('"scopes":["read"]', '"scopes":null'));
-});
-
 test("load rejects a file that is not JSON", (t) => {
   const dir = tempDir(t);
   assertCorruptNamed(dir, "not json at all");
@@ -347,6 +623,56 @@ test("load rejects trailing data after the document", (t) => {
   const [entry] = fixturePair();
   assertCorruptNamed(dir, `${testDoc([entry])} trailing`);
 });
+
+// ---------------------------------------------------------------------------
+// The shared state-file vectors (spec/fixtures/state-file-vectors.json).
+// ---------------------------------------------------------------------------
+
+test("state-file vectors: valid documents load, invalid ones are rejected with the file untouched", (t) => {
+  const dir = tempDir(t);
+  const path = join(dir, "state.json");
+  for (const c of loadStateFileVectors().cases) {
+    const text = JSON.stringify(c.document, null, 2);
+    writeFileSync(path, text);
+    const before = readFileSync(path, "utf8");
+    if (c.expect === "valid") {
+      const store = openFileState(path);
+      if (c.id === "statefile-valid-default-invite") {
+        // The default invite keeps keyTtlSeconds undefined, never null.
+        const inv = store.view().invites[0];
+        assert.ok(inv, `${c.id}: invite expected`);
+        assert.equal(inv.keyTtlSeconds, undefined);
+      }
+    } else {
+      assert.throws(
+        () => openFileState(path),
+        (err: unknown) => err instanceof StateCorruptError,
+        `${c.id}: expected StateCorruptError`,
+      );
+      // Legacy cases must name the offending member; every failed load must
+      // leave the raw file text byte-identical.
+      if (c.id.includes("-kind-")) {
+        assert.throws(
+          () => openFileState(path),
+          (err: unknown) => err instanceof StateCorruptError && (err as Error).message.includes("kind"),
+          `${c.id}: message must name kind`,
+        );
+      }
+      if (c.id.includes("-scopes-")) {
+        assert.throws(
+          () => openFileState(path),
+          (err: unknown) => err instanceof StateCorruptError && (err as Error).message.includes("scopes"),
+          `${c.id}: message must name scopes`,
+        );
+      }
+      assert.equal(readFileSync(path, "utf8"), before, `${c.id}: the failed load must not touch the file`);
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// File rollback behavior.
+// ---------------------------------------------------------------------------
 
 test("file state rolls back memory and disk", (t) => {
   const dir = tempDir(t);

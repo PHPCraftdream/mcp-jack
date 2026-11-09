@@ -3,13 +3,13 @@
  * last-admin rule depends on the atomicity. Ported from Go's state.go.
  */
 
-/** One registered key in the server state (spec 02 section 1); field shapes match ts/test/fixtures.ts. */
+/** One registered key in the server state (spec 02 section 1, admin-only); field shapes match ts/test/fixtures.ts. */
 export interface RegistryEntry {
   readonly kid: string;
   readonly publicKey: string;
   readonly name: string;
-  readonly kind?: string | null;
-  readonly scopes?: readonly string[];
+  /** Absent means not an admin (false). */
+  readonly admin?: boolean;
   readonly notBefore?: number | null;
   readonly notAfter?: number | null;
 }
@@ -17,12 +17,13 @@ export interface RegistryEntry {
 /** One pending invite (spec 03 sections 3.2 and 9). */
 export interface InviteRecord {
   readonly inviteId: string;
-  readonly scopes?: readonly string[];
-  readonly kind?: string | null;
+  /** Absent means not an admin invite (false). */
+  readonly admin?: boolean;
   readonly createdBy: string;
   readonly createdAt: number;
   readonly expiresAt: number;
-  readonly keyTtlSeconds?: number | null;
+  /** Absent when unset; never null. */
+  readonly keyTtlSeconds?: number;
 }
 
 /** Immutable snapshot of the store: deep copies, keys sorted by kid, invites sorted by inviteId. */
@@ -39,8 +40,7 @@ export interface WireRegistryEntry {
   kid: string;
   public_key: string;
   name: string;
-  kind: string | null;
-  scopes: string[];
+  admin: boolean;
   not_before: number | null;
   not_after: number | null;
 }
@@ -48,37 +48,34 @@ export interface WireRegistryEntry {
 /** Wire shape of an invite record. */
 export interface WireInviteRecord {
   invite_id: string;
-  scopes: string[];
-  kind: string | null;
+  admin: boolean;
   created_by: string;
   created_at: number;
   expires_at: number;
-  key_ttl_seconds: number | null;
+  key_ttl_seconds?: number;
 }
 
-/** Snake_case wire object in Go struct-tag field order; scopes undefined normalizes to []; bounds undefined map to null. */
+/** Snake_case wire object in Go struct-tag field order; admin is always written; bounds undefined map to null. */
 export function serializeRegistryEntry(entry: RegistryEntry): WireRegistryEntry {
   return {
     kid: entry.kid,
     public_key: entry.publicKey,
     name: entry.name,
-    kind: entry.kind ?? null,
-    scopes: entry.scopes === undefined ? [] : [...entry.scopes],
+    admin: entry.admin === true,
     not_before: entry.notBefore ?? null,
     not_after: entry.notAfter ?? null,
   };
 }
 
-/** Same for invites. */
+/** Same for invites; key_ttl_seconds is omitted when unset (exactOptionalPropertyTypes). */
 export function serializeInviteRecord(invite: InviteRecord): WireInviteRecord {
   return {
     invite_id: invite.inviteId,
-    scopes: invite.scopes === undefined ? [] : [...invite.scopes],
-    kind: invite.kind ?? null,
+    admin: invite.admin === true,
     created_by: invite.createdBy,
     created_at: invite.createdAt,
     expires_at: invite.expiresAt,
-    key_ttl_seconds: invite.keyTtlSeconds ?? null,
+    ...(invite.keyTtlSeconds !== undefined ? { key_ttl_seconds: invite.keyTtlSeconds } : {}),
   };
 }
 
@@ -91,16 +88,15 @@ export interface StateStore {
   update(fn: (edit: StateEdit) => void): void;
 }
 
-/** Internal clone of one entry: copies the scopes array; numbers are already copied by value. */
+/** Internal clone of one entry; numbers are already copied by value. */
 function cloneEntry(entry: RegistryEntry): RegistryEntry {
   const out: Mutable<RegistryEntry> = {
     kid: entry.kid,
     publicKey: entry.publicKey,
     name: entry.name,
-    scopes: entry.scopes === undefined ? [] : [...entry.scopes],
   };
-  if (entry.kind !== undefined) {
-    out.kind = entry.kind;
+  if (entry.admin !== undefined) {
+    out.admin = entry.admin;
   }
   if (entry.notBefore !== undefined) {
     out.notBefore = entry.notBefore;
@@ -115,13 +111,12 @@ function cloneEntry(entry: RegistryEntry): RegistryEntry {
 function cloneInvite(invite: InviteRecord): InviteRecord {
   const out: Mutable<InviteRecord> = {
     inviteId: invite.inviteId,
-    scopes: invite.scopes === undefined ? [] : [...invite.scopes],
     createdBy: invite.createdBy,
     createdAt: invite.createdAt,
     expiresAt: invite.expiresAt,
   };
-  if (invite.kind !== undefined) {
-    out.kind = invite.kind;
+  if (invite.admin !== undefined) {
+    out.admin = invite.admin;
   }
   if (invite.keyTtlSeconds !== undefined) {
     out.keyTtlSeconds = invite.keyTtlSeconds;
@@ -129,7 +124,7 @@ function cloneInvite(invite: InviteRecord): InviteRecord {
   return out;
 }
 
-/** Deep copies of entries (entry object and scopes array each copied). */
+/** Deep copies of entries. */
 export function cloneKeys(keys: readonly RegistryEntry[]): RegistryEntry[] {
   return keys.map(cloneEntry);
 }
@@ -209,7 +204,7 @@ export class StateEdit {
     return sortedInvites(this.inviteEntries);
   }
 
-  /** Replaces by kid or appends; clones the input; undefined scopes normalize to [] (Go's nil→empty). */
+  /** Replaces by kid or appends; clones the input. */
   putKey(entry: RegistryEntry): void {
     const cloned = cloneEntry(entry);
     for (const [i, cur] of this.keyEntries.entries()) {
@@ -232,7 +227,7 @@ export class StateEdit {
     return false;
   }
 
-  /** Replaces by inviteId or appends; clones the input; undefined scopes normalize to []. */
+  /** Replaces by inviteId or appends; clones the input. */
   putInvite(invite: InviteRecord): void {
     const cloned = cloneInvite(invite);
     for (const [i, cur] of this.inviteEntries.entries()) {
