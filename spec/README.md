@@ -49,7 +49,7 @@ Status after the scope review of 2026-11-08 ([docs/design/scope-review-2026-11-0
 
 - **Q1.** Streaming responses. *Direction:* authenticate once at a handshake, then an authenticated, encrypted session channel (ChaCha20-Poly1305, an established Noise handshake pattern), which also carries streams. Design pending; target v0.2.
 - **Q2.** ~~Delegation from a human key to an agent key~~ — closed: the protocol knows only users; `kind` and delegation are not protocol features.
-- **Q3.** Server key rotation. *Decided:* part of the protocol; the server announces its next key signed by its current key, several keys are valid during a transition, clients that miss it re-pin manually. Design pending.
+- **Q3.** Server key rotation. [Proposal under review](../docs/design/server-key-rotation.md) records a candidate contract; it is not accepted as normative v0.1 or implemented. Review and separately versioned implementation remain required.
 - **Q4.** ~~Registry and policy distribution~~ — closed: nothing is distributed; users are created on the server; the policy engine is removed.
 - **Q5.** Multi-instance servers (shared nonce cache) and cluster management. Open, deferred beyond the MVP: one server instance per state store until then.
 - **Q6.** ~~How a client learns `aud` and the server key~~ — closed: out of band, by hand; not part of the protocol.
