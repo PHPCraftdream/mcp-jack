@@ -420,3 +420,88 @@ fn lexical_number_mutations_fail_before_signature_verification() {
         }
     }
 }
+
+fn result_payload() -> String {
+    let corpus = corpus();
+    let anchor = &corpus.keys["anchor"];
+    serde_json::json!({
+        "current": {"kid": anchor.kid, "public_key": anchor.public_key},
+        "records": [], "head": {"ordinal": 0, "hash": "-"}, "complete": true
+    }).to_string()
+}
+
+fn result_body(payload: &str, mirror: &str, id: &str) -> Vec<u8> {
+    let quoted = serde_json::to_string(mirror).expect("text JSON encoding");
+    format!(r#"{{"jsonrpc":"2.0","id":{id},"result":{{"content":[{{"type":"text","text":{quoted}}}],"structuredContent":{payload},"isError":false}}}}"#).into_bytes()
+}
+
+#[test]
+fn strict_result_shape_parity_and_scalar_request_ids() {
+    let payload = result_payload();
+    let value: serde_json::Value = serde_json::from_str(&payload).expect("fixture payload");
+    let mirror = serde_json::to_string_pretty(&value).expect("reordered/whitespace mirror");
+    for id in ["7", "1.5", r#""request-😀""#, r#""😀""#, r#""literal\ud800""#] {
+        let mut body = result_body(&payload, &mirror, id);
+        let result = rotation::decode_result(&body, id.as_bytes()).expect("valid result");
+        assert_eq!(result.head_ordinal, 0);
+        assert_eq!(result.head_hash, "-");
+        assert!(result.complete);
+        assert!(result.records.is_empty());
+        assert_eq!(mcp_jack::encoding::key_id(&result.current_public_key), result.current_kid);
+        body.fill(0);
+        assert_eq!(result.current_kid, corpus().keys["anchor"].kid);
+    }
+    let body = result_body(&payload, &payload, "7");
+    assert!(rotation::decode_result(&body, b"7e0").is_err());
+}
+
+#[test]
+fn strict_result_rejects_duplicate_extra_type_lexical_and_surrogate_changes() {
+    let payload = result_payload();
+    for changed in [
+        payload.replacen("\"complete\":true", "\"complete\":true,\"complete\":true", 1),
+        payload.replacen("\"complete\":true", "\"complete\":null", 1),
+        payload.replacen("\"complete\":true", "\"complete\":true,\"extra\":1", 1),
+        payload.replacen("\"ordinal\":0", "\"ordinal\":0.0", 1),
+        payload.replacen("\"ordinal\":0", "\"ordinal\":0e0", 1),
+        payload.replacen("\"ordinal\":0", "\"ordinal\":-0", 1),
+        payload.replacen("\"hash\":\"-\"", "\"hash\":\"wrong\"", 1),
+        payload.replacen("\"records\":[]", r#""records":["\ud800"]"#, 1),
+        payload.replacen("\"records\":[]", r#""records":["\udc00"]"#, 1),
+    ] {
+        assert_ne!(changed, payload, "mutation did not alter fixture");
+        for (actual, mirror) in [(&changed, &changed), (&payload, &changed)] {
+            let error = rotation::decode_result(&result_body(actual, mirror, "7"), b"7").expect_err("invalid result accepted");
+            assert_eq!(error.code, "rotation_result_invalid");
+        }
+    }
+    let ordinary = String::from_utf8(result_body(&payload, &payload, "7")).expect("UTF8");
+    for changed in [
+        ordinary.replacen("\"jsonrpc\":\"2.0\"", "\"jsonrpc\":\"2.0\",\"jsonrpc\":\"2.0\"", 1),
+        ordinary.replacen("\"isError\":false", "\"isError\":true", 1),
+        ordinary.replacen("\"type\":\"text\"", "\"type\":\"text\",\"extra\":1", 1),
+    ] {
+        assert!(rotation::decode_result(changed.as_bytes(), b"7").is_err());
+    }
+    let mismatch = payload.replacen("\"complete\":true", "\"complete\":false", 1);
+    assert!(rotation::decode_result(&result_body(&payload, &mismatch, "7"), b"7").is_err());
+    assert!(rotation::decode_result(&[0xff], b"7").is_err());
+}
+
+#[test]
+fn strict_result_has_inclusive_full_body_and_page_caps() {
+    let payload = result_payload();
+    let mut body = result_body(&payload, &payload, "7");
+    body.resize(rotation::MAX_RESULT_BODY_BYTES, b' ');
+    assert!(rotation::decode_result(&body, b"7").is_ok());
+    body.push(b' ');
+    assert!(rotation::decode_result(&body, b"7").is_err());
+    let corpus = corpus();
+    let mut value: serde_json::Value = serde_json::from_str(&payload).expect("payload");
+    value["records"] = serde_json::json!(vec![corpus.valid_chains["overlapping"][0].clone(); 16]);
+    let page = value.to_string();
+    assert_eq!(rotation::decode_result(&result_body(&page, &page, "7"), b"7").expect("16 record schema").records.len(), 16);
+    value["records"].as_array_mut().expect("records array").push(serde_json::Value::String(corpus.valid_chains["overlapping"][0].clone()));
+    let page = value.to_string();
+    assert!(rotation::decode_result(&result_body(&page, &page, "7"), b"7").is_err());
+}

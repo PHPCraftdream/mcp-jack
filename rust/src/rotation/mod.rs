@@ -2,10 +2,12 @@
 
 mod chain;
 mod record;
+mod result;
 mod sign;
 
 pub use chain::{assignment_valid, selected_ordinal, verify_chain, Checkpoint, MAX_RETAINED_KEYS};
 pub use record::parse_record;
+pub use result::{decode_result, DecodedResult, MAX_PAGE_RECORDS, MAX_RESULT_BODY_BYTES};
 pub use sign::create_record;
 
 use std::fmt;
