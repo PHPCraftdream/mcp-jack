@@ -21,7 +21,15 @@ const named = (name) => {
   return { name, seed, publicKey, publicKeyB64u: base64url(publicKey), kid: keyId(publicKey) };
 };
 const makeEnvelope = (records, signer, head, complete = true) => ({ current: { kid: signer.kid, public_key: signer.publicKeyB64u }, records, head, complete });
-const responseBody = (envelope, id = 7) => Buffer.from(JSON.stringify({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(envelope) }], structuredContent: envelope, isError: false }));
+const responseBody = (envelope, id = 7) => Buffer.from(JSON.stringify({
+  jsonrpc: '2.0',
+  id,
+  result: {
+    content: [{ type: 'text', text: JSON.stringify(envelope) }],
+    structuredContent: envelope,
+    isError: false,
+  },
+}));
 const signedResponse = ({ signer, ts, now = ts, body, id = 'request-signature' }) => {
   const signatureMessage = Buffer.from(['mcp-jack/v1/response', '200', id, signer.kid, String(ts), base64url(sha256(body))].join('\n'), 'utf8');
   const signature = base64url(signSeed(signer.seed, signatureMessage));

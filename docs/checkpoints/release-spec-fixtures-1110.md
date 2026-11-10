@@ -19,7 +19,7 @@ The owner explicitly requested stopping the delegated executor and completing th
 - Replaced a constant-only commit-count assertion with an assertion against executed results.
 - Counted targeted expiry deletion within the 128-row transaction budget and distinguished uncertain rollback-latch writes from confirmed clock fences, with direct regressions.
 
-Initial source-only commit: 16e0c7b; draft PR #23. The first CI watcher is bv82v2j2k. These are in-flight identifiers, not passing receipts.
+Initial source-only commit: 16e0c7b; draft PR #23. The first CI watcher is bv82v2j2k. These are in-flight identifiers, not passing receipts. At head c3d74cf, CI run 42833671145 completed generation and semantic verification but failed the test step: the responseBody test helper lacked a closing object brace. Twelve tests in the other files passed; conformance.test.mjs did not load. The helper was corrected without local execution.
 - Preserved unused duplicate modules outside the integrated source set rather than silently discarding them.
 
 ## Verification and continuation
