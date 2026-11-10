@@ -91,11 +91,11 @@ jobs:
           go mod tidy
           go mod verify
       - name: Format changed Go SDK sources in CI
-        run: gofmt -w rotation/*.go durable/*.go server/admission.go server/admission_test.go server/verify.go server/middleware.go server/response_signer*.go tools/consumer/go/*.go internal/cli/gateway*.go internal/cli/run.go internal/cli/nonce_admin*.go
+        run: gofmt -w rotation/*.go client/rotation_auth*.go durable/*.go server/admission.go server/admission_test.go server/verify.go server/middleware.go server/response_signer*.go tools/consumer/go/*.go internal/cli/gateway*.go internal/cli/run.go internal/cli/nonce_admin*.go
       - name: Test codec, admission and backend ownership without CGO
         env:
           CGO_ENABLED: '0'
-        run: go test ./rotation ./server ./durable ./internal/cli
+        run: go test ./rotation ./client ./server ./durable ./internal/cli
       - name: Upload formatted sources for parent integration
         if: always()
         uses: actions/upload-artifact@v4
@@ -105,6 +105,7 @@ jobs:
             go.mod
             go.sum
             rotation/*.go
+            client/rotation_auth*.go
             durable/*.go
             tools/consumer/go/*.go
             server/admission.go
