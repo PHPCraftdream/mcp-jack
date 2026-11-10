@@ -46,12 +46,12 @@ type HandlerConfig struct {
 }
 
 type handler struct {
-	v     *Verifier
-	key   ed25519.PrivateKey
+	v      *Verifier
+	key    ed25519.PrivateKey
 	signer ResponseSigner
 	public []byte
-	kid   string
-	limit int64
+	kid    string
+	limit  int64
 	// respLimit bounds the buffered upstream response body.
 	respLimit int64
 	next      http.Handler

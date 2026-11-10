@@ -9,6 +9,8 @@ import (
 
 // ResponseSigner удерживает server signing capability без private export.
 // PublicKey возвращает фиксированную identity этого handle, не key-selection policy.
+// Provider обязан ограничивать длительность методов: SDK ждёт синхронно
+// и не может принудительно прервать зависший callback.
 type ResponseSigner interface {
 	PublicKey() []byte
 	Sign([]byte) ([]byte, error)

@@ -10,9 +10,9 @@ import (
 )
 
 type testResponseSigner struct {
-	public []byte
+	public      []byte
 	panicPublic bool
-	sign func([]byte) ([]byte, error)
+	sign        func([]byte) ([]byte, error)
 }
 
 func (signer *testResponseSigner) PublicKey() []byte {
@@ -75,10 +75,10 @@ func TestOpaqueResponseSignerValidatesExactMessageKeyAndProviderOutputWithoutRet
 	other := responseFixtureKey("other")
 	public := key.Public().(ed25519.PublicKey)
 	for name, sign := range map[string]func([]byte) ([]byte, error){
-		"error": func([]byte) ([]byte, error) { return nil, errors.New("private provider detail") },
-		"panic": func([]byte) ([]byte, error) { panic("private provider detail") },
+		"error":     func([]byte) ([]byte, error) { return nil, errors.New("private provider detail") },
+		"panic":     func([]byte) ([]byte, error) { panic("private provider detail") },
 		"nil-panic": func([]byte) ([]byte, error) { panic(nil) },
-		"short": func([]byte) ([]byte, error) { return make([]byte, 63), nil },
+		"short":     func([]byte) ([]byte, error) { return make([]byte, 63), nil },
 		"wrong-key": func(message []byte) ([]byte, error) { return ed25519.Sign(other, message), nil },
 		"mutated-message": func(message []byte) ([]byte, error) {
 			message[0] ^= 1

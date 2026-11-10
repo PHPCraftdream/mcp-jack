@@ -19,12 +19,14 @@ import (
 )
 
 type httpFixtureResponseSigner struct {
-	key ed25519.PrivateKey
-	mode string
+	key   ed25519.PrivateKey
+	mode  string
 	calls int
 }
 
-func (provider *httpFixtureResponseSigner) PublicKey() []byte { return provider.key.Public().(ed25519.PublicKey) }
+func (provider *httpFixtureResponseSigner) PublicKey() []byte {
+	return provider.key.Public().(ed25519.PublicKey)
+}
 
 func (provider *httpFixtureResponseSigner) Sign(message []byte) ([]byte, error) {
 	provider.calls++
