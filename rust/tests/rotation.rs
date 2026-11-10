@@ -754,9 +754,13 @@ fn page_framing_gap_conflict_snapshot_and_capacity_refusals() {
 
 fn carrier_header(key: &dyn JackSigner, request_sig: &str, ts: i64, body: &[u8]) -> String {
     let message = mcp_jack::signing::response_signing_string(200, request_sig, key.kid(), ts, body);
-    let signature = key.sign(message.as_bytes()).expect("actual response signature");
+    let signature = key
+        .sign(message.as_bytes())
+        .expect("actual response signature");
     mcp_jack::auth_header::format_response_auth(&mcp_jack::auth_header::ResponseAuth {
-        kid: key.kid().to_owned(), ts, sig: encode_b64url(&signature),
+        kid: key.kid().to_owned(),
+        ts,
+        sig: encode_b64url(&signature),
     })
 }
 
@@ -765,40 +769,127 @@ fn carrier_known_key_precedes_freshness_signature_and_payload() {
     let key = fixture_signer("anchor");
     let other = fixture_signer("other");
     let user = fixture_signer("public-user");
-    let request = mcp_jack::client::sign_request(&user, "public-aud", "POST", "/mcp", b"", &[0; 16], 100).expect("actual signed request");
+    let request =
+        mcp_jack::client::sign_request(&user, "public-aud", "POST", "/mcp", b"", &[0; 16], 100)
+            .expect("actual signed request");
     let request_sig = &request.auth.sig;
-    let mut known = BTreeMap::from([(key.kid().to_owned(), mcp_jack::client::RotationResponseKey {
-        public_key: key.public_key(), not_before: 0, known_cutoff: Some(110),
-    })]);
+    let mut known = BTreeMap::from([(
+        key.kid().to_owned(),
+        mcp_jack::client::RotationResponseKey {
+            public_key: key.public_key(),
+            not_before: 0,
+            known_cutoff: Some(110),
+        },
+    )]);
     let body = b"{not-json";
-    let check = |known: &BTreeMap<String, mcp_jack::client::RotationResponseKey>, header: &str, bytes: &[u8], now| mcp_jack::client::verify_rotation_carrier(known, 200, &[header], request_sig, bytes, now, 30);
+    let check = |known: &BTreeMap<String, mcp_jack::client::RotationResponseKey>,
+                 header: &str,
+                 bytes: &[u8],
+                 now| {
+        mcp_jack::client::verify_rotation_carrier(
+            known,
+            200,
+            &[header],
+            request_sig,
+            bytes,
+            now,
+            30,
+        )
+    };
     let header = carrier_header(&key, request_sig, 109, body);
     let result = check(&known, &header, body, 109).expect("valid carrier over raw non-JSON bytes");
     assert_eq!(result.kid, key.kid());
     assert_eq!(result.timestamp, 109);
-    let unknown = mcp_jack::auth_header::format_response_auth(&mcp_jack::auth_header::ResponseAuth {
-        kid: other.kid().to_owned(), ts: 0, sig: encode_b64url(&[0; 64]),
-    });
-    assert_eq!(check(&known, &unknown, body, 1000).expect_err("unknown key").code, "unknown_server_key");
-    let stale_bad = mcp_jack::auth_header::format_response_auth(&mcp_jack::auth_header::ResponseAuth {
-        kid: key.kid().to_owned(), ts: 0, sig: encode_b64url(&[0; 64]),
-    });
-    assert_eq!(check(&known, &stale_bad, body, 1000).expect_err("stale before bad signature").code, "timestamp_out_of_window");
+    let unknown =
+        mcp_jack::auth_header::format_response_auth(&mcp_jack::auth_header::ResponseAuth {
+            kid: other.kid().to_owned(),
+            ts: 0,
+            sig: encode_b64url(&[0; 64]),
+        });
+    assert_eq!(
+        check(&known, &unknown, body, 1000)
+            .expect_err("unknown key")
+            .code,
+        "unknown_server_key"
+    );
+    let stale_bad =
+        mcp_jack::auth_header::format_response_auth(&mcp_jack::auth_header::ResponseAuth {
+            kid: key.kid().to_owned(),
+            ts: 0,
+            sig: encode_b64url(&[0; 64]),
+        });
+    assert_eq!(
+        check(&known, &stale_bad, body, 1000)
+            .expect_err("stale before bad signature")
+            .code,
+        "timestamp_out_of_window"
+    );
     let bad = mcp_jack::auth_header::format_response_auth(&mcp_jack::auth_header::ResponseAuth {
-        kid: key.kid().to_owned(), ts: 109, sig: encode_b64url(&[0; 64]),
+        kid: key.kid().to_owned(),
+        ts: 109,
+        sig: encode_b64url(&[0; 64]),
     });
-    assert_eq!(check(&known, &bad, body, 109).expect_err("bad signature").code, "bad_signature");
-    assert_eq!(check(&known, &header, b"changed", 109).expect_err("changed exact body").code, "bad_signature");
-    assert_eq!(check(&known, &header, body, 110).expect_err("final cutoff equality").code, "rotation_key_interval");
+    assert_eq!(
+        check(&known, &bad, body, 109)
+            .expect_err("bad signature")
+            .code,
+        "bad_signature"
+    );
+    assert_eq!(
+        check(&known, &header, b"changed", 109)
+            .expect_err("changed exact body")
+            .code,
+        "bad_signature"
+    );
+    assert_eq!(
+        check(&known, &header, body, 110)
+            .expect_err("final cutoff equality")
+            .code,
+        "rotation_key_interval"
+    );
     let at_cutoff = carrier_header(&key, request_sig, 110, body);
-    assert_eq!(check(&known, &at_cutoff, body, 109).expect_err("signed cutoff equality").code, "rotation_key_interval");
-    known.insert(key.kid().to_owned(), mcp_jack::client::RotationResponseKey { public_key: key.public_key(), not_before: 100, known_cutoff: None });
+    assert_eq!(
+        check(&known, &at_cutoff, body, 109)
+            .expect_err("signed cutoff equality")
+            .code,
+        "rotation_key_interval"
+    );
+    known.insert(
+        key.kid().to_owned(),
+        mcp_jack::client::RotationResponseKey {
+            public_key: key.public_key(),
+            not_before: 100,
+            known_cutoff: None,
+        },
+    );
     let lower = carrier_header(&key, request_sig, 100, body);
-    assert_eq!(check(&known, &lower, body, 99).expect("future ts lower bound within skew").timestamp, 100);
+    assert_eq!(
+        check(&known, &lower, body, 99)
+            .expect("future ts lower bound within skew")
+            .timestamp,
+        100
+    );
     let before = carrier_header(&key, request_sig, 99, body);
-    assert_eq!(check(&known, &before, body, 100).expect_err("before lower bound").code, "rotation_key_interval");
-    known.insert(key.kid().to_owned(), mcp_jack::client::RotationResponseKey { public_key: key.public_key(), not_before: 110, known_cutoff: Some(110) });
-    assert_eq!(check(&known, &at_cutoff, body, 110).expect_err("empty interval").code, "rotation_key_interval");
+    assert_eq!(
+        check(&known, &before, body, 100)
+            .expect_err("before lower bound")
+            .code,
+        "rotation_key_interval"
+    );
+    known.insert(
+        key.kid().to_owned(),
+        mcp_jack::client::RotationResponseKey {
+            public_key: key.public_key(),
+            not_before: 110,
+            known_cutoff: Some(110),
+        },
+    );
+    assert_eq!(
+        check(&known, &at_cutoff, body, 110)
+            .expect_err("empty interval")
+            .code,
+        "rotation_key_interval"
+    );
 }
 
 #[test]
@@ -806,13 +897,60 @@ fn carrier_rejects_invalid_local_snapshot_window_without_changing_static_verifie
     let key = fixture_signer("anchor");
     let body = b"public body";
     let header = carrier_header(&key, "request-signature", 100, body);
-    let mut known = BTreeMap::from([(key.kid().to_owned(), mcp_jack::client::RotationResponseKey {
-        public_key: key.public_key(), not_before: 0, known_cutoff: None,
-    })]);
+    let mut known = BTreeMap::from([(
+        key.kid().to_owned(),
+        mcp_jack::client::RotationResponseKey {
+            public_key: key.public_key(),
+            not_before: 0,
+            known_cutoff: None,
+        },
+    )]);
     for window in [0, -1, 121] {
-        assert_eq!(mcp_jack::client::verify_rotation_carrier(&known, 200, &[&header], "request-signature", body, 100, window).expect_err("invalid local window").code, "rotation_state_unknown");
+        assert_eq!(
+            mcp_jack::client::verify_rotation_carrier(
+                &known,
+                200,
+                &[&header],
+                "request-signature",
+                body,
+                100,
+                window
+            )
+            .expect_err("invalid local window")
+            .code,
+            "rotation_state_unknown"
+        );
     }
-    known.insert(key.kid().to_owned(), mcp_jack::client::RotationResponseKey { public_key: [0; 32], not_before: 0, known_cutoff: None });
-    assert_eq!(mcp_jack::client::verify_rotation_carrier(&known, 200, &[&header], "request-signature", body, 100, 30).expect_err("invalid local public key").code, "rotation_state_unknown");
-    assert!(mcp_jack::signing::verify_response(&key.public_key(), 200, &[&header], "request-signature", body, 100, 30).is_ok());
+    known.insert(
+        key.kid().to_owned(),
+        mcp_jack::client::RotationResponseKey {
+            public_key: [0; 32],
+            not_before: 0,
+            known_cutoff: None,
+        },
+    );
+    assert_eq!(
+        mcp_jack::client::verify_rotation_carrier(
+            &known,
+            200,
+            &[&header],
+            "request-signature",
+            body,
+            100,
+            30
+        )
+        .expect_err("invalid local public key")
+        .code,
+        "rotation_state_unknown"
+    );
+    assert!(mcp_jack::signing::verify_response(
+        &key.public_key(),
+        200,
+        &[&header],
+        "request-signature",
+        body,
+        100,
+        30
+    )
+    .is_ok());
 }
