@@ -29,6 +29,9 @@ func VerifyChain(wires [][]byte, binding Binding, checkpoint Checkpoint, retaine
 	} else if _, err := jack.DecodeBase64URLFixed(checkpoint.Hash, 32); err != nil {
 		return nil, invalid("previous_hash")
 	}
+	if _, included := retained[checkpoint.KID]; !included && len(retained) == MaxRetainedKeys {
+		return nil, invalid("capacity")
+	}
 	keys := make(map[string][]byte, len(retained)+1)
 	for kid, public := range retained {
 		if jack.ValidatePublicKey(public) != nil || jack.KeyID(public) != kid {
@@ -82,7 +85,7 @@ func SelectedOrdinal(records []Record, now int64) uint64 {
 
 // AssignmentValid проверяет ts и строгий final cutoff по известной цепочке.
 func AssignmentValid(records []Record, ordinal uint64, ts, finalNow int64) bool {
-	if ts < 0 || ts > MaxTimestamp || finalNow < 0 || finalNow > MaxTimestamp {
+	if ordinal > MaxOrdinal || ts < 0 || ts > MaxTimestamp || finalNow < 0 || finalNow > MaxTimestamp {
 		return false
 	}
 	found := ordinal == 0

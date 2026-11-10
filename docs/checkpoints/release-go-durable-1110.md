@@ -21,6 +21,12 @@ New pipeline regressions use a clearly test-only storage spy, not a purported du
 
 The temporary preparation job now formats and tests rotation plus changed server files, and uploads go-sdk-formatted-sources with rotation/ and server/ paths. Integrate its actual artifact after review; do not invoke a local formatter. No bbolt dependency has been added yet.
 
+## Opaque record signing — third tranche
+
+While full CI for formatted admission head77d99c2 was queued/running, the parent implemented CreateRecord using opaque old/next Signer interfaces. It constructs exact B/R bytes, checks the new proof before invoking the old authorizer, validates both returned signatures without retry, and does not publish or mutate trust. New tests compare the complete Go-produced records with both independent overlap/tie chains and assert zero signer side effects on invalid input and zero old authorization after failed/altered new proof. Two additional bounds regressions cover the implicit checkpoint's history slot and an out-of-domain ordinal. Execution is pending CI. Before committing this tranche, the parent verified head77d99c2b0a9c9e623fe74c9ba287c930bdfc959f has all34 checks SUCCESS; the prior admission/freshness/lifecycle tranche is therefore fully green, but remains partial Task #59 work.
+
+The completed old full CI run42843426599 at c81489b failed only the unchanged gofmt checks for admission.go, admission_test.go and verify.go; its failed log was inspected. The correction had already been pushed as77d99c2 from the reviewed formatted artifact. Do not call either old failure or queued current checks successful.
+
 ## Remaining implementation
 
 This initial tranche is not Task #59 completion or runtime support. Durable nonce/backend ownership, high-water, intent/final receipts, dirty startup and unknown-outcome recovery; coordinated registry/key/enrollment gates; bbolt dependency/advisory/license/platform qualification and checksum generation; server publication/signer lifecycle/native tool; client ClockGuard/full-snapshot CAS/manual refresh; production integration and fault/concurrency tests remain unfinished.
