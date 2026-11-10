@@ -22,12 +22,12 @@ func TestGatewayNonceProfileIsExplicitAndValidated(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, mutate := range map[string]func(*gatewayDurableConfig){
-		"relative-path": func(c *gatewayDurableConfig) { c.Path = "nonces.db" },
-		"empty-deployment": func(c *gatewayDurableConfig) { c.DeploymentID = "" },
-		"invalid-utf8": func(c *gatewayDurableConfig) { c.DeploymentID = string([]byte{0xff}) },
+		"relative-path":        func(c *gatewayDurableConfig) { c.Path = "nonces.db" },
+		"empty-deployment":     func(c *gatewayDurableConfig) { c.DeploymentID = "" },
+		"invalid-utf8":         func(c *gatewayDurableConfig) { c.DeploymentID = string([]byte{0xff}) },
 		"oversized-deployment": func(c *gatewayDurableConfig) { c.DeploymentID = string(make([]byte, 1025)) },
-		"zero-window": func(c *gatewayDurableConfig) { c.Window = 0 },
-		"oversized-window": func(c *gatewayDurableConfig) { c.Window = 121 },
+		"zero-window":          func(c *gatewayDurableConfig) { c.Window = 0 },
+		"oversized-window":     func(c *gatewayDurableConfig) { c.Window = 121 },
 	} {
 		t.Run(name, func(t *testing.T) {
 			invalid := valid

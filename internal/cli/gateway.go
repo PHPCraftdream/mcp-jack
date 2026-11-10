@@ -19,16 +19,16 @@ import (
 )
 
 type gatewayConfig struct {
-	Version        int    `json:"version"`
-	Aud            string `json:"aud"`
-	ServerSeedFile string `json:"server_seed_file"`
-	StateFile      string `json:"state_file"`
-	Listen         string `json:"listen"`
-	UpstreamSocket string `json:"upstream_socket"`
-	UpstreamURL    string `json:"upstream_url"`
-	CallTimeoutMS  int    `json:"call_timeout_ms"`
-	MaxConcurrent  int    `json:"max_concurrent"`
-	DurableNonces *gatewayDurableConfig `json:"durable_nonces,omitempty"`
+	Version        int                   `json:"version"`
+	Aud            string                `json:"aud"`
+	ServerSeedFile string                `json:"server_seed_file"`
+	StateFile      string                `json:"state_file"`
+	Listen         string                `json:"listen"`
+	UpstreamSocket string                `json:"upstream_socket"`
+	UpstreamURL    string                `json:"upstream_url"`
+	CallTimeoutMS  int                   `json:"call_timeout_ms"`
+	MaxConcurrent  int                   `json:"max_concurrent"`
+	DurableNonces  *gatewayDurableConfig `json:"durable_nonces,omitempty"`
 }
 
 type enrollmentOnly struct {

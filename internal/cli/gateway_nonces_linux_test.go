@@ -12,6 +12,28 @@ import (
 	"github.com/PHPCraftdream/mcp-jack/server"
 )
 
+func TestGatewayDurableBootstrapEnrollmentHTTP(t *testing.T) {
+	testGatewayBootstrapEnrollNoNativeForward(t, func(config *gatewayConfig) {
+		path := filepath.Join(privateDir(t), "nonces.db")
+		opts := durable.Options{DeploymentID: "public-http-gateway-test", Window: 30}
+		if err := durable.InitializeUnused(path, opts); err != nil {
+			t.Fatal(err)
+		}
+		config.DurableNonces = &gatewayDurableConfig{Path: path, DeploymentID: opts.DeploymentID, Window: opts.Window}
+		// Cleanup helper останавливает gateway раньше этой проверки.
+		t.Cleanup(func() {
+			owner, err := durable.Open(path, opts)
+			if err != nil {
+				t.Error("gateway did not cleanly drain durable owner:", err)
+				return
+			}
+			if err := owner.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+	})
+}
+
 func TestGatewaySelectsExistingDurableOwnerWithoutFallback(t *testing.T) {
 	path := filepath.Join(privateDir(t), "nonces.db")
 	profile := &gatewayDurableConfig{Path: path, DeploymentID: "public-gateway-test", Window: 30}

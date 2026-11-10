@@ -195,6 +195,11 @@ func TestGatewayFixedUnixHopAndSignedRefusals(t *testing.T) {
 }
 
 func TestGatewayBootstrapEnrollNoNativeForward(t *testing.T) {
+	testGatewayBootstrapEnrollNoNativeForward(t, nil)
+}
+
+func testGatewayBootstrapEnrollNoNativeForward(t *testing.T, configure func(*gatewayConfig)) {
+	t.Helper()
 	d := privateDir(t)
 	var upstreamCalls atomic.Int32
 	socket := unixUpstream(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { upstreamCalls.Add(1); w.WriteHeader(200) }))
@@ -210,6 +215,9 @@ func TestGatewayBootstrapEnrollNoNativeForward(t *testing.T) {
 		t.Fatal("bootstrap failed")
 	}
 	cfg := gatewayConfig{Version: 1, Aud: "svc", ServerSeedFile: save(t, d, "server.seed", priv.Seed()), StateFile: state, Listen: listen, UpstreamSocket: socket, UpstreamURL: "http://upstream/mcp", CallTimeoutMS: 1000, MaxConcurrent: 4}
+	if configure != nil {
+		configure(&cfg)
+	}
 	path := saveJSON(t, d, "gateway.json", cfg)
 	ctx, stop := context.WithCancel(context.Background())
 	done := make(chan error, 1)
