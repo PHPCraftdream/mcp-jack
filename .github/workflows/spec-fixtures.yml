@@ -91,7 +91,7 @@ jobs:
           go mod tidy
           go mod verify
       - name: Format changed Go SDK sources in CI
-        run: gofmt -w rotation/*.go durable/*.go server/admission.go server/admission_test.go server/verify.go server/middleware.go tools/consumer/go/*.go internal/cli/gateway.go internal/cli/gateway_state_test.go
+        run: gofmt -w rotation/*.go durable/*.go server/admission.go server/admission_test.go server/verify.go server/middleware.go tools/consumer/go/*.go internal/cli/gateway*.go
       - name: Test codec, admission and backend ownership without CGO
         env:
           CGO_ENABLED: '0'
@@ -111,6 +111,5 @@ jobs:
             server/admission_test.go
             server/verify.go
             server/middleware.go
-            internal/cli/gateway.go
-            internal/cli/gateway_state_test.go
+            internal/cli/gateway*.go
           if-no-files-found: error

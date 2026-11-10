@@ -28,6 +28,7 @@ type gatewayConfig struct {
 	UpstreamURL    string `json:"upstream_url"`
 	CallTimeoutMS  int    `json:"call_timeout_ms"`
 	MaxConcurrent  int    `json:"max_concurrent"`
+	DurableNonces *gatewayDurableConfig `json:"durable_nonces,omitempty"`
 }
 
 type enrollmentOnly struct {
@@ -71,7 +72,7 @@ func socketOK(path string) error {
 
 func loadGateway(path string) (gatewayConfig, time.Duration, error) {
 	var c gatewayConfig
-	if decodeConfig(path, &c) != nil || c.Version != 1 || c.Aud == "" || c.MaxConcurrent < 1 || c.MaxConcurrent > 64 {
+	if decodeConfig(path, &c) != nil || c.Version != 1 || c.Aud == "" || c.MaxConcurrent < 1 || c.MaxConcurrent > 64 || c.DurableNonces.validate(c.MaxConcurrent) != nil {
 		return c, 0, errConfig
 	}
 	d, err := callDuration(c.CallTimeoutMS)
@@ -94,7 +95,7 @@ func loadGateway(path string) (gatewayConfig, time.Duration, error) {
 	return c, d, nil
 }
 
-func gateway(ctx context.Context, path string) error {
+func gateway(ctx context.Context, path string) (result error) {
 	c, timeout, err := loadGateway(path)
 	if err != nil {
 		return err
@@ -131,11 +132,21 @@ func gateway(ctx context.Context, path string) error {
 		return (&net.Dialer{Timeout: timeout}).DialContext(ctx, "unix", c.UpstreamSocket)
 	}
 	defer base.CloseIdleConnections()
-	nonces := server.NewNonceStore()
-	v, err := server.NewVerifier(server.Config{
-		Aud: c.Aud, State: boundedState{state}, Nonces: nonces,
+	verification := server.Config{
+		Aud: c.Aud, State: boundedState{state},
 		Native: enrollmentOnly{native: server.NewNativeTools(server.NativeOptions{}), serverKID: serverKID},
-	})
+	}
+	closeNonces, err := selectGatewayNonces(c, &verification)
+	if err != nil {
+		return errConfig
+	}
+	defer func() {
+		if err := closeNonces(); err != nil && result == nil {
+			result = errConfig
+		}
+	}()
+	nonces := verification.Nonces
+	v, err := server.NewVerifier(verification)
 	if err != nil {
 		return errConfig
 	}
@@ -147,7 +158,7 @@ func gateway(ctx context.Context, path string) error {
 	}
 	var connections sync.WaitGroup
 	slots := make(chan struct{}, c.MaxConcurrent)
-	// A fixed global admission rate also bounds the SDK's in-memory nonce growth.
+	// Общий transport limit действует до auth; durable capacity проверяет backend.
 	var rateMu sync.Mutex
 	var second int64
 	var admitted int
@@ -171,10 +182,12 @@ func gateway(ctx context.Context, path string) error {
 			http.Error(w, "busy", 503)
 			return
 		}
-		nonces.Purge(now)
-		if nonces.Len() >= 4096 {
-			http.Error(w, "busy", 503)
-			return
+		if nonces != nil {
+			nonces.Purge(now)
+			if nonces.Len() >= 4096 {
+				http.Error(w, "busy", 503)
+				return
+			}
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
