@@ -127,6 +127,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		target = r.URL.RequestURI()
 	}
 	res := h.v.Verify(Request{Method: r.Method, Target: target, AuthValues: r.Header.Values("Jack-Auth"), Body: body})
+	defer res.Done()
 	switch {
 	case !res.Accepted:
 		h.reject(w, res)

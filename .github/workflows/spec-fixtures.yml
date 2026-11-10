@@ -83,14 +83,19 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: '1.26.10'
-      - name: Format Go rotation sources in CI
-        run: gofmt -w rotation/*.go
-      - name: Test independent Go rotation codec
-        run: go test ./rotation
+      - name: Format changed Go SDK sources in CI
+        run: gofmt -w rotation/*.go server/admission.go server/admission_test.go server/verify.go server/middleware.go
+      - name: Test independent codec and durable admission pipeline
+        run: go test ./rotation ./server
       - name: Upload formatted sources for parent integration
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: go-rotation-formatted-sources
-          path: rotation/*.go
+          name: go-sdk-formatted-sources
+          path: |
+            rotation/*.go
+            server/admission.go
+            server/admission_test.go
+            server/verify.go
+            server/middleware.go
           if-no-files-found: error

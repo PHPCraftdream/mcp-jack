@@ -94,6 +94,8 @@ type Config struct {
 	State StateStore
 	// Nonces records seen (kid, nonce) pairs.
 	Nonces *NonceStore
+	// DurableNonces выбирается явно вместо volatile Nonces.
+	DurableNonces DurableNonceStore
 	// Audit receives audit events for protocol-native admin calls; optional.
 	Audit AuditSink
 	// Native implements the jack.* tools; when nil every jack.* tool is denied.
@@ -116,8 +118,18 @@ func NewVerifier(cfg Config) (*Verifier, error) {
 		return nil, errors.New("server: Config.Aud must be non-empty")
 	case cfg.State == nil:
 		return nil, errors.New("server: Config.State must be set")
-	case cfg.Nonces == nil:
+	case cfg.Nonces == nil && cfg.DurableNonces == nil:
 		return nil, errors.New("server: Config.Nonces must be set")
+	case cfg.Nonces != nil && cfg.DurableNonces != nil:
+		return nil, errors.New("server: select exactly one nonce profile")
+	}
+	if cfg.DurableNonces != nil {
+		if _, ok := cfg.State.(AdmissionStateStore); !ok {
+			return nil, errors.New("server: durable admission requires coordinated state")
+		}
+		if cfg.Window < 0 || cfg.Window > 120 {
+			return nil, errors.New("server: durable window must be between 1 and 120 seconds")
+		}
 	}
 	if cfg.Window <= 0 {
 		cfg.Window = DefaultWindow
@@ -171,6 +183,7 @@ type Result struct {
 	Structured any
 	// Audit is the audit event written for the call, if any.
 	Audit *AuditEvent
+	admission *admissionLease
 }
 
 func rejection(status int, code, message string) Result {
@@ -232,6 +245,27 @@ func (v *Verifier) Verify(req Request) Result {
 	signing := jack.RequestSigningString(req.Method, req.Target, v.cfg.Aud, auth.Kid, auth.TS, auth.Nonce, req.Body)
 	if !jack.Verify(verifyKey, []byte(signing), sig) {
 		return rejection(401, jack.CodeBadSignature, "signature does not verify")
+	}
+
+	if v.cfg.DurableNonces != nil {
+		res, finalNow := v.reserveDurable(auth, signing, caller, known)
+		handedOff := false
+		defer func() {
+			if !handedOff {
+				res.Done()
+			}
+		}()
+		if res.HTTPStatus != 0 {
+			handedOff = true
+			return res
+		}
+		var callerPtr *RegistryEntry
+		if known {
+			callerPtr = &caller
+		}
+		out := v.authorize(req, auth, finalNow, callerPtr, res)
+		handedOff = true
+		return out
 	}
 
 	// The nonce is recorded only after the signature verified, so
