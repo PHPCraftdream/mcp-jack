@@ -91,11 +91,11 @@ jobs:
           go mod tidy
           go mod verify
       - name: Format changed Go SDK sources in CI
-        run: gofmt -w rotation/*.go durable/*.go server/admission.go server/admission_test.go server/verify.go server/middleware.go tools/consumer/go/*.go
+        run: gofmt -w rotation/*.go durable/*.go server/admission.go server/admission_test.go server/verify.go server/middleware.go tools/consumer/go/*.go internal/cli/gateway.go internal/cli/gateway_state_test.go
       - name: Test codec, admission and backend ownership without CGO
         env:
           CGO_ENABLED: '0'
-        run: go test ./rotation ./server ./durable
+        run: go test ./rotation ./server ./durable ./internal/cli
       - name: Upload formatted sources for parent integration
         if: always()
         uses: actions/upload-artifact@v4
@@ -111,4 +111,6 @@ jobs:
             server/admission_test.go
             server/verify.go
             server/middleware.go
+            internal/cli/gateway.go
+            internal/cli/gateway_state_test.go
           if-no-files-found: error

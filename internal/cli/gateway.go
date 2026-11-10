@@ -42,10 +42,12 @@ func (n enrollmentOnly) Call(c *server.NativeCall) (server.NativeResult, *jack.E
 	return n.native.Call(c)
 }
 
-type boundedState struct{ server.StateStore }
+type boundedState struct{ server.AdmissionStateStore }
+
+var _ server.AdmissionStateStore = boundedState{}
 
 func (s boundedState) Update(update server.StateUpdate) error {
-	return s.StateStore.Update(func(e *server.StateEdit) error {
+	return s.AdmissionStateStore.Update(func(e *server.StateEdit) error {
 		if err := update(e); err != nil {
 			return err
 		}
