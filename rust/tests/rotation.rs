@@ -440,7 +440,8 @@ fn strict_result_shape_parity_and_scalar_request_ids() {
     let payload = result_payload();
     let value: serde_json::Value = serde_json::from_str(&payload).expect("fixture payload");
     let mirror = serde_json::to_string_pretty(&value).expect("reordered/whitespace mirror");
-    for id in ["7", "1.5", r#""request-😀""#, r#""😀""#, r#""literal\ud800""#] {
+    let literal_id = serde_json::to_string(&format!("literal{}ud800", char::from(0x5c_u8))).expect("escaped literal ID");
+    for id in ["7", "1.5", r#""request-😀""#, r#""😀""#, &literal_id] {
         let mut body = result_body(&payload, &mirror, id);
         let result = rotation::decode_result(&body, id.as_bytes()).expect("valid result");
         assert_eq!(result.head_ordinal, 0);
