@@ -26,6 +26,8 @@ type HandlerConfig struct {
 	Verifier *Verifier
 	// ServerKey signs responses (spec 01 section 5); clients pin its public key.
 	ServerKey ed25519.PrivateKey
+	// ResponseSigner выбирается явно вместо ServerKey, с фиксированной public identity.
+	ResponseSigner ResponseSigner
 	// MaxBodyBytes bounds the request body; zero means 1 MiB. The body must
 	// be read in full to be hashed, so the limit is a denial-of-service guard.
 	MaxBodyBytes int64
@@ -46,6 +48,8 @@ type HandlerConfig struct {
 type handler struct {
 	v     *Verifier
 	key   ed25519.PrivateKey
+	signer ResponseSigner
+	public []byte
 	kid   string
 	limit int64
 	// respLimit bounds the buffered upstream response body.
@@ -86,7 +90,9 @@ func NewHandler(cfg HandlerConfig, next http.Handler) (http.Handler, error) {
 	switch {
 	case cfg.Verifier == nil:
 		return nil, errors.New("server: HandlerConfig.Verifier must be set")
-	case len(cfg.ServerKey) != ed25519.PrivateKeySize:
+	case cfg.ResponseSigner != nil && len(cfg.ServerKey) != 0:
+		return nil, errors.New("server: select exactly one response signing profile")
+	case cfg.ResponseSigner == nil && len(cfg.ServerKey) != ed25519.PrivateKeySize:
 		return nil, errors.New("server: HandlerConfig.ServerKey must be an Ed25519 private key")
 	case next == nil:
 		return nil, errors.New("server: next handler must be set")
@@ -102,8 +108,17 @@ func NewHandler(cfg HandlerConfig, next http.Handler) (http.Handler, error) {
 	if respLimit == 0 {
 		respLimit = defaultMaxResponseBytes
 	}
-	pub := cfg.ServerKey.Public().(ed25519.PublicKey)
-	return &handler{v: cfg.Verifier, key: cfg.ServerKey, kid: jack.KeyID(pub), limit: limit, respLimit: respLimit, next: next}, nil
+	var public []byte
+	if cfg.ResponseSigner != nil {
+		var err error
+		public, err = responsePublicKey(cfg.ResponseSigner)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		public = cfg.ServerKey.Public().(ed25519.PublicKey)
+	}
+	return &handler{v: cfg.Verifier, key: cfg.ServerKey, signer: cfg.ResponseSigner, public: public, kid: jack.KeyID(public), limit: limit, respLimit: respLimit, next: next}, nil
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -250,7 +265,18 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, body []byte, r
 func (h *handler) writeSigned(w http.ResponseWriter, status int, header http.Header, body []byte, requestSig string) {
 	now := h.v.cfg.Now()
 	signing := jack.ResponseSigningString(status, requestSig, h.kid, now, body)
-	sig := ed25519.Sign(h.key, []byte(signing))
+	var sig []byte
+	if h.signer != nil {
+		var err error
+		sig, err = responseSignature(h.signer, h.public, signing)
+		if err != nil {
+			// Нет unsigned success, provider detail, fallback или retry. Nonce уже consumed.
+			writeError(w, http.StatusServiceUnavailable, "internal_error", "response signing unavailable")
+			return
+		}
+	} else {
+		sig = ed25519.Sign(h.key, []byte(signing))
+	}
 	header.Set("Jack-Auth", jack.FormatResponseAuth(jack.ResponseAuth{Kid: h.kid, TS: now, Sig: jack.EncodeBase64URL(sig)}))
 	writeRaw(w, status, header, body)
 }
