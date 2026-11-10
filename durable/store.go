@@ -138,6 +138,10 @@ func initializeUnused(path string, opts Options, syncParent func(string) error) 
 // Open открывает только существующий initialized store без implicit create/reset.
 // Dirty/unsafe startup всегда закрыт до отдельной явной recovery операции.
 func Open(path string, opts Options) (*Store, error) {
+	return openStore(path, opts, dbOptions(false))
+}
+
+func openStore(path string, opts Options, options *bolt.Options) (*Store, error) {
 	opts, err := normalizedOptions(opts)
 	if err != nil {
 		return nil, err
@@ -145,11 +149,16 @@ func Open(path string, opts Options) (*Store, error) {
 	if err := privateDirectory(path); err != nil {
 		return nil, err
 	}
-	db, err := bolt.Open(path, 0600, dbOptions(false))
+	db, err := bolt.Open(path, 0600, options)
 	if err != nil {
 		return nil, ErrUnavailable
 	}
-	fail := func(err error) (*Store, error) { _ = db.Close(); return nil, err }
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			_ = db.Close()
+		}
+	}()
 	var m metadata
 	err = db.View(func(tx *bolt.Tx) error {
 		var found int
@@ -215,12 +224,12 @@ func Open(path string, opts Options) (*Store, error) {
 		return nil
 	})
 	if err != nil {
-		return fail(err)
+		return nil, err
 	}
 	m.Owner++
 	m.Dirty = true
 	if err := db.Update(func(tx *bolt.Tx) error { return tx.Bucket([]byte("metadata")).Put(headerKey, encodeMetadata(m)) }); err != nil {
-		return fail(ErrUnavailable)
+		return nil, ErrUnavailable
 	}
 	// Сначала подтверждаем dirty marker, затем наблюдаем startup clock.
 	// Неопределённый unsafe-latch больше не может открыть clean restart.
@@ -228,13 +237,15 @@ func Open(path string, opts Options) (*Store, error) {
 	if now < 0 || now > maxTimestamp || now < m.HighWater {
 		m.Unsafe = true
 		_ = db.Update(func(tx *bolt.Tx) error { return tx.Bucket([]byte("metadata")).Put(headerKey, encodeMetadata(m)) })
-		return fail(ErrRecoveryRequired)
+		return nil, ErrRecoveryRequired
 	}
 	m.HighWater = now
 	if err := db.Update(func(tx *bolt.Tx) error { return tx.Bucket([]byte("metadata")).Put(headerKey, encodeMetadata(m)) }); err != nil {
-		return fail(ErrUnavailable)
+		return nil, ErrUnavailable
 	}
-	return &Store{db: db, meta: m, opts: opts}, nil
+	owner := &Store{db: db, meta: m, opts: opts}
+	handedOff = true
+	return owner, nil
 }
 
 // Fence не ждёт leases и не повторяет uncertain transaction.

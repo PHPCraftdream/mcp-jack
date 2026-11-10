@@ -169,6 +169,46 @@ func TestFenceRemainsDirtyAcrossRestart(t *testing.T) {
 	}
 }
 
+func TestStartupClockPanicClosesActualOwnedFile(t *testing.T) {
+	now := int64(100)
+	path := filepath.Join(privateTestDirectory(t), "nonces.db")
+	opts := testOptions(&now)
+	if err := InitializeUnused(path, opts); err != nil {
+		t.Fatal(err)
+	}
+	options := dbOptions(false)
+	originalOpen := options.OpenFile
+	var owned *os.File
+	options.OpenFile = func(name string, flags int, mode os.FileMode) (*os.File, error) {
+		file, err := originalOpen(name, flags, mode)
+		if err == nil {
+			owned = file
+			t.Cleanup(func() { _ = file.Close() })
+		}
+		return file, err
+	}
+	broken := opts
+	broken.Now = func() int64 { panic("public startup clock panic") }
+	var observed any
+	func() {
+		defer func() { observed = recover() }()
+		_, _ = openStore(path, broken, options)
+	}()
+	if observed != "public startup clock panic" || owned == nil {
+		t.Fatal("startup clock panic was not exercised")
+	}
+	if _, err := owned.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("actual owned file was not closed: %v", err)
+	}
+	if owner, err := Open(path, opts); !errors.Is(err, ErrRecoveryRequired) {
+		if owner != nil {
+			owner.Fence()
+			_ = owner.Close()
+		}
+		t.Fatalf("dirty startup after panic was not fenced: %v", err)
+	}
+}
+
 func TestStartupRollbackDoesNotClearAtCatchUp(t *testing.T) {
 	now := int64(100)
 	path := filepath.Join(privateTestDirectory(t), "nonces.db")
