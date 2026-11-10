@@ -325,7 +325,7 @@ func TestUnknownFinalOutcomeNeverRetriesOrAuthorizes(t *testing.T) {
 	for _, committed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "reservation-absent", true: "reservation-present"}[committed], func(t *testing.T) {
 			now := int64(100)
-			owner, _, _ := testOwner(t, &now)
+			owner, path, opts := testOwner(t, &now)
 			state := server.NewMemoryState()
 			verifier := actualVerifier(t, owner, state, &now)
 			request := signedStorageRequest(t, state, 100, 4)
@@ -369,6 +369,11 @@ func TestUnknownFinalOutcomeNeverRetriesOrAuthorizes(t *testing.T) {
 			again.Done()
 			if again.Accepted || calls != 2 {
 				t.Fatal("fenced operation was redelivered")
+			}
+			_ = owner.Close()
+			report, err := InspectRecovery(path, opts)
+			if err != nil || !report.Dirty || (len(report.Live) == 1) != committed || (len(report.Intents) == 1) == committed || len(report.Live)+len(report.Intents) != 1 || len(report.Tombstones) != 0 {
+				t.Fatalf("inspection lost actual unknown disposition: %+v %v", report, err)
 			}
 		})
 	}

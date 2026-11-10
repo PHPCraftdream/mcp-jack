@@ -79,6 +79,14 @@ At source0e7a291e0588f5bf4febf0b0cc905d00e4a10f97, preparation42876137356/job130
 
 The same existing HTTP bootstrap/enroll/invite-reuse/native-admin-refusal/metadata/no-forward test is now reused for both volatile and actual Linux durable profiles via a small test helper. After helper shutdown/drain, the durable variant opens/closes the real database again to verify clean ownership handoff. This new HTTP variant and the formatting integration require fresh CI; no runtime completion is claimed.
 
+## Recovery inspection foundation — pending CI
+
+A separate non-serving InspectRecovery API opens only an existing private store under the same exclusive lifetime file lock. It never samples Now, changes owner/H/dirty/unsafe, purges history, retries an operation or enables admission. Strict metadata/bucket/graph/structural validation is shared with serving Open; serving's existing ready-error ordering and dirty/unsafe/intent/full-tombstone refusal remain unchanged. Inspection bypasses only readiness so unresolved history can be examined, never schema/graph validation.
+
+The owned bounded RecoverySnapshot carries exact live/intent/tombstone receipts and store/deployment/generation/W/H/dirty/unsafe metadata. A domain-separated SHA256 with typed bucket/row markers and explicit length framing binds the full logical graph including indices; it is not a MAC, rollback oracle or authorization to reopen. Ordinary receipt/history fields are not reconstructed. No mutation/disposition API is supplied by this tranche; explicit reconciliation/tombstones and operator/external recovery gates remain necessary.
+
+New actual-bbolt tests compare complete database bytes before/after inspection, verify no clock invocation, owned receipt snapshots, stable fingerprint, persistent dirty/unsafe refusal, corrupt dirty-graph rejection without repair, positive exclusive lock and missing-file noncreation. Unsupported-platform tests require no clock/file effects. Existing genuinely committed/rolled-back unknown-final tests now also inspect the persisted live versus intent disposition after close. Loader extraction is behavior-preserving for serving; its established tests remain required. No local execution occurred; source formatting/tests await CI.
+
 ## Remaining implementation
 
 This initial tranche is not Task #59 completion or runtime support. Durable nonce/backend ownership, high-water, intent/final receipts, dirty startup and unknown-outcome recovery; coordinated registry/key/enrollment gates; bbolt dependency/advisory/license/platform qualification and checksum generation; server publication/signer lifecycle/native tool; client ClockGuard/full-snapshot CAS/manual refresh; production integration and fault/concurrency tests remain unfinished.
