@@ -234,7 +234,7 @@ jobs:
           if-no-files-found: error
 
   consumer-go:
-    name: consumer go 1.22
+    name: consumer go 1.25
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

@@ -62,7 +62,7 @@ const goMod = await readFile(goModPath, "utf8");
 if (!/^module github\.com\/PHPCraftdream\/mcp-jack$/mu.test(goMod)) {
   fail('go.mod module line must remain exactly "module github.com/PHPCraftdream/mcp-jack"');
 }
-if (!/^go 1\.22$/mu.test(goMod)) fail('go.mod must keep "go 1.22" unchanged');
+if (!/^go 1\.25\.0$/mu.test(goMod)) fail('go.mod must declare the approved "go 1.25.0" floor');
 
 // Enumerate tracked files and keep ONLY the module scope: root-level *.go +
 // go.mod + client/*.go + server/*.go + userkey/*.go + spec/** (spec/spec.go
@@ -71,7 +71,7 @@ if (!/^go 1\.22$/mu.test(goMod)) fail('go.mod must keep "go 1.22" unchanged');
 // staged module artifact carries both exact dual-licence texts. Everything
 // else (rust/, ts/, tools/, interop/, docs/, .github/, readme files,
 // .gitattributes) is excluded by construction.
-const scope = /^(?:[^/]+\.go|go\.mod|LICENSE-MIT|LICENSE-APACHE|client\/[^/]+\.go|server\/[^/]+\.go|userkey\/[^/]+\.go|spec\/.+)$/u;
+const scope = /^(?:[^/]+\.go|go\.mod|LICENSE-MIT|LICENSE-APACHE|client\/[^/]+\.go|server\/[^/]+\.go|userkey\/[^/]+\.go|rotation\/[^/]+\.go|spec\/.+)$/u;
 const listOutput = execFileSync("git", ["ls-files", "-z"], {
   cwd: repoRoot,
   encoding: "buffer",
@@ -98,7 +98,7 @@ for (const rel of members) {
 
 const inventory = {
   module: "github.com/PHPCraftdream/mcp-jack",
-  goVersion: "1.22",
+  goVersion: "1.25.0",
   files: members,
   snapshot: "staged",
 };

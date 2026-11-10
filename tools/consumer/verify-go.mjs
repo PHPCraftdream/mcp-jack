@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 // replacement plus standard library only, no go.sum is required (replaced
 // modules bypass the proxy/checksum database entirely; GOFLAGS=-mod=mod and
 // isolated GOPATH/GOMODCACHE/GOCACHE keep the resolution hermetic, and
-// GOTOOLCHAIN=local pins the toolchain to the CI-installed Go 1.22).
+// GOTOOLCHAIN=local pins the toolchain to the CI-installed Go 1.25).
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
@@ -55,8 +55,8 @@ if (realStageRelative === "" || realStageRelative === ".." || realStageRelative.
 
 const inventoryPath = path.join(stageDir, "inventory.json");
 const inventory = JSON.parse(await readFile(inventoryPath, "utf8"));
-const allowed = /^(?:[^/]+\.go|go\.mod|LICENSE-MIT|LICENSE-APACHE|client\/[^/]+\.go|server\/[^/]+\.go|userkey\/[^/]+\.go|spec\/.+)$/u;
-if (inventory.module !== "github.com/PHPCraftdream/mcp-jack" || inventory.goVersion !== "1.22" || inventory.snapshot !== "staged") {
+const allowed = /^(?:[^/]+\.go|go\.mod|LICENSE-MIT|LICENSE-APACHE|client\/[^/]+\.go|server\/[^/]+\.go|userkey\/[^/]+\.go|rotation\/[^/]+\.go|spec\/.+)$/u;
+if (inventory.module !== "github.com/PHPCraftdream/mcp-jack" || inventory.goVersion !== "1.25.0" || inventory.snapshot !== "staged") {
   throw new Error("staged module identity metadata changed");
 }
 if (!Array.isArray(inventory.files) || inventory.files.length === 0) throw new Error("staged module inventory is incomplete");

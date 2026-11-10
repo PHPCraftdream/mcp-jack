@@ -73,3 +73,24 @@ jobs:
             spec/fixtures/candidate/rotation-state-vectors.json
             spec/tests/candidate/CASES.md
           if-no-files-found: error
+
+  go-source-preparation:
+    name: prepare Go rotation sources
+    if: github.ref == 'refs/heads/release-go-durable-1110'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.10'
+      - name: Format Go rotation sources in CI
+        run: gofmt -w rotation/*.go
+      - name: Test independent Go rotation codec
+        run: go test ./rotation
+      - name: Upload formatted sources for parent integration
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-rotation-formatted-sources
+          path: rotation/*.go
+          if-no-files-found: error
