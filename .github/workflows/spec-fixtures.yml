@@ -92,6 +92,7 @@ jobs:
       - name: Format candidate Rust sources in CI
         run: cargo fmt --all
       - name: Test candidate rotation without default features
+        timeout-minutes: 10
         run: cargo test --locked --no-default-features --test rotation
       - name: Upload formatted sources for parent integration
         if: always()

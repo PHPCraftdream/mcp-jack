@@ -57,6 +57,12 @@ Two new Rust integration tests compare complete newly produced records with both
 
 At a48ce94f2cf2bf23b075dabfdf7e928ab9699e36, preparation42890244757 passed cargo test --locked --no-default-features --test rotation:7passed/0failed/0ignored, including both new actual opaque-signing tests. FullCI42890257040 Linuxjob130089192961 and Windowsjob130089193004 failed only rustfmt in sign.rs and tests/rotation.rs; completed-job logs were read. Artifact13797538097 (GitHub archive digest sha256:4ec2a86671c4ba4eb5fb7a33faba325fbc436ff05d2f74f07b6e52f3dc9d9e08) downloaded into new isolated .rush/ci-artifacts-42890244757-rust-prep. Both complete formatting-only diffs were reviewed, copied byte-identically and cmp-confirmed. The correction still needs full exact-head CI; no local formatter/build/test or dependency/lock change occurred.
 
+## Rust bounded mutation controls — pending CI
+
+Exact92f7f42e02e9ef5af17d0fffe8d0c1160a13b2a8 passed all34 checks, independently verified after watcher b2kok3yio completed exit0. Rust opaque signing and its formatting correction are fully green; this does not complete group60 or authorize a partial merge.
+
+New Rust tests mirror the verified TypeScript mutation obligations: flip one ASCII bit at every byte position of a valid independent record (fixed corpus cap1024bytes), require every altered wire to fail, require exact exercised count, and compare the untouched positive before/after the loop. Separate bounded lexical ordinal/timestamp mutations must return the lexical error rather than merely fail a later signature check. No new primitive/dependency/local execution or duplicate parser oracle. The temporary preparation test step now has an explicit10-minute bound including compilation; these controls are not a replacement for the still-required actual cargo-fuzz campaigns. New tests await CI.
+
 ## Delivery constraints
 
 Implementation/commit/push/green-merge/post-merge/source-preserving cleanup were authorized by the owner. No new agents after the stop/self-work instruction. All execution remains in GitHub CI; start background gh watch immediately after every push/PR-ready/rerun and consume terminal results. Inspect exact SHA and full expected check set, not only watcher exit0 or initially visible materialization jobs. Any failure must be diagnosed and fixed in the same cycle. Product versions/private/publish flags and publication remain unchanged; final publication requires new explicit owner permission.

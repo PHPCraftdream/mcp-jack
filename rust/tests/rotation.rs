@@ -360,3 +360,63 @@ fn signing_order_errors_and_no_retry_are_observable() {
     );
     assert_eq!(*events.lock().expect("test event lock"), ["next", "old"]);
 }
+
+#[test]
+fn every_byte_mutation_is_rejected_without_poisoning_the_positive_record() {
+    let corpus = corpus();
+    let original = corpus.valid_chains["overlapping"][0].as_bytes();
+    assert!(original.len() > 128 && original.len() <= 1024);
+    let keys = corpus
+        .keys
+        .values()
+        .map(|key| (key.kid.clone(), public(&key.public_key)))
+        .collect();
+    let before = rotation::parse_record(original, binding(&corpus.binding), &keys)
+        .expect("untouched positive control");
+    let mut exercised = 0;
+    for (index, byte) in original.iter().enumerate() {
+        let mut mutated = original.to_vec();
+        mutated[index] = *byte ^ 1;
+        assert!(
+            rotation::parse_record(&mutated, binding(&corpus.binding), &keys).is_err(),
+            "single-byte mutation accepted at {index}"
+        );
+        exercised += 1;
+    }
+    assert_eq!(exercised, original.len());
+    let after = rotation::parse_record(original, binding(&corpus.binding), &keys)
+        .expect("positive control after mutations");
+    assert_eq!(before, after);
+}
+
+#[test]
+fn lexical_number_mutations_fail_before_signature_verification() {
+    let corpus = corpus();
+    let original = &corpus.valid_chains["overlapping"][0];
+    let keys = corpus
+        .keys
+        .values()
+        .map(|key| (key.kid.clone(), public(&key.public_key)))
+        .collect();
+    for (field, code) in [(3_usize, "ordinal"), (8, "timestamp"), (9, "timestamp")] {
+        for lexical in [
+            "01",
+            "+1",
+            "-0",
+            "1.0",
+            "1e0",
+            " 1",
+            "1 ",
+            "NaN",
+            "Infinity",
+            "9007199254740993",
+        ] {
+            let mut lines: Vec<&str> = original.split('\n').collect();
+            lines[field] = lexical;
+            let wire = lines.join("\n");
+            let error = rotation::parse_record(wire.as_bytes(), binding(&corpus.binding), &keys)
+                .expect_err("lexical mutation accepted");
+            assert_eq!(error.code, code, "field={field} lexical={lexical}");
+        }
+    }
+}
