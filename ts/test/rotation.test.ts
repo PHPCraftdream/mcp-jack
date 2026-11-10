@@ -123,7 +123,7 @@ test("candidate creation: invalid inputs never invoke signing and NEXT proof pre
   assert.throws(() => rotation.createRotationRecord(corpus.binding, checkpoint, oldProvider, nextProvider, NaN), rejects("timestamp"));
   assert.throws(() => rotation.createRotationRecord({ ...corpus.binding, aud: "\ud800" }, checkpoint, oldProvider, nextProvider, 1000), rejects("utf8"));
   assert.throws(() => rotation.createRotationRecord(corpus.binding, { ...checkpoint, hash: "wrong" }, oldProvider, nextProvider, 1000), rejects("previous_hash"));
-  assert.deepEqual(calls, []);
+  assert.equal(calls.length, 0);
   const altered: rotation.RotationSigner = {
     publicKey: () => next.publicKey(),
     sign: (message) => {
