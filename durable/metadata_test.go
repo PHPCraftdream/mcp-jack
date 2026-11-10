@@ -57,7 +57,9 @@ func TestMetadataStrictCodec(t *testing.T) {
 		}
 	}
 	payload, err := checkedPayload(valid)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	for length := 0; length < len(payload); length++ {
 		if _, err := decodeMetadata(sealPayload(append([]byte(nil), payload[:length]...))); err == nil {
 			t.Fatalf("truncated schema with valid checksum accepted at %d", length)
