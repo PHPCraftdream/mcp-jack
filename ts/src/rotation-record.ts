@@ -68,7 +68,7 @@ export function parseRotationRecord(
   binding: RotationBinding,
   authorizers: ReadonlyMap<string, string>,
 ): RotationRecord {
-  if (wire.length === 0 || wire.length > ROTATION_MAX_RECORD_BYTES) reject("record_size");
+  if (!(wire instanceof Uint8Array) || wire.length === 0 || wire.length > ROTATION_MAX_RECORD_BYTES) reject("record_size");
   const bytes = Buffer.from(wire);
   if (bytes.some((byte) => byte > 127)) reject("non_ascii");
   const text = bytes.toString("ascii");
