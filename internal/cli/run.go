@@ -13,6 +13,19 @@ import (
 const maxBody = 1 << 20
 const protocolVersion = "2025-11-25"
 
+const usage = `jack keygen server|user --secret FILE --public FILE
+jack bootstrap --state FILE --invite-file FILE
+jack enroll --config FILE --invite-file FILE --name NAME
+jack gateway --config FILE
+jack bridge --config FILE
+jack nonce-init-unused --config FILE --confirm-unused-deployment ID
+jack nonce-inspect --config FILE
+
+nonce-init-unused: только deployment, никогда не принимавший запросы.
+Не использовать для восстановления утраченной истории nonce или миграции volatile state.
+nonce-inspect не снимает dirty/unsafe и не разрешает запуск сервера.
+`
+
 var errConfig = errors.New("invalid configuration or private storage")
 var errProtocol = errors.New("unsupported or invalid protocol message")
 var errRemote = errors.New("remote call failed; no retry performed")
@@ -87,7 +100,7 @@ func run(ctx context.Context, args []string, streams IO) error {
 		return err
 	}
 	if len(args) == 1 && (args[0] == "help" || args[0] == "--help") {
-		_, err := io.WriteString(streams.Err, "jack keygen server|user --secret FILE --public FILE\njack bootstrap --state FILE --invite-file FILE\njack enroll --config FILE --invite-file FILE --name NAME\njack gateway --config FILE\njack bridge --config FILE\n")
+		_, err := io.WriteString(streams.Err, usage)
 		return err
 	}
 	if len(args) < 2 {
@@ -109,6 +122,18 @@ func run(ctx context.Context, args []string, streams IO) error {
 			return err
 		}
 		return bootstrap(f["state"], f["invite-file"])
+	case "nonce-init-unused":
+		f, err := flags(args[0], args[1:], "config", "confirm-unused-deployment")
+		if err != nil {
+			return err
+		}
+		return nonceInitializeUnused(f["config"], f["confirm-unused-deployment"])
+	case "nonce-inspect":
+		f, err := flags(args[0], args[1:], "config")
+		if err != nil {
+			return err
+		}
+		return nonceInspect(f["config"], streams.Out)
 	case "enroll":
 		f, err := flags("enroll", args[1:], "config", "invite-file", "name")
 		if err != nil {
