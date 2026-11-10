@@ -232,7 +232,7 @@ func (v *Verifier) reserveDurable(auth jack.RequestAuth, signing string, caller 
 			result.HTTPStatus, result.Code, result.Message = 503, "state_changed", "verification state changed"
 			return nil
 		}
-		if d := finalNow-auth.TS; d > request.Window || -d > request.Window {
+		if d := finalNow - auth.TS; d > request.Window || -d > request.Window {
 			result.HTTPStatus, result.Code, result.Message = 401, jack.CodeTimestampOutOfWindow, "timestamp is outside the acceptance window"
 		}
 		return nil

@@ -182,7 +182,7 @@ type Result struct {
 	// Structured is the structuredContent of a successful native tool call.
 	Structured any
 	// Audit is the audit event written for the call, if any.
-	Audit *AuditEvent
+	Audit     *AuditEvent
 	admission *admissionLease
 }
 
