@@ -73,3 +73,33 @@ jobs:
             spec/fixtures/candidate/rotation-state-vectors.json
             spec/tests/candidate/CASES.md
           if-no-files-found: error
+
+  rust-source-preparation:
+    name: prepare Rust SDK sources
+    if: github.ref == 'refs/heads/release-sdk-rust-ts-1110'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: Format candidate Rust sources in CI
+        run: cargo fmt --all
+      - name: Test candidate rotation without default features
+        run: cargo test --locked --no-default-features --test rotation
+      - name: Upload formatted sources for parent integration
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-sdk-formatted-sources
+          path: |
+            rust/src/lib.rs
+            rust/src/rotation/*.rs
+            rust/tests/rotation.rs
+          if-no-files-found: error

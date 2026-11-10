@@ -1,0 +1,52 @@
+//! Candidate rotation primitives; static credentials и runtime trust не меняются.
+
+mod chain;
+mod record;
+
+pub use chain::{assignment_valid, selected_ordinal, verify_chain, Checkpoint, MAX_RETAINED_KEYS};
+pub use record::parse_record;
+
+use std::fmt;
+
+pub const DOMAIN: &str = "mcp-jack/server-key-rotation/min1";
+pub const GRACE_SECONDS: u64 = 172_800;
+pub const MAX_TIMESTAMP: u64 = 999_999_999_999;
+pub const MAX_ORDINAL: u64 = 9_007_199_254_740_991;
+pub const MAX_RECORD_BYTES: usize = 8192;
+
+#[derive(Debug, Clone, Copy)]
+pub struct Binding<'a> {
+    pub endpoint: &'a str,
+    pub aud: &'a str,
+}
+
+/// Owned публичные данные; входные wire/key buffers не сохраняются по ссылке.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Record {
+    pub ordinal: u64,
+    pub previous_hash: String,
+    pub old_kid: String,
+    pub new_kid: String,
+    pub public_key: [u8; 32],
+    pub published_at: u64,
+    pub activates_at: u64,
+    pub wire: String,
+    pub hash: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RotationError {
+    pub code: &'static str,
+}
+
+impl fmt::Display for RotationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "jack: candidate rotation {}", self.code)
+    }
+}
+
+impl std::error::Error for RotationError {}
+
+fn invalid(code: &'static str) -> RotationError {
+    RotationError { code }
+}
