@@ -24,7 +24,7 @@ Initial source-only commit: 16e0c7b; draft PR #23. The first CI watcher is bv82v
 
 ## Verification and continuation
 
-No local build, test, generator, scanner, Node or installation command was run. Initial candidate generation, deterministic checking, independent verification and tests must execute in GitHub CI. The first source-only CI run is not final acceptance. Download its exact generated artifacts into a new isolated directory, inspect them, integrate generated fixture bytes and the generated case index, then enforce a standing check of committed bytes before regeneration. Preserve all existing current-v1 gates.
+No local build, test, generator, scanner, Node or installation command was run. At source c7ed797f195881f50fc8e29ae59101be7da39593, all 33 PR checks succeeded. Candidate run 42833949995/job129891026050 passed deterministic checking, semantic verification (19 record negatives,24 nonce events,14 client cases,8 clock/server events), and34 tests with zero failures/skips/todos. Artifact13772981366 was downloaded into a new isolated directory, inspected, and integrated byte-for-byte with cmp confirmation. Exact extracted-file hashes and the GitHub-reported archive digest are recorded in spec/fixtures/candidate/README.md. The candidate workflow now checks committed bytes before any regeneration. Existing current-v1 gates remain unchanged. The final artifact-integration commit still needs its own exact-head CI and merge/post-merge acceptance.
 
 Review all remaining changes and actual CI failures before merge. Merge only an exact green head, verify post-merge workflows and main ancestry, preserve source data, then remove only completed task-owned worktree and branches. Task #57 remains in progress until those gates pass.
 
