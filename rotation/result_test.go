@@ -26,7 +26,7 @@ func resultEnvelope(t *testing.T, payload, mirror []byte, id json.RawMessage) []
 	body, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0", "id": id,
 		"result": map[string]any{
-			"content": []any{map[string]any{"type": "text", "text": string(mirror)}},
+			"content":           []any{map[string]any{"type": "text", "text": string(mirror)}},
 			"structuredContent": json.RawMessage(payload), "isError": false,
 		},
 	})

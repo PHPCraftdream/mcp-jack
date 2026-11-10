@@ -12,20 +12,20 @@ const MaxResultBodyBytes = 256 << 10
 const MaxPageRecords = 16
 
 type CurrentKey struct {
-	KID string
+	KID       string
 	PublicKey [32]byte
 }
 
 type ResultCursor struct {
 	Ordinal uint64
-	Hash string
+	Hash    string
 }
 
 // DecodedResult — owned schema data, не authenticated carrier или ACKed trust.
 type DecodedResult struct {
-	Current CurrentKey
-	Records []string
-	Head ResultCursor
+	Current  CurrentKey
+	Records  []string
+	Head     ResultCursor
 	Complete bool
 }
 

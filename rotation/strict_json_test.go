@@ -9,7 +9,7 @@ func TestStrictJSONScalarEscapesAndDepthGuards(t *testing.T) {
 	quote := string(rune(0x22))
 	slash := string(rune(0x5c))
 	for _, row := range []struct {
-		text string
+		text  string
 		valid bool
 	}{
 		{quote + slash + "ud83d" + slash + "ude00" + quote, true},
