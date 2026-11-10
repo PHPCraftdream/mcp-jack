@@ -75,7 +75,7 @@ func TestRotationCarrierRejectsInvalidWindowOrLocalKeySnapshot(t *testing.T) {
 	known := map[string]client.RotationResponseKey{kid: {PublicKey: pub}}
 	body := []byte("public body")
 	headers := carrierHeader(key, 200, "request-signature", 100, body)
-	for _, window := range []time.Duration{0, time.Millisecond, 121*time.Second} {
+	for _, window := range []time.Duration{0, time.Millisecond, 121 * time.Second} {
 		if _, err := client.VerifyRotationCarrier(known, 200, headers, "request-signature", body, time.Unix(100, 0), window); err == nil {
 			t.Fatal("invalid immutable candidate window accepted")
 		}

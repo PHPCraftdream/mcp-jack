@@ -11,14 +11,14 @@ import (
 // RotationResponseKey поступает только из independently trusted/ACKed snapshot.
 // NotBefore — signing-time lower bound; KnownCutoff nil означает неизвестный successor.
 type RotationResponseKey struct {
-	PublicKey [32]byte
-	NotBefore int64
+	PublicKey   [32]byte
+	NotBefore   int64
 	KnownCutoff *int64
 }
 
 // RotationCarrier — crypto/interval metadata, не ClockGuard readiness или trust ACK.
 type RotationCarrier struct {
-	KID string
+	KID       string
 	Timestamp int64
 }
 
