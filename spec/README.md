@@ -1,59 +1,68 @@
 # mcp-jack specification
 
-Status: draft v0.1. The scope reduction of 2026-11-08 is applied in this text and in the fixture generator and reference tools; the generated fixture files are materialized from the generator in CI and are pending that integration. The scope review ([docs/design/scope-review-2026-11-08.md](../docs/design/scope-review-2026-11-08.md)) decided the direction; this spec now implements it, and the Go, Rust and TypeScript SDKs follow it in the next tasks.
+**Status: draft v0.1; not frozen.** This main copy describes the existing HTTP request/response protocol, SDK behavior and current top-level fixtures. The earlier scope reduction of 2026-11-08 is reflected in the normative text and current generator/reference verifier. Checked-in files do not prove that tests or CI were run. This file does not establish broader Task57 acceptance, SDK support or release completion.
+
+Selected D2/D3 owner directions and separately maintained candidate details are documented in [`candidate/README.md`](candidate/README.md), [`candidate/durable-nonces.md`](candidate/durable-nonces.md), [`candidate/server-key-rotation.md`](candidate/server-key-rotation.md), and [`../docs/protocol-transition.md`](../docs/protocol-transition.md). Candidate details are not normative v0.1, do not freeze wire behavior and do not authorize implementation, dependencies, version changes or release. Current protocol behavior remains the v0.1 spec and current top-level fixtures.
 
 ## Layout
 
 | Path | Content |
 |---|---|
-| [01-authentication.md](01-authentication.md) | Keys, signed requests and responses, verification order, replay protection |
-| [02-authorization.md](02-authorization.md) | Key registry, the `admin` flag, evaluation and dispatch, verified caller identity hand-off |
-| [03-user-management.md](03-user-management.md) | Protocol-native tools for users, invites, enrollment, rotation and administration; the state file |
-| `fixtures/` | Deterministic test keys, documents and vectors: requests, state-changing sequences, keys, registry and state-file loading, responses (normative, generated), plus the hand-maintained `client-url-policy.json` (SDK client URL test table, not a protocol vector) |
-| `tests/` | Conformance runner contract and the generated case index |
-| `tools/` | Fixture generator and the reference verifier used to cross-check them |
+| [01-authentication.md](01-authentication.md) | Current authentication: signatures and in-memory replay checks |
+| [02-authorization.md](02-authorization.md) | Current registry, admin flag, dispatch and identity hand-off |
+| [03-user-management.md](03-user-management.md) | Current native user/invite tools, user-key rotation and state file |
+| `fixtures/` top level | The current v0.1 vector set plus two hand-maintained SDK tables |
+| `fixtures/candidate/` | Task57 candidate source-preparation outputs; not current-v0.1 inputs |
+| `tests/` top level | Current v0.1 runner contract and current top-level `CASES.md` |
+| `tests/candidate/` | Separate candidate runner and candidate generated-index route |
+| `tools/` top level | Established current generator and reference verifier |
+| `tools/candidate/` | Independent candidate generator/checker and preparation machinery |
 
 ## Conventions
 
-- Test vectors are normative: an implementation conforms when it produces the expected result for every vector.
-- All vectors except `fixtures/client-url-policy.json` are generated, not hand-written, and are normative protocol vectors. `fixtures/client-url-policy.json` is a manually maintained SDK client-side destination-policy test table: it is not a protocol vector, is not produced by `gen-fixtures.mjs` and is not covered by `--check`. Edit it by hand and keep the Go, Rust and TS runners in sync. Keys are derived from public strings, so they are reproducible and **test only**.
-- The reference verifier (`tools/reference-verifier.mjs`) exists to validate the spec text and the fixtures. It is not an SDK.
+- Test vectors define the behavior they cover. Passing current top-level v0.1 cases is a conformance criterion, not evidence a runner was executed.
+- **Current normative vector boundary:** exactly the eight generated files directly under top-level `fixtures/` form the current v0.1 protocol-vector set. The two hand-maintained top-level SDK tables are not protocol vectors; `fixtures/README.md` documents their scope/composition. Fixture keys are test-only.
+- **Candidate fixture boundary:** nested `fixtures/candidate/` is separately routed Task57 future-profile source-preparation data. It is not current v0.1 loader/conformance input; stated expected values are declarations, not generated cryptographic proof.
+- **Current/candidate case-index boundary:** top-level `tests/CASES.md` indexes current v0.1 cases only. Candidate runner tests and generated case index route separately through `tests/candidate/`; candidate results do not extend current conformance.
+- **Current/candidate tooling boundary:** top-level `tools/gen-fixtures.mjs`/`tools/reference-verifier.mjs` cover current vectors. The independent `tools/candidate/` generator/checker and `.github/workflows/spec-fixtures.yml` entrypoint prepare candidate expectations only; they do not change or validate the current top-level set.
 
-```
-node spec/tools/gen-fixtures.mjs          # regenerate
-node spec/tools/gen-fixtures.mjs --check  # fail if files on disk are stale
+The commands below are maintainer examples for current top-level vectors only; they do not run candidate generation/checking/testing.
+
+```text
+node spec/tools/gen-fixtures.mjs          # regenerate current top-level vectors
+node spec/tools/gen-fixtures.mjs --check  # check current top-level vectors
 ```
 
 ## Decisions in this draft
 
 | # | Decision | Why |
 |---|---|---|
-| D1 | mcp-jack is a **transport wrapper** around unmodified MCP over HTTP: JSON-RPC bodies pass through untouched, protection is added around them. Roles: gateway in front of an unmodified MCP server, local stdio bridge for MCP clients that do not know mcp-jack, embeddable library. stdio and WebSocket are not protocol transports in v0.1. | Keeps every existing MCP server and client usable. stdio is local and relies on OS trust. WebSocket is not part of the MCP specification. |
-| D2 | Ed25519 only, a single protocol version, no negotiation. | No downgrade surface; identical results across Go, Rust and JS. |
-| D3 | A small custom signing format over raw bytes instead of RFC 9421 (HTTP Message Signatures). | A plain newline-joined string is easy to reproduce bit-for-bit in three languages and to test with vectors. Trade-off: not a standard; see Q7. |
-| D4 | *To be revisited in v0.2 (session channel, Q1).* Per-request signature with a nonce cache, no session. | Matches the stateless transport of the 2026-07-28 MCP specification; no session state to steal or to synchronise. |
-| D5 | *To be revisited in v0.2: an authenticated, encrypted session channel (Q1).* TLS provides confidentiality; signatures provide authentication, integrity, replay protection and an audit identity. | Do not reinvent channel encryption. |
-| D6 | No policy engine. Ordinary MCP of an authenticated caller passes through unchanged; what it may do inside MCP is decided by the consumers of the SDK from the verified caller identity (`kid`, `name`, `admin`) the server SDK hands them (02 section 3). | The wrapper cannot know the tools of the server it protects; a protocol-side access model would be policy by another name. The `admin` flag (D11) is the only protocol-enforced privilege and it gates only the protocol's own tools. |
-| D7 | The `jack.` tool-name prefix is reserved for protocol-native tools; requests for them are dispatched by the protocol layer and never reach the wrapped handler. | Consumer access rules can neither open nor close user management. |
-| D8 | No service-management profile. The tools a service exposes inside MCP, and who may call them, are the service's own concern; the protocol neither names nor scopes them. | Outside the protocol's responsibility (2026-11-08 scope review). |
-| D9 | Users, invites, enrollment and key rotation are protocol-native MCP tools (`jack.*`), so administrators, SDKs and agents manage keys over the same authenticated channel. | Any party can generate a key pair; the server only ever sees public keys. |
-| D10 | Enrollment is the single exception to "unknown key is rejected": the request is signed by the new key, which proves possession, and carries a single-use invite. | An invite is a bearer secret for exactly one purpose, so it is single-use, short-lived and carries one fixed admin flag; proof of possession stops anyone registering a key they do not control. |
-| D11 | One strict boolean `admin` per user, default false, granted only through the administration tools; any administrator may administer any entry; the last active administrator cannot be removed or demoted. | One flag keeps the protocol's own privilege model auditable; the first administrator is created out of band (03 section 5). |
-| D12 | Strict Ed25519: canonical prime-order-subgroup public keys only, and signatures with S >= L are invalid. | Verifiers in Go, Rust and JS otherwise disagree on edge cases, and a small-order key can verify for many messages. |
-| D13 | Duplicate member names inside one JSON object of a request body keep the **last** occurrence: the parsed object has one member per distinct name, holding the last occurrence's value in document order — the occurrences are **not** merged. It applies to the JSON-RPC body (and so to `params` and `params.arguments`) and to protocol-native tool argument objects; authentication still covers the exact original body bytes. Registry and state-file documents are **not** covered by this rule. | Go, `serde_json` and `JSON.parse` all keep the last value, so one normative sentence buys identical behavior in every SDK; rejecting duplicates would break pass-through of ordinary MCP traffic. The scope stays narrow so the operator-facing document formats keep their own load-time rules. |
-| D14 | Verified caller identity hand-off: after authentication the server SDK exposes `{kid, name, admin}` to the wrapped MCP handler (Go request context, Rust request extension, TypeScript request property behind an accessor). | Consumers need the authenticated identity to write their own access rules; the snapshot is server-authenticated, immutable to consumers and unspoofable by request headers or body (02 section 3). |
+| D1 | mcp-jack is a **transport wrapper** around unmodified MCP over HTTP: JSON-RPC bodies pass through untouched, with protection around them. The repository also contains a Go CLI gateway and stdio bridge; their presence does not establish broad MCP interoperability. WebSocket is not a protocol transport in v0.1. | The bounded executable profile is not general MCP conformance. |
+| D2 | Ed25519 only, one protocol version, no negotiation. | Avoid downgrade surface and preserve consistent behavior. |
+| D3 | A small custom signing format over raw bytes rather than RFC 9421 HTTP Message Signatures. | Newline-joined bytes are straightforward to reproduce and fixture-test across languages; the trade-off is a custom, nonstandard format. |
+| D4 | Per-request signature with a nonce cache, no session. **Current nonce cache is in memory.** Durable authenticated nonce reservation before authorization/state mutation/dispatch is the selected future direction, not current v0.1 behavior. | Restart protection requires separate durable backend and acceptance work. |
+| D5 | TLS provides confidentiality; signatures provide authentication, integrity, replay protection and an audit identity. | Signatures do not provide confidentiality. |
+| D6 | No policy engine. Ordinary authenticated MCP passes through; consumers decide application authorization using verified `{kid, name, admin}` identity. `admin` gates only native administration tools. | Application authorization belongs to the protected service. |
+| D7 | The `jack.` tool prefix is reserved for protocol-native tools handled by the protocol layer. | Native calls do not reach the wrapped handler. |
+| D8 | No service-management profile. | Services define their own tools and access rules. |
+| D9 | User administration and **user-key** rotation use native `jack.*` tools; the server receives public user keys only. | This is distinct from future server response-key rotation. |
+| D10 | Enrollment is the exception to unknown-key rejection: a new key signs proof of possession and presents a single-use invite. | Invites are narrowly scoped bearer permissions. |
+| D11 | One strict boolean `admin` per user, default false; protocol admin privilege gates native administration. | Keep protocol privilege simple and auditable. |
+| D12 | Strict Ed25519 public-key admission and signature scalar rule (`S < L`). | Preserve the normative cryptographic contract; do not weaken it. |
+| D13 | Duplicate JSON members in request bodies use last-occurrence-wins and are not merged; authentication still covers exact bytes. | Keep parser behavior explicit and narrowly scoped. |
+| D14 | Server SDK hands a read-only verified identity snapshot to wrapped handlers. | Consumers can apply their own authorization. |
 
-## Open questions
+## Open questions and separately selected future directions
 
-Status after the scope review of 2026-11-08 ([docs/design/scope-review-2026-11-08.md](../docs/design/scope-review-2026-11-08.md)):
+- **Q1.** Streaming responses remain future work; an authenticated encrypted session channel is a possible future direction.
+- **Q2.** ~~Delegation~~ — closed: no delegation or `kind` protocol feature.
+- **Q3.** **Server response-key rotation direction selected; contract and implementation remain candidate work.** Owner direction allows arbitrary multiple pending announcements, without a one-pending rule or cooldown; OLD remains in use until NEW takes over 48 hours after its announcement. The owner example is K1 announced Monday 10, K2 announced Monday 11: K1 remains usable until Wednesday 11 when K2 takes over. Candidate formal time/event representation and ordering/cutoff mechanics are technical defaults, not additional owner decisions. No server-key rotation is implemented or frozen in this spec.
+- **Q4.** ~~Registry/policy distribution~~ — closed.
+- **Q5.** Multi-instance/cluster nonce sharing remains deferred; current nonce storage is in memory. D2 selects durable authenticated reservation before native authorization/state mutation/dispatch, with unknown write outcome failing closed and no automatic retry. No timestamp-startup floor is selected. Design/backend qualification/implementation remain future work.
+- **Q6.** Initial audience and server-key trust remain out of band. Rotation does not replace the initial independent pin.
+- **Q7.** ~~RFC 9421 replacement~~ — closed; current signing format remains.
+- **Q8.** ~~Protocol human-approval flow~~ — closed; not a protocol/SDK feature.
+- **Q9.** ~~License~~ — MIT OR Apache-2.0; see repository license and contribution files.
+- **Q10.** ~~Policy matching~~ — closed; ordinary MCP authorization belongs to SDK consumers.
 
-- **Q1.** Streaming responses. *Direction:* authenticate once at a handshake, then an authenticated, encrypted session channel (ChaCha20-Poly1305, an established Noise handshake pattern), which also carries streams. Design pending; target v0.2.
-- **Q2.** ~~Delegation from a human key to an agent key~~ — closed: the protocol knows only users; `kind` and delegation are not protocol features.
-- **Q3.** Server key rotation. [Proposal under review](../docs/design/server-key-rotation.md) records a candidate contract; it is not accepted as normative v0.1 or implemented. Review and separately versioned implementation remain required.
-- **Q4.** ~~Registry and policy distribution~~ — closed: nothing is distributed; users are created on the server; the policy engine is removed.
-- **Q5.** Multi-instance servers (shared nonce cache) and cluster management. Open, deferred beyond the MVP: one server instance per state store until then.
-- **Q6.** ~~How a client learns `aud` and the server key~~ — closed: out of band, by hand; not part of the protocol.
-- **Q7.** ~~RFC 9421 plus RFC 9530 instead of the custom format~~ — closed: no; D3 stays.
-- **Q8.** ~~Human approval for destructive operations~~ — closed: not part of the protocol or the SDK.
-- **Q9.** ~~Licence~~ — resolved: the project is dual licensed under MIT OR Apache-2.0 ([LICENSE-MIT](../LICENSE-MIT), [LICENSE-APACHE](../LICENSE-APACHE)); the same terms apply to contributions ([CONTRIBUTING.md](../CONTRIBUTING.md)) and are stated in the [README](../README.md).
-- **Q10.** ~~Policy matching beyond methods and tool names~~ — closed: authorization inside MCP belongs to SDK users; the policy engine is removed.
+This draft is not a wire freeze, release or promise of cross-SDK support. Static pins, user-key rotation, existing profiles and credentials remain unchanged absent a separately approved transition. Current normative text plus the eight top-level generated v0.1 vectors are the existing protocol baseline; nested candidate fixtures, tooling, runner/index and workflow are separately routed future-profile material and do not alter current conformance.
