@@ -1,6 +1,7 @@
 mod common;
 
 use ed25519_dalek::{Signer, SigningKey};
+use mcp_jack::client::{ClientError, InMemorySigner, Signer as JackSigner};
 use mcp_jack::encoding::{body_hash, decode_b64url, decode_b64url_fixed, encode_b64url};
 use mcp_jack::rotation::{self, Binding, Checkpoint};
 use serde::Deserialize;
@@ -213,4 +214,85 @@ fn bounds_unknown_authorizer_and_retained_reuse() {
         rotation::MAX_TIMESTAMP + 1,
         0
     ));
+}
+
+fn fixture_signer(name: &str) -> InMemorySigner {
+    // Публичный fixture seed; production key material здесь не используется.
+    let seed = Sha256::digest(format!("mcp-jack test key: candidate-server-{name}").as_bytes());
+    InMemorySigner::from_seed(&seed).expect("fixture seed")
+}
+
+#[test]
+fn opaque_record_creation_matches_complete_independent_chains() {
+    let corpus = corpus();
+    for (name, chain) in &corpus.valid_chains {
+        let mut previous = checkpoint(&corpus);
+        let mut old = fixture_signer("anchor");
+        for (index, expected) in chain.iter().enumerate() {
+            let next = fixture_signer(&format!("next{}", index + 1));
+            let published = if index == 0 || name == "tie" { 1000 } else { 4600 };
+            let record = rotation::create_record(binding(&corpus.binding), &previous, &old, &next, published).expect("opaque record creation");
+            assert_eq!(&record.wire, expected);
+            previous = Checkpoint { ordinal: record.ordinal, hash: record.hash, kid: record.new_kid, public_key: record.public_key, published_at: record.published_at };
+            old = next;
+        }
+    }
+}
+
+struct ObservedSigner {
+    inner: InMemorySigner,
+    events: std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
+    label: &'static str,
+    corrupt: bool,
+    fail: bool,
+}
+
+impl JackSigner for ObservedSigner {
+    fn sign(&self, message: &[u8]) -> Result<Vec<u8>, ClientError> {
+        self.events.lock().expect("test event lock").push(self.label);
+        if self.fail {
+            return Err(ClientError::Client("private provider detail".into()));
+        }
+        let mut proof = self.inner.sign(message)?;
+        if self.corrupt {
+            proof[0] ^= 1;
+        }
+        Ok(proof)
+    }
+    fn public_key(&self) -> [u8; 32] { self.inner.public_key() }
+    fn kid(&self) -> &str { self.inner.kid() }
+}
+
+#[test]
+fn signing_order_errors_and_no_retry_are_observable() {
+    let corpus = corpus();
+    let previous = checkpoint(&corpus);
+    let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut old = ObservedSigner { inner: fixture_signer("anchor"), events: events.clone(), label: "old", corrupt: false, fail: false };
+    let mut next = ObservedSigner { inner: fixture_signer("next1"), events: events.clone(), label: "next", corrupt: false, fail: false };
+    assert_eq!(rotation::create_record(binding(&corpus.binding), &previous, &old, &next, rotation::MAX_TIMESTAMP).expect_err("overflow").code, "timestamp");
+    let mut invalid = previous.clone();
+    invalid.hash = "wrong".into();
+    assert_eq!(rotation::create_record(binding(&corpus.binding), &invalid, &old, &next, 1000).expect_err("checkpoint").code, "previous_hash");
+    assert!(events.lock().expect("test event lock").is_empty());
+
+    next.corrupt = true;
+    assert_eq!(rotation::create_record(binding(&corpus.binding), &previous, &old, &next, 1000).expect_err("new proof").code, "new_proof");
+    assert_eq!(*events.lock().expect("test event lock"), ["next"]);
+    events.lock().expect("test event lock").clear();
+    next.corrupt = false;
+    next.fail = true;
+    let failure = rotation::create_record(binding(&corpus.binding), &previous, &old, &next, 1000).expect_err("provider failure");
+    assert_eq!(failure.code, "signer");
+    assert!(!failure.to_string().contains("private provider detail"));
+    assert_eq!(*events.lock().expect("test event lock"), ["next"]);
+    events.lock().expect("test event lock").clear();
+    next.fail = false;
+    let created = rotation::create_record(binding(&corpus.binding), &previous, &old, &next, 1000).expect("valid providers");
+    assert_eq!(created.wire, corpus.valid_chains["overlapping"][0]);
+    assert_eq!(*events.lock().expect("test event lock"), ["next", "old"]);
+    events.lock().expect("test event lock").clear();
+    old.corrupt = true;
+    assert_eq!(rotation::create_record(binding(&corpus.binding), &previous, &old, &next, 1000).expect_err("old proof").code, "old_authorization");
+    assert_eq!(*events.lock().expect("test event lock"), ["next", "old"]);
 }
