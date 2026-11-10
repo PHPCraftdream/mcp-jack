@@ -164,6 +164,17 @@ test('exact duplicate checks signature, current tuple and cutoff before zero tru
   assert.equal(rejected.callbacks, 0);
 });
 
+test('retained duplicate suffix can start after the anchor and remains a no-op', () => {
+  const { r1, r2 } = rotationRecordsForVerification;
+  const anchor = named('candidate-server-anchor');
+  const chain = verifyChain([r1.wire, r2.wire], { endpoint: ENDPOINT, aud: AUDIENCE, anchorKid: anchor.kid, anchorPublicKey: anchor.publicKey });
+  const snapshot = newRotationSnapshot({ endpoint: ENDPOINT, aud: AUDIENCE, anchorKid: anchor.kid, anchorPublicKey: anchor.publicKey, records: chain.records });
+  const next = named('candidate-server-next2');
+  const response = signedResponse({ signer: next, ts: 177400, body: responseBody(makeEnvelope([r2.wireText], next, { ordinal: 2, hash: r2.hash })) });
+  const result = acceptRefresh({ snapshot, response, expectedId: 7, cursor: { ordinal: 2, hash: r2.hash }, preCallbackNow: 177400, finalNow: 177400, finalClockGeneration: 1 });
+  assert.deepEqual([result.accepted, result.callbacks, result.snapshot.ackOrdinal], [true, 0, 2]);
+});
+
 test('valid extension preserves committed revision and one callback regardless of links', () => {
   const r1 = rotationRecordsForVerification.r1;
   const r2 = rotationRecordsForVerification.r2;

@@ -14,7 +14,7 @@ The owner explicitly requested stopping the delegated executor and completing th
 - Fixed the fixture test's doubled spec directory, missing new-public-key argument, missing sequence tombstone expectations, missing tie-selection event, and noncanonical-base64 mutation.
 - Replaced a test-only duplicate JSON parser oracle with the actual candidate response parser.
 - Preserved UTF-8 bytes until ASCII record validation; rejected fractional/exponent head ordinals before numeric coercion.
-- Included retained keys in extension reuse checks.
+- Included retained keys in extension reuse checks and accepted exact retained duplicate suffixes starting after the anchor, with a direct regression.
 - Wired ClockGuard into refresh authentication/payload, pre-CAS and final gates; uncertain clock writes fence before trust CAS.
 - Replaced a constant-only commit-count assertion with an assertion against executed results.
 - Counted targeted expiry deletion within the 128-row transaction budget and distinguished uncertain rollback-latch writes from confirmed clock fences, with direct regressions.

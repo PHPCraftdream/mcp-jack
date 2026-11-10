@@ -140,20 +140,25 @@ export const validateRefreshPreResponse = ({ state, response, expectedId, cursor
   const recordLines = envelope.records.map((record) => record.split('\n'));
   const firstOrdinal = recordLines.length ? Number(recordLines[0][3]) : null;
   const hasDuplicatePrefix = cursor.ordinal > 0 && firstOrdinal !== null && firstOrdinal <= cursor.ordinal;
-  const startAtAnchor = hasDuplicatePrefix;
-  const chainKeys = startAtAnchor
-    ? new Map([[state.anchorKid, Buffer.from(state.anchorPublicKey)]])
+  const initialOrdinal = hasDuplicatePrefix ? firstOrdinal - 1 : cursor.ordinal;
+  if (!Number.isSafeInteger(initialOrdinal) || initialOrdinal < 0) return { ok: false, error: 'rotation_record_invalid' };
+  const predecessor = initialOrdinal === 0 ? null : state.recordByOrdinal.get(initialOrdinal);
+  if (initialOrdinal > 0 && !predecessor) return { ok: false, error: 'rotation_gap' };
+  const chainKeys = hasDuplicatePrefix
+    ? new Map([[state.anchorKid, Buffer.from(state.anchorPublicKey)], ...state.records
+      .filter((record) => record.ordinal <= initialOrdinal)
+      .map((record) => [record.newKid, Buffer.from(record.publicKey)])])
     : new Map(state.keys);
   const parsedChain = verifyChain(envelope.records.map((record) => Buffer.from(record, 'utf8')), {
     endpoint: state.endpoint,
     aud: state.aud,
     anchorKid: state.anchorKid,
     anchorPublicKey: state.anchorPublicKey,
-    initialOrdinal: startAtAnchor ? 0 : cursor.ordinal,
-    initialHash: startAtAnchor ? '-' : cursor.hash,
-    previousKid: startAtAnchor || cursor.ordinal === 0 ? null : cursorRecord.newKid,
+    initialOrdinal,
+    initialHash: predecessor?.hash ?? '-',
+    previousKid: predecessor?.newKid ?? null,
     knownKeys: chainKeys,
-    priorPublishedAt: startAtAnchor || cursor.ordinal === 0 ? 0 : cursorRecord.publishedAt,
+    priorPublishedAt: predecessor?.publishedAt ?? 0,
   });
   if (!parsedChain.ok) {
     if (parsedChain.code === 'key_reuse' || parsedChain.code === 'new_key_id' || parsedChain.code === 'new_key' || parsedChain.code === 'activation' || parsedChain.code.endsWith('proof') || parsedChain.code === 'old_authorization') return { ok: false, error: 'rotation_record_invalid' };
