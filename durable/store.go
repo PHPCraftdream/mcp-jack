@@ -151,13 +151,17 @@ func openStore(path string, opts Options, options *bolt.Options) (*Store, error)
 	if err := privateDirectory(path); err != nil {
 		return nil, err
 	}
-	if options == nil || options.OpenFile == nil { return nil, ErrInvalidStore }
+	if options == nil || options.OpenFile == nil {
+		return nil, ErrInvalidStore
+	}
 	opening := *options
 	originalOpen := opening.OpenFile
 	var ownedFile *os.File
 	opening.OpenFile = func(name string, flags int, mode os.FileMode) (*os.File, error) {
 		file, err := originalOpen(name, flags, mode)
-		if err == nil { ownedFile = file }
+		if err == nil {
+			ownedFile = file
+		}
 		return file, err
 	}
 	db, err := bolt.Open(path, 0600, &opening)
