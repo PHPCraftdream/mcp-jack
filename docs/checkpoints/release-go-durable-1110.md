@@ -21,6 +21,6 @@ The current gateway still uses volatile nonce state and static response signing.
 
 ## Next steps
 
-Commit/push only the reviewed scoped tranche, start a real background workflow watcher immediately, inspect the source-preparation result and download its formatted artifacts into a new isolated directory. Integrate actual bytes, then continue implementation directly; do not merge partial Task #59 work. Tests/builds/formatting/dependency lock generation stay in GitHub CI.
+Initial tranche 5d1ff4d5836ed1c46af0680b70094b3654088bef is in draft PR #24. CI run42839252662/job129909708121 passed go test ./rotation on Go1.26.10. Both main Go lanes failed the unchanged gofmt gate. Artifact13774328831 (go-rotation-formatted-sources; GitHub-reported archive digest sha256:51083c597dd717e0f90f81950ba154744d092f2f318eca37e7965bb3a0180a4b) was downloaded into a new isolated directory after one recoverable TLS timeout. The parent reviewed the formatting-only diff and integrated all three files byte-for-byte with cmp confirmation. Push this correction, start a fresh background watcher, then continue implementation directly; do not merge partial Task #59 work. Tests/builds/formatting/dependency lock generation stay in GitHub CI.
 
 Preserve the original release-plan worktree, all historical checkpoints and the unknown untracked nested directory in main. No publication is authorized.
