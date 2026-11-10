@@ -131,6 +131,14 @@ New tests use the independent fixture keys/records and cover positive/reordered 
 
 At a3ba8ed81d764de3aba70c38149200a6e5ec26a2, preparation42911654996 passed modules verified and CGO0 rotation/server/durable/internal-cli tests (rotation0.843s, server0.807s, durable2.668s, CLI6.697s). FullCI42911666769 Linuxjob130163595347 and Windowsjob130163595373 failed only gofmt for rotation/result.go, result_test.go and strict_json_test.go; completed-job logs were read. Artifact13806987952 (GitHub archive digest sha256:5d551804a326a7a9d0e273091b07b882988b61428060b9c75868cc186ea4cdbc) downloaded into new isolated .rush/ci-artifacts-42911654996-go-prep. All three complete whitespace-only diffs were reviewed, copied and cmp-confirmed; go.mod/go.sum unchanged. The formatting correction still needs full exact-head CI; no local formatter/build/test or decoder behavior change.
 
+## Go page framing counterpart — pending CI
+
+Exact6fa0916e8962a7398f989aa22ddb1bf637302525 passed all34 checks, independently confirmed after terminal watcher bhn4pxqem. The strict Go result decoder, Unicode/lexical/boundary controls and formatting correction are fully green; group59 remains incomplete.
+
+New ValidatePageFraming mirrors the green TS spatial checks over decoded shape and caller-verified intrinsic records: exact wire/full-hash association, retained duplicate prefix terminating at the cursor, acknowledged-position conflicts, ordinal/hash continuity, cap16, terminal/head/complete and empty-page conditions. Returned value metadata distinguishes terminal cursor from advertised head; duplicate-only is a no-op. No carrier authentication, authorizer/P/reuse/current binding/first bridge/ClockGuard/CAS/ACK/persistence/retry/fetch is performed. Those controller/chain gates remain required.
+
+New tests use the independent overlap and separately signed conflict records, exercise extension/prefix/retained suffix/no-op/incomplete/empty positive controls, caller ownership, gap/head/completeness/missing-history/mixed-snapshot/forged-hash/capacity refusals. Production request/response behavior is unchanged; new helper/tests await GitHubCI/formatting. No local builds/tests/generators ran.
+
 ## Remaining implementation
 
 This initial tranche is not Task #59 completion or runtime support. Durable nonce/backend ownership, high-water, intent/final receipts, dirty startup and unknown-outcome recovery; coordinated registry/key/enrollment gates; bbolt dependency/advisory/license/platform qualification and checksum generation; server publication/signer lifecycle/native tool; client ClockGuard/full-snapshot CAS/manual refresh; production integration and fault/concurrency tests remain unfinished.
