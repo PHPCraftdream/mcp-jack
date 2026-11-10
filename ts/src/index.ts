@@ -17,3 +17,4 @@ export * from "./server/state.js";
 export * from "./server/verify.js";
 // Namespaced: the client re-declares JsonValue and the TOOL_* names of the server modules.
 export * as client from "./client/index.js";
+export * as rotation from "./rotation.js";

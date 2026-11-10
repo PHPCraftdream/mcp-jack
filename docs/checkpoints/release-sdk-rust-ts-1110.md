@@ -1,0 +1,26 @@
+# Rust and TypeScript SDK group — candidate implementation
+
+## Scope and ownership
+
+Group60 is in progress in worktrees/release-sdk-rust-ts-1110, branch release-sdk-rust-ts-1110, based on delivered candidate spec/fixtures merge bcfbc2565681be5a74fcc0c7d25a82a519afa5be. The parent works directly; no agent was launched. This is independent of group59's Go worktree and preserves its acceptance/merge dependency gates. Primary checkout stays main; original plan worktree, unknown nested directory, historical checkpoints and local checkpoint commit4c5749d remain untouched.
+
+## Initial TypeScript tranche
+
+- Additive namespace rotation exports candidate codec/chain primitives; existing auth, client/server trust, static credentials and private-export boundaries are unchanged.
+- Strict bounded ASCII12-line records, canonical decimals/base64url, exact scalar UTF-8 endpoint/audience binding, canonical admitted public keys/key IDs, checked172800 activation, both Ed25519 proofs and full-record hash.
+- Contiguous extension from independently trusted checkpoint, previous full-record hash/adjacent signer/publication order/retained-key reuse and bounded1153-key history including implicit checkpoint.
+- Frozen records and arrays contain only immutable scalar values, not mutable key/proof buffers. No input buffers are retained.
+- Greatest eligible ordinal on equal activation; assignment lower bound and strict known cutoff checked against both signed timestamp and final raw sample.
+- Tests execute all19 independently committed negative fixtures and both positive overlap/tie chains, compare exact wire bytes/full hashes, and check unknown-authorizer refusal, buffer ownership, malformed Unicode, numeric boundaries and retained-key reuse.
+
+These are primitives only: no automatic refresh, pagination, persistence ACK, durable server profile, rotation trust/controller, native publication or runtime delivery is claimed. Endpoint BOM bytes are preserved by fatal UTF-8 decoding with ignoreBOM=true; unpaired JavaScript surrogates are rejected by an exact scalar round trip.
+
+## Verification and remaining work
+
+No local Node/compiler/build/tests/fuzz/install/formatter/scanner was run. No new dependency, version, MSRV or publication flag changed. Existing SDK crypto/base64url modules are reused; expected crypto bytes/checksums are not fabricated. New implementation/tests await actual GitHub CI; no green receipt exists yet.
+
+Rust code has not been touched. Before Rust implementation, load rust-intel and inspect exact Cargo.lock/API/MSRV1.88 baseline. Group60 still requires full Rust implementation, TS server/client/durable ACK/failure/controller integration, bounded actual Rust fuzz campaigns and TS property/mutation controls, independent oracles, full consumers/feature isolation/security gates. New tooling dependencies require verification/approval. Node20/22, TS7 and downstream declarations TS5.9 remain existing acceptance lanes. Both SDKs must meet their own gates before group60 completes; partial green is not merge readiness.
+
+## Delivery constraints
+
+Implementation/commit/push/green-merge/post-merge/source-preserving cleanup were authorized by the owner. No new agents after the stop/self-work instruction. All execution remains in GitHub CI; start background gh watch immediately after every push/PR-ready/rerun and consume terminal results. Inspect exact SHA and full expected check set, not only watcher exit0 or initially visible materialization jobs. Any failure must be diagnosed and fixed in the same cycle. Product versions/private/publish flags and publication remain unchanged; final publication requires new explicit owner permission.
