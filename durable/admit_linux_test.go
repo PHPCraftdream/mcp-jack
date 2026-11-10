@@ -197,7 +197,15 @@ func TestUnknownIntentCreationAbsentStillFencesRestart(t *testing.T) {
 	if result.Accepted || result.NonceRecorded || result.Code != "durability_unavailable" || calls != 1 || owner.meta.Live != 0 || owner.meta.Intents != 0 || !owner.fenced.Load() {
 		t.Fatalf("unknown absent intent admitted: %+v", result)
 	}
+	claim := testRecord(t, owner.meta, intentRecord).receipt
 	_ = owner.Close()
+	snapshot, err := InspectRecovery(path, opts)
+	if err != nil || !snapshot.Dirty || len(snapshot.Live)+len(snapshot.Intents)+len(snapshot.Tombstones) != 0 {
+		t.Fatalf("absent unknown operation lost dirty gate: %+v %v", snapshot, err)
+	}
+	if err := ReconcileUnknown(path, opts, snapshot.Hash, claim); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("empty unknown history was treated as abort: %v", err)
+	}
 	if reopened, err := Open(path, opts); !errors.Is(err, ErrRecoveryRequired) {
 		if reopened != nil {
 			reopened.Fence()
