@@ -93,6 +93,31 @@ test("candidate rotation: strict numeric domains and retained-key reuse", () => 
   assert.equal(rotation.rotationAssignmentValid(records, 1, 173799, 173799), false);
 });
 
+test("candidate rotation mutation: every single-byte change is rejected", { timeout: 30000 }, () => {
+  const original = raw(first);
+  assert.ok(original.length > 128 && original.length <= 1024);
+  let exercised = 0;
+  for (let index = 0; index < original.length; index++) {
+    const mutated = Uint8Array.from(original);
+    // ASCII mutation: многие варианты доходят до crypto, а не только non_ascii guard.
+    mutated[index] = (mutated[index] as number) ^ 1;
+    assert.throws(() => rotation.parseRotationRecord(mutated, corpus.binding, allKeys), rotation.RotationError, `byte ${index}`);
+    exercised++;
+  }
+  assert.equal(exercised, original.length);
+  assert.equal(rotation.parseRotationRecord(original, corpus.binding, allKeys).wire, first);
+});
+
+test("candidate rotation mutation: lexical numeric errors precede signature checks", () => {
+  for (const [field, code] of [[3, "ordinal"], [8, "timestamp"], [9, "timestamp"]] as const) {
+    for (const lexical of ["01", "+1", "-0", "1.0", "1e0", " 1", "1 ", "NaN", "Infinity", "9007199254740993"]) {
+      const lines = first.split("\n");
+      lines[field] = lexical;
+      assert.throws(() => rotation.parseRotationRecord(raw(lines.join("\n")), corpus.binding, allKeys), rejects(code), `${field}:${lexical}`);
+    }
+  }
+});
+
 test("candidate creation: opaque signers reproduce both complete independent chains", () => {
   for (const [name, wires] of Object.entries(corpus.valid_chains)) {
     let previous = checkpoint;

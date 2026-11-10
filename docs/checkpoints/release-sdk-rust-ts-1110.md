@@ -29,6 +29,12 @@ The next tranche reuses only the publicKey/sign capabilities of the existing cli
 
 At4b1929b5f6fd908d27e2ab6b7ddbbb52e0dcdc5b, TS build:test/coverage failed before tests executed: test/rotation.test.ts(130,18) TS2345, next-altered not assignable to never. Completed Linuxjob130057863893 and coveragejob130057864058 logs were read. The Node assert.deepEqual(calls,[]) assertion narrowed the captured array to never[]; replace only that empty-array assertion with assert.equal(calls.length,0), which preserves the exact no-signing requirement without a type cast or production change. New signing tests still require successful CI execution; the earlier325-test receipt applies only to5530ddf.
 
+## Verified signing baseline and bounded mutation controls
+
+Exact46c572f34571b3a5a07679d3245bc126bb656f54 passed all33 PR checks; watcher bo71ygwu1 completed exit0 and full count/SHA were independently confirmed. Actual LinuxNode20 job130064163261/run42883072342 logs show all eight candidate codec/signing tests executed and total329tests/pass329/fail0. The prior TS2345 is therefore fixed and verified. This is not full group60 acceptance or permission to merge the partial draft.
+
+The next test tranche flips one ASCII bit at every byte position of one independently signed valid record, with a fixed maximum1024-byte corpus and test timeout30seconds. Every changed wire must be rejected by the SDK; the untouched record must still pass. This oracle derives from exact signed-byte binding, not a duplicate parser. Separate bounded cases require lexical ordinal/timestamp errors for leading zeros, signs, fractions, exponents, whitespace, non-numbers and unsafe integers before signature verification. These new mutation controls await CI and were not run locally.
+
 ## Delivery constraints
 
 Implementation/commit/push/green-merge/post-merge/source-preserving cleanup were authorized by the owner. No new agents after the stop/self-work instruction. All execution remains in GitHub CI; start background gh watch immediately after every push/PR-ready/rerun and consume terminal results. Inspect exact SHA and full expected check set, not only watcher exit0 or initially visible materialization jobs. Any failure must be diagnosed and fixed in the same cycle. Product versions/private/publish flags and publication remain unchanged; final publication requires new explicit owner permission.
