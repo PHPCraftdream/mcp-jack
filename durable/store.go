@@ -68,12 +68,25 @@ func dbOptions(create bool) *bolt.Options {
 // deployment. Не мигрирует volatile history и никогда не заменяет существующий файл.
 // При неизвестной ошибке файл сохраняется для recovery, а не удаляется/создаётся заново.
 func InitializeUnused(path string, opts Options) error {
+	return initializeUnused(path, opts, syncDirectory)
+}
+
+func syncDirectory(path string) error {
+	parent, err := os.Open(path)
+	if err != nil { return ErrUnavailable }
+	syncErr := parent.Sync()
+	closeErr := parent.Close()
+	if syncErr != nil || closeErr != nil { return ErrUnavailable }
+	return nil
+}
+
+func initializeUnused(path string, opts Options, syncParent func(string) error) error {
 	opts, err := normalizedOptions(opts)
 	if err != nil { return err }
 	if err := privateDirectory(path); err != nil { return err }
 	now := opts.Now()
 	if now < 0 || now > maxTimestamp { return ErrInvalidStore }
-	m := metadata{Deployment: opts.DeploymentID, Generation: 1, Owner: 1, Window: opts.Window, HighWater: now}
+	m := metadata{Deployment: opts.DeploymentID, Generation: 1, Owner: 1, Window: opts.Window, HighWater: now, Dirty: true}
 	if _, err := rand.Read(m.StoreID[:]); err != nil || m.StoreID == [16]byte{} { return ErrUnavailable }
 	db, err := bolt.Open(path, 0600, dbOptions(true))
 	if err != nil { return ErrUnavailable }
@@ -83,13 +96,20 @@ func InitializeUnused(path string, opts Options) error {
 		}
 		return tx.Bucket([]byte("metadata")).Put(headerKey, encodeMetadata(m))
 	})
-	closeErr := db.Close()
-	if err != nil || closeErr != nil { return ErrUnavailable }
-	parent, err := os.Open(filepath.Dir(path))
-	if err != nil { return ErrUnavailable }
-	syncErr := parent.Sync()
-	closeErr = parent.Close()
-	if syncErr != nil || closeErr != nil { return ErrUnavailable }
+	if err != nil {
+		_ = db.Close()
+		return ErrUnavailable
+	}
+	if err := syncParent(filepath.Dir(path)); err != nil {
+		_ = db.Close()
+		return ErrUnavailable
+	}
+	m.Dirty = false
+	if err := db.Update(func(tx *bolt.Tx) error { return tx.Bucket([]byte("metadata")).Put(headerKey, encodeMetadata(m)) }); err != nil {
+		_ = db.Close()
+		return ErrUnavailable
+	}
+	if err := db.Close(); err != nil { return ErrUnavailable }
 	return nil
 }
 

@@ -10,13 +10,23 @@ import (
 	"testing"
 )
 
+func privateTestDirectory(t *testing.T) string {
+	t.Helper()
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0700); err != nil { t.Fatal(err) }
+	directory := filepath.Join(parent, "private")
+	if err := os.Mkdir(directory, 0700); err != nil { t.Fatal(err) }
+	if err := privateDirectory(filepath.Join(directory, "nonces.db")); err != nil { t.Fatalf("private fixture: %v", err) }
+	return directory
+}
+
 func testOptions(now *int64) Options {
 	return Options{DeploymentID: "public-test-deployment", Window: 30, Now: func() int64 { return *now }}
 }
 
 func TestOpenMissingNeverCreates(t *testing.T) {
 	now := int64(100)
-	path := filepath.Join(t.TempDir(), "nonces.db")
+	path := filepath.Join(privateTestDirectory(t), "nonces.db")
 	if _, err := Open(path, testOptions(&now)); err == nil {
 		t.Fatal("missing store opened")
 	}
@@ -27,7 +37,7 @@ func TestOpenMissingNeverCreates(t *testing.T) {
 
 func TestInitializeRefusesReplacementAndCleanRestart(t *testing.T) {
 	now := int64(100)
-	path := filepath.Join(t.TempDir(), "nonces.db")
+	path := filepath.Join(privateTestDirectory(t), "nonces.db")
 	opts := testOptions(&now)
 	if err := InitializeUnused(path, opts); err != nil { t.Fatal(err) }
 	before, err := os.ReadFile(path)
@@ -49,9 +59,48 @@ func TestInitializeRefusesReplacementAndCleanRestart(t *testing.T) {
 	if reopened.meta.Owner != generation+1 || reopened.meta.HighWater != 101 { t.Fatal("restart did not preserve owner/H ordering") }
 }
 
+func TestDirectorySyncFailureLeavesInitializationFenced(t *testing.T) {
+	now := int64(100)
+	path := filepath.Join(privateTestDirectory(t), "nonces.db")
+	opts := testOptions(&now)
+	calls := 0
+	err := initializeUnused(path, opts, func(directory string) error {
+		calls++
+		if directory != filepath.Dir(path) { t.Fatal("wrong directory sync target") }
+		return errors.New("public injected directory sync failure")
+	})
+	if err == nil || calls != 1 { t.Fatal("initialization did not report failed sync") }
+	before, err := os.ReadFile(path)
+	if err != nil { t.Fatal("uncertain initialization file was removed") }
+	if owner, err := Open(path, opts); !errors.Is(err, ErrRecoveryRequired) {
+		if owner != nil { owner.Fence(); _ = owner.Close() }
+		t.Fatalf("uncertain initialization admitted: %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) { t.Fatal("refusal silently repaired/reset uncertain initialization") }
+}
+
+func TestUnsafePermissionsRefuseBeforeCreation(t *testing.T) {
+	now := int64(100)
+	directory := privateTestDirectory(t)
+	path := filepath.Join(directory, "nonces.db")
+	opts := testOptions(&now)
+	if err := InitializeUnused(path, opts); err != nil { t.Fatal(err) }
+	if err := os.Chmod(path, 0644); err != nil { t.Fatal(err) }
+	if owner, err := Open(path, opts); err == nil {
+		_ = owner.Close()
+		t.Fatal("public-readable database admitted")
+	}
+	if err := os.Chmod(path, 0600); err != nil { t.Fatal(err) }
+	if err := os.Chmod(directory, 0755); err != nil { t.Fatal(err) }
+	missing := filepath.Join(directory, "new.db")
+	if err := InitializeUnused(missing, opts); err == nil { t.Fatal("unsafe directory admitted") }
+	if _, err := os.Lstat(missing); !errors.Is(err, os.ErrNotExist) { t.Fatal("unsafe initialization created a file") }
+}
+
 func TestFenceRemainsDirtyAcrossRestart(t *testing.T) {
 	now := int64(100)
-	path := filepath.Join(t.TempDir(), "nonces.db")
+	path := filepath.Join(privateTestDirectory(t), "nonces.db")
 	opts := testOptions(&now)
 	if err := InitializeUnused(path, opts); err != nil { t.Fatal(err) }
 	owner, err := Open(path, opts)
@@ -63,7 +112,7 @@ func TestFenceRemainsDirtyAcrossRestart(t *testing.T) {
 
 func TestStartupRollbackDoesNotClearAtCatchUp(t *testing.T) {
 	now := int64(100)
-	path := filepath.Join(t.TempDir(), "nonces.db")
+	path := filepath.Join(privateTestDirectory(t), "nonces.db")
 	opts := testOptions(&now)
 	if err := InitializeUnused(path, opts); err != nil { t.Fatal(err) }
 	now = 99
@@ -74,7 +123,7 @@ func TestStartupRollbackDoesNotClearAtCatchUp(t *testing.T) {
 
 func TestEmptyOversizedAndSymlinkStoresRefused(t *testing.T) {
 	now := int64(100)
-	directory := t.TempDir()
+	directory := privateTestDirectory(t)
 	opts := testOptions(&now)
 	for _, size := range []int64{0, maxFileBytes + pageBytes} {
 		path := filepath.Join(directory, "size.db")

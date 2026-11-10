@@ -19,6 +19,10 @@ func TestUnsupportedPlatformNeverCreatesOrSamples(t *testing.T) {
 	if _, err := Open(path, opts); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("unsupported open: %v", err)
 	}
-	if samples != 0 { t.Fatal("unsupported backend used the clock") }
-	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) { t.Fatal("unsupported backend created data") }
+	if samples != 0 {
+		t.Fatal("unsupported backend used the clock")
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("unsupported backend created data")
+	}
 }
