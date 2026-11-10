@@ -101,6 +101,8 @@ jobs:
           name: rust-sdk-formatted-sources
           path: |
             rust/src/lib.rs
+            rust/src/client/mod.rs
+            rust/src/client/rotation_auth.rs
             rust/src/rotation/*.rs
             rust/tests/rotation.rs
           if-no-files-found: error

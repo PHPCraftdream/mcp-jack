@@ -105,6 +105,14 @@ New client.verifyRotationCarrier mirrors the Go ACKed-key map layer without chan
 
 Tests use actual request/response signatures and the existing request-header parser, require unknown-before-stale/badsig/invalidJSON, freshness-before-signature, exact-byte tamper refusal, lower/cutoff equality/empty interval, invalid local clock/window/key state and unchanged static verifier. The transport must bound/own raw bytes; no eager JSON parsing/key discovery/credential mutation/fetch/retry. New code/tests await GitHubCI; no dependency/version/local executable verification changes.
 
+## Rust known-key carrier verification — pending CI
+
+Exacted6624956beeec86bf99779afb031ac4b51b2ba7 passed all34 checks, independently confirmed after terminal watcher b532jlsba. TS known-carrier verification and existing static profile compatibility are green; group60 remains incomplete.
+
+New client.verify_rotation_carrier mirrors the Go map-based crypto/interval layer using existing parse_response_auth/signing::verify_response. Only independently trusted/ACKed public keys and their known lower/cutoff metadata can authenticate; unknown kid precedes freshness/signature/body inspection, header errors retain client http_status0, local window/key/interval state fails closed, lower is inclusive by signed ts and known cutoff strict for both signed ts/supplied now. Empty intervals never authenticate; no extra raw-now lower bound or hidden clock read. No payload parsing/key discovery/credential mutation/fetch/retry/trust ACK, and durable ClockGuard/final interval/bridge/revision/whole-state CAS remain caller/controller obligations.
+
+Two external tests use actual request and response signatures for unknown/stale/bad-signature/raw non-JSON body precedence, exact-byte tamper, lower/cutoff equality/future skew/empty interval, invalid local window/key snapshot and unchanged static verifier. Public typed metadata is owned; only public values derive Debug and no new trait/unsafe/primitive/dependency/feature/lock/MSRV change occurs. New sources/tests await CI. Temporary preparation now uploads client/mod.rs and rotation_auth.rs as well as existing rotation sources; the same rotation integration target executes these tests. No local executable verification ran.
+
 ## Delivery constraints
 
 Implementation/commit/push/green-merge/post-merge/source-preserving cleanup were authorized by the owner. No new agents after the stop/self-work instruction. All execution remains in GitHub CI; start background gh watch immediately after every push/PR-ready/rerun and consume terminal results. Inspect exact SHA and full expected check set, not only watcher exit0 or initially visible materialization jobs. Any failure must be diagnosed and fixed in the same cycle. Product versions/private/publish flags and publication remain unchanged; final publication requires new explicit owner permission.
