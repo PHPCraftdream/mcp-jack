@@ -531,3 +531,70 @@ fn strict_result_has_inclusive_full_body_and_page_caps() {
     let page = value.to_string();
     assert!(rotation::decode_result(&result_body(&page, &page, "7"), b"7").is_err());
 }
+
+fn framing_result(records: &[rotation::Record], head: &rotation::ResultCursor, complete: bool) -> rotation::DecodedResult {
+    let corpus = corpus();
+    let anchor = &corpus.keys["anchor"];
+    rotation::DecodedResult {
+        current_kid: anchor.kid.clone(), current_public_key: public(&anchor.public_key),
+        records: records.iter().map(|record| record.wire.clone()).collect(),
+        head_ordinal: head.ordinal, head_hash: head.hash.clone(), complete,
+    }
+}
+
+#[test]
+fn page_framing_prefix_extension_retained_suffix_and_noop() {
+    let corpus = corpus();
+    let wires: Vec<&[u8]> = corpus.valid_chains["overlapping"].iter().map(|wire| wire.as_bytes()).collect();
+    let records = rotation::verify_chain(&wires, binding(&corpus.binding), &checkpoint(&corpus), &BTreeMap::new()).expect("independent records");
+    let zero = rotation::ResultCursor { ordinal: 0, hash: "-".into() };
+    let one = rotation::ResultCursor { ordinal: 1, hash: records[0].hash.clone() };
+    let two = rotation::ResultCursor { ordinal: 2, hash: records[1].hash.clone() };
+    let known = BTreeMap::from([(1, one.hash.clone()), (2, two.hash.clone())]);
+    for (cursor, delivered, head, complete, start, terminal) in [
+        (zero.clone(), records.clone(), two.clone(), true, 0, two.clone()),
+        (one.clone(), records.clone(), two.clone(), true, 1, two.clone()),
+        (two.clone(), records[1..].to_vec(), two.clone(), true, 1, two.clone()),
+        (zero.clone(), records[..1].to_vec(), two.clone(), false, 0, one.clone()),
+        (one.clone(), records[..1].to_vec(), two.clone(), false, 1, one.clone()),
+        (zero.clone(), Vec::new(), zero.clone(), true, 0, zero.clone()),
+    ] {
+        let result = rotation::validate_page_framing(&framing_result(&delivered, &head, complete), &cursor, &delivered, &known).expect("valid framing");
+        assert_eq!(result.extension_start, start);
+        assert_eq!(result.terminal, terminal);
+        assert_eq!(result.head, head);
+        assert_eq!(result.complete, complete);
+    }
+}
+
+#[test]
+fn page_framing_gap_conflict_snapshot_and_capacity_refusals() {
+    let corpus = corpus();
+    let wires: Vec<&[u8]> = corpus.valid_chains["overlapping"].iter().map(|wire| wire.as_bytes()).collect();
+    let records = rotation::verify_chain(&wires, binding(&corpus.binding), &checkpoint(&corpus), &BTreeMap::new()).expect("independent records");
+    let zero = rotation::ResultCursor { ordinal: 0, hash: "-".into() };
+    let one = rotation::ResultCursor { ordinal: 1, hash: records[0].hash.clone() };
+    let two = rotation::ResultCursor { ordinal: 2, hash: records[1].hash.clone() };
+    let known = BTreeMap::from([(1, one.hash.clone()), (2, two.hash.clone())]);
+    for (cursor, delivered, head, complete) in [
+        (zero.clone(), records[1..].to_vec(), two.clone(), true),
+        (two.clone(), records[..1].to_vec(), one.clone(), true),
+        (zero.clone(), records.clone(), one.clone(), true),
+        (zero.clone(), records.clone(), two.clone(), false),
+        (zero.clone(), Vec::new(), one.clone(), false),
+        (zero.clone(), Vec::new(), one.clone(), true),
+    ] {
+        assert_eq!(rotation::validate_page_framing(&framing_result(&delivered, &head, complete), &cursor, &delivered, &known).expect_err("gap accepted").code, "rotation_gap");
+    }
+    let keys = corpus.keys.values().map(|key| (key.kid.clone(), public(&key.public_key))).collect();
+    let conflict = rotation::parse_record(corpus.source_controls.decreasing_prefix.as_bytes(), binding(&corpus.binding), &keys).expect("valid signed conflict");
+    let conflict_head = rotation::ResultCursor { ordinal: 1, hash: conflict.hash.clone() };
+    assert_ne!(conflict.hash, one.hash);
+    assert_eq!(rotation::validate_page_framing(&framing_result(std::slice::from_ref(&conflict), &conflict_head, true), &one, &[conflict], &known).expect_err("conflict accepted").code, "rotation_conflict");
+    assert_eq!(rotation::validate_page_framing(&framing_result(&records[..1], &one, true), &zero, &records[1..], &known).expect_err("mixed snapshot accepted").code, "rotation_record_invalid");
+    let mut forged = records[0].clone();
+    forged.hash = records[1].hash.clone();
+    assert_eq!(rotation::validate_page_framing(&framing_result(&records[..1], &one, true), &zero, &[forged], &known).expect_err("forged hash accepted").code, "rotation_record_invalid");
+    let oversized = vec![records[0].clone(); 17];
+    assert_eq!(rotation::validate_page_framing(&framing_result(&oversized, &one, true), &one, &oversized, &known).expect_err("capacity exceeded").code, "rotation_result_invalid");
+}

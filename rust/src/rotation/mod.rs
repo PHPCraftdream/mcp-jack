@@ -1,11 +1,13 @@
 //! Candidate rotation primitives; static credentials и runtime trust не меняются.
 
 mod chain;
+mod page;
 mod record;
 mod result;
 mod sign;
 
 pub use chain::{assignment_valid, selected_ordinal, verify_chain, Checkpoint, MAX_RETAINED_KEYS};
+pub use page::{validate_page_framing, PageFraming, ResultCursor};
 pub use record::parse_record;
 pub use result::{decode_result, DecodedResult, MAX_PAGE_RECORDS, MAX_RESULT_BODY_BYTES};
 pub use sign::create_record;
