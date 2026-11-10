@@ -12,6 +12,17 @@ func validTestMetadata() metadata {
 	return m
 }
 
+func TestMetadataChecksumRejectsSingleByteCorruption(t *testing.T) {
+	encoded := encodeMetadata(validTestMetadata())
+	for index := range encoded {
+		corrupt := append([]byte(nil), encoded...)
+		corrupt[index] ^= 1
+		if _, err := decodeMetadata(corrupt); err == nil {
+			t.Fatalf("corrupt header accepted at byte %d", index)
+		}
+	}
+}
+
 func TestMetadataStrictCodec(t *testing.T) {
 	original := validTestMetadata()
 	got, err := decodeMetadata(encodeMetadata(original))
@@ -45,12 +56,19 @@ func TestMetadataStrictCodec(t *testing.T) {
 			t.Fatalf("truncated header accepted at %d", length)
 		}
 	}
-	if _, err := decodeMetadata(append(valid, 0)); err == nil {
-		t.Fatal("trailing bytes accepted")
+	payload, err := checkedPayload(valid)
+	if err != nil { t.Fatal(err) }
+	for length := 0; length < len(payload); length++ {
+		if _, err := decodeMetadata(sealPayload(append([]byte(nil), payload[:length]...))); err == nil {
+			t.Fatalf("truncated schema with valid checksum accepted at %d", length)
+		}
 	}
-	unknownFlags := encodeMetadata(original)
+	if _, err := decodeMetadata(sealPayload(append(append([]byte(nil), payload...), 0))); err == nil {
+		t.Fatal("trailing bytes with valid checksum accepted")
+	}
+	unknownFlags := append([]byte(nil), payload...)
 	unknownFlags[len(unknownFlags)-1] |= 4
-	if _, err := decodeMetadata(unknownFlags); err == nil {
+	if _, err := decodeMetadata(sealPayload(unknownFlags)); err == nil {
 		t.Fatal("unknown flags accepted")
 	}
 }

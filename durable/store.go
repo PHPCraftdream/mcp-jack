@@ -201,16 +201,11 @@ func openStore(path string, opts Options, options *bolt.Options) (*Store, error)
 		if m.Dirty || m.Unsafe {
 			return ErrRecoveryRequired
 		}
-		// Пока доступны только ownership/initialization операции, populated rows
-		// требуют ещё не доставленного reservation/recovery codec, а не reset.
-		for _, name := range bucketNames[1:] {
-			key, _ := tx.Bucket([]byte(name)).Cursor().First()
-			if key != nil {
-				return ErrInvalidStore
-			}
+		if err := validateRows(tx, m); err != nil {
+			return err
 		}
-		if m.Live != 0 || m.Intents != 0 || m.Tombstones != 0 {
-			return ErrInvalidStore
+		if m.Intents != 0 || m.Tombstones >= 64 {
+			return ErrRecoveryRequired
 		}
 		var invalid bool
 		for checkErr := range tx.Check() {
@@ -261,6 +256,10 @@ func (s *Store) Close() error {
 		s.leases.Wait()
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		if s.meta.Intents != 0 || s.meta.Tombstones >= 64 || s.meta.Unsafe {
+			s.fenced.Store(true)
+			s.closeErr = ErrRecoveryRequired
+		}
 		if !s.fenced.Load() {
 			m := s.meta
 			m.Dirty = false

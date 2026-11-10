@@ -2,6 +2,7 @@ package durable
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"io"
 	"unicode/utf8"
@@ -32,6 +33,24 @@ type metadata struct {
 	Unsafe     bool
 }
 
+// Checksum обнаруживает случайное повреждение, не malicious-host tampering или backup rollback.
+func sealPayload(payload []byte) []byte {
+	sum := sha256.Sum256(payload)
+	return append(payload, sum[:]...)
+}
+
+func checkedPayload(data []byte) ([]byte, error) {
+	if len(data) < sha256.Size {
+		return nil, ErrInvalidStore
+	}
+	payload := data[:len(data)-sha256.Size]
+	sum := sha256.Sum256(payload)
+	if !bytes.Equal(sum[:], data[len(payload):]) {
+		return nil, ErrInvalidStore
+	}
+	return payload, nil
+}
+
 func encodeMetadata(m metadata) []byte {
 	var out bytes.Buffer
 	out.Write(headerMagic)
@@ -53,12 +72,20 @@ func encodeMetadata(m metadata) []byte {
 		flags |= 2
 	}
 	out.WriteByte(flags)
-	return out.Bytes()
+	return sealPayload(out.Bytes())
 }
 
 func decodeMetadata(data []byte) (metadata, error) {
 	var m metadata
-	if len(data) > 2048 || !bytes.HasPrefix(data, headerMagic) {
+	if len(data) > 2048 {
+		return m, ErrInvalidStore
+	}
+	payload, err := checkedPayload(data)
+	if err != nil {
+		return m, err
+	}
+	data = payload
+	if !bytes.HasPrefix(data, headerMagic) {
 		return m, ErrInvalidStore
 	}
 	r := bytes.NewReader(data[len(headerMagic):])
