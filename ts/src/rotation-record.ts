@@ -1,4 +1,5 @@
 import { validatePublicKey, verify } from "./ed25519.js";
+import { rotationBindingError } from "./rotation-binding.js";
 import { bodyHash, decodeBase64URL, decodeBase64URLFixed, keyId } from "./encoding.js";
 
 export const ROTATION_DOMAIN = "mcp-jack/server-key-rotation/min1";
@@ -61,14 +62,6 @@ function decodeText(bytes: Uint8Array): string {
   }
 }
 
-function validBinding(binding: RotationBinding): void {
-  for (const [text, maximum] of [[binding.endpoint, 2048], [binding.aud, 1024]] as const) {
-    const bytes = Buffer.from(text, "utf8");
-    if (bytes.length < 1 || bytes.length > maximum) reject("binding_size");
-    if (decodeText(bytes) !== text) reject("utf8");
-  }
-}
-
 /** Candidate codec: не меняет trust, не выбирает outer carrier, не выполняет fetch. */
 export function parseRotationRecord(
   wire: Uint8Array,
@@ -89,7 +82,8 @@ export function parseRotationRecord(
   if (ordinal === 0) reject("ordinal");
   const publishedAt = decimal(line(8), ROTATION_MAX_TIMESTAMP, "timestamp");
   const activatesAt = decimal(line(9), ROTATION_MAX_TIMESTAMP, "timestamp");
-  validBinding(binding);
+  const bindingError = rotationBindingError(binding);
+  if (bindingError !== undefined) reject(bindingError);
   const endpoint = decode(line(1), undefined, "binding_encoding");
   const aud = decode(line(2), undefined, "binding_encoding");
   if (endpoint.length < 1 || endpoint.length > 2048 || aud.length < 1 || aud.length > 1024) reject("binding_encoding");

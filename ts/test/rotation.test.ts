@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
-import { decodeBase64URL, rotation } from "../src/index.js";
+import { client, decodeBase64URL, rotation } from "../src/index.js";
 import { fixture } from "./fixtures.js";
 
 interface Corpus {
@@ -22,6 +22,11 @@ assert.ok(overlapping && overlapping.length === 2);
 const first = overlapping[0];
 assert.ok(first);
 const raw = (wire: string): Uint8Array => Buffer.from(wire, "utf8");
+
+function testSigner(name: string): client.InMemorySigner {
+  const seed = createHash("sha256").update(`mcp-jack test key: candidate-server-${name}`, "utf8").digest();
+  return new client.InMemorySigner(seed);
+}
 
 function rejects(code: string): (error: unknown) => boolean {
   return (error) => error instanceof rotation.RotationError && error.code === code;
@@ -86,4 +91,95 @@ test("candidate rotation: strict numeric domains and retained-key reuse", () => 
   assert.ok(next);
   assert.throws(() => rotation.verifyRotationChain([raw(first)], corpus.binding, checkpoint, new Map([[next.kid, next.public_key]])), rejects("key_reuse"));
   assert.equal(rotation.rotationAssignmentValid(records, 1, 173799, 173799), false);
+});
+
+test("candidate creation: opaque signers reproduce both complete independent chains", () => {
+  for (const [name, wires] of Object.entries(corpus.valid_chains)) {
+    let previous = checkpoint;
+    let old = testSigner("anchor");
+    for (const [index, expected] of wires.entries()) {
+      const next = testSigner(`next${index + 1}`);
+      const publishedAt = index === 0 || name === "tie" ? 1000 : 4600;
+      const created = rotation.createRotationRecord(corpus.binding, previous, old, next, publishedAt);
+      assert.equal(created.wire, expected);
+      previous = { ordinal: created.ordinal, hash: created.hash, kid: created.newKid, publicKeyB64u: created.publicKeyB64u, publishedAt: created.publishedAt };
+      old = next;
+    }
+  }
+});
+
+test("candidate creation: invalid inputs never invoke signing and NEXT proof precedes OLD", () => {
+  const old = testSigner("anchor");
+  const next = testSigner("next1");
+  const calls: string[] = [];
+  const oldProvider: rotation.RotationSigner = {
+    publicKey: () => old.publicKey(),
+    sign: (message) => { calls.push("old"); return old.sign(message); },
+  };
+  const nextProvider: rotation.RotationSigner = {
+    publicKey: () => next.publicKey(),
+    sign: (message) => { calls.push("next"); return next.sign(message); },
+  };
+  assert.throws(() => rotation.createRotationRecord(corpus.binding, checkpoint, oldProvider, nextProvider, NaN), rejects("timestamp"));
+  assert.throws(() => rotation.createRotationRecord({ ...corpus.binding, aud: "\ud800" }, checkpoint, oldProvider, nextProvider, 1000), rejects("utf8"));
+  assert.throws(() => rotation.createRotationRecord(corpus.binding, { ...checkpoint, hash: "wrong" }, oldProvider, nextProvider, 1000), rejects("previous_hash"));
+  assert.deepEqual(calls, []);
+  const altered: rotation.RotationSigner = {
+    publicKey: () => next.publicKey(),
+    sign: (message) => {
+      calls.push("next-altered");
+      message.fill(0);
+      return next.sign(message);
+    },
+  };
+  assert.throws(() => rotation.createRotationRecord(corpus.binding, checkpoint, oldProvider, altered, 1000), rejects("new_proof"));
+  assert.deepEqual(calls, ["next-altered"]);
+  calls.length = 0;
+  rotation.createRotationRecord(corpus.binding, checkpoint, oldProvider, nextProvider, 1000);
+  assert.deepEqual(calls, ["next", "old"]);
+});
+
+test("candidate creation: provider buffer/input mutation cannot change the authorized record", () => {
+  const old = testSigner("anchor");
+  const next = testSigner("next1");
+  const binding = { ...corpus.binding };
+  const previous = { ...checkpoint };
+  const nextPublic = next.publicKey();
+  let nextProof: Uint8Array | undefined;
+  const nextProvider: rotation.RotationSigner = {
+    publicKey: () => nextPublic,
+    sign: (message) => {
+      nextProof = next.sign(message);
+      nextPublic.fill(0);
+      return nextProof;
+    },
+  };
+  const oldProvider: rotation.RotationSigner = {
+    publicKey: () => old.publicKey(),
+    sign: (message) => {
+      binding.endpoint = "changed";
+      previous.hash = "changed";
+      nextPublic.fill(0);
+      nextProof?.fill(0);
+      return old.sign(message);
+    },
+  };
+  assert.equal(rotation.createRotationRecord(binding, previous, oldProvider, nextProvider, 1000).wire, first);
+});
+
+test("candidate creation: provider errors are sanitized, never retried, and BOM binding stays exact", () => {
+  const old = testSigner("anchor");
+  const next = testSigner("next1");
+  let calls = 0;
+  const failed: rotation.RotationSigner = {
+    publicKey: () => next.publicKey(),
+    sign: () => { calls++; throw new Error("private provider detail"); },
+  };
+  assert.throws(() => rotation.createRotationRecord(corpus.binding, checkpoint, old, failed, 1000), (error: unknown) => rejects("signer")(error) && error instanceof Error && !error.message.includes("private provider detail"));
+  assert.equal(calls, 1);
+  const bom = String.fromCharCode(0xfeff);
+  const binding = { endpoint: bom + corpus.binding.endpoint, aud: bom + corpus.binding.aud };
+  const created = rotation.createRotationRecord(binding, checkpoint, old, next, 1000);
+  assert.equal(rotation.parseRotationRecord(raw(created.wire), binding, allKeys).wire, created.wire);
+  assert.throws(() => rotation.parseRotationRecord(raw(created.wire), corpus.binding, allKeys), rejects("binding"));
 });
