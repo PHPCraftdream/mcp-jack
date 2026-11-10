@@ -223,6 +223,104 @@ func TestInvalidSignatureNeverInvokesActualTransaction(t *testing.T) {
 	}
 }
 
+func TestActualRollbackAfterIntentPersistsUnsafeLatch(t *testing.T) {
+	now := int64(100)
+	owner, path, opts := testOwner(t, &now)
+	state := server.NewMemoryState()
+	request := signedStorageRequest(t, state, 100, 10)
+	original := owner.transact
+	calls := 0
+	owner.transact = func(apply func(*bolt.Tx) error) error {
+		calls++
+		err := original(apply)
+		if calls == 1 && err == nil {
+			now = 99
+		}
+		return err
+	}
+	result := actualVerifier(t, owner, state, &now).Verify(request)
+	result.Done()
+	if result.Accepted || result.NonceRecorded || result.Code != "clock_unsafe" || calls != 2 || !owner.meta.Unsafe || !owner.fenced.Load() || owner.meta.Intents != 0 || owner.meta.Live != 0 || owner.meta.HighWater != 100 {
+		t.Fatalf("rollback lost unsafe latch or dispatched: %+v calls=%d", result, calls)
+	}
+	if err := owner.Close(); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("unsafe close: %v", err)
+	}
+	now = 100
+	if reopened, err := Open(path, opts); !errors.Is(err, ErrRecoveryRequired) {
+		if reopened != nil {
+			reopened.Fence()
+			_ = reopened.Close()
+		}
+		t.Fatalf("catch-up cleared unsafe latch: %v", err)
+	}
+}
+
+func TestUnknownStaleIntentCleanupNeverRetriesOrAuthorizes(t *testing.T) {
+	for _, committed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "cleanup-rolled-back", true: "cleanup-committed"}[committed], func(t *testing.T) {
+			now := int64(100)
+			owner, path, opts := testOwner(t, &now)
+			state := server.NewMemoryState()
+			request := signedStorageRequest(t, state, 100, 11)
+			original := owner.transact
+			calls := 0
+			injected := errors.New("public injected cleanup uncertainty")
+			owner.transact = func(apply func(*bolt.Tx) error) error {
+				calls++
+				if calls == 1 {
+					err := original(apply)
+					if err == nil {
+						now = 131
+					}
+					return err
+				}
+				if committed {
+					if err := original(apply); err != nil {
+						return err
+					}
+					return injected
+				}
+				return original(func(tx *bolt.Tx) error {
+					if err := apply(tx); err != nil {
+						return err
+					}
+					return injected
+				})
+			}
+			result := actualVerifier(t, owner, state, &now).Verify(request)
+			result.Done()
+			if result.Accepted || result.NonceRecorded || result.Code != "durability_unavailable" || calls != 2 || !owner.fenced.Load() {
+				t.Fatalf("uncertain cleanup was retried or authorized: %+v calls=%d", result, calls)
+			}
+			if err := owner.db.View(func(tx *bolt.Tx) error {
+				m, err := decodeMetadata(tx.Bucket([]byte("metadata")).Get(headerKey))
+				if err != nil {
+					return err
+				}
+				wantIntents := uint32(1)
+				if committed {
+					wantIntents = 0
+				}
+				if m.Live != 0 || m.Intents != wantIntents || !m.Dirty {
+					return errors.New("actual cleanup disposition differs from injection")
+				}
+				return validateRows(tx, m)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			_ = owner.Close()
+			if reopened, err := Open(path, opts); !errors.Is(err, ErrRecoveryRequired) {
+				if reopened != nil {
+					reopened.Fence()
+					_ = reopened.Close()
+				}
+				t.Fatalf("cleanup absence cleared recovery fence: %v", err)
+			}
+		})
+	}
+}
+
 func TestUnknownFinalOutcomeNeverRetriesOrAuthorizes(t *testing.T) {
 	for _, committed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "reservation-absent", true: "reservation-present"}[committed], func(t *testing.T) {
