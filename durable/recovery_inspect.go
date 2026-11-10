@@ -54,7 +54,7 @@ func InspectRecovery(path string, opts Options) (report RecoverySnapshot, result
 		}
 		report = RecoverySnapshot{
 			Version: formatVersion, DeploymentID: m.Deployment,
-			StoreID: jack.EncodeBase64URL(m.StoreID[:]),
+			StoreID:         jack.EncodeBase64URL(m.StoreID[:]),
 			StoreGeneration: m.Generation, OwnerGeneration: m.Owner,
 			Window: m.Window, HighWater: m.HighWater,
 			Dirty: m.Dirty, Unsafe: m.Unsafe,
