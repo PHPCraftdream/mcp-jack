@@ -234,7 +234,13 @@ func (v *Verifier) Verify(req Request) Result {
 		verifyKey = key
 	}
 
-	if d := now - auth.TS; d > v.cfg.Window || -d > v.cfg.Window {
+	var distance uint64
+	if now < auth.TS {
+		distance = uint64(auth.TS) - uint64(now)
+	} else {
+		distance = uint64(now) - uint64(auth.TS)
+	}
+	if distance > uint64(v.cfg.Window) {
 		return rejection(401, jack.CodeTimestampOutOfWindow, "timestamp is outside the acceptance window")
 	}
 
