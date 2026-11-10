@@ -16,6 +16,13 @@ import (
 	"github.com/PHPCraftdream/mcp-jack/userkey"
 )
 
+type adminTestOutput struct {
+	bytes.Buffer
+	closed bool
+}
+
+func (output *adminTestOutput) Close() error { output.closed = true; return nil }
+
 func TestCLISetAdminExplicitFalseAndLastAdmin(t *testing.T) {
 	var forwarded atomic.Int32
 	config, _, state := signedFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -36,8 +43,12 @@ func TestCLISetAdminExplicitFalseAndLastAdmin(t *testing.T) {
 	}
 	run := func(kid, value string) (int, string, string) {
 		t.Helper()
-		var out, diagnostics bytes.Buffer
+		var out adminTestOutput
+		var diagnostics bytes.Buffer
 		status := Run(context.Background(), []string{"user-set-admin", "--config", config, "--kid", kid, "--admin", value}, IO{Out: &out, Err: &diagnostics})
+		if out.closed {
+			t.Fatal("admin command closed caller output")
+		}
 		if bytes.Contains(diagnostics.Bytes(), []byte(config)) || bytes.Contains(diagnostics.Bytes(), []byte(kid)) {
 			t.Fatal("diagnostic disclosed supplied values")
 		}
@@ -60,7 +71,7 @@ func TestCLISetAdminExplicitFalseAndLastAdmin(t *testing.T) {
 		}
 		var ack struct {
 			KID   string `json:"kid"`
-			Admin *bool `json:"admin"`
+			Admin *bool  `json:"admin"`
 		}
 		if json.Unmarshal([]byte(out), &ack) != nil || ack.KID != target.Kid || ack.Admin == nil || *ack.Admin != (value == "true") {
 			t.Fatal("missing or mismatched authenticated acknowledgement")
@@ -102,7 +113,8 @@ func TestCLISetAdminRefusesUnsignedSuccessWithoutRetry(t *testing.T) {
 	defer unsigned.Close()
 	cfg.Endpoint = unsigned.URL + "/mcp"
 	config := saveJSON(t, privateDir(t), "client.json", cfg)
-	var out, diagnostics bytes.Buffer
+	var out adminTestOutput
+	var diagnostics bytes.Buffer
 	kid := jack.EncodeBase64URL(make([]byte, 32))
 	if Run(context.Background(), []string{"user-set-admin", "--config", config, "--kid", kid, "--admin", "false"}, IO{Out: &out, Err: &diagnostics}) == 0 || out.Len() != 0 || calls.Load() != 1 {
 		t.Fatal("unsigned success accepted or call retried")
@@ -112,7 +124,8 @@ func TestCLISetAdminRefusesUnsignedSuccessWithoutRetry(t *testing.T) {
 func TestCLISetAdminRequiresExactBooleanBeforeConfigIO(t *testing.T) {
 	kid := jack.EncodeBase64URL(make([]byte, 32))
 	for _, value := range []string{"", "0", "1", "FALSE", "True", " false", "false ", "null"} {
-		var out, diagnostics bytes.Buffer
+		var out adminTestOutput
+		var diagnostics bytes.Buffer
 		args := []string{"user-set-admin", "--config", "not-read", "--kid", kid}
 		if value != "" {
 			args = append(args, "--admin", value)

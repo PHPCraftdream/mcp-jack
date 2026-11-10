@@ -55,7 +55,7 @@ func userSetAdmin(ctx context.Context, configPath, kid, value string, out io.Wri
 		IsError    bool `json:"isError"`
 		Structured *struct {
 			KID   string `json:"kid"`
-			Admin *bool `json:"admin"`
+			Admin *bool  `json:"admin"`
 		} `json:"structuredContent"`
 	}
 	if json.Unmarshal(message["result"], &result) != nil || result.IsError || result.Structured == nil || result.Structured.KID != kid || result.Structured.Admin == nil || *result.Structured.Admin != admin {
