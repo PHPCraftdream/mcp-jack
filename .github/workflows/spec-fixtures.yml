@@ -44,3 +44,30 @@ jobs:
             spec/fixtures/state-file-vectors.json
             spec/tests/CASES.md
           if-no-files-found: error
+
+  candidate-generate:
+    name: generate and upload candidate fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Generate candidate fixtures
+        run: node spec/tools/candidate/gen-fixtures.mjs
+      - name: Verify candidate regeneration is deterministic
+        run: node spec/tools/candidate/gen-fixtures.mjs --check
+      - name: Verify candidate fixtures
+        run: node spec/tools/candidate/verify-fixtures.mjs
+      - name: Test candidate fixtures
+        run: node --test spec/tests/candidate/*.test.mjs
+      - name: Upload generated candidate fixtures
+        uses: actions/upload-artifact@v4
+        with:
+          name: spec-candidate-generated-fixtures
+          path: |
+            spec/fixtures/candidate/rotation-vectors.json
+            spec/fixtures/candidate/nonce-vectors.json
+            spec/fixtures/candidate/rotation-state-vectors.json
+            spec/tests/candidate/CASES.md
+          if-no-files-found: error

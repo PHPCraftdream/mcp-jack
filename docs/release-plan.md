@@ -1,161 +1,163 @@
-# Release plan: v0.1.0
+# Release plan: v0.1.0 (historical plan; not release authorization)
 
-Status: plan, 2026-11-09. Nothing in this document is implemented yet. Versions, tags, pushes and registry publication each need explicit approval from the maintainer.
+**Current status: planning record, last updated 2026-11-10.** Preserve the historical 2026-11-09 statements and task IDs below as provenance, not as a current claim that all work remains unimplemented. The original plan is commit `777771fed0a53011898e55d959b6f8576675fd89`, atop main baseline `e681f07`. Its recommendations are explicitly superseded where noted. No wire freeze, version change, tag, publication, RC or release is approved.
+
+PR #22 delivered the design baseline as `c098cf5678716b36d1bff5012f864e2e0d105286` after 32 successful checks on reviewed head `f00fc2e42e935f6632e48d224be3c76581aa6ec5`. All six post-merge workflows succeeded; main ancestry and source-preserving cleanup were verified. This establishes design delivery, not D2/D3 runtime implementation or candidate acceptance.
 
 ## 1. Where the project stands
 
-Done and verified in GitHub CI (main at `e681f07`):
+### Historical 2026-11-09 baseline statement (preserved, not current)
 
-- Specification v0.1 after the 2026-11-08 scope reduction: per-request Ed25519 signatures on requests and responses, nonce cache and time window, strict Ed25519 and canonical base64url, signed rejections, protocol-native `jack.*` tools (whoami, user key rotation, invite enrollment, admin user/invite management), single `admin` flag, verified caller identity `{kid, name, admin}` handed to the wrapped MCP handler, audit, out-of-band first administrator.
-- SDKs for Go, Rust and TypeScript (server and client), normative generated fixtures, reference verifier, 3 × 3 cross-language interop and credential-transfer matrices, coverage, bounded Go fuzzing, licence and packaged-consumer checks.
-- Repository published under MIT OR Apache-2.0; no open issues or pull requests; no tags; nothing published to npm, crates.io or the Go proxy.
+The original plan stated that the following were done and verified in GitHub CI on main at `e681f07`:
 
-Gaps that block a first release:
+- Specification v0.1 after the 2026-11-08 scope reduction: per-request Ed25519 signatures, nonce cache/time window, strict Ed25519 and canonical base64url, signed rejections, native `jack.*` tools, the single `admin` flag, verified caller identity hand-off, audit, and out-of-band first administrator.
+- Go, Rust and TypeScript SDKs; normative generated fixtures and reference verifier; 3×3 cross-language request/response interop and credential-transfer matrices; coverage, bounded Go fuzzing, license and packaged-consumer checks.
+- The plan recorded the repository as MIT OR Apache-2.0, with no open issues or pull requests, no tags and no npm/crates.io/Go proxy publication.
 
-| # | Gap | Why it matters |
+These are dated historical baseline claims, not current issue/PR counts or new test receipts. This release-plan document preserves that history. Other work in this same worktree supplies candidate generator/index and workflow changes; this documentation edit does not own or alter those paths.
+
+### Current progress and open work
+
+Parent reports PR16–21 as merged foundations, packaging and bounded Go CLI work; CLI source is present under `cmd/jack` and `internal/cli`. Do not infer all historical S3 acceptance receipts from source presence. PR22's parent-provided merge/check status is recorded above. The six post-merge workflows succeeded and Task52 cleanup completed. This document reconciles the listed public docs; separate Task57 work adds candidate generator/index and workflow artifacts.
+
+The historical gap list below is retained for provenance, with current interpretation inline. This release-plan document is one part of broader Task57 work; this section does not describe other worker-owned candidate artifacts as absent.
+
+| # | Historical gap (2026-11-09 wording) | Current reconciliation |
 |---|---|---|
-| G1 | The server key cannot be rotated. `docs/design/server-key-rotation.md` (sr1) is a heavy design proposal, not implemented. | A frozen server key means every client must be re-pinned by hand on any key change or suspected leak. The maintainer decided on 2026-11-08 that rotation is part of the protocol. |
-| G2 | The nonce cache is in memory only and the spec says nothing about restarts. | After a restart, a request captured within the last `window` seconds (30 s by default) can be replayed once. |
-| G3 | There are no executables: no gateway, no stdio bridge, no CLI for key generation and bootstrap. D1 and the README promise all three roles. | Existing MCP clients (desktop apps, coding agents) speak stdio or plain HTTP; without a bridge they cannot use mcp-jack at all, and operators have no tool to create the first administrator. |
-| G4 | Compatibility with real MCP clients and servers is untested. | Open points: `GET` streams (MCP clients expect `405` when no stream is offered; we answer `501` when the upstream streams), `Accept` negotiation so upstreams answer JSON, pass-through of `MCP-Protocol-Version` and session headers. |
-| G5 | Stale texts. | `spec/README.md` status line says fixtures and SDK migration are pending; Q3 lost its "decided: part of the protocol" wording; `README.md` and `docs/readiness.md` call rotation "design pending"; `SECURITY.md` lists "policy checks"; the Rust crate description mentions authorization and "server SDK" only. |
-| G6 | No release engineering. | TypeScript is `0.0.0` and `private`, Rust is `0.1.0` with `publish = false`, no changelog, no release workflow, no signed artifacts, no versioning policy. |
-| G7 | No user documentation beyond SDK READMEs. | No quickstart, operator guide or threat model; no examples with the official MCP SDKs. |
-| G8 | Security assurance is thin. | Only Go has fuzz targets; no differential fuzzing across SDKs; no independent review of the reduced contract; no vulnerability scanning in CI. |
+| G1 | Server key cannot be rotated; `docs/design/server-key-rotation.md` sr1 was a heavy, unimplemented proposal. | Rotation direction is selected: arbitrarily many pending announcements, and OLD remains in use until NEW takes over 48 hours after announcement. Candidate time anchor, ordering/cutoff details, implementation and acceptance remain future work. |
+| G2 | Nonce cache is in memory and spec says nothing about restart. | Still a current source limitation. Selected remedy is durable authenticated nonce reservation before native authorization/state mutation/handler dispatch; unknown write outcome fails closed, without automatic retry. The historical `ts < server_start` recommendation is superseded. |
+| G3 | No executables: no gateway, bridge or CLI. | Historical statement is stale: Go CLI/keygen/bootstrap/enroll/gateway/bridge source exists. This does not establish complete integration, exact CI receipts, broad MCP compatibility or release readiness. |
+| G4 | Real MCP compatibility untested, including streams, `Accept`, protocol/session headers. | Compatibility design is source research and proposed future acceptance; do not label official MCP interoperability complete. It is distinct from current Jack 3×3 request/response and credential-transfer matrices. |
+| G5 | Stale texts: fixtures/SDK migration pending; Q3 decision; SECURITY “policy checks”; old SDK README wording. | This document and the requested public docs are being reconciled; no claim is made about other historical G5 targets. Q3 direction is selected but not implemented/frozen. |
+| G6 | No release engineering; versions/publication still need decisions. | No version changes are approved and any separately authorized RC is artifact-only/no registry publication. Release engineering/version bumps/publication remain unapproved. |
+| G7 | Limited user/operator documentation. | This is not a complete operator guide or quickstart. Preserve the scope and tasks as future/historical planning, not delivered release artifacts. |
+| G8 | Security assurance gaps: differential fuzzing, independent review, vulnerability scanning. | Candidate acceptance/security gates remain distinct from current workflows. No new audit, scan, or differential-fuzz result is claimed. |
 
-## 2. Release scope
+## 2. Release scope: historical proposal and current decisions
 
-**v0.1.0 contains:** wire format `mcp-jack/v1` frozen for the 0.x series; the three SDKs; minimal server-key rotation; restart replay guard; a Go command-line tool with gateway, stdio bridge, key generation, bootstrap and admin commands; examples with the official MCP SDKs; user and operator documentation; signed release artifacts.
+The original release-plan recommendation was: “v0.1.0 contains a wire format frozen for the 0.x series; three SDKs; minimal server-key rotation; restart replay guard; Go CLI gateway/stdio bridge/key generation/bootstrap/admin commands; official MCP examples; documentation; signed release artifacts.” Its freeze, rotation/restart mechanism and release/artifact commitments are superseded. The spec is not frozen; no release is authorized.
 
-**Not in v0.1.0 (deferred or rejected):**
+The D-1/D-4/D-5 summaries in this plan are separate release scope, version, and artifact-only RC decisions; they do not approve D2/D3 protocol mechanics. D2/D3 express directions, while technical candidates remain defaults.
 
-- Authenticated encrypted session channel and streaming (Q1, v0.2).
-- Multi-instance servers, shared nonce store, cluster management (Q5). v0.1 supports one server instance per state store.
-- The heavy parts of sr1: generation chains, fork detection and quarantine, `server_id`, 24-hour stabilization, crash-durability contract. They stay a reference for v0.2 hardening.
-- Per-user server keys after the first handshake: rejected. All keys would live on the same server, so a server compromise leaks them together; responses are already bound to each request; rotation would multiply. Per-session keys belong to the v0.2 channel (ephemeral key exchange, forward secrecy).
-- Server-side hardware signers and OS key-store integrations beyond the existing `Signer` interface.
-- Delegation, approval flows, MCP access rules: not protocol features.
-- External paid audit: the release is labelled "pre-1.0, not independently audited"; an audit is planned after feedback.
+D2/D3 summaries here record protocol directions, not release approval. The D3 owner example is K1 announced Monday 10 and K2 announced Monday 11: K1 remains usable until Wednesday 11 when K2 takes over. The fixed next-announcement retirement is the owner direction. Separately, candidate `P_i`/`A_i` logical-time model, event anchor, ordinal tie ordering/empty intervals, strict client cutoff and delivery edges are technical defaults, not further owner decisions. See [versioning policy](versioning.md), [candidate index](../spec/candidate/README.md) and [protocol transition policy](protocol-transition.md).
 
-## 3. Decisions needed before work starts
+Not selected/currently deferred or unchanged:
 
-| # | Question | Recommendation |
+- Encrypted session channel/streaming remains future work.
+- Multi-instance/cluster nonce sharing remains unsupported/deferred; current nonce storage is in memory. D2 design assumes durable authenticated reservation with a single accepting owner; implementation and backend qualification remain future work.
+- Heavy sr1 generation/fork/quarantine proposal is not adopted as v0.1. The selected D3 direction is different and has no one-pending rule/cooldown.
+- Per-user server keys, delegation, policy engine, ordinary MCP authorization and human-approval flows are not added by this work.
+- Static server pins, profiles, credentials and user-key rotation remain unchanged unless the separately reviewed [protocol transition](protocol-transition.md) explicitly defines migration. No TOFU or silent `v1` reinterpretation.
+- No publication/version bump, registry RC, stable release, tag, GitHub Release or public announcement is approved. Artifact-only RC policy is not RC authorization.
+
+## 3. Decisions and superseded recommendations
+
+The recommendations in these sections are historical, potentially broad or advice; they do not override the current decisions above.
+
+| ID | Historical plan recommendation (2026-11-09) | Current decision/status |
 |---|---|---|
-| D-1 | Ship executables (gateway, bridge, CLI) in v0.1.0, or SDKs only? | Ship them, in Go only (single static binary per platform). Without the bridge the protocol has no users. |
-| D-2 | Restart replay guard: reject `ts` earlier than server start, or persist nonces? | Reject `ts < server_start` (no extra storage). Cost: a request signed just before a restart fails once and is retried with a fresh `ts`. |
-| D-3 | Rotation delivery: native tool, response header, or both? | Native read-only tool `jack.server.key` for any authenticated user; the client SDK calls it on connect and periodically. One path, easy to test. |
-| D-4 | Versions and names: `0.1.0` everywhere; npm `mcp-jack`, crate `mcp-jack`, Go tag `v0.1.0`. | Yes; re-check name availability just before publishing. |
-| D-5 | Does a release candidate go to the registries (`0.1.0-rc.1`)? | Yes for npm and crates.io pre-release versions; Go uses the `v0.1.0-rc.1` tag. |
+| D-1 | Ship Go gateway/bridge/CLI, not SDKs only. | Candidate release-scope direction; Go source exists, but this is not release authorization. |
+| D-2 | Reject `ts < server_start` as restart guard, retry with fresh `ts`. | **Superseded.** Durable authenticated nonce reservation before dispatch is selected. Unknown write outcome fails closed; never automatically retry. No timestamp startup floor. |
+| D-3 | Read-only `jack.server.key`, refreshed automatically on connect and periodically; one pending rotation. | **Superseded.** Arbitrarily many pending announcements, without cooldown or one-pending restriction; OLD remains in use until NEW takes over 48 hours after announcement. Candidate time-anchor/order/cutoff details are technical defaults, not additional owner decisions. Automatic refresh is not selected; implementation remains future work. |
+| D-4 | Set all component names/versions to 0.1.0 and verify registry name availability. | **Superseded.** No version changes yet; no name/tag/publication approval. Preserve checked-in values. |
+| D-5 | Publish RCs to npm/crates.io and use Go prerelease tag. | **Superseded.** Any separately authorized RC is artifact-only, without registry publication. No tag or release is authorized here. |
 
-## 4. Plan: super-tasks and tasks
+## 4. Work plan and task-ID provenance
 
-Each super-task is one branch, one worktree under `worktrees/` and one pull request; CI is the gate. Task ids are stable references for issues and commits.
+The original plan's task IDs are preserved as historical references, not evidence that each task is open, completed or accepted. Tasks that encode superseded mechanisms are called out; new candidate work is not silently folded into old acceptance.
 
-### S1. Close the specification and freeze the wire format
+### S1. Close specification and freeze the wire format — historical heading; freeze not approved
 
-Depends on: D-2, D-3.
+Depends historically on D-2/D-3. Current status: no freeze; this documentation change is not normative spec acceptance. Candidate details stay separate in [`spec/candidate/`](../spec/candidate/) and [`docs/protocol-transition.md`](protocol-transition.md).
 
-| Task | Content | Acceptance |
+| Task | Historical content / current interpretation | Acceptance status |
 |---|---|---|
-| S1.1 | Minimal server-key rotation section in the spec. Announcement record (exact bytes, own domain string): `aud`, old `kid`, new `kid`, new public key, `switch_at`; signed by the current key and by the new key (proof of possession). Tool `jack.server.key` returns the current key and the pending announcement. Server signs with the old key before `switch_at` and with the new key from `switch_at`. A client that verified the announcement against its pin accepts both keys in `[switch_at - window, switch_at + window]`, then drops the old key. One pending rotation at a time, no cancel; a client that missed the switch is re-pinned by hand; no TOFU. Error codes. | Spec text reviewed; sr1 marked "superseded for v0.1, reference for v0.2". |
-| S1.2 | Restart replay guard in 01-authentication (per D-2). | Normative rule plus its error code and order in the verification steps. |
-| S1.3 | Generator and reference verifier: rotation vectors (valid, wrong signer, bad proof, wrong `aud`, reused key, window edges) and restart-guard vectors; `CASES.md`. | `gen-fixtures.mjs --check` passes in CI. |
-| S1.4 | Fix stale texts (G5) and restore the Q3 decision wording in `spec/README.md`, the scope review, `README.md`, `docs/readiness.md`, `SECURITY.md`, the Rust crate description. | No document contradicts the current contract. |
-| S1.5 | Versioning and compatibility policy: wire version `v1` frozen for 0.x; SDK semver pre-1.0; what a breaking change is. | `docs/versioning.md`; spec status says "wire format frozen". |
+| S1.1 | Historical minimal one-pending server-key rotation and `switch_at`. Superseded by selected multi-pending announcement direction; technical candidate default. | Candidate contract review and later normative spec/fixtures remain future gates. |
+| S1.2 | Historical `ts < server_start` restart guard. Superseded by D2 durable authenticated nonce reservation. | Durable backend/SDK contract and evidence remain future gates; no timestamp-floor case is selected. |
+| S1.3 | Historical generator/reference rotation and restart vectors in current `CASES.md`. | This documentation edit leaves the current generated case index untouched. Other Task57 work supplies a candidate generated case index and workflow in separate paths; these remain separate from the current generated assets. |
+| S1.4 | Fix stale public documentation. | This documentation edit covers the seven requested public documentation files. Other Task57 work has separate ownership. |
+| S1.5 | Versioning policy and “wire v1 frozen for 0.x.” | Versioning policy says no freeze. Freeze approval and exact contract baseline remain future gates. |
 
-### S2. Rotation and restart guard in the SDKs
+### S2. Rotation and restart guard in SDKs — direction selected; implementation/acceptance pending
 
-Depends on: S1.
+Historical S2.1–S2.4 specified a single rotation tool/window, one-pending semantics and startup guard. Those mechanisms are superseded. Future SDK work must implement a separately approved normative D2/D3 contract and add candidate fixtures/interop. Do not claim Go/Rust/TypeScript support for D2/D3 from current in-memory nonce stores/static pins. Existing Jack 3×3 request/response and credential-transfer matrices are separate.
 
-| Task | Content | Acceptance |
+| Task ID | Preserved workstream | Current status |
 |---|---|---|
-| S2.1 | Go: server key set (current, next, announcement), `jack.server.key`, switch at `switch_at`, restart guard; client fetch/verify/accept window and a pin-update callback (the application persists the new pin; the SDK writes no files). | Go conformance tests on the new fixtures pass in CI. |
-| S2.2 | Rust: same as S2.1. | Rust conformance tests pass in CI on stable and MSRV 1.85. |
-| S2.3 | TypeScript: same as S2.1. | TS tests pass in CI on Node 20 and 22. |
-| S2.4 | Interop scenarios 3 × 3: announce and switch, forged announcement rejected, straggler after the window fails closed, restart guard. | Interop job green with the new scenarios. |
+| S2.1 | Go server/client restart and rotation work. | Future candidate implementation; no durable nonce backend or server-key rotation client/server contract in the SDK. |
+| S2.2 | Rust equivalent. | Future candidate implementation; Rust manifest is at MSRV 1.88. |
+| S2.3 | TypeScript equivalent. | Future candidate implementation; package remains private. |
+| S2.4 | Cross-language interop. | Existing Jack request/response and credential-transfer matrices are separate from future D2/D3 candidate and official MCP coverage. |
 
-S2.1-S2.3 can run in parallel; S2.4 follows them.
+### S3. Executables (Go) — source exists; historical receipts remain distinct
 
-### S3. Executables (Go)
+The historical plan treated executable work as future. Current `internal/cli` source has keygen, bootstrap, enroll, gateway and bridge. Parent reports PR16–21 foundation/packaging/bounded CLI work and PR22 status above. This is not proof of every S3 acceptance item or release readiness. The gateway still uses in-memory nonce storage; its bounded legacy MCP profile is not general MCP compatibility.
 
-Depends on: D-1. S3.1-S3.3 can start in parallel with S2; S3.4 needs S2.1.
-
-| Task | Content | Acceptance |
+| Task ID | Historical content | Current status / gate |
 |---|---|---|
-| S3.1 | `mcp-jack` CLI skeleton: `keygen` (server and user keys, file permissions 0600), `bootstrap` (local first-admin invite), `enroll`, config file format without private keys inline. | Unit tests; documented commands. |
-| S3.2 | `mcp-jack gateway`: reverse proxy in front of an unmodified MCP HTTP server, using the Go server SDK; forwards verified identity as configured headers to the upstream only on the trusted hop. | Integration test with a stub upstream. |
-| S3.3 | `mcp-jack bridge`: MCP stdio on one side, signed HTTP on the other, using the Go client SDK; key from a file or an external signer. | Integration test: stdio JSON-RPC in, signed request out, verified response back. |
-| S3.4 | Admin and rotation commands: `user list/create/revoke/set-admin`, `invite create/list/revoke`, `server-key announce/status`. | Commands covered by tests against a real gateway. |
-| S3.5 | Cross-platform builds (Linux, Windows, macOS; amd64 and arm64) in CI. | Artifacts built on every PR, not published. |
+| S3.1 | CLI skeleton/keygen/bootstrap/enroll/config. | Source exists; do not infer a per-task CI receipt beyond parent-provided status. |
+| S3.2 | Gateway and trusted-hop identity forwarding. | Source exists; deployment must protect upstream socket/hop. E2E/security acceptance requires exact receipts. |
+| S3.3 | Stdio-to-HTTP bridge. | Source exists; framing/lifecycle source is not full MCP compatibility acceptance. |
+| S3.4 | Historical `user ...` and `server-key announce/status` CLI commands. | Current `internal/cli/run.go` has no admin or rotation CLI subcommands. Server SDK native user-administration and user-key tools are separate. No server response-key rotation command exists. |
+| S3.5 | Cross-platform builds. | Check actual artifact receipts for a specific SHA before claiming; no build was run for this documentation work. |
 
-### S4. MCP ecosystem compatibility and examples
+### S4. MCP ecosystem compatibility and examples — future acceptance
 
-Depends on: S3.2, S3.3 (for S4.2).
+`docs/design/mcp-compatibility.md` records upstream source observations and proposed tests; it does not claim execution or compatibility. Separate official MCP client/bridge/gateway/server coverage from existing SDK 3×3 request/response and credential-transfer matrices. Legacy and modern MCP profiles are not interchangeable; do not claim broad MCP support.
 
-| Task | Content | Acceptance |
+| Task ID | Historical content | Current status |
 |---|---|---|
-| S4.1 | Examples per language with the official MCP SDKs: a protected server (Go SDK, Rust `rmcp`, TS `@modelcontextprotocol/sdk`) and a client. | Examples build in CI. |
-| S4.2 | End-to-end test in CI: official MCP client → `mcp-jack bridge` → `mcp-jack gateway` → official MCP server; checks `initialize`, `tools/list`, `tools/call`, `GET` stream behaviour, `Accept`, `MCP-Protocol-Version`, session headers. | E2E job green. |
-| S4.3 | Fix every incompatibility S4.2 finds (likely: `405` instead of `501` for an unsupported `GET` stream, `Accept` rewriting at the gateway). Spec change if the wire is affected, before the freeze in S1.5 is final. | E2E green with no known workarounds. |
+| S4.1 | Official SDK examples. | Future work unless separate source/CI evidence says otherwise. |
+| S4.2 | Official client → bridge → gateway → server E2E. | Candidate future acceptance; not represented by current Jack interop matrices. |
+| S4.3 | Fix compatibility findings before freeze. | Freeze is not approved; resolve under a reviewed profile and future acceptance. |
 
-### S5. Security assurance
+### S5. Security assurance — open gates, not claims
 
-Depends on: S2, S3.
+The threat model distinguishes source observations from inferred risks and candidate checks; it is not an audit. Source/workflow configuration is not evidence that differential fuzzing, independent review or all advisory gates completed. Parent-provided D2/D3 directions and PR22 status are not candidate acceptance; the six post-merge workflows and Task52 cleanup completed.
 
-| Task | Content | Acceptance |
+| Task ID | Historical content | Current status |
 |---|---|---|
-| S5.1 | Threat model: assets, attackers, what is and is not protected (no confidentiality without TLS, single instance, unaudited, missed rotation, server compromise). | `docs/threat-model.md`, linked from README and SECURITY.md. |
-| S5.2 | Fuzzing beyond Go: Rust `cargo-fuzz` targets for header, body classification, JSON parsing, envelopes; TS property tests; bounded CI runs. | New targets run in CI. |
-| S5.3 | Differential fuzzing across the three SDKs for parsers whose disagreement is a vulnerability (header, base64url, JSON duplicates, body classification, rotation record). | Corpus and harness in CI; no disagreements. |
-| S5.4 | Independent zero-trust review of spec and SDK changes since PR #14; fix confirmed findings. | Review report and fixes merged. |
-| S5.5 | Supply chain in CI: `govulncheck`, `cargo audit`/`cargo deny` advisories, `npm audit`. | Jobs green or findings triaged. |
+| S5.1 | Threat model. | Reconciled in this worktree; no runtime/security assessment claimed. |
+| S5.2 | Rust fuzz targets and TS property tests. | Historical task; do not claim completion absent receipts. |
+| S5.3 | Differential fuzzing across SDKs. | Future acceptance; no differential-fuzz result claimed. |
+| S5.4 | Independent review and fixes. | Separate review evidence required; no independent audit claim. |
+| S5.5 | Supply-chain/advisory scanning. | Distinguish workflow wiring/parent receipts from a new scan; no scan run for this documentation work. |
 
-### S6. Documentation
+### S6. Documentation — historical backlog, documentation portion scoped
 
-Depends on: S2, S3 (texts describe the shipped behaviour).
+This documentation portion does not add a full quickstart/operator guide. It follows the source, candidate and workflow work in broader Task57.
 
-| Task | Content | Acceptance |
+| Task ID | Historical content | Current status |
 |---|---|---|
-| S6.1 | README rewritten for users: what it is, status, five-minute quickstart (gateway + bridge), limitations. | Reviewed. |
-| S6.2 | Operator guide: key generation and storage, bootstrap, invites and enrollment, user key rotation, server key rotation, audit log, state file backup, clock sync, single instance. | `docs/operator-guide.md`. |
-| S6.3 | API docs: Go doc comments for pkg.go.dev, rustdoc for docs.rs, TS API section; per-language quickstarts. | Docs build without warnings. |
-| S6.4 | Clean `docs/`: shorten `readiness.md` to current evidence, add a design-docs index, mark historical records as such. | No stale status statements. |
+| S6.1 | User README and quickstart. | Not delivered by this documentation portion. |
+| S6.2 | Operator guide. | Historical future work; no new guide claimed. |
+| S6.3 | API docs. | Historical future work; no SDK API changes here. |
+| S6.4 | Clean docs/status/index. | This documentation portion only; historical release-plan facts and task IDs are preserved; unsafe recommendations are superseded inline. |
 
-### S7. Release engineering
+### S7. Release engineering — no version/publication approval
 
-Can run in parallel with S4-S6. Version changes need explicit approval.
-
-| Task | Content | Acceptance |
+| Task ID | Historical content | Current status |
 |---|---|---|
-| S7.1 | Package metadata: description, keywords, README per package, docs.rs metadata; versions set to the release version and `private`/`publish = false` removed only in the release PR. | Consumer checks pass on the release PR. |
-| S7.2 | `CHANGELOG.md` and release-notes template. | Present. |
-| S7.3 | Release workflow on tag: full CI, `npm publish` with provenance (trusted publishing), `cargo publish`, Go tag, GitHub Release with binaries, checksums and build attestations. | Dry run (`npm publish --dry-run`, `cargo publish --dry-run`) green. |
-| S7.4 | Repository settings (maintainer): branch protection with required checks, private vulnerability reporting enabled, npm trusted publisher and crates.io token configured. | Checklist ticked by the maintainer. |
-| S7.5 | Re-check the `mcp-jack` name on npm, crates.io and GitHub. | Recorded with date. |
+| S7.1 | Set package metadata to release version and remove publication restrictions in release PR. | Not authorized; preserve current manifests and flags. |
+| S7.2 | Changelog and release notes. | Existing files may be present; no version/release approval follows. |
+| S7.3 | Publish artifacts/packages on tag. | Not authorized. Future artifact-only RC needs exact artifact/checksum/attestation receipts. |
+| S7.4 | Repository settings/publishing credentials. | No new authorization or account configuration implied. |
+| S7.5 | Recheck package names. | No package-name or publication decision made. |
 
-### S8. Release candidate and release
+### S8. Release candidate and release — not authorized
 
-Depends on: S1-S7.
+An RC, if separately authorized, is artifact-only with no registry publication. This supersedes historical S8.1's registry-published `v0.1.0-rc.1`/tag/install proposal. S8.2's repeat-RC step and S8.3's stable tag/publication/GitHub Release/announcement are not authorized. Future RC/stable actions require separate approvals and exact receipts.
 
-| Task | Content | Acceptance |
-|---|---|---|
-| S8.1 | `v0.1.0-rc.1`: tag, publish pre-release versions, install from the registries in clean environments, run the E2E job against published artifacts. | Consumer installs and E2E green. |
-| S8.2 | Fix RC findings; repeat RC if the wire or public API changed. | No open release blockers. |
-| S8.3 | `v0.1.0`: tag, publish, GitHub Release, announcement. | Packages installable; release notes published. |
+## 5. Order and critical path — historical diagram, not current commitment
 
-## 5. Order and critical path
-
-```
-D-1..D-5 ─► S1 ─► S2 ─┬─► S5 ─┐
-            S3.1-3.3 ─┼─► S3.4, S3.5 ─► S4 ─┼─► S8
-                      └─► S6 ───────────────┤
-            S7 (parallel, after D-4) ───────┘
-```
-
-Critical path: S1 → S2 → S4 → S8. S3 and S7 start early in parallel; S5 and S6 start once S2 and S3 settle.
+The original graph and “S1 → S2 → S4 → S8” critical path describe former one-pending/startup-floor/freeze/published-RC recommendations. They are not current estimates or approvals. Current sequencing is gated by review of D2/D3 directions and candidate technical details, normative contract decisions, implementation, separate candidate CI evidence, integration/security review and explicit release decision. No task completion is inferred from the historical graph.
 
 ## 6. Working rules
 
-- One worktree and pull request per super-task; sub-agents only with the maintainer's approval; every sub-agent is told that builds and tests run in GitHub CI only (locally only `cargo check`, `cargo clippy`, `cargo fmt`).
-- Fixtures stay generated; every wire change lands in spec, generator, reference verifier and all three SDKs in the same super-task.
-- No version change, tag, push or publication without explicit approval.
+Preserve the historical process with current boundaries:
+
+- Keep worktree/PR boundaries and tie CI receipts to exact full SHA; do not represent parent-provided status as local execution.
+- The documentation portion does not rewrite current generated files. Separate Task57 work owns the candidate case generator/index and workflow.
+- Future approved wire changes require normative spec, generator/reference model, fixtures and applicable SDKs together.
+- No versions, tags, pushes, publication, RC or release without separate explicit approval; an artifact-only RC does not publish to registries.
+- No executable commands, tests, scripts, scans, probes or builds were run for this documentation portion under the owner's prohibition.
