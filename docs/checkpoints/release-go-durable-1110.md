@@ -151,6 +151,12 @@ Transport must bound and own the raw body; the helper never parses it, discovers
 
 Atc38b525ea535a7fbf1044a83c5318bf63cda16f4, preparation42920206607 passed modules verified and CGO0 rotation/client/server/durable/internal-cli tests (client1.688s, rotation0.835s, server1.372s, durable3.007s, CLI6.542s). FullCI42920213805 Linuxjob130192862849 and Windowsjob130192862803 failed only gofmt client/rotation_auth.go and rotation_auth_test.go; completed-job logs were read. Artifact13812025217 (GitHub archive digest sha256:cf70724541fabc81972fadb5c03b6b989128dbdbd16fcf5fb4d361b24656e7a5) downloaded into new isolated .rush/ci-artifacts-42920206607-go-prep. Both complete whitespace-only diffs reviewed/copied/cmp, go.mod/go.sum unchanged. Fresh full exact-head CI required for the formatting correction; no local formatter/test or behavior change.
 
+## Response freshness arithmetic hardening — pending CI
+
+While reading the existing v1 response verifier for cross-SDK carrier integration, source review found signed-subtraction overflow: with a valid response ts0 and local raw Unix clock MinInt64, ts-now wraps negative and the old comparison can accept an arbitrarily stale signed response. The comparator now computes ordered uint64 distance, whose modulo subtraction represents the exact nonnegative distance for any int64 endpoints up to2^64-1. Ordinary header/key/freshness/signature precedence, default window and inclusive boundaries are unchanged; this is not a new clock acceptance policy or replacement for durable ClockGuard.
+
+A narrow actual-signed-response regression checks representable MinInt64/MinInt64+1/ordinary ±31-second refusals through both static VerifyResponse and the candidate carrier wrapper, plus inclusive ±30/zero positive controls. This would fail against the previous overflow comparator. No local reproduction/test/build/formatter ran; CI preparation includes the changed existing client/auth.go and the new test, using the already approved dependencies/toolchain. New fix/tests await actual CI verification.
+
 ## Remaining implementation
 
 This initial tranche is not Task #59 completion or runtime support. Durable nonce/backend ownership, high-water, intent/final receipts, dirty startup and unknown-outcome recovery; coordinated registry/key/enrollment gates; bbolt dependency/advisory/license/platform qualification and checksum generation; server publication/signer lifecycle/native tool; client ClockGuard/full-snapshot CAS/manual refresh; production integration and fault/concurrency tests remain unfinished.
