@@ -33,6 +33,8 @@ type Options struct {
 type Store struct {
 	mu        sync.Mutex
 	db        *bolt.DB
+	file      *os.File
+	transact  func(func(*bolt.Tx) error) error
 	meta      metadata
 	opts      Options
 	fenced    atomic.Bool
@@ -149,7 +151,16 @@ func openStore(path string, opts Options, options *bolt.Options) (*Store, error)
 	if err := privateDirectory(path); err != nil {
 		return nil, err
 	}
-	db, err := bolt.Open(path, 0600, options)
+	if options == nil || options.OpenFile == nil { return nil, ErrInvalidStore }
+	opening := *options
+	originalOpen := opening.OpenFile
+	var ownedFile *os.File
+	opening.OpenFile = func(name string, flags int, mode os.FileMode) (*os.File, error) {
+		file, err := originalOpen(name, flags, mode)
+		if err == nil { ownedFile = file }
+		return file, err
+	}
+	db, err := bolt.Open(path, 0600, &opening)
 	if err != nil {
 		return nil, ErrUnavailable
 	}
@@ -238,7 +249,7 @@ func openStore(path string, opts Options, options *bolt.Options) (*Store, error)
 	if err := db.Update(func(tx *bolt.Tx) error { return tx.Bucket([]byte("metadata")).Put(headerKey, encodeMetadata(m)) }); err != nil {
 		return nil, ErrUnavailable
 	}
-	owner := &Store{db: db, meta: m, opts: opts}
+	owner := &Store{db: db, file: ownedFile, transact: db.Update, meta: m, opts: opts}
 	handedOff = true
 	return owner, nil
 }
