@@ -16,11 +16,20 @@ pub struct Checkpoint {
 }
 
 /// Возвращает owned contiguous extension, без изменения caller trust/persistence.
-pub fn verify_chain(wires: &[&[u8]], binding: Binding<'_>, checkpoint: &Checkpoint, retained: &BTreeMap<String, [u8; 32]>) -> Result<Vec<Record>, RotationError> {
+pub fn verify_chain(
+    wires: &[&[u8]],
+    binding: Binding<'_>,
+    checkpoint: &Checkpoint,
+    retained: &BTreeMap<String, [u8; 32]>,
+) -> Result<Vec<Record>, RotationError> {
     if wires.len() > MAX_RETAINED_KEYS || retained.len() > MAX_RETAINED_KEYS {
         return Err(invalid("capacity"));
     }
-    if checkpoint.ordinal > MAX_ORDINAL || checkpoint.published_at > MAX_TIMESTAMP || validate_public_key(&checkpoint.public_key).is_err() || key_id(&checkpoint.public_key) != checkpoint.kid {
+    if checkpoint.ordinal > MAX_ORDINAL
+        || checkpoint.published_at > MAX_TIMESTAMP
+        || validate_public_key(&checkpoint.public_key).is_err()
+        || key_id(&checkpoint.public_key) != checkpoint.kid
+    {
         return Err(invalid("anchor_key_id"));
     }
     if checkpoint.ordinal == 0 {
@@ -44,7 +53,9 @@ pub fn verify_chain(wires: &[&[u8]], binding: Binding<'_>, checkpoint: &Checkpoi
     let mut records = Vec::with_capacity(wires.len());
     for wire in wires {
         let record = parse_record(wire, binding, &keys)?;
-        if previous.ordinal == MAX_ORDINAL || previous.ordinal.checked_add(1) != Some(record.ordinal) {
+        if previous.ordinal == MAX_ORDINAL
+            || previous.ordinal.checked_add(1) != Some(record.ordinal)
+        {
             return Err(invalid("ordinal_sequence"));
         }
         if record.previous_hash != previous.hash {
@@ -63,7 +74,13 @@ pub fn verify_chain(wires: &[&[u8]], binding: Binding<'_>, checkpoint: &Checkpoi
             return Err(invalid("capacity"));
         }
         keys.insert(record.new_kid.clone(), record.public_key);
-        previous = Checkpoint { ordinal: record.ordinal, hash: record.hash.clone(), kid: record.new_kid.clone(), public_key: record.public_key, published_at: record.published_at };
+        previous = Checkpoint {
+            ordinal: record.ordinal,
+            hash: record.hash.clone(),
+            kid: record.new_kid.clone(),
+            public_key: record.public_key,
+            published_at: record.published_at,
+        };
         records.push(record);
     }
     Ok(records)
@@ -74,7 +91,12 @@ pub fn selected_ordinal(records: &[Record], now: u64) -> Result<u64, RotationErr
     if now > MAX_TIMESTAMP {
         return Err(invalid("timestamp"));
     }
-    Ok(records.iter().filter(|record| record.activates_at <= now).map(|record| record.ordinal).max().unwrap_or(0))
+    Ok(records
+        .iter()
+        .filter(|record| record.activates_at <= now)
+        .map(|record| record.ordinal)
+        .max()
+        .unwrap_or(0))
 }
 
 /// Проверяет lower ts bound и strict known cutoff по ts и final_now.
@@ -90,7 +112,9 @@ pub fn assignment_valid(records: &[Record], ordinal: u64, ts: u64, final_now: u6
                 return false;
             }
         }
-        if ordinal.checked_add(1) == Some(record.ordinal) && (ts >= record.activates_at || final_now >= record.activates_at) {
+        if ordinal.checked_add(1) == Some(record.ordinal)
+            && (ts >= record.activates_at || final_now >= record.activates_at)
+        {
             return false;
         }
     }
