@@ -5,9 +5,9 @@ import jack "github.com/PHPCraftdream/mcp-jack"
 // PageFraming — metadata, не автоматическое продвижение ACKed cursor.
 type PageFraming struct {
 	ExtensionStart int
-	Terminal ResultCursor
-	Head ResultCursor
-	Complete bool
+	Terminal       ResultCursor
+	Head           ResultCursor
+	Complete       bool
 }
 
 func validCursor(cursor ResultCursor) bool {

@@ -25,11 +25,11 @@ func TestPageFramingRetainedPrefixExtensionNoopAndOwnedMetadata(t *testing.T) {
 		return result
 	}
 	for _, row := range []struct {
-		cursor rotation.ResultCursor
-		records []rotation.Record
-		head rotation.ResultCursor
+		cursor   rotation.ResultCursor
+		records  []rotation.Record
+		head     rotation.ResultCursor
 		complete bool
-		start int
+		start    int
 		terminal rotation.ResultCursor
 	}{
 		{zero, records, two, true, 0, two},
