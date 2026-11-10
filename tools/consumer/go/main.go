@@ -336,5 +336,8 @@ func main() {
 		fail("shutdown", err)
 	}
 
-	fmt.Println("PASS: go consumer smoke (key lifecycle, credential flow, signed loopback round trip, verified identity, application denial, wrong pin, tamper)")
+	if err := verifyDurableArtifact(); err != nil {
+		fail("durable staged artifact lifecycle", err)
+	}
+	fmt.Println("PASS: go consumer smoke (key lifecycle, credential flow, signed loopback round trip, verified identity, application denial, wrong pin, tamper, durable ownership lifecycle)")
 }

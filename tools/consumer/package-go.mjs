@@ -18,9 +18,9 @@ import { fileURLToPath } from "node:url";
 // <stage>/module IS the module artifact; the consumer's go.mod documents the
 // resolution with a replace directive pointing at the snapshot
 // (`replace github.com/PHPCraftdream/mcp-jack => ../module`), never at the
-// repo checkout. Because the replaced module is a filesystem path, Go needs
-// no go.sum entries for it (no proxy fetch, no checksum database), so the
-// module ships without go.sum by design.
+// repo checkout.
+// Корневой replacement не требует checksum, но внешние зависимости требуют
+// точных reviewed go.mod/go.sum. Оба файла входят в staged snapshot.
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
@@ -71,7 +71,7 @@ if (!/^go 1\.25\.0$/mu.test(goMod)) fail('go.mod must declare the approved "go 1
 // staged module artifact carries both exact dual-licence texts. Everything
 // else (rust/, ts/, tools/, interop/, docs/, .github/, readme files,
 // .gitattributes) is excluded by construction.
-const scope = /^(?:[^/]+\.go|go\.mod|LICENSE-MIT|LICENSE-APACHE|client\/[^/]+\.go|server\/[^/]+\.go|userkey\/[^/]+\.go|rotation\/[^/]+\.go|spec\/.+)$/u;
+const scope = /^(?:[^/]+\.go|go\.(?:mod|sum)|LICENSE-MIT|LICENSE-APACHE|client\/[^/]+\.go|server\/[^/]+\.go|userkey\/[^/]+\.go|rotation\/[^/]+\.go|durable\/[^/]+\.go|spec\/.+)$/u;
 const listOutput = execFileSync("git", ["ls-files", "-z"], {
   cwd: repoRoot,
   encoding: "buffer",
@@ -127,11 +127,16 @@ const diskRootGo = (await readdir(repoRoot))
 for (const name of diskRootGo) {
   if (!members.includes(name)) fail(`root-level Go file on disk is missing from the staged snapshot: ${name}`);
 }
-// Forbidden members: nothing outside the module scope may slip into the
-// snapshot, and the module carries no go.sum (no external deps, stdlib only).
+// Ничего за пределами явного module scope не попадает в snapshot.
 for (const rel of members) {
   if (!scope.test(rel)) fail(`staged module snapshot included an out-of-scope file: ${rel}`);
-  if (rel.endsWith("go.sum")) fail("staged module snapshot must not contain go.sum (product has no deps)");
+}
+if (!members.includes("go.sum")) fail("reviewed dependency checksums are missing");
+for (const name of ["go.mod", "go.sum"]) {
+  const [staged, original] = await Promise.all([
+    readFile(path.join(moduleRoot, name)), readFile(path.join(repoRoot, name)),
+  ]);
+  if (!staged.equals(original)) fail(`staged ${name} differs from the reviewed source`);
 }
 
 console.log(`Go module snapshot: stage/module (${members.length} files)`);

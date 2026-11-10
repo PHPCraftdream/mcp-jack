@@ -75,7 +75,7 @@ jobs:
           if-no-files-found: error
 
   go-source-preparation:
-    name: prepare Go rotation sources
+    name: prepare Go SDK sources
     if: github.ref == 'refs/heads/release-go-durable-1110'
     runs-on: ubuntu-latest
     steps:
@@ -83,17 +83,30 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: '1.26.10'
+      - name: Resolve and verify the approved Go backend dependency graph
+        env:
+          GOPROXY: https://proxy.golang.org
+          GOSUMDB: sum.golang.org
+        run: |
+          go mod tidy
+          go mod verify
       - name: Format changed Go SDK sources in CI
-        run: gofmt -w rotation/*.go server/admission.go server/admission_test.go server/verify.go server/middleware.go
-      - name: Test independent codec and durable admission pipeline
-        run: go test ./rotation ./server
+        run: gofmt -w rotation/*.go durable/*.go server/admission.go server/admission_test.go server/verify.go server/middleware.go tools/consumer/go/*.go
+      - name: Test codec, admission and backend ownership without CGO
+        env:
+          CGO_ENABLED: '0'
+        run: go test ./rotation ./server ./durable
       - name: Upload formatted sources for parent integration
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: go-sdk-formatted-sources
           path: |
+            go.mod
+            go.sum
             rotation/*.go
+            durable/*.go
+            tools/consumer/go/*.go
             server/admission.go
             server/admission_test.go
             server/verify.go

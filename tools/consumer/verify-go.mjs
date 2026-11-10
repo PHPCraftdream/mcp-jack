@@ -17,11 +17,10 @@ import { fileURLToPath } from "node:url";
 //   replace github.com/PHPCraftdream/mcp-jack => ../module
 // which targets the STAGED SNAPSHOT directory (stage/module) produced by
 // package-go.mjs — never the repo checkout. This is the documented resolution
-// of the staged module artifact. Because the dependency is a filesystem-path
-// replacement plus standard library only, no go.sum is required (replaced
-// modules bypass the proxy/checksum database entirely; GOFLAGS=-mod=mod and
-// isolated GOPATH/GOMODCACHE/GOCACHE keep the resolution hermetic, and
-// GOTOOLCHAIN=local pins the toolchain to the CI-installed Go 1.25).
+// of the staged module artifact.
+// Только корневой модуль заменён staged snapshot. Внешние зависимости
+// проверяются публичным checksum database; go.mod/go.sum копируются побайтово.
+// GOPATH/GOMODCACHE/GOCACHE изолированы, GOTOOLCHAIN=local фиксирует Go 1.25.
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
@@ -55,16 +54,15 @@ if (realStageRelative === "" || realStageRelative === ".." || realStageRelative.
 
 const inventoryPath = path.join(stageDir, "inventory.json");
 const inventory = JSON.parse(await readFile(inventoryPath, "utf8"));
-const allowed = /^(?:[^/]+\.go|go\.mod|LICENSE-MIT|LICENSE-APACHE|client\/[^/]+\.go|server\/[^/]+\.go|userkey\/[^/]+\.go|rotation\/[^/]+\.go|spec\/.+)$/u;
+const allowed = /^(?:[^/]+\.go|go\.(?:mod|sum)|LICENSE-MIT|LICENSE-APACHE|client\/[^/]+\.go|server\/[^/]+\.go|userkey\/[^/]+\.go|rotation\/[^/]+\.go|durable\/[^/]+\.go|spec\/.+)$/u;
 if (inventory.module !== "github.com/PHPCraftdream/mcp-jack" || inventory.goVersion !== "1.25.0" || inventory.snapshot !== "staged") {
   throw new Error("staged module identity metadata changed");
 }
 if (!Array.isArray(inventory.files) || inventory.files.length === 0) throw new Error("staged module inventory is incomplete");
 for (const member of inventory.files) {
   if (typeof member !== "string" || !allowed.test(member)) throw new Error(`out-of-scope staged module file: ${String(member)}`);
-  if (member.endsWith("go.sum")) throw new Error("staged module snapshot must not contain go.sum (product has no deps)");
 }
-for (const member of ["go.mod", "LICENSE-MIT", "LICENSE-APACHE", "spec/spec.go"]) {
+for (const member of ["go.mod", "go.sum", "LICENSE-MIT", "LICENSE-APACHE", "spec/spec.go", "durable/store.go"]) {
   if (!inventory.files.includes(member)) throw new Error(`missing staged module file: ${member}`);
 }
 
@@ -72,10 +70,9 @@ const moduleRoot = path.join(stageDir, "module");
 const stagedGoMod = await readFile(path.join(moduleRoot, "go.mod"));
 const repoGoMod = await readFile(path.join(repoRoot, "go.mod"));
 if (!stagedGoMod.equals(repoGoMod)) throw new Error("staged go.mod differs byte-wise from the repo go.mod");
-const moduleEntries = await readdir(moduleRoot, { recursive: true });
-if (moduleEntries.some((name) => name.endsWith("go.sum"))) {
-  throw new Error("staged module snapshot contains go.sum; the product must ship without one");
-}
+const stagedGoSum = await readFile(path.join(moduleRoot, "go.sum"));
+const repoGoSum = await readFile(path.join(repoRoot, "go.sum"));
+if (!stagedGoSum.equals(repoGoSum)) throw new Error("staged go.sum differs byte-wise from the reviewed module graph");
 
 const consumerDir = path.join(stageDir, "consumer");
 await mkdir(consumerDir);
@@ -97,6 +94,8 @@ function go(args, encoding) {
       GOMODCACHE: path.join(stageDir, "gopath", "pkg", "mod"),
       GOCACHE: path.join(stageDir, "gocache"),
       GOTOOLCHAIN: "local",
+      GOPROXY: "https://proxy.golang.org",
+      GOSUMDB: "sum.golang.org",
     },
     encoding,
     stdio: encoding === "utf8" ? ["ignore", "pipe", "inherit"] : "inherit",
@@ -107,6 +106,11 @@ function go(args, encoding) {
 // Full standalone smoke: key lifecycle, credential flow, and a real signed
 // loopback client/server round trip against the staged snapshot.
 go(["run", "."]);
+go(["mod", "verify"]);
+for (const [name, expected] of [["go.mod", repoGoMod], ["go.sum", repoGoSum]]) {
+  const actual = await readFile(path.join(moduleRoot, name));
+  if (!actual.equals(expected)) throw new Error(`consumer execution changed staged ${name}`);
+}
 
 // Resolution proof: `go list -m` prints the replacement for a replaced
 // module. Assert it resolved to the staged snapshot via the documented
