@@ -105,6 +105,12 @@ New offline CLI commands use only the private existing gateway config and durabl
 
 New Linux tests drive the real Run command parser and actual bbolt: missing/wrong confirmation must not create a file; explicit initialization succeeds without seed/state/socket; repeat init refuses with exact database bytes preserved; inspection outputs correct JSON, does not close caller output or change database bytes, and does not leak supplied paths/deployment IDs in diagnostics. Dirty inspection must preserve startup refusal; missing output fails closed. Temporary source preparation includes the new CLI sources/tests and run.go; all execution/formatting awaits GitHub CI, none ran locally. No command clears a fence or disposes a terminal tombstone.
 
+## HTTP outcome/restart retention controls — pending CI
+
+Exact8a7fb0c5bb3a791cbf45aed07bc7c153f525dc0f passed all34 checks, independently confirmed after watcher bvrla56du completed exit0. Offline unused init/inspection and their actual Run/bbolt tests are therefore verified, not merely source-written.
+
+A new real-bbolt HTTP middleware test exercises success, application500, response-overflow502, streaming-refusal501 and handler panic. Each case first sends a tampered-target signature and requires zero dispatch/zero storage reservation, then sends the exact valid signed request. Non-panic responses are independently verified by the actual client response verifier. Handler outcomes must leave exactly one live nonce, no intent and one application call. Clean Close must drain the real request lease even on panic/error, then Open at fixed clock+1 and the same complete HTTP request must return unsigned401 replayed_nonce without a second handler call. All clocks are deterministic; no sleeps, local execution or test-only durability spy. This is actual server HTTP middleware plus bbolt qualification, not a claim of full gateway binary/process E2E. New tests await CI; production behavior unchanged.
+
 ## Remaining implementation
 
 This initial tranche is not Task #59 completion or runtime support. Durable nonce/backend ownership, high-water, intent/final receipts, dirty startup and unknown-outcome recovery; coordinated registry/key/enrollment gates; bbolt dependency/advisory/license/platform qualification and checksum generation; server publication/signer lifecycle/native tool; client ClockGuard/full-snapshot CAS/manual refresh; production integration and fault/concurrency tests remain unfinished.
