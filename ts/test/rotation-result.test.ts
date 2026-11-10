@@ -119,6 +119,40 @@ test("rotation result: actual full-body cap is inclusive, page cap counts every 
   rejected(envelope(JSON.stringify(page)));
 });
 
+test("rotation result: exhaustive escaped member spellings preserve values but never hide duplicates", { timeout: 30_000 }, () => {
+  const ordinary = envelope();
+  const members: readonly (readonly [string, string])[] = [
+    ["jsonrpc", '"2.0"'],
+    ["isError", "false"],
+    ["type", '"text"'],
+    ["complete", "true"],
+    ["kid", JSON.stringify(initial.current.kid)],
+    ["ordinal", "0"],
+  ];
+  let cases = 0;
+  let expectedCases = 0;
+  for (const [name, value] of members) {
+    const target = `${JSON.stringify(name)}:${value}`;
+    assert.equal(ordinary.split(target).length, 2, `unique source member: ${name}`);
+    expectedCases += (2 ** name.length) - 1;
+    for (let mask = 1; mask < 2 ** name.length; mask += 1) {
+      const escaped = Array.from(name, (character, index) => (mask & (1 << index)) === 0
+        ? character
+        : `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
+      const member = `"${escaped}":${value}`;
+      const positive = ordinary.replace(target, member);
+      // Независимый JSON decoder подтверждает семантику escape spelling.
+      assert.deepEqual(JSON.parse(positive), JSON.parse(ordinary), `${name}/${mask}: ${positive}`);
+      assert.equal(rotation.decodeRotationResult(raw(positive), 1).current.kid, initial.current.kid, `${name}/${mask}`);
+      rejected(ordinary.replace(target, `${target},${member}`));
+      cases += 1;
+    }
+  }
+  assert.equal(cases, expectedCases);
+  assert.equal(cases, 658);
+  assert.equal(rotation.decodeRotationResult(raw(ordinary), 1).complete, true);
+});
+
 test("shared JSON parser: native last-wins unchanged; candidate duplicate/scalar/depth guards isolated", () => {
   assert.equal((parseJsonRaw('{"x":1,"x":2}').value as { x: number }).x, 2);
   assert.throws(() => parseCandidateJsonRaw('{"x":1,"x":2}'));

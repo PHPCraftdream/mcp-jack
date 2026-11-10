@@ -118,3 +118,9 @@ At f29af77f867651416dbf088493bb666babe40d8f, preparation42923161247 passed rotat
 ## Delivery constraints
 
 Implementation/commit/push/green-merge/post-merge/source-preserving cleanup were authorized by the owner. No new agents after the stop/self-work instruction. All execution remains in GitHub CI; start background gh watch immediately after every push/PR-ready/rerun and consume terminal results. Inspect exact SHA and full expected check set, not only watcher exit0 or initially visible materialization jobs. Any failure must be diagnosed and fixed in the same cycle. Product versions/private/publish flags and publication remain unchanged; final publication requires new explicit owner permission.
+
+## Подтверждённый carrier CI и escaped-member coverage — 2026-11-11
+
+Exact82240650bd1ed5a58a73a5ed37f9f3b22cf0a0bd: все34 checks SUCCESS, watcher bgphrw8i2 завершён exit0 и принят. Последний Rust carrier formatting failure закрыт; task60 остаётся незавершённой, PR25 draft. Go2039fe7 extreme-clock fix также все34SUCCESS; отдельная PR24 получила user-set-admin tranche da9f6b7, CI наблюдается bxr8j6tki.
+
+Новый bounded TypeScript regression перебирает все658 непустых ASCII/Unicode-escape spelling masks для имён jsonrpc/isError/type/complete/kid/ordinal на шести object boundaries. Для каждого spelling независимый JSON.parse подтверждает семантическую идентичность валидного envelope, candidate decoder должен его принять; добавление того же escaped имени рядом с оригиналом должно отклоняться как duplicate. Есть точный счётчик cases и исходный positive control, timeout30s. Это детерминированная mutation coverage, не cargo-fuzz campaign и не полный controller/ACK coverage. Новые tests пока не исполнялись, проверка только GitHubCI; product/API/dependency/version/MSRV изменений нет.
