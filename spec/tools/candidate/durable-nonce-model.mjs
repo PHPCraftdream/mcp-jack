@@ -26,17 +26,20 @@ const hasExpiredLive = (state, now) => {
 const purgeExpiredLive = (state, now, exactKey) => {
   const limit = Math.min(state.live.length, NONCE_LIMITS.livePlusIntent);
   const retained = [];
-  let purged = 0;
+  let remaining = NONCE_LIMITS.purgeRows;
+  let exactPending = state.live.slice(0, limit).some((row) => row.key === exactKey && now > row.retainUntil);
   let changed = false;
   for (let index = 0; index < limit; index += 1) {
     const row = state.live[index];
     const expired = now > row.retainUntil;
-    if (expired && row.key === exactKey) {
+    if (expired && row.key === exactKey && remaining > 0) {
+      exactPending = false;
+      remaining -= 1;
       changed = true;
       continue;
     }
-    if (expired && purged < NONCE_LIMITS.purgeRows) {
-      purged += 1;
+    if (expired && remaining > (exactPending ? 1 : 0)) {
+      remaining -= 1;
       changed = true;
       continue;
     }
@@ -83,13 +86,13 @@ export const reserveNonce = (input, op) => {
   });
   const noWrite = (status, code, extra = {}) => finish(status, code, extra);
   const failClock = (rawNow) => {
-    state.clockUnsafe = true;
     state.fenced = true;
-    if (op.rollbackLatch === 'unknown') {
-      return noWrite(503, 'clock_unsafe', { latchedRaw: rawNow, latchPersistence: 'unknown' });
-    }
     callbacks += 1;
     writes += 1;
+    if (op.rollbackLatch === 'unknown' || op.rollbackLatch === 'definite_failure') {
+      return finish(503, 'durability_unavailable', { latchedRaw: rawNow, latchPersistence: op.rollbackLatch });
+    }
+    state.clockUnsafe = true;
     return finish(503, 'clock_unsafe', { latchedRaw: rawNow });
   };
 

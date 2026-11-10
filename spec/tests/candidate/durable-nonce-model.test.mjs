@@ -45,6 +45,24 @@ test('changing authentication or expiry boundary changes executed nonce behavior
   assert.notEqual(reserveNonce(expiry.state, { ...expiry.event, ts: 131, entryNow: 131, intentNow: 131, finalNow: 131 }).response.code, 'replayed_nonce');
 });
 
+test('uncertain rollback latch reports unavailable, never a confirmed clock fence', () => {
+  const row = NONCE_EVENTS.find((item) => item.id === 'purge-highwater-rollback');
+  const result = reserveNonce(row.state, { ...row.event, rollbackLatch: 'unknown' });
+  assert.deepEqual([result.response.code, result.writes, result.callbacks, result.dispatches], ['durability_unavailable', 1, 1, 0]);
+  assert.equal(result.state.clockUnsafe, false);
+  assert.equal(result.state.fenced, true);
+});
+
+test('targeted expiry deletion counts toward the 128-row transaction budget', () => {
+  const row = NONCE_EVENTS.find((item) => item.id === 'expiry-plus-one-fresh-timestamp');
+  const live = Array.from({ length: 129 }, (_, index) => ({ key: `expired-${index}`, retainUntil: 130 }));
+  live.push({ key: `${row.event.kid}:${row.event.nonce}`, retainUntil: 130 });
+  const result = reserveNonce(initialNonceState({ highWater: 130, live }), { ...row.event, finalOutcome: 'aborted', cleanupOutcome: 'confirmed' });
+  assert.equal(result.state.live.length, 2);
+  assert.equal(result.state.live.some((entry) => entry.key === `${row.event.kid}:${row.event.nonce}`), false);
+  assert.equal(result.dispatches, 0);
+});
+
 test('unknown exact intent never gains retry permission from absent state', () => {
   const row = NONCE_EVENTS.find((item) => item.id === 'unknown-intent-absent');
   const committed = reserveNonce(row.state, row.event);
