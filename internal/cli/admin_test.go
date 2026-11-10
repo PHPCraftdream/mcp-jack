@@ -25,10 +25,10 @@ func (output *adminTestOutput) Close() error { output.closed = true; return nil 
 
 func TestCLISetAdminExplicitFalseAndLastAdmin(t *testing.T) {
 	var forwarded atomic.Int32
-	config, _, state := signedFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	config, _, state := signedFixtureWithNative(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		forwarded.Add(1)
 		w.WriteHeader(500)
-	}))
+	}), server.NewNativeTools(server.NativeOptions{}))
 	caller := state.View().Keys[0]
 	_, other, err := userkey.IssueLocalPair()
 	if err != nil {
