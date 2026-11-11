@@ -51,7 +51,7 @@ type handler struct {
 	v      *Verifier
 	key    ed25519.PrivateKey
 	signer ResponseSigner
-	keys ResponseKeyProvider
+	keys   ResponseKeyProvider
 	public []byte
 	kid    string
 	limit  int64
@@ -124,7 +124,9 @@ func NewHandler(cfg HandlerConfig, next http.Handler) (http.Handler, error) {
 		public = cfg.ServerKey.Public().(ed25519.PublicKey)
 	}
 	var kid string
-	if public != nil { kid = jack.KeyID(public) }
+	if public != nil {
+		kid = jack.KeyID(public)
+	}
 	return &handler{v: cfg.Verifier, key: cfg.ServerKey, signer: cfg.ResponseSigner, keys: cfg.ResponseKeys, public: public, kid: kid, limit: limit, respLimit: respLimit, next: next}, nil
 }
 

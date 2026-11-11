@@ -9,19 +9,19 @@ import (
 
 // ResponseKeyRequest — owned copy; payload не является источником key authority.
 type ResponseKeyRequest struct {
-	Status int
-	Tool string
+	Status           int
+	Tool             string
 	RequestSignature string
-	Body []byte
+	Body             []byte
 }
 
 // ResponseKeyAuthorization закрепляет identity/time и lease до завершения write.
 // Provider обязан ограничивать callbacks и не терять lease при panic/error.
 type ResponseKeyAuthorization struct {
-	Signer ResponseSigner
+	Signer    ResponseSigner
 	Timestamp int64
-	Final func() error
-	Release func()
+	Final     func() error
+	Release   func()
 }
 
 // ResponseKeyProvider выбирается явно; persistence/clock/ring invariants принадлежат provider.
@@ -34,11 +34,16 @@ var errResponseAuthorization = errors.New("server: response authorization unavai
 func authorizeResponse(provider ResponseKeyProvider, input ResponseKeyRequest) (authorization ResponseKeyAuthorization, err error) {
 	complete := false
 	defer func() {
-		if !complete { _ = recover(); err = errResponseAuthorization }
+		if !complete {
+			_ = recover()
+			err = errResponseAuthorization
+		}
 	}()
 	authorization, err = provider.AuthorizeResponse(input)
 	complete = true
-	if err != nil { return authorization, errResponseAuthorization }
+	if err != nil {
+		return authorization, errResponseAuthorization
+	}
 	if authorization.Signer == nil || authorization.Final == nil || authorization.Release == nil || authorization.Timestamp < 0 || authorization.Timestamp > maxDurableTimestamp {
 		return authorization, errResponseAuthorization
 	}
@@ -47,15 +52,24 @@ func authorizeResponse(provider ResponseKeyProvider, input ResponseKeyRequest) (
 
 func finalResponseAuthorization(check func() error) (err error) {
 	complete := false
-	defer func() { if !complete { _ = recover(); err = errResponseAuthorization } }()
+	defer func() {
+		if !complete {
+			_ = recover()
+			err = errResponseAuthorization
+		}
+	}()
 	err = check()
 	complete = true
-	if err != nil { return errResponseAuthorization }
+	if err != nil {
+		return errResponseAuthorization
+	}
 	return nil
 }
 
 func releaseResponseAuthorization(release func()) {
-	if release == nil { return }
+	if release == nil {
+		return
+	}
 	defer func() { _ = recover() }()
 	release()
 }
@@ -65,15 +79,29 @@ func (h *handler) writeAuthorized(w http.ResponseWriter, status int, header http
 	input := ResponseKeyRequest{Status: status, Tool: tool, RequestSignature: requestSignature, Body: append([]byte(nil), payload...)}
 	authorization, err := authorizeResponse(h.keys, input)
 	defer releaseResponseAuthorization(authorization.Release)
-	refuse := func() { writeError(w, http.StatusServiceUnavailable, "rotation_state_unavailable", "response authorization unavailable") }
-	if err != nil { refuse(); return }
+	refuse := func() {
+		writeError(w, http.StatusServiceUnavailable, "rotation_state_unavailable", "response authorization unavailable")
+	}
+	if err != nil {
+		refuse()
+		return
+	}
 	public, err := responsePublicKey(authorization.Signer)
-	if err != nil { refuse(); return }
+	if err != nil {
+		refuse()
+		return
+	}
 	kid := jack.KeyID(public)
 	message := jack.ResponseSigningString(status, requestSignature, kid, authorization.Timestamp, payload)
 	signature, err := responseSignature(authorization.Signer, public, message)
-	if err != nil { refuse(); return }
-	if err := finalResponseAuthorization(authorization.Final); err != nil { refuse(); return }
+	if err != nil {
+		refuse()
+		return
+	}
+	if err := finalResponseAuthorization(authorization.Final); err != nil {
+		refuse()
+		return
+	}
 	header.Set("Jack-Auth", jack.FormatResponseAuth(jack.ResponseAuth{Kid: kid, TS: authorization.Timestamp, Sig: jack.EncodeBase64URL(signature)}))
 	writeRaw(w, status, header, payload)
 }
