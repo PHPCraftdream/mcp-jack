@@ -14,45 +14,45 @@ type trustBindingDocument struct {
 }
 
 type trustCheckpointDocument struct {
-	Ordinal uint64 `json:"ordinal"`
-	Hash string `json:"hash"`
-	KID string `json:"kid"`
-	PublicKey string `json:"public_key"`
-	PublishedAt int64 `json:"published_at"`
+	Ordinal     uint64 `json:"ordinal"`
+	Hash        string `json:"hash"`
+	KID         string `json:"kid"`
+	PublicKey   string `json:"public_key"`
+	PublishedAt int64  `json:"published_at"`
 }
 
 type trustHeadDocument struct {
 	Ordinal uint64 `json:"ordinal"`
-	Hash string `json:"hash"`
+	Hash    string `json:"hash"`
 }
 
 type trustKeyDocument struct {
-	Ordinal uint64 `json:"ordinal"`
-	KID string `json:"kid"`
-	PublicKey string `json:"public_key"`
-	NotBefore int64 `json:"not_before"`
+	Ordinal     uint64 `json:"ordinal"`
+	KID         string `json:"kid"`
+	PublicKey   string `json:"public_key"`
+	NotBefore   int64  `json:"not_before"`
 	KnownCutoff *int64 `json:"known_cutoff"`
 }
 
 type trustClockDocument struct {
-	Binding trustBindingDocument `json:"binding"`
-	Window int64 `json:"window"`
-	HighWater int64 `json:"high_water"`
-	Revision uint64 `json:"clock_revision"`
-	Unsafe bool `json:"unsafe"`
+	Binding   trustBindingDocument `json:"binding"`
+	Window    int64                `json:"window"`
+	HighWater int64                `json:"high_water"`
+	Revision  uint64               `json:"clock_revision"`
+	Unsafe    bool                 `json:"unsafe"`
 }
 
 type trustDocument struct {
-	FormatVersion uint32 `json:"format_version"`
-	Binding trustBindingDocument `json:"binding"`
-	Window int64 `json:"window"`
-	Checkpoint trustCheckpointDocument `json:"checkpoint"`
-	Head trustHeadDocument `json:"head"`
-	Records []string `json:"records"`
-	Keys []trustKeyDocument `json:"keys"`
-	Revision uint64 `json:"trust_revision"`
-	Fenced bool `json:"fenced"`
-	Clock trustClockDocument `json:"clock"`
+	FormatVersion uint32                  `json:"format_version"`
+	Binding       trustBindingDocument    `json:"binding"`
+	Window        int64                   `json:"window"`
+	Checkpoint    trustCheckpointDocument `json:"checkpoint"`
+	Head          trustHeadDocument       `json:"head"`
+	Records       []string                `json:"records"`
+	Keys          []trustKeyDocument      `json:"keys"`
+	Revision      uint64                  `json:"trust_revision"`
+	Fenced        bool                    `json:"fenced"`
+	Clock         trustClockDocument      `json:"clock"`
 }
 
 func canonicalTrustScalars(value any, nullable bool) bool {
@@ -136,7 +136,7 @@ func DecodeTrustSnapshot(data []byte, binding Binding, window int64, checkpoint 
 	loaded := TrustSnapshot{
 		FormatVersion: document.FormatVersion, Binding: Binding{Endpoint: document.Binding.Endpoint, Audience: document.Binding.Audience}, Window: document.Window,
 		Checkpoint: Checkpoint{Ordinal: document.Checkpoint.Ordinal, Hash: document.Checkpoint.Hash, KID: document.Checkpoint.KID, PublishedAt: document.Checkpoint.PublishedAt},
-		Head: ResultCursor{Ordinal: document.Head.Ordinal, Hash: document.Head.Hash}, Records: document.Records, Keys: make([]TrustKey, len(document.Keys)),
+		Head:       ResultCursor{Ordinal: document.Head.Ordinal, Hash: document.Head.Hash}, Records: document.Records, Keys: make([]TrustKey, len(document.Keys)),
 		Revision: document.Revision, Fenced: document.Fenced,
 		Clock: ClockTuple{Binding: Binding{Endpoint: document.Clock.Binding.Endpoint, Audience: document.Clock.Binding.Audience}, Window: document.Clock.Window, HighWater: document.Clock.HighWater, Revision: document.Clock.Revision, Unsafe: document.Clock.Unsafe},
 	}
@@ -161,7 +161,7 @@ func EncodeTrustSnapshot(input TrustSnapshot, binding Binding, window int64, che
 	document := trustDocument{
 		FormatVersion: snapshot.FormatVersion, Binding: trustBindingDocument{Endpoint: snapshot.Binding.Endpoint, Audience: snapshot.Binding.Audience}, Window: snapshot.Window,
 		Checkpoint: trustCheckpointDocument{Ordinal: snapshot.Checkpoint.Ordinal, Hash: snapshot.Checkpoint.Hash, KID: snapshot.Checkpoint.KID, PublicKey: jack.EncodeBase64URL(snapshot.Checkpoint.PublicKey[:]), PublishedAt: snapshot.Checkpoint.PublishedAt},
-		Head: trustHeadDocument{Ordinal: snapshot.Head.Ordinal, Hash: snapshot.Head.Hash}, Records: append([]string{}, snapshot.Records...), Keys: make([]trustKeyDocument, len(snapshot.Keys)),
+		Head:       trustHeadDocument{Ordinal: snapshot.Head.Ordinal, Hash: snapshot.Head.Hash}, Records: append([]string{}, snapshot.Records...), Keys: make([]trustKeyDocument, len(snapshot.Keys)),
 		Revision: snapshot.Revision, Fenced: snapshot.Fenced,
 		Clock: trustClockDocument{Binding: trustBindingDocument{Endpoint: snapshot.Clock.Binding.Endpoint, Audience: snapshot.Clock.Binding.Audience}, Window: snapshot.Clock.Window, HighWater: snapshot.Clock.HighWater, Revision: snapshot.Clock.Revision, Unsafe: snapshot.Clock.Unsafe},
 	}

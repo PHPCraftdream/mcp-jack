@@ -58,7 +58,7 @@ func TestTrustSnapshotCodecRejectsSchemaAndScalarAmbiguity(t *testing.T) {
 			t.Fatalf("ambiguous state accepted: %v", err)
 		}
 	}
-	for _, replacement := range []struct { from, to string }{
+	for _, replacement := range []struct{ from, to string }{
 		{`"format_version":1`, `"format_version":1,"format_version":1`},
 		{`"fenced":false`, `"fenced":false,"fenced":false`},
 		{`"unsafe":false`, `"unsafe":false,"unsafe":false`},
