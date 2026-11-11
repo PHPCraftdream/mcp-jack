@@ -4,3 +4,4 @@ export * from "./rotation-chain.js";
 export * from "./rotation-sign.js";
 export * from "./rotation-result.js";
 export * from "./rotation-page.js";
+export * from "./rotation-trust.js";
