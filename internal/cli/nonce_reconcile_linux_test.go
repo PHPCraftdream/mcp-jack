@@ -55,8 +55,8 @@ func nonceRecoveryCLIFixture(t *testing.T) (string, string, durable.Options, dur
 		t.Fatal("fixture did not reserve an actual authenticated request")
 	}
 	owner.Fence()
-	if owner.Close() == nil {
-		t.Fatal("fixture did not preserve uncertainty fence")
+	if err := owner.Close(); err != nil {
+		t.Fatal("fixture physical owner close failed", err)
 	}
 	snapshot, err := durable.InspectRecovery(path, options)
 	if err != nil || !snapshot.Dirty || len(snapshot.Live) != 1 {
