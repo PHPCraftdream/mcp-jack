@@ -6,6 +6,8 @@ mod record;
 mod result;
 mod sign;
 mod trust;
+mod trust_json;
+mod trust_json_wire;
 
 pub use chain::{assignment_valid, selected_ordinal, verify_chain, Checkpoint, MAX_RETAINED_KEYS};
 pub use page::{validate_page_framing, PageFraming, ResultCursor};
@@ -16,6 +18,7 @@ pub use trust::{
     trust_clock_compatible, validate_trust_snapshot, ClockTuple, OwnedBinding, TrustKey,
     TrustSnapshot,
 };
+pub use trust_json::{decode_trust_snapshot, encode_trust_snapshot, MAX_TRUST_SNAPSHOT_BYTES};
 
 use std::fmt;
 

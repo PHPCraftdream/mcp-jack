@@ -350,3 +350,6 @@ fn independently_provisioned_nonzero_checkpoint_has_checked_activation_and_ordin
         rotation::validate_trust_snapshot(&overflow_ordinal, binding(&corpus), 30, &root).is_err()
     );
 }
+
+#[path = "rotation_trust/json.rs"]
+mod json_tests;
