@@ -1,5 +1,12 @@
+use mcp_jack::auth_header::{ResponseAuth, format_response_auth};
 use mcp_jack::client::signer::Signer;
-use mcp_jack::rotation::{Checkpoint, OwnedBinding, RotationStoreOptions, RotationTrustStore};
+use mcp_jack::client::{InMemorySigner, random_nonce, sign_request};
+use mcp_jack::encoding::encode_b64url;
+use mcp_jack::rotation::{
+    Checkpoint, OwnedBinding, ResultCursor, RotationController, RotationResponse,
+    RotationStoreOptions, RotationTrustStore,
+};
+use mcp_jack::signing::response_signing_string;
 use std::cell::Cell;
 use std::fs;
 use std::os::unix::fs::DirBuilderExt;
@@ -12,6 +19,23 @@ impl Drop for Sandbox {
         // Только свежий test-owned каталог, без чужих артефактов.
         fs::remove_dir_all(&self.0).expect("remove consumer store sandbox");
     }
+}
+
+fn signed_response(signer: &dyn Signer, request_body: &[u8], body: &[u8]) -> Result<RotationResponse, String> {
+    let client = InMemorySigner::generate().map_err(|_| "generate packaged controller client")?;
+    let nonce = random_nonce().map_err(|_| "packaged controller nonce")?;
+    let request = sign_request(&client, super::AUD, "POST", "/mcp", request_body, &nonce, super::NOW)
+        .map_err(|_| "sign packaged controller request")?;
+    let signing = response_signing_string(200, &request.auth.sig, signer.kid(), super::NOW, body);
+    let signature = signer.sign(signing.as_bytes()).map_err(|_| "sign packaged controller response")?;
+    Ok(RotationResponse {
+        status: 200,
+        headers: vec![format_response_auth(&ResponseAuth {
+            kid: signer.kid().into(), ts: super::NOW, sig: encode_b64url(&signature),
+        })],
+        request_signature: request.auth.sig,
+        body: body.to_vec(),
+    })
 }
 
 pub(super) fn verify(signer: &dyn Signer) -> Result<(), String> {
@@ -86,6 +110,36 @@ pub(super) fn verify(signer: &dyn Signer) -> Result<(), String> {
             == "-",
         "packaged store owned snapshot",
     )?;
+    {
+        let mut controller = RotationController::new(&mut store)
+            .map_err(|_| "construct packaged response controller")?;
+        let request = serde_json::json!({"jsonrpc":"2.0","id":7,"method":"tools/call",
+            "params":{"name":"consumer.echo","arguments":{}}}).to_string();
+        let opaque = [0xff, 0, 10];
+        let verified = controller.verify_response(signed_response(signer, request.as_bytes(), &opaque)?)
+            .map_err(|_| "verify packaged opaque response")?;
+        super::check(verified == opaque, "packaged controller exact response bytes")?;
+        let mut tampered = signed_response(signer, request.as_bytes(), &opaque)?;
+        tampered.body.push(0);
+        match controller.verify_response(tampered) {
+            Err(error) => super::check(error.code == "bad_signature" && error.http_status == 0, "packaged controller tamper refusal")?,
+            Ok(_) => return Err("packaged controller accepted tampered bytes".into()),
+        }
+        let cursor = ResultCursor { ordinal: 0, hash: "-".into() };
+        let request = serde_json::json!({"jsonrpc":"2.0","id":7,"method":"tools/call",
+            "params":{"name":"jack.server.key","arguments":{"after_ordinal":0,"after_hash":"-"}}}).to_string();
+        let page = serde_json::json!({
+            "current":{"kid":signer.kid(),"public_key":encode_b64url(&signer.public_key())},
+            "records":[],"head":{"ordinal":0,"hash":"-"},"complete":true,
+        });
+        let body = serde_json::json!({"jsonrpc":"2.0","id":7,"result":{
+            "content":[{"type":"text","text":page.to_string()}],"structuredContent":page,"isError":false,
+        }}).to_string().into_bytes();
+        let result = controller.accept_refresh(signed_response(signer, request.as_bytes(), &body)?, b"7", &cursor)
+            .map_err(|_| "accept packaged explicit empty refresh")?;
+        super::check(!result.committed && result.complete && result.revision == 1 && result.head == cursor && result.terminal == cursor,
+            "packaged empty refresh is not a trust mutation")?;
+    }
     store.close().map_err(|_| "close packaged store")?;
     super::check(
         !sandbox.0.join("trust.owner").exists(),
