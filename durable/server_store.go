@@ -1,7 +1,6 @@
 package durable
 
 import (
-	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"os"
@@ -128,21 +127,8 @@ func (store *ServerStore) validateRows(tx *bolt.Tx) (rotation.ServerSnapshot, tr
 	if err != nil || !rotation.TrustClockCompatible(snapshot.Public, guard.Clock) {
 		return rotation.ServerSnapshot{}, guard, ErrRecoveryRequired
 	}
-	if len(intent) == 0 && (len(snapshot.Public.Records) != 0 || snapshot.Public.Revision != 1) {
-		return rotation.ServerSnapshot{}, guard, ErrInvalidStore
-	}
-	if len(intent) != 0 {
-		previous, next, err := decodeServerIntent(intent)
-		if err != nil || !bytes.Equal(next, encoded) {
-			return rotation.ServerSnapshot{}, guard, ErrInvalidStore
-		}
-		before, err := rotation.DecodeServerSnapshot(previous, store.options.Binding, store.options.Window, store.options.Checkpoint)
-		if err != nil {
-			return rotation.ServerSnapshot{}, guard, ErrInvalidStore
-		}
-		if _, err := rotation.ValidateServerPublication(before, snapshot, store.options.Binding, store.options.Window, store.options.Checkpoint); err != nil {
-			return rotation.ServerSnapshot{}, guard, ErrInvalidStore
-		}
+	if err := validateServerPublicationRows(encoded, intent, snapshot, store.options.TrustOptions); err != nil {
+		return rotation.ServerSnapshot{}, guard, err
 	}
 	return snapshot, guard, nil
 }
