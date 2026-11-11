@@ -71,6 +71,11 @@ test("controller: exact owned signed body without parsing, with inclusive freshn
   assert.deepEqual(store.snapshot().snapshot, before);
   verified.fill(0);
   assert.notDeepEqual(verified, input.body);
+  const plain = { ...input, body: new Uint8Array(input.body) };
+  const copied = controller.verifyResponse(plain);
+  assert.deepEqual([...copied], [...plain.body]);
+  copied.fill(0);
+  assert.notDeepEqual([...copied], [...plain.body]);
   const sequence = [1000, 1000, 1030];
   clock.hook = () => { const value = sequence.shift(); assert.notEqual(value, undefined); return value as number; };
   assert.deepEqual(controller.verifyResponse(input), input.body);
