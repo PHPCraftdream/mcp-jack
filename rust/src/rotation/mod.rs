@@ -3,20 +3,20 @@
 mod chain;
 mod json_object;
 mod page;
+#[cfg(target_os = "linux")]
+mod private_file;
 mod record;
 mod result;
 mod sign;
-mod trust;
-mod trust_json;
-mod trust_json_wire;
-#[cfg(target_os = "linux")]
-mod private_file;
 #[cfg(target_os = "linux")]
 mod store;
 #[cfg(target_os = "linux")]
 mod store_format;
 #[cfg(all(test, target_os = "linux"))]
 mod store_tests;
+mod trust;
+mod trust_json;
+mod trust_json_wire;
 
 #[cfg(target_os = "linux")]
 pub use store::RotationTrustStore;
