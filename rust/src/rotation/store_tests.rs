@@ -488,7 +488,8 @@ fn protected_bundle_rejects_raw_number_aliases_duplicates_and_wrong_objects() {
         profile.clone(),
         &anchor,
         &options,
-    ).unwrap();
+    )
+    .unwrap();
     let bytes = bundle.pack().unwrap();
     let outer: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     let payload = outer["payload"].as_str().unwrap();
@@ -496,7 +497,9 @@ fn protected_bundle_rejects_raw_number_aliases_duplicates_and_wrong_objects() {
         serde_json::json!({
             "payload": text,
             "checksum": crate::encoding::body_hash(text.as_bytes()),
-        }).to_string().into_bytes()
+        })
+        .to_string()
+        .into_bytes()
     };
     assert!(store_format::unpack(seal(payload), &options, &profile).is_ok());
     assert_eq!(payload.matches("\"owner\":1").count(), 1);
@@ -513,7 +516,17 @@ fn protected_bundle_rejects_raw_number_aliases_duplicates_and_wrong_objects() {
     }
     assert!(store_format::unpack(seal("[]"), &options, &profile).is_err());
     let mut value: serde_json::Value = serde_json::from_str(payload).unwrap();
-    for field in ["domain", "format_version", "store_id", "profile", "owner", "dirty", "fenced", "clock", "snapshot"] {
+    for field in [
+        "domain",
+        "format_version",
+        "store_id",
+        "profile",
+        "owner",
+        "dirty",
+        "fenced",
+        "clock",
+        "snapshot",
+    ] {
         let saved = value[field].clone();
         value[field] = serde_json::Value::Null;
         assert!(store_format::unpack(seal(&value.to_string()), &options, &profile).is_err());
@@ -526,10 +539,15 @@ fn protected_bundle_rejects_raw_number_aliases_duplicates_and_wrong_objects() {
         ("\"high_water\":0", "\"high_water\":-0"),
         ("\"high_water\":0", "\"high_water\":1000000000000"),
         ("\"clock_revision\":0", "\"clock_revision\":0.0"),
-        ("\"clock_revision\":0", "\"clock_revision\":9007199254740992"),
+        (
+            "\"clock_revision\":0",
+            "\"clock_revision\":9007199254740992",
+        ),
     ] {
         assert_eq!(clock.matches(needle).count(), 1);
-        assert!(store_format::read_clock(&clock.replacen(needle, replacement, 1), &options).is_err());
+        assert!(
+            store_format::read_clock(&clock.replacen(needle, replacement, 1), &options).is_err()
+        );
     }
     assert!(store_format::read_clock("[]", &options).is_err());
     let mut clock_value: serde_json::Value = serde_json::from_str(clock).unwrap();
@@ -554,20 +572,32 @@ fn late_filesystem_identity_loss_cannot_commit_clock_or_clean_owner() {
             if callback.get() {
                 if replace_parent {
                     fs::rename(&callback_parent, &callback_moved).unwrap();
-                    fs::DirBuilder::new().mode(0o700).create(&callback_parent).unwrap();
+                    fs::DirBuilder::new()
+                        .mode(0o700)
+                        .create(&callback_parent)
+                        .unwrap();
                 } else {
-                    fs::write(callback_parent.join("trust.owner"), b"foreign owner marker").unwrap();
+                    fs::write(callback_parent.join("trust.owner"), b"foreign owner marker")
+                        .unwrap();
                 }
                 Ok(101)
             } else {
                 Ok(100)
             }
-        }).unwrap();
+        })
+        .unwrap();
         let before = fs::read(&path).unwrap();
         armed.set(true);
-        assert_eq!(store.advance_and_check().unwrap_err().code, "rotation_clock_unavailable");
+        assert_eq!(
+            store.advance_and_check().unwrap_err().code,
+            "rotation_clock_unavailable"
+        );
         assert!(store.close().is_err());
-        let surviving = if replace_parent { moved.join("trust") } else { path.clone() };
+        let surviving = if replace_parent {
+            moved.join("trust")
+        } else {
+            path.clone()
+        };
         assert_eq!(fs::read(&surviving).unwrap(), before);
         assert!(surviving.with_file_name("trust.owner").exists());
         if replace_parent {
