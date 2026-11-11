@@ -14,15 +14,21 @@ fn response(seed: u8, timestamp: i64, body: &[u8]) -> RotationResponse {
     let mut nonce = [0; 16];
     getrandom::fill(&mut nonce).unwrap();
     let request = request_signing_string(
-        "POST", "/mcp?exact=query", "store-test", client.kid(), timestamp,
-        &encode_b64url(&nonce), b"exact request body",
+        "POST",
+        "/mcp?exact=query",
+        "store-test",
+        client.kid(),
+        timestamp,
+        &encode_b64url(&nonce),
+        b"exact request body",
     );
     let request_signature = encode_b64url(&client.sign(request.as_bytes()).unwrap());
     let signed = response_signing_string(200, &request_signature, server.kid(), timestamp, body);
     RotationResponse {
         status: 200,
         headers: vec![format_response_auth(&ResponseAuth {
-            kid: server.kid().into(), ts: timestamp,
+            kid: server.kid().into(),
+            ts: timestamp,
             sig: encode_b64url(&server.sign(signed.as_bytes()).unwrap()),
         })],
         request_signature,
@@ -42,13 +48,19 @@ fn ordinary_exact_opaque_body_inclusive_window_and_no_trust_mutation() {
     let mut store = RotationTrustStore::open(&path, options(), move || {
         clock_calls.set(clock_calls.get() + 1);
         Ok(clock_time.get())
-    }).unwrap();
+    })
+    .unwrap();
     {
         let mut controller = RotationController::new(&mut store).unwrap();
         calls.set(0);
         now.set(130);
         let body = [0xff, 0, 10, 13];
-        assert_eq!(controller.verify_response(response(31, 100, &body)).unwrap(), body);
+        assert_eq!(
+            controller
+                .verify_response(response(31, 100, &body))
+                .unwrap(),
+            body
+        );
         assert_eq!(calls.get(), 3);
     }
     let (snapshot, clock) = store.snapshot().unwrap();
@@ -70,7 +82,8 @@ fn unknown_key_and_body_cap_precede_clock_bad_crypto_never_advances_guard() {
     let mut store = RotationTrustStore::open(&path, options(), move || {
         clock_calls.set(clock_calls.get() + 1);
         Ok(clock_time.get())
-    }).unwrap();
+    })
+    .unwrap();
     {
         let mut controller = RotationController::new(&mut store).unwrap();
         calls.set(0);
@@ -82,7 +95,10 @@ fn unknown_key_and_body_cap_precede_clock_bad_crypto_never_advances_guard() {
         assert_eq!(calls.get(), 0);
         let mut large = response(31, 100, b"opaque");
         large.body = vec![0; 1024 * 1024 + 1];
-        assert_eq!(controller.verify_response(large).unwrap_err().code, "rotation_result_invalid");
+        assert_eq!(
+            controller.verify_response(large).unwrap_err().code,
+            "rotation_result_invalid"
+        );
         assert_eq!(calls.get(), 0);
         now.set(101);
         for mutation in ["body", "status", "request", "signature"] {
@@ -92,8 +108,10 @@ fn unknown_key_and_body_cap_precede_clock_bad_crypto_never_advances_guard() {
                 "status" => changed.status = 201,
                 "request" => changed.request_signature = encode_b64url(&[7; 64]),
                 "signature" => {
-                    let mut auth = crate::auth_header::parse_response_auth(&[&changed.headers[0]]).unwrap();
-                    let mut signature = crate::encoding::decode_b64url_fixed(&auth.sig, 64).unwrap();
+                    let mut auth =
+                        crate::auth_header::parse_response_auth(&[&changed.headers[0]]).unwrap();
+                    let mut signature =
+                        crate::encoding::decode_b64url_fixed(&auth.sig, 64).unwrap();
                     signature[0] ^= 1;
                     auth.sig = encode_b64url(&signature);
                     changed.headers[0] = format_response_auth(&auth);
@@ -121,16 +139,29 @@ fn final_freshness_and_rollback_refuse_body_without_undoing_clock_state() {
         let callback = queue.clone();
         let mut store = RotationTrustStore::open(&path, options(), move || {
             Ok(callback.borrow_mut().pop_front().unwrap_or(100))
-        }).unwrap();
+        })
+        .unwrap();
         {
             let mut controller = RotationController::new(&mut store).unwrap();
             queue.borrow_mut().extend([100, 100, final_time]);
-            let error = controller.verify_response(response(31, 100, b"never return")).unwrap_err();
-            assert_eq!(error.code, if final_time == 99 { "rotation_clock_unsafe" } else { "timestamp_out_of_window" });
+            let error = controller
+                .verify_response(response(31, 100, b"never return"))
+                .unwrap_err();
+            assert_eq!(
+                error.code,
+                if final_time == 99 {
+                    "rotation_clock_unsafe"
+                } else {
+                    "timestamp_out_of_window"
+                }
+            );
             assert!(queue.borrow().is_empty());
         }
         if final_time == 99 {
-            assert_eq!(store.advance_and_check().unwrap_err().code, "rotation_clock_unsafe");
+            assert_eq!(
+                store.advance_and_check().unwrap_err().code,
+                "rotation_clock_unsafe"
+            );
             assert!(store.close().is_err());
         } else {
             let (snapshot, clock) = store.snapshot().unwrap();
@@ -151,8 +182,12 @@ fn acknowledged_successor_and_strict_final_cutoff_leave_static_pin_unchanged() {
     let clock_base = base.clone();
     let callback = queue.clone();
     let mut store = RotationTrustStore::open(&path, options(), move || {
-        Ok(callback.borrow_mut().pop_front().unwrap_or(clock_base.get()))
-    }).unwrap();
+        Ok(callback
+            .borrow_mut()
+            .pop_front()
+            .unwrap_or(clock_base.get()))
+    })
+    .unwrap();
     let (previous, clock) = store.snapshot().unwrap();
     let desired = next(&previous, &clock);
     let cutoff = desired.keys[1].not_before;
@@ -161,16 +196,31 @@ fn acknowledged_successor_and_strict_final_cutoff_leave_static_pin_unchanged() {
     {
         let mut controller = RotationController::new(&mut store).unwrap();
         queue.borrow_mut().extend([cutoff - 1, cutoff - 1, cutoff]);
-        assert_eq!(controller.verify_response(response(31, i64::try_from(cutoff - 1).unwrap(), b"old")).unwrap_err().code, "rotation_key_interval");
+        assert_eq!(
+            controller
+                .verify_response(response(31, i64::try_from(cutoff - 1).unwrap(), b"old"))
+                .unwrap_err()
+                .code,
+            "rotation_key_interval"
+        );
         base.set(cutoff);
         let next_response = response(32, i64::try_from(cutoff).unwrap(), b"next");
         let old = InMemorySigner::from_seed(&[31; 32]).unwrap();
         let references: Vec<&str> = next_response.headers.iter().map(String::as_str).collect();
-        assert_eq!(crate::signing::verify_response(
-            &old.public_key(), next_response.status, &references,
-            &next_response.request_signature, &next_response.body,
-            i64::try_from(cutoff).unwrap(), 30,
-        ).unwrap_err().code, "unknown_server_key");
+        assert_eq!(
+            crate::signing::verify_response(
+                &old.public_key(),
+                next_response.status,
+                &references,
+                &next_response.request_signature,
+                &next_response.body,
+                i64::try_from(cutoff).unwrap(),
+                30,
+            )
+            .unwrap_err()
+            .code,
+            "unknown_server_key"
+        );
         assert_eq!(controller.verify_response(next_response).unwrap(), b"next");
     }
     let (snapshot, clock) = store.snapshot().unwrap();
