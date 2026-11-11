@@ -4,6 +4,7 @@ package rotationserver
 import (
 	"errors"
 	"sync/atomic"
+	"unicode/utf8"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
 	"github.com/PHPCraftdream/mcp-jack/durable"
@@ -37,6 +38,7 @@ func (signer pinnedSigner) Sign(message []byte) ([]byte, error) { return signer.
 type Provider struct {
 	store *durable.ServerStore
 	keys  map[keyIdentity]pinnedSigner
+	publication atomic.Bool
 }
 
 func pinKey(input Key) (output pinnedSigner, result error) {
@@ -47,7 +49,7 @@ func pinKey(input Key) (output pinnedSigner, result error) {
 			result = ErrUnavailable
 		}
 	}()
-	if input.Signer == nil || input.Reference == "" || len(input.Reference) > rotation.MaxSignerReferenceBytes {
+	if input.Signer == nil || input.Reference == "" || !utf8.ValidString(input.Reference) || len(input.Reference) > rotation.MaxSignerReferenceBytes {
 		return output, ErrUnavailable
 	}
 	public := append([]byte{}, input.Signer.PublicKey()...)
