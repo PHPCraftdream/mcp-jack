@@ -29,18 +29,7 @@ type gatewayConfig struct {
 	CallTimeoutMS  int                   `json:"call_timeout_ms"`
 	MaxConcurrent  int                   `json:"max_concurrent"`
 	DurableNonces  *gatewayDurableConfig `json:"durable_nonces,omitempty"`
-}
-
-type enrollmentOnly struct {
-	native    *server.Native
-	serverKID string
-}
-
-func (n enrollmentOnly) Call(c *server.NativeCall) (server.NativeResult, *jack.Error) {
-	if c.Tool != server.ToolEnroll || c.Kid == n.serverKID {
-		return server.NativeResult{}, &jack.Error{HTTPStatus: 403, Code: jack.CodeOperationDenied, Message: "operation is not enabled"}
-	}
-	return n.native.Call(c)
+	NativeAdmin    nativeAdminFlag       `json:"native_admin,omitempty"`
 }
 
 type boundedState struct{ server.AdmissionStateStore }
@@ -52,7 +41,7 @@ func (s boundedState) Update(update server.StateUpdate) error {
 		if err := update(e); err != nil {
 			return err
 		}
-		if len(e.Keys()) > 1024 {
+		if len(e.Keys()) > 1024 || len(e.Invites()) > 1024 {
 			return errConfig
 		}
 		return nil
@@ -134,7 +123,7 @@ func gateway(ctx context.Context, path string) (result error) {
 	defer base.CloseIdleConnections()
 	verification := server.Config{
 		Aud: c.Aud, State: boundedState{state},
-		Native: enrollmentOnly{native: server.NewNativeTools(server.NativeOptions{}), serverKID: serverKID},
+		Native: gatewayNative{native: server.NewNativeTools(server.NativeOptions{}), serverKID: serverKID, adminEnabled: bool(c.NativeAdmin)},
 	}
 	closeNonces, err := selectGatewayNonces(c, &verification)
 	if err != nil {

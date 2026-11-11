@@ -37,6 +37,29 @@ func TestBoundedGatewayStatePreservesAdmissionGate(t *testing.T) {
 	}
 }
 
+func TestBoundedGatewayStateKeepsAtomicInviteLimit(t *testing.T) {
+	state := server.NewMemoryState()
+	bounded := boundedState{state}
+	if err := bounded.Update(func(edit *server.StateEdit) error {
+		for index := 0; index < 1024; index++ {
+			edit.PutInvite(server.InviteRecord{InviteID: strconv.Itoa(index)})
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := bounded.Update(func(edit *server.StateEdit) error {
+		edit.PutKey(server.RegistryEntry{Kid: "must-not-commit"})
+		edit.PutInvite(server.InviteRecord{InviteID: "overflow"})
+		return nil
+	}); !errors.Is(err, errConfig) {
+		t.Fatalf("invite capacity not enforced: %v", err)
+	}
+	if len(state.View().Invites) != 1024 || len(state.View().Keys) != 0 {
+		t.Fatal("overflow partially committed registry edits")
+	}
+}
+
 func TestBoundedGatewayStateKeepsAtomicKeyLimit(t *testing.T) {
 	state := server.NewMemoryState()
 	bounded := boundedState{state}

@@ -22,17 +22,47 @@ Commands:
 - `jack enroll --config FILE --invite-file FILE --name NAME`
 - `jack gateway --config FILE`
 - `jack bridge --config FILE`
+- `jack user-create --config FILE --public FILE --name NAME --admin true|false [--not-before TS] [--not-after TS]`
+- `jack user-list --config FILE`
+- `jack user-get --config FILE --kid KID`
+- `jack user-set-admin --config FILE --kid KID --admin true|false`
+- `jack user-revoke --config FILE --kid KID`
+- `jack invite-create --config FILE --invite-file FILE --admin true|false [--ttl-seconds N] [--key-ttl-seconds N]`
+- `jack invite-list --config FILE`
+- `jack invite-revoke --config FILE --invite-id ID`
 
 Every path argument and every file path inside configuration must be an absolute,
 clean native path. Directory creation is deliberately not implicit: provision an
 owner-controlled directory before use. Examples below use symbolic placeholders,
 not paths from any developer machine.
 
-There are no admin commands, user/server rotation commands, external signer
-providers, restart guards, durable nonce stores, sessions, general policy engine,
-or D-2/D-3 mechanisms. The native dispatcher permits only `jack.enroll`; even an
-administrator cannot invoke the SDK's other native tools through this gateway.
-Application authorization for ordinary MCP operations remains upstream-owned.
+The original bootstrap-only scope now also includes the user/invite admin CLI
+and an explicit durable nonce profile; omission of that profile still selects
+the original volatile store. This does not supply server-key rotation runtime,
+sessions, a general policy engine, or automatic recovery.
+
+The gateway permits only `jack.enroll` by default. Optional configuration
+`"native_admin": true` enables exactly the existing SDK user list/get/create/
+set_admin/revoke and invite create/list/revoke tools. Omission or `false` keeps
+the closed default; `null`, strings and numbers are rejected. Older binaries
+that do not recognize this field reject the configuration; removing it restores
+the closed default rather than preserving admin enablement. Native SDK admin
+authorization and transactional last-admin checks still apply. Both registry
+keys and stored invite records are capped at 1024 by the atomic update wrapper;
+capacity exhaustion refuses the update without partially committing edits.
+`jack.whoami`, user-key rotation, server-key rotation and unknown `jack.*` tools
+remain disabled and are never forwarded upstream. The server response identity
+cannot enroll or act as a native client. Application authorization for ordinary
+MCP operations remains upstream-owned.
+
+Admin commands use the independently pinned client configuration and one signed,
+response-verified request, without retries. `user-create` reads only a public
+user-key envelope; it does not upload private key material. `invite-create`
+reserves a new private output file before the request and writes the code only
+after verifying the signed reply and code/ID relationship. Standard output
+contains only the public invite ID and expiry. A failed or unknown operation
+leaves the reservation file in place; it is not reset or retried automatically.
+Filesystem output and remote state are not a cross-file transaction.
 
 ## Custody and file contract
 
@@ -147,7 +177,7 @@ power-loss, replay-across-restart, or multi-instance guarantee.
 
 ## Fixed Unix-socket gateway
 
-Gateway configuration (all fields required):
+Gateway configuration (shown fields required; `native_admin` is optional and defaults to `false`):
 
 ```json
 {

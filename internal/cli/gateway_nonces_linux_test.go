@@ -13,7 +13,17 @@ import (
 )
 
 func TestGatewayDurableBootstrapEnrollmentHTTP(t *testing.T) {
+	testGatewayDurableNativeHTTP(t, false)
+}
+
+func TestGatewayDurableNativeAdminHTTP(t *testing.T) {
+	testGatewayDurableNativeHTTP(t, true)
+}
+
+func testGatewayDurableNativeHTTP(t *testing.T, admin bool) {
+	t.Helper()
 	testGatewayBootstrapEnrollNoNativeForward(t, func(config *gatewayConfig) {
+		config.NativeAdmin = nativeAdminFlag(admin)
 		path := filepath.Join(privateDir(t), "nonces.db")
 		opts := durable.Options{DeploymentID: "public-http-gateway-test", Window: 30}
 		if err := durable.InitializeUnused(path, opts); err != nil {
