@@ -3,7 +3,8 @@ mod common;
 use mcp_jack::client::{InMemorySigner, Signer};
 use mcp_jack::encoding::{body_hash, decode_b64url_fixed, encode_b64url, key_id};
 use mcp_jack::rotation::{
-    self, Binding, Checkpoint, ClockTuple, OwnedBinding, Record, ResultCursor, TrustKey, TrustSnapshot,
+    self, Binding, Checkpoint, ClockTuple, OwnedBinding, Record, ResultCursor, TrustKey,
+    TrustSnapshot,
 };
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -127,7 +128,10 @@ fn example(corpus: &Corpus) -> TrustSnapshot {
     snapshot_from(binding(corpus), &root, &records, high_water)
 }
 
-fn validate(input: &TrustSnapshot, corpus: &Corpus) -> Result<TrustSnapshot, rotation::RotationError> {
+fn validate(
+    input: &TrustSnapshot,
+    corpus: &Corpus,
+) -> Result<TrustSnapshot, rotation::RotationError> {
     rotation::validate_trust_snapshot(input, binding(corpus), 30, &checkpoint(corpus))
 }
 
@@ -170,7 +174,9 @@ fn whole_trust_rejects_every_redundant_identity_time_or_shape_mutation() {
         |value| value.keys[0].not_before = 1,
         |value| value.keys[0].known_cutoff = None,
         |value| value.keys.last_mut().expect("tail").known_cutoff = Some(0),
-        |value| { value.keys.pop(); },
+        |value| {
+            value.keys.pop();
+        },
         |value| value.revision = 0,
         |value| value.revision = rotation::MAX_ORDINAL + 1,
         |value| value.clock.binding.endpoint.clear(),
@@ -187,17 +193,27 @@ fn whole_trust_rejects_every_redundant_identity_time_or_shape_mutation() {
     let input = example(&corpus);
     assert!(rotation::validate_trust_snapshot(
         &input,
-        Binding { endpoint: &corpus.binding.endpoint, aud: "other" },
+        Binding {
+            endpoint: &corpus.binding.endpoint,
+            aud: "other"
+        },
         30,
         &checkpoint(&corpus),
-    ).is_err());
-    assert!(rotation::validate_trust_snapshot(&input, binding(&corpus), 31, &checkpoint(&corpus)).is_err());
+    )
+    .is_err());
+    assert!(
+        rotation::validate_trust_snapshot(&input, binding(&corpus), 31, &checkpoint(&corpus))
+            .is_err()
+    );
     let mut root = checkpoint(&corpus);
     root.hash = "other".to_owned();
     assert!(rotation::validate_trust_snapshot(&input, binding(&corpus), 30, &root).is_err());
     let mut oversized = input;
     oversized.records = vec!["invalid".to_owned(); rotation::MAX_RETAINED_KEYS];
-    assert_eq!(validate(&oversized, &corpus).expect_err("shape bound").code, "rotation_state_unknown");
+    assert_eq!(
+        validate(&oversized, &corpus).expect_err("shape bound").code,
+        "rotation_state_unknown"
+    );
 }
 
 #[test]
@@ -261,8 +277,12 @@ fn signed_pending_capacity_accepts_128_and_refuses_129_without_new_dependencies(
     let accepted = snapshot_from(binding(&corpus), &root, &records[..128], 1000);
     assert!(rotation::validate_trust_snapshot(&accepted, binding(&corpus), 30, &root).is_ok());
     let refused = snapshot_from(binding(&corpus), &root, &records, 1000);
-    assert_eq!(rotation::validate_trust_snapshot(&refused, binding(&corpus), 30, &root)
-        .expect_err("129 pending keys accepted").code, "rotation_state_unknown");
+    assert_eq!(
+        rotation::validate_trust_snapshot(&refused, binding(&corpus), 30, &root)
+            .expect_err("129 pending keys accepted")
+            .code,
+        "rotation_state_unknown"
+    );
     let mut active = refused;
     active.clock.high_water = 1000 + rotation::GRACE_SECONDS;
     assert!(rotation::validate_trust_snapshot(&active, binding(&corpus), 30, &root).is_ok());
@@ -288,8 +308,12 @@ fn whole_trust_rechecks_proofs_even_when_redundant_head_hash_matches_tampered_by
         lines[proof_line] = encode_b64url(&proof);
         input.records[0] = lines.join("\n");
         input.head.hash = body_hash(input.records[0].as_bytes());
-        assert_eq!(validate(&input, &corpus).expect_err("tampered proof accepted").code,
-            "rotation_state_unknown");
+        assert_eq!(
+            validate(&input, &corpus)
+                .expect_err("tampered proof accepted")
+                .code,
+            "rotation_state_unknown"
+        );
     }
 }
 
@@ -322,5 +346,7 @@ fn independently_provisioned_nonzero_checkpoint_has_checked_activation_and_ordin
     root.published_at -= 1;
     root.ordinal += 1;
     let overflow_ordinal = snapshot_from(binding(&corpus), &root, &[], rotation::MAX_TIMESTAMP);
-    assert!(rotation::validate_trust_snapshot(&overflow_ordinal, binding(&corpus), 30, &root).is_err());
+    assert!(
+        rotation::validate_trust_snapshot(&overflow_ordinal, binding(&corpus), 30, &root).is_err()
+    );
 }

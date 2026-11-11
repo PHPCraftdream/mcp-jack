@@ -13,7 +13,8 @@ pub use record::parse_record;
 pub use result::{decode_result, DecodedResult, MAX_PAGE_RECORDS, MAX_RESULT_BODY_BYTES};
 pub use sign::create_record;
 pub use trust::{
-    trust_clock_compatible, validate_trust_snapshot, ClockTuple, OwnedBinding, TrustKey, TrustSnapshot,
+    trust_clock_compatible, validate_trust_snapshot, ClockTuple, OwnedBinding, TrustKey,
+    TrustSnapshot,
 };
 
 use std::fmt;
