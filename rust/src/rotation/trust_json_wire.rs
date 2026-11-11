@@ -84,7 +84,10 @@ impl<'de, T: Deserialize<'de>, const LIMIT: usize> Deserialize<'de> for BoundedV
                 write!(formatter, "an array of at most {LIMIT} values")
             }
 
-            fn visit_seq<A: SeqAccess<'de>>(mut self, mut sequence: A) -> Result<Self::Value, A::Error> {
+            fn visit_seq<A: SeqAccess<'de>>(
+                mut self,
+                mut sequence: A,
+            ) -> Result<Self::Value, A::Error> {
                 // size_hint не определяет allocation; extra element не сохраняется.
                 while self.0.len() < LIMIT {
                     match sequence.next_element::<T>()? {
@@ -168,11 +171,12 @@ mod tests {
 
     #[test]
     fn bounded_sequence_accepts_limit_without_decoding_an_extra_owned_element() {
-        let positive = serde_json::from_str::<BoundedVec<u8, 2>>("[1,2]")
-            .expect("inclusive array limit");
+        let positive =
+            serde_json::from_str::<BoundedVec<u8, 2>>("[1,2]").expect("inclusive array limit");
         assert_eq!(positive.0, [1, 2]);
         let failure = serde_json::from_str::<BoundedVec<u8, 2>>("[1,2,\"not a byte\"]")
-            .err().expect("excess array refused");
+            .err()
+            .expect("excess array refused");
         assert!(failure.to_string().contains("array capacity exceeded"));
     }
 }

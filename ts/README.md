@@ -65,3 +65,47 @@ node tools/consumer/verify-ts.mjs tools/consumer/.scratch/ts-consumer
 The preparation script is CI-only and requires `GITHUB_ACTIONS=true`; the stage must be a new direct child under `tools/consumer/.scratch/`. It builds into that stage, then stages only library `dist` JavaScript/declarations, this README, and byte-for-byte copies of the root `LICENSE-MIT` and `LICENSE-APACHE`; it runs `npm pack` with the private metadata retained. The stage contains the tarball, inventory, and intermediate `build/`, `package/`, and `npm-cache/` directories. `tools/consumer/.scratch/` is ignored by Git. The verification driver installs the tarball and the consumer fixture's own TypeScript tooling into a stage-local `consumer/` directory, checks the installed-file inventory and exact license bytes, type-checks `smoke.ts` using only the `mcp-jack` package-root import, then executes it against a bounded real loopback server. The smoke covers client-key public transfer, issuer credential import against a separately constructed trusted server tuple, a signed client/server round trip, wrong-server-pin refusal, and tampered-request refusal. No consumer lockfile is copied from the SDK.
 
 CI runs the pair above as the consumer ts job (Node 20 and 22): the stage below `tools/consumer/.scratch/` is created fresh per run by the packaging driver, and the verification driver installs the tarball into a stage-local `consumer/` directory there; the tarball, inventory, and generated install/compiler files remain in that stage.
+
+## Candidate rotation trust store
+
+The additive `rotation` namespace exposes `RotationTrustStore` and the type
+`RotationStoreOptions`. This is an explicit candidate-profile storage API; the
+existing static `client.Client`, credentials, server adapters and authorization
+rules do not opt into it automatically. It does not implement a rotating client,
+refresh transport, native server tool, publication or recovery workflow.
+
+Provision `binding`, immutable `window` (1–120 seconds) and `checkpoint` from an
+independently trusted source, never from an unverified response or a store file
+being adopted. `RotationTrustStore.initializeUnused(stateFile, options)` is a
+separate, explicit operation for a proven unused profile and never overwrites an
+existing file. Normal startup uses only `RotationTrustStore.open(stateFile,
+options)`; missing, incompatible, dirty, unsafe or uncertain state is a refusal,
+not an instruction to initialize, reset or retry.
+
+The concrete profile is synchronous, single-process/cooperating-owner storage on
+private Linux ext4/XFS/Btrfs directories. The immediate parent must belong to the
+current UID with mode 0700; state and owner files use mode 0600. Symlink/hardlink,
+unsafe-owner/mode and unsupported-platform/filesystem cases fail closed. An
+exclusive random owner marker and a dirty logical epoch prevent accidental
+concurrent/restart admission. Stale markers are never broken by PID checks or
+removed automatically. Unknown write outcomes retain the startup gate and
+artifacts; do not delete them to make startup succeed.
+
+The protected bundle contains separate logical whole-snapshot and authoritative
+ClockGuard records. `snapshot()` is a committed read, not a fresh clock sample,
+readiness proof or ACK. `rawClock()` is preliminary; `advanceAndCheck()` and
+`checkSnapshotClock(expected)` perform the authoritative monotone clock operation.
+`compareAndSwap(expected, desired, clock)` requires the exact current snapshot and
+captured guard, extends validated history and leaves logical guard bytes unchanged;
+a copied snapshot tuple alone is not time authority. No method retries an unknown
+operation or clears an unsafe rollback latch on catch-up. `close()` releases a
+healthy, settled owner only; network callers need their own final authority and
+response-lifetime gates. All synchronous callbacks and I/O must be bounded and
+non-reentrant; this API cannot preempt an arbitrary stalled callback.
+
+The local bundle limit is 16 MiB, distinct from the candidate refresh HTTP body
+limit of 256 KiB. Checksums detect accidental corruption; they are not a MAC, backup rollback
+oracle, physical-volume quota, power-loss certification or storage encryption.
+Raw file ownership and wire-format helpers are not namespace exports. Full
+candidate client/server controllers and independent release review remain separate
+gates.

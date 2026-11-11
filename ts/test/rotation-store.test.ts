@@ -5,8 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { rotation } from "../src/index.js";
-import { RotationTrustStore } from "../src/rotation-store.js";
 import { fixture } from "./fixtures.js";
+
+const RotationTrustStore = rotation.RotationTrustStore;
+type Store = rotation.RotationTrustStore;
 
 interface Corpus {
   binding: rotation.RotationBinding;
@@ -149,7 +151,7 @@ test("trust store: throwing/reentrant clock fences without subsequent write or c
   context.after(() => rmSync(root, { recursive: true, force: true }));
   for (const mode of ["throw", "reentrant", "fence"]) {
     const path = join(root, mode);
-    let store: RotationTrustStore | undefined;
+    let store: Store | undefined;
     let active = false;
     const config = options(() => {
       if (active) {
@@ -371,4 +373,10 @@ test("trust store: each open/init captures the clock getter once and owns its ca
   store.close();
   assert.equal(getterReads, 2);
   assert.equal(samples, 4);
+});
+
+test("rotation namespace exposes semantic store without private file or wire helpers", () => {
+  for (const name of ["RotationFileOwner", "createUnusedOwner", "pack", "unpack", "invalidStore", "anchorSnapshot"]) {
+    assert.equal(name in rotation, false, `private helper leaked: ${name}`);
+  }
 });

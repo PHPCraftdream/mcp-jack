@@ -113,15 +113,21 @@ pub fn encode_trust_snapshot(
             hash: value.head.hash,
         }),
         records: BoundedVec(value.records),
-        keys: BoundedVec(value.keys.into_iter().map(|key| {
-            Object(KeyDocument {
-                ordinal: Unsigned(key.ordinal),
-                kid: key.kid,
-                public_key: encode_b64url(&key.public_key),
-                not_before: Unsigned(key.not_before),
-                known_cutoff: Cutoff(key.known_cutoff),
-            })
-        }).collect()),
+        keys: BoundedVec(
+            value
+                .keys
+                .into_iter()
+                .map(|key| {
+                    Object(KeyDocument {
+                        ordinal: Unsigned(key.ordinal),
+                        kid: key.kid,
+                        public_key: encode_b64url(&key.public_key),
+                        not_before: Unsigned(key.not_before),
+                        known_cutoff: Cutoff(key.known_cutoff),
+                    })
+                })
+                .collect(),
+        ),
         trust_revision: Unsigned(value.revision),
         fenced: value.fenced,
         clock: Object(ClockDocument {

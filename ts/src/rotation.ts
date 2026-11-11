@@ -6,3 +6,5 @@ export * from "./rotation-result.js";
 export * from "./rotation-page.js";
 export * from "./rotation-trust.js";
 export * from "./rotation-trust-json.js";
+export { RotationTrustStore } from "./rotation-store.js";
+export type { RotationStoreOptions } from "./rotation-store.js";
