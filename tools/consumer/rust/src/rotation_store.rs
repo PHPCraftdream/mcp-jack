@@ -113,8 +113,7 @@ pub(super) fn verify(signer: &dyn Signer) -> Result<(), String> {
     {
         let mut controller = RotationController::new(&mut store)
             .map_err(|_| "construct packaged response controller")?;
-        let request = serde_json::json!({"jsonrpc":"2.0","id":7,"method":"tools/call",
-            "params":{"name":"consumer.echo","arguments":{}}}).to_string();
+        let request = r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"consumer.echo","arguments":{}}}"#;
         let opaque = [0xff, 0, 10];
         let verified = controller.verify_response(signed_response(signer, request.as_bytes(), &opaque)?)
             .map_err(|_| "verify packaged opaque response")?;
@@ -126,15 +125,28 @@ pub(super) fn verify(signer: &dyn Signer) -> Result<(), String> {
             Ok(_) => return Err("packaged controller accepted tampered bytes".into()),
         }
         let cursor = ResultCursor { ordinal: 0, hash: "-".into() };
-        let request = serde_json::json!({"jsonrpc":"2.0","id":7,"method":"tools/call",
-            "params":{"name":"jack.server.key","arguments":{"after_ordinal":0,"after_hash":"-"}}}).to_string();
-        let page = serde_json::json!({
-            "current":{"kid":signer.kid(),"public_key":encode_b64url(&signer.public_key())},
-            "records":[],"head":{"ordinal":0,"hash":"-"},"complete":true,
-        });
-        let body = serde_json::json!({"jsonrpc":"2.0","id":7,"result":{
-            "content":[{"type":"text","text":page.to_string()}],"structuredContent":page,"isError":false,
-        }}).to_string().into_bytes();
+        let request = r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"jack.server.key","arguments":{"after_ordinal":0,"after_hash":"-"}}}"#;
+        // Fixed fixture: подставляются только canonical base64url public values.
+        let page = format!(
+            concat!(
+                r#"{{"current":{{"kid":"{}","public_key":"{}"}},"#,
+                r#""records":[],"head":{{"ordinal":0,"hash":"-"}},"complete":true}}"#,
+            ),
+            mcp_jack::encoding::key_id(&signer.public_key()),
+            encode_b64url(&signer.public_key()),
+        );
+        super::check(
+            !page.as_bytes().contains(&92) && page.bytes().all(|byte| byte.is_ascii() && !byte.is_ascii_control()),
+            "packaged page fixture has no backslash or control bytes",
+        )?;
+        let mirror = page.replace('"', r#"\""#);
+        let body = format!(
+            concat!(
+                r#"{{"jsonrpc":"2.0","id":7,"result":{{"#,
+                r#""content":[{{"type":"text","text":"{}"}}],"structuredContent":{},"isError":false}}}}"#,
+            ),
+            mirror, page,
+        ).into_bytes();
         let result = controller.accept_refresh(signed_response(signer, request.as_bytes(), &body)?, b"7", &cursor)
             .map_err(|_| "accept packaged explicit empty refresh")?;
         super::check(!result.committed && result.complete && result.revision == 1 && result.head == cursor && result.terminal == cursor,
