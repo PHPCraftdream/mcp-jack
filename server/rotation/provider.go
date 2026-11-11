@@ -36,8 +36,8 @@ func (signer pinnedSigner) Sign(message []byte) ([]byte, error) { return signer.
 
 // Provider копирует public identities; приватные handles не экспортируются и не закрываются.
 type Provider struct {
-	store *durable.ServerStore
-	keys  map[keyIdentity]pinnedSigner
+	store       *durable.ServerStore
+	keys        map[keyIdentity]pinnedSigner
 	publication atomic.Bool
 }
 
