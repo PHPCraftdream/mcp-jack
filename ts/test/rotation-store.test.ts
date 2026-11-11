@@ -349,3 +349,26 @@ test("trust store: abandoned child dirty epoch independently blocks startup with
   assert.deepEqual(readFileSync(archived), marker);
   assert.equal(existsSync(path + ".owner"), false);
 });
+
+test("trust store: each open/init captures the clock getter once and owns its callback", { skip: !linux }, (context) => {
+  const root = directory();
+  context.after(() => rmSync(root, { recursive: true, force: true }));
+  const path = join(root, "state");
+  let getterReads = 0;
+  let samples = 0;
+  const config = options(() => 100);
+  Object.defineProperty(config, "now", { configurable: true, get() {
+    getterReads++;
+    return () => { samples++; return 100; };
+  } });
+  RotationTrustStore.initializeUnused(path, config);
+  assert.equal(getterReads, 1);
+  const store = RotationTrustStore.open(path, config);
+  assert.equal(getterReads, 2);
+  Object.defineProperty(config, "now", { get() { throw new Error("must not reread caller options"); } });
+  assert.equal(store.rawClock(), 100);
+  assert.equal(store.advanceAndCheck().highWater, 100);
+  store.close();
+  assert.equal(getterReads, 2);
+  assert.equal(samples, 4);
+});

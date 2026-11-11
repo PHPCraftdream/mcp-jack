@@ -5,6 +5,7 @@ import { bodyHash } from "../src/encoding.js";
 import { anchorSnapshot, clockBytes, encodedSnapshot, pack, readClock, unpack } from "../src/rotation-store-format.js";
 import type { RotationStoreOptions, StoreBundle } from "../src/rotation-store-format.js";
 import type { RotationBinding } from "../src/rotation-record.js";
+import { ROTATION_MAX_TRUST_SNAPSHOT_BYTES } from "../src/rotation-trust-json.js";
 import { fixture } from "./fixtures.js";
 
 interface Corpus { binding: RotationBinding; keys: Record<string, { kid: string; public_key: string }> }
@@ -90,4 +91,21 @@ test("trust store format: copied tuple cannot outrun independent guard; raw cloc
   assert.throws(() => readClock(serialized.replace('"unsafe":false', '"unsafe":null'), options));
   assert.throws(() => readClock(serialized.replace('"window":30', '"window":31'), options));
   assert.throws(() => readClock(serialized.replace('"unsafe":false', '"unsafe":false,"extra":0'), options));
+});
+
+test("trust store format: inclusive local byte limit, UTF-8, scalar and depth boundaries", () => {
+  const encoded = pack(bundle);
+  const exact = Buffer.alloc(ROTATION_MAX_TRUST_SNAPSHOT_BYTES, 0x20);
+  exact.set(encoded);
+  assert.deepEqual(unpack(exact, options, profile).bundle, bundle);
+  assert.throws(() => unpack(Buffer.concat([exact, Buffer.from(" ")]), options, profile));
+  assert.throws(() => unpack(new Uint8Array(), options, profile));
+  assert.throws(() => unpack(Buffer.from([0xff]), options, profile));
+  assert.throws(() => pack({ ...bundle, snapshotBytes: " ".repeat(ROTATION_MAX_TRUST_SNAPSHOT_BYTES) }));
+  const original = payload(encoded);
+  const escaped = String.fromCharCode(92) + "ud800";
+  assert.throws(() => unpack(seal(original.replace('"owner":1', `"owner":1,"extra":"${escaped}"`)), options, profile));
+  const deep = "[".repeat(65) + "0" + "]".repeat(65);
+  assert.throws(() => unpack(seal(original.replace('"owner":1', `"owner":1,"extra":${deep}`)), options, profile));
+  assert.throws(() => unpack(Buffer.concat([encoded, Buffer.from("0")]), options, profile));
 });
