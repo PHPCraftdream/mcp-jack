@@ -1,3 +1,4 @@
+use super::json_object::Object;
 use super::{invalid, RotationError, MAX_ORDINAL};
 use crate::ed25519::validate_public_key;
 use crate::encoding::{decode_b64url_fixed, key_id};
@@ -18,17 +19,18 @@ pub struct DecodedResult {
     pub complete: bool,
 }
 
+// Map-only schema как в TS rotation-result.ts; не serde positional structs.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Envelope {
     jsonrpc: String,
     id: Box<RawValue>,
-    result: NativeResult,
+    result: Object<NativeResult>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NativeResult {
-    content: Vec<Content>,
+    content: Vec<Object<Content>>,
     #[serde(rename = "structuredContent")]
     structured: Box<RawValue>,
     #[serde(rename = "isError")]
@@ -44,9 +46,9 @@ struct Content {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Payload {
-    current: Current,
+    current: Object<Current>,
     records: Vec<String>,
-    head: Head,
+    head: Object<Head>,
     complete: bool,
 }
 #[derive(Deserialize)]
@@ -89,19 +91,21 @@ fn id_matches(actual: &RawValue, expected: &RawValue) -> bool {
 }
 
 fn payload(text: &str) -> Result<DecodedResult, RotationError> {
-    let wire: Payload =
+    let Object(wire): Object<Payload> =
         serde_json::from_str(text).map_err(|_| invalid("rotation_result_invalid"))?;
     if wire.records.len() > MAX_PAGE_RECORDS {
         return Err(invalid("rotation_result_invalid"));
     }
-    let public_key: [u8; 32] = decode_b64url_fixed(&wire.current.public_key, 32)
+    let current = wire.current.0;
+    let head = wire.head.0;
+    let public_key: [u8; 32] = decode_b64url_fixed(&current.public_key, 32)
         .map_err(|_| invalid("rotation_result_invalid"))?
         .try_into()
         .map_err(|_| invalid("rotation_result_invalid"))?;
-    if validate_public_key(&public_key).is_err() || key_id(&public_key) != wire.current.kid {
+    if validate_public_key(&public_key).is_err() || key_id(&public_key) != current.kid {
         return Err(invalid("rotation_result_invalid"));
     }
-    let ordinal_text = source(&wire.head.ordinal);
+    let ordinal_text = source(&head.ordinal);
     if ordinal_text.is_empty()
         || (ordinal_text.len() > 1 && ordinal_text.starts_with('0'))
         || !ordinal_text.bytes().all(|byte| byte.is_ascii_digit())
@@ -115,18 +119,18 @@ fn payload(text: &str) -> Result<DecodedResult, RotationError> {
         return Err(invalid("rotation_result_invalid"));
     }
     if ordinal == 0 {
-        if wire.head.hash != "-" {
+        if head.hash != "-" {
             return Err(invalid("rotation_result_invalid"));
         }
     } else {
-        decode_b64url_fixed(&wire.head.hash, 32).map_err(|_| invalid("rotation_result_invalid"))?;
+        decode_b64url_fixed(&head.hash, 32).map_err(|_| invalid("rotation_result_invalid"))?;
     }
     Ok(DecodedResult {
-        current_kid: wire.current.kid,
+        current_kid: current.kid,
         current_public_key: public_key,
         records: wire.records,
         head_ordinal: ordinal,
-        head_hash: wire.head.hash,
+        head_hash: head.hash,
         complete: wire.complete,
     })
 }
@@ -139,29 +143,42 @@ pub fn decode_result(body: &[u8], expected_id: &[u8]) -> Result<DecodedResult, R
         return Err(invalid("rotation_result_invalid"));
     }
     let text = std::str::from_utf8(body).map_err(|_| invalid("rotation_result_invalid"))?;
-    let wire: Envelope =
+    let Object(wire): Object<Envelope> =
         serde_json::from_str(text).map_err(|_| invalid("rotation_result_invalid"))?;
     let expected_text =
         std::str::from_utf8(expected_id).map_err(|_| invalid("rotation_result_invalid"))?;
     let expected: Box<RawValue> =
         serde_json::from_str(expected_text).map_err(|_| invalid("rotation_result_invalid"))?;
+    let result = wire.result.0;
     if wire.jsonrpc != "2.0"
         || !id_matches(&wire.id, &expected)
-        || wire.result.is_error
-        || wire.result.content.len() != 1
+        || result.is_error
+        || result.content.len() != 1
     {
         return Err(invalid("rotation_result_invalid"));
     }
     // Length1 проверена выше; content и payload types запрещают duplicate/extra fields.
-    let item = &wire.result.content[0];
+    let item = &result.content[0].0;
     if item.kind != "text" {
         return Err(invalid("rotation_result_invalid"));
     }
-    let structured = payload(wire.result.structured.get())?;
+    let structured = payload(result.structured.get())?;
     let mirror = payload(&item.text)?;
     // Единственное numeric payload поле — canonical head ordinal: его lexeme уникален.
     if structured != mirror {
         return Err(invalid("rotation_result_invalid"));
     }
     Ok(structured)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Envelope, Object};
+
+    #[test]
+    fn raw_struct_sequence_control_demonstrates_why_map_gate_is_required() {
+        let sequence = r#"["2.0",7,{"content":[],"structuredContent":null,"isError":false}]"#;
+        assert!(serde_json::from_str::<Envelope>(sequence).is_ok());
+        assert!(serde_json::from_str::<Object<Envelope>>(sequence).is_err());
+    }
 }

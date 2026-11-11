@@ -1,32 +1,9 @@
+use super::json_object::Object;
 use super::{MAX_ORDINAL, MAX_RETAINED_KEYS};
-use serde::de::{self, value::MapAccessDeserializer, IgnoredAny, MapAccess, SeqAccess, Visitor};
+use serde::de::{self, IgnoredAny, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::value::RawValue;
 use std::fmt;
-use std::marker::PhantomData;
-
-// serde struct visitor допускает sequence; persisted objects обязаны быть maps.
-#[derive(Serialize)]
-#[serde(transparent)]
-pub(super) struct Object<T>(pub(super) T);
-
-impl<'de, T: Deserialize<'de>> Deserialize<'de> for Object<T> {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct Map<T>(PhantomData<T>);
-        impl<'de, T: Deserialize<'de>> Visitor<'de> for Map<T> {
-            type Value = Object<T>;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str("an object")
-            }
-
-            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
-                T::deserialize(MapAccessDeserializer::new(map)).map(Object)
-            }
-        }
-        deserializer.deserialize_map(Map::<T>(PhantomData))
-    }
-}
 
 #[derive(Serialize)]
 #[serde(transparent)]

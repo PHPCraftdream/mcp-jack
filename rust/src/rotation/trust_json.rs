@@ -1,6 +1,7 @@
+use super::json_object::Object;
 use super::trust_json_wire::{
     BindingDocument, BoundedVec, CheckpointDocument, ClockDocument, Cutoff, HeadDocument,
-    KeyDocument, Object, TrustDocument, Unsigned,
+    KeyDocument, TrustDocument, Unsigned,
 };
 use super::{
     invalid, validate_trust_snapshot, Binding, Checkpoint, ClockTuple, OwnedBinding, ResultCursor,

@@ -954,3 +954,44 @@ fn carrier_rejects_invalid_local_snapshot_window_without_changing_static_verifie
     )
     .is_ok());
 }
+
+#[test]
+fn strict_result_refuses_positional_arrays_at_every_candidate_object_boundary() {
+    let payload = result_payload();
+    let original: serde_json::Value = serde_json::from_slice(&result_body(&payload, &payload, "7"))
+        .expect("independent valid envelope");
+    let reference = serde_json::to_vec(&original).expect("reference JSON serialization");
+    assert!(rotation::decode_result(&reference, b"7").is_ok());
+    let cases: &[(&str, &[&str])] = &[
+        ("", &["jsonrpc", "id", "result"]),
+        ("/result", &["content", "structuredContent", "isError"]),
+        ("/result/content/0", &["type", "text"]),
+        ("/result/structuredContent", &["current", "records", "head", "complete"]),
+        ("/result/structuredContent/current", &["kid", "public_key"]),
+        ("/result/structuredContent/head", &["ordinal", "hash"]),
+    ];
+    for (path, names) in cases {
+        let mut changed = original.clone();
+        let object = changed.pointer(path).expect("candidate object");
+        let values = names.iter().map(|name| object[*name].clone()).collect();
+        *changed.pointer_mut(path).expect("candidate object") = serde_json::Value::Array(values);
+        let body = serde_json::to_vec(&changed).expect("positional mutation");
+        let error = rotation::decode_result(&body, b"7").expect_err("positional array accepted");
+        assert_eq!(error.code, "rotation_result_invalid", "boundary {path}");
+    }
+    let original: serde_json::Value = serde_json::from_str(&payload).expect("reference payload");
+    for (path, names) in [
+        ("", &["current", "records", "head", "complete"][..]),
+        ("/current", &["kid", "public_key"][..]),
+        ("/head", &["ordinal", "hash"][..]),
+    ] {
+        let mut mirror = original.clone();
+        let object = mirror.pointer(path).expect("mirror object");
+        let values = names.iter().map(|name| object[*name].clone()).collect();
+        *mirror.pointer_mut(path).expect("mirror object") = serde_json::Value::Array(values);
+        let mirror = serde_json::to_string(&mirror).expect("mirror positional mutation");
+        let error = rotation::decode_result(&result_body(&payload, &mirror, "7"), b"7")
+            .expect_err("positional text mirror accepted");
+        assert_eq!(error.code, "rotation_result_invalid", "mirror {path}");
+    }
+}

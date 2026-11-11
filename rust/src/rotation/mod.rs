@@ -1,6 +1,7 @@
 //! Candidate rotation primitives; static credentials и runtime trust не меняются.
 
 mod chain;
+mod json_object;
 mod page;
 mod record;
 mod result;
