@@ -477,3 +477,102 @@ fn private_file_inclusive_limit_and_exact_byte_conflict() {
     assert!(!oversized.exists());
     assert!(!sandbox.0.join("oversized.owner").exists());
 }
+
+#[test]
+fn protected_bundle_rejects_raw_number_aliases_duplicates_and_wrong_objects() {
+    let options = options();
+    let anchor = options.anchor().unwrap();
+    let profile = crate::encoding::body_hash(options.encode(&anchor).unwrap().as_bytes());
+    let bundle = Bundle::new(
+        crate::encoding::encode_b64url(&[2; 16]),
+        profile.clone(),
+        &anchor,
+        &options,
+    ).unwrap();
+    let bytes = bundle.pack().unwrap();
+    let outer: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let payload = outer["payload"].as_str().unwrap();
+    let seal = |text: &str| {
+        serde_json::json!({
+            "payload": text,
+            "checksum": crate::encoding::body_hash(text.as_bytes()),
+        }).to_string().into_bytes()
+    };
+    assert!(store_format::unpack(seal(payload), &options, &profile).is_ok());
+    assert_eq!(payload.matches("\"owner\":1").count(), 1);
+    for raw in ["0", "-0", "1.0", "1e0", "9007199254740992", "null", "true"] {
+        let changed = payload.replacen("\"owner\":1", &format!("\"owner\":{raw}"), 1);
+        assert!(store_format::unpack(seal(&changed), &options, &profile).is_err());
+    }
+    for extra in [r#""owner":1"#, r#""own\u0065r":1"#, r#""extra":0"#] {
+        let mut changed = payload[..payload.len() - 1].to_owned();
+        changed.push(',');
+        changed.push_str(extra);
+        changed.push('}');
+        assert!(store_format::unpack(seal(&changed), &options, &profile).is_err());
+    }
+    assert!(store_format::unpack(seal("[]"), &options, &profile).is_err());
+    let mut value: serde_json::Value = serde_json::from_str(payload).unwrap();
+    for field in ["domain", "format_version", "store_id", "profile", "owner", "dirty", "fenced", "clock", "snapshot"] {
+        let saved = value[field].clone();
+        value[field] = serde_json::Value::Null;
+        assert!(store_format::unpack(seal(&value.to_string()), &options, &profile).is_err());
+        value[field] = saved;
+    }
+    let clock = &bundle.clock;
+    assert!(store_format::read_clock(clock, &options).is_ok());
+    for (needle, replacement) in [
+        ("\"window\":30", "\"window\":3e1"),
+        ("\"high_water\":0", "\"high_water\":-0"),
+        ("\"high_water\":0", "\"high_water\":1000000000000"),
+        ("\"clock_revision\":0", "\"clock_revision\":0.0"),
+        ("\"clock_revision\":0", "\"clock_revision\":9007199254740992"),
+    ] {
+        assert_eq!(clock.matches(needle).count(), 1);
+        assert!(store_format::read_clock(&clock.replacen(needle, replacement, 1), &options).is_err());
+    }
+    assert!(store_format::read_clock("[]", &options).is_err());
+    let mut clock_value: serde_json::Value = serde_json::from_str(clock).unwrap();
+    clock_value["binding"] = serde_json::json!([options.binding.endpoint, options.binding.aud]);
+    assert!(store_format::read_clock(&clock_value.to_string(), &options).is_err());
+}
+
+#[test]
+fn late_filesystem_identity_loss_cannot_commit_clock_or_clean_owner() {
+    for replace_parent in [false, true] {
+        let sandbox = Sandbox::new();
+        let parent = sandbox.0.join("private");
+        fs::DirBuilder::new().mode(0o700).create(&parent).unwrap();
+        let path = parent.join("trust");
+        initialize(&path);
+        let armed = Rc::new(Cell::new(false));
+        let callback = armed.clone();
+        let callback_parent = parent.clone();
+        let moved = sandbox.0.join("moved");
+        let callback_moved = moved.clone();
+        let mut store = RotationTrustStore::open(&path, options(), move || {
+            if callback.get() {
+                if replace_parent {
+                    fs::rename(&callback_parent, &callback_moved).unwrap();
+                    fs::DirBuilder::new().mode(0o700).create(&callback_parent).unwrap();
+                } else {
+                    fs::write(callback_parent.join("trust.owner"), b"foreign owner marker").unwrap();
+                }
+                Ok(101)
+            } else {
+                Ok(100)
+            }
+        }).unwrap();
+        let before = fs::read(&path).unwrap();
+        armed.set(true);
+        assert_eq!(store.advance_and_check().unwrap_err().code, "rotation_clock_unavailable");
+        assert!(store.close().is_err());
+        let surviving = if replace_parent { moved.join("trust") } else { path.clone() };
+        assert_eq!(fs::read(&surviving).unwrap(), before);
+        assert!(surviving.with_file_name("trust.owner").exists());
+        if replace_parent {
+            assert!(!path.exists());
+            assert!(!parent.join("trust.owner").exists());
+        }
+    }
+}
