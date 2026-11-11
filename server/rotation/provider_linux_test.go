@@ -41,6 +41,11 @@ func setup(t *testing.T) fixture {
 
 func setupWithClock(t *testing.T, wrap func(func() int64) func() int64) fixture {
 	t.Helper()
+	return setupWithEndpoint(t, "https://public.invalid/mcp", wrap)
+}
+
+func setupWithEndpoint(t *testing.T, endpoint string, wrap func(func() int64) func() int64) fixture {
+	t.Helper()
 	keys := []testSigner{makeSigner(31), makeSigner(32), makeSigner(33)}
 	checkpoint := rotation.Checkpoint{Hash: "-", KID: jack.KeyID(keys[0].PublicKey())}
 	copy(checkpoint.PublicKey[:], keys[0].PublicKey())
@@ -57,7 +62,7 @@ func setupWithClock(t *testing.T, wrap func(func() int64) func() int64) fixture 
 	if err := os.Chmod(directory, 0700); err != nil {
 		t.Fatal(err)
 	}
-	options := durable.ServerOptions{TrustOptions: durable.TrustOptions{Binding: rotation.Binding{Endpoint: "https://public.invalid/mcp", Audience: "provider-test"}, Window: 30, Checkpoint: checkpoint, Now: source}, AnchorReference: "anchor"}
+	options := durable.ServerOptions{TrustOptions: durable.TrustOptions{Binding: rotation.Binding{Endpoint: endpoint, Audience: "provider-test"}, Window: 30, Checkpoint: checkpoint, Now: source}, AnchorReference: "anchor"}
 	path := filepath.Join(directory, "server.db")
 	if err := durable.InitializeServerUnused(path, options); err != nil {
 		t.Fatal(err)
