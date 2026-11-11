@@ -125,10 +125,12 @@ func (provider *Provider) selectSigner(snapshot rotation.ServerSnapshot, clock r
 
 // AuthorizeResponse не доверяет body/tool при выборе identity и не делает fallback.
 // Final однократен; Release обязателен после physical write, также при любой ошибке.
-func (provider *Provider) AuthorizeResponse(_ server.ResponseKeyRequest) (server.ResponseKeyAuthorization, error) {
+func (provider *Provider) AuthorizeResponse(input server.ResponseKeyRequest) (server.ResponseKeyAuthorization, error) {
 	if provider == nil || provider.store == nil {
 		return server.ResponseKeyAuthorization{}, ErrUnavailable
 	}
+	page, err := decodeNativeResponse(input)
+	if err != nil { return server.ResponseKeyAuthorization{}, ErrUnavailable }
 	release, err := provider.store.AcquireServingLease()
 	if err != nil {
 		return server.ResponseKeyAuthorization{}, ErrUnavailable
@@ -151,6 +153,7 @@ func (provider *Provider) AuthorizeResponse(_ server.ResponseKeyRequest) (server
 	if err != nil {
 		return server.ResponseKeyAuthorization{}, ErrUnavailable
 	}
+	if !matchesNativeResponse(page,snapshot,signer) { return server.ResponseKeyAuthorization{}, ErrUnavailable }
 	var finalized, released atomic.Bool
 	authorization := server.ResponseKeyAuthorization{
 		Signer:    signer,

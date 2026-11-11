@@ -107,7 +107,7 @@ await writeFile(path.join(stageDir, "inventory.json"), `${JSON.stringify(invento
 // Required members: the manifest, the embedded spec entrypoint, and every
 // root-level *.go file currently on disk per ls-files (fail on mismatch).
 if (!members.includes("go.mod")) fail("staged module snapshot omitted go.mod");
-for (const source of ["client/rotation/controller.go", "client/rotation/refresh.go", "client/rotation/http.go", "server/rotation/provider.go", "server/rotation/publication.go"]) {
+for (const source of ["client/rotation/controller.go", "client/rotation/refresh.go", "client/rotation/http.go", "server/rotation/provider.go", "server/rotation/publication.go", "server/rotation/native.go"]) {
   if (!members.includes(source)) fail(`staged module snapshot omitted ${source}`);
 }
 if (!members.includes("spec/spec.go")) fail("staged module snapshot omitted spec/spec.go (go:embed fixtures/*.json)");

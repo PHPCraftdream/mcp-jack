@@ -17,6 +17,7 @@ const DefaultWindow = 30
 // Names of the protocol-native tools (spec 03). Tools with the "jack." prefix
 // never reach the wrapped handler.
 const (
+	ToolServerKey         = "jack.server.key"
 	ToolEnroll            = "jack.enroll"
 	ToolWhoAmI            = "jack.whoami"
 	ToolRotateKey         = "jack.key.rotate"
@@ -98,8 +99,10 @@ type Config struct {
 	DurableNonces DurableNonceStore
 	// Audit receives audit events for protocol-native admin calls; optional.
 	Audit AuditSink
-	// Native implements the jack.* tools; when nil every jack.* tool is denied.
+	// Native — current-v1 tools; nil запрещает их, ServerKeys выбирается отдельно.
 	Native NativeTools
+	// ServerKeys включает только candidate jack.server.key; default native allowlist неизменен.
+	ServerKeys NativeTools
 	// Window is the timestamp window in seconds; zero means DefaultWindow.
 	Window int64
 	// Now returns the current Unix time in seconds; nil means the wall clock.
@@ -319,14 +322,20 @@ func (v *Verifier) authorize(req Request, auth jack.RequestAuth, now int64, call
 
 	if msg.hasTool && strings.HasPrefix(msg.tool, "jack.") {
 		res.Native = true
-		if !IsNativeTool(msg.tool) || v.cfg.Native == nil {
+		native := v.cfg.Native
+		if msg.tool == ToolServerKey {
+			native = v.cfg.ServerKeys
+		} else if !IsNativeTool(msg.tool) {
+			return fail(403, jack.CodeOperationDenied, "operation is not permitted")
+		}
+		if native == nil {
 			return fail(403, jack.CodeOperationDenied, "operation is not permitted")
 		}
 		call := &NativeCall{
 			Tool: msg.tool, Arguments: msg.arguments, Caller: caller, Kid: auth.Kid, TS: auth.TS,
 			Now: now, Aud: v.cfg.Aud, State: v.cfg.State,
 		}
-		out, jerr := v.cfg.Native.Call(call)
+		out, jerr := native.Call(call)
 		var event *AuditEvent
 		if auditedTool(msg.tool) {
 			event = &AuditEvent{Time: now, Tool: msg.tool, Outcome: AuditSuccess, ActorKid: auth.Kid, Target: call.Target}

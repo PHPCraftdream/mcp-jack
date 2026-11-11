@@ -95,6 +95,8 @@ func NewHandler(cfg HandlerConfig, next http.Handler) (http.Handler, error) {
 		return nil, errors.New("server: HandlerConfig.Verifier must be set")
 	case cfg.ResponseKeys != nil && (cfg.ResponseSigner != nil || len(cfg.ServerKey) != 0):
 		return nil, errors.New("server: select exactly one response signing profile")
+	case cfg.Verifier.cfg.ServerKeys != nil && cfg.ResponseKeys == nil:
+		return nil, errors.New("server: candidate server-key delivery requires ResponseKeys")
 	case cfg.ResponseSigner != nil && len(cfg.ServerKey) != 0:
 		return nil, errors.New("server: select exactly one response signing profile")
 	case cfg.ResponseKeys == nil && cfg.ResponseSigner == nil && len(cfg.ServerKey) != ed25519.PrivateKeySize:
