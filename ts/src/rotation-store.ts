@@ -11,12 +11,16 @@ export type { RotationStoreOptions } from "./rotation-store-format.js";
 type NormalizedOptions = RotationStoreOptions & { readonly now: () => number };
 
 function normalized(input: RotationStoreOptions): { options: NormalizedOptions; anchor: RotationTrustSnapshot; profile: string } {
-  const anchor = anchorSnapshot(input);
-  const now = input.now;
-  if (now !== undefined && typeof now !== "function") invalidStore();
-  const options = Object.freeze({ binding: anchor.binding, window: anchor.window, checkpoint: anchor.checkpoint,
-    now: now ?? (() => Math.floor(Date.now() / 1000)) });
-  return { options, anchor, profile: bodyHash(Buffer.from(encodedSnapshot(anchor, options), "utf8")) };
+  try {
+    const anchor = anchorSnapshot(input);
+    const now = input.now;
+    if (now !== undefined && typeof now !== "function") invalidStore();
+    const options = Object.freeze({ binding: anchor.binding, window: anchor.window, checkpoint: anchor.checkpoint,
+      now: now ?? (() => Math.floor(Date.now() / 1000)) });
+    return { options, anchor, profile: bodyHash(Buffer.from(encodedSnapshot(anchor, options), "utf8")) };
+  } catch {
+    return invalidStore();
+  }
 }
 
 /** Concrete private Linux profile; sync callbacks/I/O должны быть bounded и не reentrant. */

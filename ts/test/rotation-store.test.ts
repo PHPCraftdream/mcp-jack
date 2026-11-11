@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -242,5 +242,110 @@ test("trust store: unsupported platform refuses before clock or file creation", 
   assert.throws(() => RotationTrustStore.open(path, config), code("rotation_state_unavailable"));
   assert.equal(calls, 0);
   assert.equal(existsSync(path), false);
+  assert.equal(existsSync(path + ".owner"), false);
+});
+
+test("trust store: actual init/trust-CAS lost outcomes keep restart gate and never retry", { skip: !linux }, (context) => {
+  const root = directory();
+  context.after(() => rmSync(root, { recursive: true, force: true }));
+  for (const phase of ["init", "trust"]) for (const outcome of ["before", "after"]) {
+    const path = join(root, `${phase}-${outcome}`);
+    let desired: rotation.RotationTrustSnapshot | undefined;
+    if (phase === "trust") {
+      RotationTrustStore.initializeUnused(path, options(() => 100));
+      const preparing = RotationTrustStore.open(path, options(() => 100));
+      const state = preparing.snapshot();
+      desired = extension(state.snapshot, state.clock);
+      preparing.close();
+    }
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", `
+      import fs from 'node:fs';
+      import {syncBuiltinESMExports} from 'node:module';
+      const {RotationTrustStore} = await import(process.argv[1]);
+      const config = JSON.parse(process.argv[4]);
+      config.now = () => 100;
+      const phase = process.argv[5];
+      const store = phase === 'trust' ? RotationTrustStore.open(process.argv[2], config) : undefined;
+      const previous = store?.snapshot();
+      const rename = fs.renameSync;
+      let attempts = 0;
+      fs.renameSync = (...args) => {
+        attempts++;
+        if (process.argv[3] === 'after') rename(...args);
+        throw new Error('injected lost outcome');
+      };
+      syncBuiltinESMExports();
+      let refused = false;
+      try {
+        if (phase === 'init') RotationTrustStore.initializeUnused(process.argv[2], config);
+        else store.compareAndSwap(previous.snapshot, JSON.parse(process.argv[6]), previous.clock);
+      } catch(error) { if(error.code !== 'rotation_state_unknown') throw error; refused = true; }
+      if (!refused || attempts !== 1) process.exit(2);
+      if (store !== undefined) {
+        try { store.close(); process.exit(3); }
+        catch(error) { if(error.code !== 'rotation_state_unavailable') throw error; }
+      }
+      if (attempts !== 1 || !fs.existsSync(process.argv[2]+'.owner')) process.exit(4);
+    `, moduleURL, path, outcome, JSON.stringify(options(() => 100)), phase, JSON.stringify(desired ?? null)], { timeout: 3000, encoding: "utf8" });
+    assert.equal(child.error, undefined);
+    assert.equal(child.status, 0, child.stderr);
+    const state = disk(path);
+    const guard = JSON.parse(state.clock) as { high_water: number };
+    if (phase === "init") {
+      assert.equal(state.dirty, outcome === "before");
+      assert.equal(guard.high_water, outcome === "after" ? 100 : 0);
+    } else {
+      const snapshot = JSON.parse(state.snapshot) as { trust_revision: number };
+      assert.equal(snapshot.trust_revision, outcome === "after" ? 2 : 1);
+      assert.equal(state.dirty, true);
+      assert.equal(guard.high_water, 100);
+    }
+    assert.equal(existsSync(path + ".owner"), true);
+    const committed = readFileSync(path);
+    assert.throws(() => RotationTrustStore.open(path, options(() => 100)), code("rotation_state_unavailable"));
+    assert.deepEqual(readFileSync(path), committed);
+  }
+});
+
+test("trust store: options getter errors are sanitized before any file or clock work", (context) => {
+  const root = directory();
+  context.after(() => rmSync(root, { recursive: true, force: true }));
+  const path = join(root, "state");
+  const config = options(() => { throw new Error("clock must not be called"); });
+  let reads = 0;
+  Object.defineProperty(config, "now", { get() { reads++; throw new Error("private options detail"); } });
+  for (const action of [() => RotationTrustStore.initializeUnused(path, config), () => RotationTrustStore.open(path, config)]) {
+    assert.throws(action, (error) => code("rotation_state_unavailable")(error) && !String(error).includes("private options detail"));
+  }
+  assert.equal(reads, 2);
+  assert.equal(existsSync(path), false);
+  assert.equal(existsSync(path + ".owner"), false);
+});
+
+test("trust store: abandoned child dirty epoch independently blocks startup without stale marker", { skip: !linux }, (context) => {
+  const root = directory();
+  context.after(() => rmSync(root, { recursive: true, force: true }));
+  const path = join(root, "state");
+  RotationTrustStore.initializeUnused(path, options(() => 100));
+  const child = spawnSync(process.execPath, ["--input-type=module", "-e", `
+    const {RotationTrustStore} = await import(process.argv[1]);
+    const config = JSON.parse(process.argv[3]);
+    config.now = () => 100;
+    RotationTrustStore.open(process.argv[2], config);
+    process.exit(0);
+  `, moduleURL, path, JSON.stringify(options(() => 100))], { timeout: 3000, encoding: "utf8" });
+  assert.equal(child.error, undefined);
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(disk(path).dirty, true);
+  const before = readFileSync(path);
+  const marker = readFileSync(path + ".owner");
+  // Только test-owned evidence: убираем marker как причину отказа, не восстанавливаем store.
+  const archived = join(root, "abandoned-owner-evidence");
+  renameSync(path + ".owner", archived);
+  let calls = 0;
+  assert.throws(() => RotationTrustStore.open(path, options(() => { calls++; return 100; })), code("rotation_state_unavailable"));
+  assert.equal(calls, 0);
+  assert.deepEqual(readFileSync(path), before);
+  assert.deepEqual(readFileSync(archived), marker);
   assert.equal(existsSync(path + ".owner"), false);
 });
