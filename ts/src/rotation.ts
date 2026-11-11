@@ -10,3 +10,5 @@ export { RotationTrustStore } from "./rotation-store.js";
 export type { RotationStoreOptions } from "./rotation-store.js";
 export { RotationController } from "./rotation-controller.js";
 export type { RotationResponse, RotationRefreshResult } from "./rotation-controller.js";
+export { RotationHTTPClient } from "./rotation-http.js";
+export type { RotationHTTPReply } from "./rotation-http.js";

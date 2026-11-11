@@ -71,8 +71,9 @@ CI runs the pair above as the consumer ts job (Node 20 and 22): the stage below 
 The additive `rotation` namespace exposes `RotationTrustStore` and the type
 `RotationStoreOptions`. This is an explicit candidate-profile storage API; the
 existing static `client.Client`, credentials, server adapters and authorization
-rules do not opt into it automatically. It does not implement a rotating client,
-refresh transport, native server tool, publication or recovery workflow.
+rules do not opt into it automatically. The store itself does not send requests;
+the explicit candidate HTTP client below is separate. Native server tools,
+publication and recovery workflows are not implemented by this storage API.
 
 Provision `binding`, immutable `window` (1–120 seconds) and `checkpoint` from an
 independently trusted source, never from an unverified response or a store file
@@ -137,6 +138,34 @@ freshness/cutoff failure can follow a confirmed commit. That commit is never rol
 back. An uncertain write instead fences the owner; do not retry, reset, delete the
 owner marker or silently replace trust. A snapshot's copied clock tuple remains a
 CAS dependency, not a fresh time source. Raw file ownership, protected-bundle
-serialization and refresh-state helpers remain internal. A complete rotating HTTP
-client and candidate server integration are separate work; this low-level API does
-not claim either.
+serialization and refresh-state helpers remain internal. This low-level controller
+does not send HTTP requests. The separate explicit client below adds transport;
+candidate server integration remains unfinished.
+
+### Explicit candidate HTTP client
+
+`new rotation.RotationHTTPClient(store, signer, timeoutMs)` binds an explicitly
+opened store and request signer to the store's independent endpoint/audience.
+The deadline must be an integer from 1 through 30000 milliseconds. There is no URL,
+audience, trust-key, redirect, proxy, agent, retry, or per-request signer override.
+The existing static `createSigningFetch` and clients are unchanged.
+
+`call(body, optionalAbortSignal)` sends one POST of owned buffered bytes (at most
+1 MiB) and returns authenticated status/body only after controller and final
+exchange-lifetime checks. Ordinary replies never extend trust. `refresh(signal)`
+explicitly sends one `jack.server.key` page request from the captured ACKed cursor,
+limits its response to 256 KiB, and delegates one-page acceptance to the controller.
+It never requests another page automatically. A late deadline/cancellation error,
+like a late controller error, can follow a confirmed ACK without rolling it back.
+
+Transport uses Node's native HTTP/HTTPS request API with a fresh connection,
+normal certificate verification and TLS 1.2 minimum, no environment proxy,
+redirect following, transparent decompression or automatic retries. Raw auth
+header values are preserved; headers are bounded at 16 KiB. Encoded responses and
+text/event-stream are refused. The exact raw path/query is signed and transmitted;
+URL fragments are not sent. A monotonic total deadline spans storage, signing,
+connection, headers, body and final controller work; synchronous callbacks still
+cannot be preempted, but expired work cannot dispatch or return a body. Abort and
+error paths destroy owned request/response resources. Store lifecycle remains
+caller-owned; closing/fencing it while an exchange is in flight prevents verified
+body delivery. Transport/deadline helpers are not namespace exports.
