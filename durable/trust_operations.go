@@ -11,21 +11,37 @@ import (
 // AdvanceAndCheck — единственная операция, меняющая authoritative H/revision/unsafe.
 func (store *TrustStore) AdvanceAndCheck() (rotation.ClockTuple, error) {
 	done, err := store.begin()
-	if err != nil { return rotation.ClockTuple{}, trustError("rotation_clock_unavailable") }
+	if err != nil {
+		return rotation.ClockTuple{}, trustError("rotation_clock_unavailable")
+	}
 	defer done()
 	var result rotation.ClockTuple
 	err = store.transact(func(tx *bolt.Tx) error {
 		guard, err := store.ownedGuard(tx)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		result = guard.Clock
-		if result.Unsafe { return nil }
+		if result.Unsafe {
+			return nil
+		}
 		now, sampled := sampleTrustNow(store.options.Now)
-		if !sampled { return ErrUnavailable }
+		if !sampled {
+			return ErrUnavailable
+		}
 		unsafe := now < result.HighWater || now < 0 || now > rotation.MaxTimestamp
-		if !unsafe && now == result.HighWater { return nil }
-		if result.Revision == rotation.MaxOrdinal { return ErrUnavailable }
+		if !unsafe && now == result.HighWater {
+			return nil
+		}
+		if result.Revision == rotation.MaxOrdinal {
+			return ErrUnavailable
+		}
 		result.Revision++
-		if unsafe { result.Unsafe = true } else { result.HighWater = now }
+		if unsafe {
+			result.Unsafe = true
+		} else {
+			result.HighWater = now
+		}
 		guard.Clock = result
 		return tx.Bucket(trustBucket).Put(trustGuardKey, encodeTrustGuard(guard))
 	})
@@ -37,15 +53,21 @@ func (store *TrustStore) AdvanceAndCheck() (rotation.ClockTuple, error) {
 		store.failed()
 		return rotation.ClockTuple{}, trustError("rotation_clock_unavailable")
 	}
-	if store.fenced.Load() { return rotation.ClockTuple{}, trustError("rotation_clock_unavailable") }
-	if result.Unsafe { return rotation.ClockTuple{}, trustError("rotation_clock_unsafe") }
+	if store.fenced.Load() {
+		return rotation.ClockTuple{}, trustError("rotation_clock_unavailable")
+	}
+	if result.Unsafe {
+		return rotation.ClockTuple{}, trustError("rotation_clock_unsafe")
+	}
 	return result, nil
 }
 
 // Snapshot читает committed state; не выполняет fresh clock operation или ACK.
 func (store *TrustStore) Snapshot() (rotation.TrustSnapshot, rotation.ClockTuple, error) {
 	done, err := store.begin()
-	if err != nil { return rotation.TrustSnapshot{}, rotation.ClockTuple{}, err }
+	if err != nil {
+		return rotation.TrustSnapshot{}, rotation.ClockTuple{}, err
+	}
 	defer done()
 	var data []byte
 	var guard trustGuard
@@ -53,54 +75,87 @@ func (store *TrustStore) Snapshot() (rotation.TrustSnapshot, rotation.ClockTuple
 		var raw []byte
 		var err error
 		raw, data, err = readTrustRows(tx)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		guard, err = store.ownedGuard(tx)
-		if err != nil { return err }
-		if !bytes.Equal(raw, encodeTrustGuard(guard)) { return ErrInvalidStore }
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(raw, encodeTrustGuard(guard)) {
+			return ErrInvalidStore
+		}
 		return nil
 	})
-	if err != nil { return rotation.TrustSnapshot{}, rotation.ClockTuple{}, store.failed() }
+	if err != nil {
+		return rotation.TrustSnapshot{}, rotation.ClockTuple{}, store.failed()
+	}
 	snapshot, err := rotation.DecodeTrustSnapshot(data, store.options.Binding, store.options.Window, store.options.Checkpoint)
 	if err != nil || !rotation.TrustClockCompatible(snapshot, guard.Clock) {
 		return rotation.TrustSnapshot{}, rotation.ClockTuple{}, store.failed()
 	}
-	if store.fenced.Load() { return rotation.TrustSnapshot{}, rotation.ClockTuple{}, ErrUnavailable }
+	if store.fenced.Load() {
+		return rotation.TrustSnapshot{}, rotation.ClockTuple{}, ErrUnavailable
+	}
 	return snapshot, guard.Clock, nil
 }
 
 // CompareAndSwap меняет whole trust ровно один раз, оставляя guard bytes неизменными.
 func (store *TrustStore) CompareAndSwap(expected, desired rotation.TrustSnapshot, clock rotation.ClockTuple) error {
 	previous, err := rotation.EncodeTrustSnapshot(expected, store.options.Binding, store.options.Window, store.options.Checkpoint)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	next, err := rotation.EncodeTrustSnapshot(desired, store.options.Binding, store.options.Window, store.options.Checkpoint)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	if expected.Revision == rotation.MaxOrdinal || desired.Revision != expected.Revision+1 || expected.Fenced || desired.Fenced || desired.Clock != clock ||
 		!rotation.TrustClockCompatible(expected, clock) || len(desired.Records) <= len(expected.Records) {
 		return trustError("rotation_state_changed")
 	}
 	for index, wire := range expected.Records {
-		if desired.Records[index] != wire { return trustError("rotation_state_changed") }
+		if desired.Records[index] != wire {
+			return trustError("rotation_state_changed")
+		}
 	}
 	done, err := store.begin()
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	defer done()
 	err = store.transact(func(tx *bolt.Tx) error {
 		guard, err := store.ownedGuard(tx)
-		if err != nil { return err }
-		if guard.Clock != clock || guard.Clock.Unsafe { return errTrustConflict }
+		if err != nil {
+			return err
+		}
+		if guard.Clock != clock || guard.Clock.Unsafe {
+			return errTrustConflict
+		}
 		bucket := tx.Bucket(trustBucket)
 		payload, err := checkedPayload(bucket.Get(trustSnapshotKey))
-		if err != nil { return err }
-		if !bytes.Equal(payload, previous) { return errTrustConflict }
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(payload, previous) {
+			return errTrustConflict
+		}
 		return bucket.Put(trustSnapshotKey, sealPayload(next))
 	})
-	if errors.Is(err, errTrustConflict) { return trustError("rotation_state_changed") }
-	if err != nil { store.failed(); return trustError("rotation_state_unknown") }
+	if errors.Is(err, errTrustConflict) {
+		return trustError("rotation_state_changed")
+	}
+	if err != nil {
+		store.failed()
+		return trustError("rotation_state_unknown")
+	}
 	if info, err := store.file.Stat(); err != nil || info.Size() > maxFileBytes {
 		store.failed()
 		return trustError("rotation_state_unknown")
 	}
-	if store.fenced.Load() { return trustError("rotation_state_unknown") }
+	if store.fenced.Load() {
+		return trustError("rotation_state_unknown")
+	}
 	return nil
 }
 

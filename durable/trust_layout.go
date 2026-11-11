@@ -16,10 +16,10 @@ var trustGuardMagic = []byte("mcp-jack/client-trust/guard/v1\n")
 type trustGuard struct {
 	StoreID [16]byte
 	Profile [32]byte
-	Owner uint64
-	Dirty bool
-	Fenced bool
-	Clock rotation.ClockTuple
+	Owner   uint64
+	Dirty   bool
+	Fenced  bool
+	Clock   rotation.ClockTuple
 }
 
 func encodeTrustGuard(guard trustGuard) []byte {
@@ -31,9 +31,15 @@ func encodeTrustGuard(guard trustGuard) []byte {
 		_ = binary.Write(&out, binary.BigEndian, number)
 	}
 	var flags byte
-	if guard.Dirty { flags |= 1 }
-	if guard.Fenced { flags |= 2 }
-	if guard.Clock.Unsafe { flags |= 4 }
+	if guard.Dirty {
+		flags |= 1
+	}
+	if guard.Fenced {
+		flags |= 2
+	}
+	if guard.Clock.Unsafe {
+		flags |= 4
+	}
 	out.WriteByte(flags)
 	return sealPayload(out.Bytes())
 }
@@ -45,14 +51,20 @@ func decodeTrustGuard(data []byte, options TrustOptions, profile [32]byte) (trus
 		return guard, ErrInvalidStore
 	}
 	position := len(trustGuardMagic)
-	copy(guard.StoreID[:], payload[position:position+16]); position += 16
-	copy(guard.Profile[:], payload[position:position+32]); position += 32
-	guard.Owner = binary.BigEndian.Uint64(payload[position:]); position += 8
-	window := binary.BigEndian.Uint64(payload[position:]); position += 8
-	highWater := binary.BigEndian.Uint64(payload[position:]); position += 8
-	revision := binary.BigEndian.Uint64(payload[position:]); position += 8
+	copy(guard.StoreID[:], payload[position:position+16])
+	position += 16
+	copy(guard.Profile[:], payload[position:position+32])
+	position += 32
+	guard.Owner = binary.BigEndian.Uint64(payload[position:])
+	position += 8
+	window := binary.BigEndian.Uint64(payload[position:])
+	position += 8
+	highWater := binary.BigEndian.Uint64(payload[position:])
+	position += 8
+	revision := binary.BigEndian.Uint64(payload[position:])
+	position += 8
 	flags := payload[position]
-	if guard.StoreID == [16]byte{} || guard.Profile != profile || guard.Owner == 0 || window != uint64(options.Window) || highWater > uint64(rotation.MaxTimestamp) || revision > rotation.MaxOrdinal || flags &^ 7 != 0 {
+	if guard.StoreID == [16]byte{} || guard.Profile != profile || guard.Owner == 0 || window != uint64(options.Window) || highWater > uint64(rotation.MaxTimestamp) || revision > rotation.MaxOrdinal || flags&^7 != 0 {
 		return trustGuard{}, ErrInvalidStore
 	}
 	guard.Dirty, guard.Fenced = flags&1 != 0, flags&2 != 0
@@ -88,9 +100,13 @@ func readTrustRows(tx *bolt.Tx) ([]byte, []byte, error) {
 	}
 	corrupt := false
 	for err := range tx.Check() {
-		if err != nil { corrupt = true }
+		if err != nil {
+			corrupt = true
+		}
 	}
-	if corrupt { return nil, nil, ErrInvalidStore }
+	if corrupt {
+		return nil, nil, ErrInvalidStore
+	}
 	guard := append([]byte(nil), bucket.Get(trustGuardKey)...)
 	encoded := bucket.Get(trustSnapshotKey)
 	if len(encoded) > rotation.MaxTrustSnapshotBytes+32 {
