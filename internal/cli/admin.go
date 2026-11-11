@@ -28,38 +28,16 @@ func userSetAdmin(ctx context.Context, configPath, kid, value string, out io.Wri
 	if err != nil {
 		return err
 	}
-	body, err := json.Marshal(map[string]any{
-		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-		"params": map[string]any{
-			"name":      client.ToolAdminUserSetAdmin,
-			"arguments": map[string]any{"kid": kid, "admin": admin},
-		},
-	})
-	if err != nil {
-		return errConfig
-	}
-	ctx, cancel := context.WithTimeout(ctx, conn.timeout)
-	defer cancel()
-	reply, status, err := conn.post(ctx, body)
+	payload, err := conn.nativeResult(ctx, client.ToolAdminUserSetAdmin, map[string]any{"kid": kid, "admin": admin})
 	if err != nil {
 		return err
 	}
-	if status != 200 {
+	var ack struct {
+		KID   string `json:"kid"`
+		Admin *bool  `json:"admin"`
+	}
+	if json.Unmarshal(payload, &ack) != nil || ack.KID != kid || ack.Admin == nil || *ack.Admin != admin {
 		return errRemote
 	}
-	message, err := responseObject(reply, json.RawMessage("1"))
-	if err != nil || len(message["error"]) != 0 {
-		return errRemote
-	}
-	var result struct {
-		IsError    bool `json:"isError"`
-		Structured *struct {
-			KID   string `json:"kid"`
-			Admin *bool  `json:"admin"`
-		} `json:"structuredContent"`
-	}
-	if json.Unmarshal(message["result"], &result) != nil || result.IsError || result.Structured == nil || result.Structured.KID != kid || result.Structured.Admin == nil || *result.Structured.Admin != admin {
-		return errRemote
-	}
-	return json.NewEncoder(out).Encode(result.Structured)
+	return json.NewEncoder(out).Encode(ack)
 }

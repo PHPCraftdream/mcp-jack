@@ -21,6 +21,9 @@ jack bridge --config FILE
 jack nonce-init-unused --config FILE --confirm-unused-deployment ID
 jack nonce-inspect --config FILE
 jack user-set-admin --config FILE --kid KID --admin true|false
+jack user-list --config FILE
+jack user-get --config FILE --kid KID
+jack user-revoke --config FILE --kid KID
 
 nonce-init-unused: только deployment, никогда не принимавший запросы.
 Не использовать для восстановления утраченной истории nonce или миграции volatile state.
@@ -135,6 +138,16 @@ func run(ctx context.Context, args []string, streams IO) error {
 			return err
 		}
 		return nonceInspect(f["config"], streams.Out)
+	case "user-list", "user-get", "user-revoke":
+		names := []string{"config"}
+		if args[0] != "user-list" {
+			names = append(names, "kid")
+		}
+		f, err := flags(args[0], args[1:], names...)
+		if err != nil {
+			return err
+		}
+		return userCommand(ctx, args[0], f["config"], f["kid"], streams.Out)
 	case "user-set-admin":
 		f, err := flags(args[0], args[1:], "config", "kid", "admin")
 		if err != nil {
