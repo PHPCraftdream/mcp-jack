@@ -55,14 +55,22 @@ func decodeServerIntent(data []byte) ([]byte, []byte, error) {
 // Общий exact intent check для serving startup и offline inspection.
 func validateServerPublicationRows(encoded, intent []byte, snapshot rotation.ServerSnapshot, options TrustOptions) error {
 	if len(intent) == 0 {
-		if len(snapshot.Public.Records) != 0 || snapshot.Public.Revision != 1 { return ErrInvalidStore }
+		if len(snapshot.Public.Records) != 0 || snapshot.Public.Revision != 1 {
+			return ErrInvalidStore
+		}
 		return nil
 	}
 	previous, next, err := decodeServerIntent(intent)
-	if err != nil || !bytes.Equal(next, encoded) { return ErrInvalidStore }
+	if err != nil || !bytes.Equal(next, encoded) {
+		return ErrInvalidStore
+	}
 	before, err := rotation.DecodeServerSnapshot(previous, options.Binding, options.Window, options.Checkpoint)
-	if err != nil { return ErrInvalidStore }
-	if _, err := rotation.ValidateServerPublication(before, snapshot, options.Binding, options.Window, options.Checkpoint); err != nil { return ErrInvalidStore }
+	if err != nil {
+		return ErrInvalidStore
+	}
+	if _, err := rotation.ValidateServerPublication(before, snapshot, options.Binding, options.Window, options.Checkpoint); err != nil {
+		return ErrInvalidStore
+	}
 	return nil
 }
 
