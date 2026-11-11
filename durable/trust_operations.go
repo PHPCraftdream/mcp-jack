@@ -11,10 +11,14 @@ import (
 // RawClock — только sample для outer checks, не durable time authority.
 func (store *TrustStore) RawClock() (int64, error) {
 	done, err := store.begin()
-	if err != nil { return 0, err }
+	if err != nil {
+		return 0, err
+	}
 	defer done()
 	now, sampled := sampleTrustNow(store.options.Now)
-	if !sampled || store.fenced.Load() { return 0, store.failed() }
+	if !sampled || store.fenced.Load() {
+		return 0, store.failed()
+	}
 	return now, nil
 }
 
@@ -26,7 +30,9 @@ func (store *TrustStore) AdvanceAndCheck() (rotation.ClockTuple, error) {
 // CheckSnapshotClock атомарно проверяет whole trust вместе с fresh guard operation.
 func (store *TrustStore) CheckSnapshotClock(expected rotation.TrustSnapshot) (rotation.ClockTuple, error) {
 	encoded, err := rotation.EncodeTrustSnapshot(expected, store.options.Binding, store.options.Window, store.options.Checkpoint)
-	if err != nil { return rotation.ClockTuple{}, err }
+	if err != nil {
+		return rotation.ClockTuple{}, err
+	}
 	return store.advanceTrustClock(encoded)
 }
 
@@ -45,7 +51,9 @@ func (store *TrustStore) advanceTrustClock(expected []byte) (rotation.ClockTuple
 		}
 		if expected != nil {
 			payload, err := checkedPayload(tx.Bucket(trustBucket).Get(trustSnapshotKey))
-			if err != nil { return err }
+			if err != nil {
+				return err
+			}
 			conflict = !bytes.Equal(payload, expected)
 		}
 		result = guard.Clock
@@ -86,7 +94,9 @@ func (store *TrustStore) advanceTrustClock(expected []byte) (rotation.ClockTuple
 	if result.Unsafe {
 		return rotation.ClockTuple{}, trustError("rotation_clock_unsafe")
 	}
-	if conflict { return rotation.ClockTuple{}, trustError("rotation_state_changed") }
+	if conflict {
+		return rotation.ClockTuple{}, trustError("rotation_state_changed")
+	}
 	return result, nil
 }
 

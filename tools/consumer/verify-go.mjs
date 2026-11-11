@@ -54,7 +54,7 @@ if (realStageRelative === "" || realStageRelative === ".." || realStageRelative.
 
 const inventoryPath = path.join(stageDir, "inventory.json");
 const inventory = JSON.parse(await readFile(inventoryPath, "utf8"));
-const allowed = /^(?:[^/]+\.go|go\.(?:mod|sum)|LICENSE-MIT|LICENSE-APACHE|client\/[^/]+\.go|server\/[^/]+\.go|userkey\/[^/]+\.go|rotation\/[^/]+\.go|durable\/[^/]+\.go|spec\/.+)$/u;
+const allowed = /^(?:[^/]+\.go|go\.(?:mod|sum)|LICENSE-MIT|LICENSE-APACHE|client\/[^/]+\.go|client\/rotation\/[^/]+\.go|server\/[^/]+\.go|userkey\/[^/]+\.go|rotation\/[^/]+\.go|durable\/[^/]+\.go|spec\/.+)$/u;
 if (inventory.module !== "github.com/PHPCraftdream/mcp-jack" || inventory.goVersion !== "1.25.0" || inventory.snapshot !== "staged") {
   throw new Error("staged module identity metadata changed");
 }
@@ -62,7 +62,7 @@ if (!Array.isArray(inventory.files) || inventory.files.length === 0) throw new E
 for (const member of inventory.files) {
   if (typeof member !== "string" || !allowed.test(member)) throw new Error(`out-of-scope staged module file: ${String(member)}`);
 }
-for (const member of ["go.mod", "go.sum", "LICENSE-MIT", "LICENSE-APACHE", "spec/spec.go", "durable/store.go"]) {
+for (const member of ["go.mod", "go.sum", "LICENSE-MIT", "LICENSE-APACHE", "spec/spec.go", "durable/store.go", "client/rotation/controller.go", "client/rotation/refresh.go"]) {
   if (!inventory.files.includes(member)) throw new Error(`missing staged module file: ${member}`);
 }
 

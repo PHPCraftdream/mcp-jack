@@ -153,24 +153,34 @@ func TestTrustStoreExplicitInitOwnershipAndCleanReopen(t *testing.T) {
 func TestTrustFinalClockGateAtomicallyChecksExpectedSnapshot(t *testing.T) {
 	store, _, _, now, signer := testTrustOwner(t)
 	expected, clock, err := store.Snapshot()
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	desired := extendTrust(t, expected, clock, signer)
-	if err := store.CompareAndSwap(expected, desired, clock); err != nil { t.Fatal(err) }
+	if err := store.CompareAndSwap(expected, desired, clock); err != nil {
+		t.Fatal(err)
+	}
 	now.Store(1001)
 	if _, err := store.CheckSnapshotClock(expected); err == nil {
 		t.Fatal("final clock gate ignored concurrent committed trust")
 	} else {
 		var refusal *rotation.Error
-		if !errors.As(err, &refusal) || refusal.Code != "rotation_state_changed" { t.Fatal("definite trust conflict misclassified") }
+		if !errors.As(err, &refusal) || refusal.Code != "rotation_state_changed" {
+			t.Fatal("definite trust conflict misclassified")
+		}
 	}
 	retained, advanced, err := store.Snapshot()
-	if err != nil || retained.Head != desired.Head || advanced.HighWater != 1001 { t.Fatal("conflict rolled back clock or changed trust") }
+	if err != nil || retained.Head != desired.Head || advanced.HighWater != 1001 {
+		t.Fatal("conflict rolled back clock or changed trust")
+	}
 	now.Store(1000)
 	if _, err := store.CheckSnapshotClock(expected); err == nil {
 		t.Fatal("stale trust rescued rollback")
 	} else {
 		var refusal *rotation.Error
-		if !errors.As(err, &refusal) || refusal.Code != "rotation_clock_unsafe" { t.Fatal("rollback did not dominate final conflict") }
+		if !errors.As(err, &refusal) || refusal.Code != "rotation_clock_unsafe" {
+			t.Fatal("rollback did not dominate final conflict")
+		}
 	}
 }
 
