@@ -130,7 +130,9 @@ func (provider *Provider) AuthorizeResponse(input server.ResponseKeyRequest) (se
 		return server.ResponseKeyAuthorization{}, ErrUnavailable
 	}
 	page, err := decodeNativeResponse(input)
-	if err != nil { return server.ResponseKeyAuthorization{}, ErrUnavailable }
+	if err != nil {
+		return server.ResponseKeyAuthorization{}, ErrUnavailable
+	}
 	release, err := provider.store.AcquireServingLease()
 	if err != nil {
 		return server.ResponseKeyAuthorization{}, ErrUnavailable
@@ -153,7 +155,9 @@ func (provider *Provider) AuthorizeResponse(input server.ResponseKeyRequest) (se
 	if err != nil {
 		return server.ResponseKeyAuthorization{}, ErrUnavailable
 	}
-	if !matchesNativeResponse(page,snapshot,signer) { return server.ResponseKeyAuthorization{}, ErrUnavailable }
+	if !matchesNativeResponse(page, snapshot, signer) {
+		return server.ResponseKeyAuthorization{}, ErrUnavailable
+	}
 	var finalized, released atomic.Bool
 	authorization := server.ResponseKeyAuthorization{
 		Signer:    signer,
