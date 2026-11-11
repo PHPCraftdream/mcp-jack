@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, linkSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -118,4 +118,41 @@ test("private file owner unsupported platforms fail closed before file creation"
   assert.throws(() => RotationFileOwner.open(path), code("rotation_state_unavailable"));
   assert.equal(existsSync(path), false);
   assert.equal(existsSync(path + ".owner"), false);
+});
+
+test("private file owner: actual pre/post-rename unknown outcomes retain one-attempt restart gate", { skip: !linux }, (context) => {
+  const root = directory();
+  context.after(() => rmSync(root, { recursive: true, force: true }));
+  for (const outcome of ["before", "after"]) {
+    const path = join(root, outcome);
+    RotationFileOwner.initializeUnused(path, Buffer.from("expected public bytes"));
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", `
+      import fs from 'node:fs';
+      import {syncBuiltinESMExports} from 'node:module';
+      const rename = fs.renameSync;
+      let attempts = 0;
+      fs.renameSync = (...args) => {
+        attempts++;
+        if (process.argv[3] === 'after') rename(...args);
+        throw new Error('injected lost rename outcome');
+      };
+      syncBuiltinESMExports();
+      const {RotationFileOwner} = await import(process.argv[1]);
+      const owner = RotationFileOwner.open(process.argv[2]);
+      let refused = false;
+      try { owner.replace(Buffer.from('expected public bytes'), Buffer.from('desired public bytes')); }
+      catch (error) { if (error.code !== 'rotation_state_unknown') throw error; refused = true; }
+      if (!refused || attempts !== 1) process.exit(2);
+      try { owner.close(); process.exit(3); }
+      catch (error) { if (error.code !== 'rotation_state_unavailable') throw error; }
+      if (!fs.existsSync(process.argv[2]+'.owner')) process.exit(4);
+    `, moduleURL, path, outcome], { timeout: 3000, encoding: "utf8" });
+    assert.equal(child.error, undefined);
+    assert.equal(child.status, 0, child.stderr);
+    assert.equal(readFileSync(path, "utf8"), outcome === "after" ? "desired public bytes" : "expected public bytes");
+    assert.equal(existsSync(path + ".owner"), true);
+    assert.throws(() => RotationFileOwner.open(path), code("rotation_state_unavailable"));
+    const retained = readdirSync(root).filter((name) => name.startsWith(`.${outcome}.`) && name.endsWith(".tmp"));
+    assert.equal(retained.length, outcome === "before" ? 1 : 0);
+  }
 });
