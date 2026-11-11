@@ -368,6 +368,8 @@ fn crash_child() {
         if kind == "clock" {
             time.set(101);
             store.advance_and_check().unwrap();
+        } else if kind == "refresh" {
+            super::refresh_tests::crash_refresh(&mut store);
         } else {
             store
                 .compare_and_swap(&previous, &next(&previous, &clock), &clock)
@@ -379,7 +381,7 @@ fn crash_child() {
 
 #[test]
 fn real_child_pre_and_post_rename_unknown_outcomes_preserve_artifacts() {
-    for kind in ["initialize", "clock", "trust"] {
+    for kind in ["initialize", "clock", "trust", "refresh"] {
         for stage in ["before-rename", "after-rename"] {
             let sandbox = Sandbox::new();
             let path = sandbox.file();
@@ -411,7 +413,7 @@ fn real_child_pre_and_post_rename_unknown_outcomes_preserve_artifacts() {
                 serde_json::from_str(payload["clock"].as_str().unwrap()).unwrap();
             assert_eq!(
                 snapshot["trust_revision"],
-                if kind == "trust" && stage == "after-rename" {
+                if (kind == "trust" || kind == "refresh") && stage == "after-rename" {
                     2
                 } else {
                     1

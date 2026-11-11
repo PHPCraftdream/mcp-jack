@@ -10,6 +10,10 @@ mod page;
 #[cfg(target_os = "linux")]
 mod private_file;
 mod record;
+#[cfg(target_os = "linux")]
+mod refresh_state;
+#[cfg(all(test, target_os = "linux"))]
+mod refresh_tests;
 mod result;
 mod sign;
 #[cfg(target_os = "linux")]
@@ -23,7 +27,7 @@ mod trust_json;
 mod trust_json_wire;
 
 #[cfg(target_os = "linux")]
-pub use controller::{RotationController, RotationResponse};
+pub use controller::{RotationController, RotationRefreshResult, RotationResponse};
 #[cfg(target_os = "linux")]
 pub use store::RotationTrustStore;
 #[cfg(target_os = "linux")]

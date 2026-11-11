@@ -347,6 +347,25 @@ The returned body is owned and opaque: ordinary responses are not decoded as
 rotation announcements, and failures return no body. Errors are local sanitized
 JackError values with http_status0. Static credentials and clients are unchanged.
 
-This controller does not send HTTP requests, fetch keys, retry, paginate, or
-perform a refresh ACK. Explicit refresh acceptance, product rotating transport,
-and candidate server integration remain separate unfinished work.
+### Explicit single-page refresh
+
+`accept_refresh(response, expected_id, cursor)` accepts one caller-requested native
+`jack.server.key` result. The ID is the expected raw JSON scalar; the cursor is
+the currently ACKed terminal, not an unverified server-declared head. Known outer
+authentication and an authoritative gate precede strict result decoding. The
+controller binds current metadata to that carrier, verifies publication times,
+both proofs, full-record hashes, framing, contiguous extension, adjacent
+publication order, and retained-key nonreuse. It then checks the exact snapshot,
+a fresh guard and the strict first-bridge deadline, performs one exact CAS,
+and applies a final gate.
+
+`RotationRefreshResult` distinguishes declared `head` from ACKed `terminal` and
+reports complete/committed/revision. Empty or duplicate pages are no-ops and do
+not increment trust revision. A late final error can follow a confirmed durable
+ACK: an exception does not mean that trust stayed unchanged, and the SDK never
+rolls back that ACK. An uncertain CAS returns no ACK, retains the dirty/owner
+gates, and is not retried or automatically recovered.
+
+There is no HTTP sender, automatic refresh, hidden key discovery, retry, or pagination.
+The caller explicitly requests any next page. Product rotating transport and
+candidate server integration remain separate unfinished work.
