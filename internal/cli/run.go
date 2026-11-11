@@ -20,6 +20,7 @@ jack gateway --config FILE
 jack bridge --config FILE
 jack nonce-init-unused --config FILE --confirm-unused-deployment ID
 jack nonce-inspect --config FILE
+jack nonce-reconcile-terminal --config FILE --expected-hash HASH --receipt-file FILE --confirm-no-redelivery INTENT_ID
 jack server-key-init-unused --config FILE --confirm-unused-endpoint URL --confirm-unused-aud AUD
 jack server-key-status --config FILE
 jack server-key-announce --config FILE --reference HANDLE --kid KID
@@ -35,6 +36,7 @@ jack invite-revoke --config FILE --invite-id ID
 nonce-init-unused: только deployment, никогда не принимавший запросы.
 Не использовать для восстановления утраченной истории nonce или миграции volatile state.
 nonce-inspect не снимает dirty/unsafe и не разрешает запуск сервера.
+nonce-reconcile-terminal переводит только exact receipt в no-redelivery tombstone; dirty/unsafe остаются.
 server-key-init-unused: только binding, никогда не использовавший server rotation store; не recovery/reset.
 server-key-status работает offline без signer seeds, не снимает dirty/unsafe и не разрешает serving.
 server-key-announce требует остановленного владельца store; stdout содержит только public record после ACK.
@@ -163,6 +165,12 @@ func run(ctx context.Context, args []string, streams IO) error {
 			return err
 		}
 		return nonceInitializeUnused(f["config"], f["confirm-unused-deployment"])
+	case "nonce-reconcile-terminal":
+		f, err := flags(args[0], args[1:], "config", "expected-hash", "receipt-file", "confirm-no-redelivery")
+		if err != nil {
+			return err
+		}
+		return nonceReconcileTerminal(f["config"], f["expected-hash"], f["receipt-file"], f["confirm-no-redelivery"])
 	case "nonce-inspect":
 		f, err := flags(args[0], args[1:], "config")
 		if err != nil {

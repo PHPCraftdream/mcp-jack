@@ -23,6 +23,7 @@ Commands:
 - `jack enroll --config FILE --invite-file FILE --name NAME`
 - `jack gateway --config FILE`
 - `jack bridge --config FILE`
+- `jack nonce-reconcile-terminal --config FILE --expected-hash HASH --receipt-file FILE --confirm-no-redelivery INTENT_ID`
 - `jack server-key-init-unused --config FILE --confirm-unused-endpoint URL --confirm-unused-aud AUD`
 - `jack server-key-status --config FILE`
 - `jack server-key-announce --config FILE --reference HANDLE --kid KID`
@@ -772,3 +773,33 @@ known test-owned registry marker is explicitly archived to avoid attributing the
 refusal to an unrelated stale registry lock. This is process-crash qualification,
 not a power-loss, physical-volume or backup-rollback guarantee, and does not add a
 product recovery/reset path.
+
+## Explicit terminal nonce reconciliation
+
+`jack nonce-reconcile-terminal --config FILE --expected-hash HASH --receipt-file
+FILE --confirm-no-redelivery INTENT_ID` is an offline operator action over an
+already closed dirty nonce store. It uses only the existing gateway durable-nonce
+profile and the SDK's exact `ReconcileUnknown` transaction. It never loads server
+signer material, sends HTTP, redelivers the request, clears dirty/unsafe, releases
+serving, or resets/migrates storage. A successful terminal disposition is not
+permission to restart.
+
+The expected hash must be the exact current logical graph hash from
+`nonce-inspect`. It is an integrity/concurrency check, not a MAC, external ledger
+or proof against backup rollback. The private receipt file contains exactly one
+complete `NonceReceipt` object copied from that inspection/evidence, not the whole
+report. Its fields retain the SDK's exact names: `Version`, `DeploymentID`,
+`StoreGeneration`, `OwnerGeneration`, `IntentID`, `OperationID`, `KID`, `Nonce`,
+`Signature`, `RequestHash`, `Timestamp`, `RetainUntil`, `HighWater`. All are required;
+unknown/duplicate/null fields and an OperationID array other than exactly sixteen
+non-null byte values are refused before storage. The explicit confirmation must
+equal that receipt's IntentID. The file uses the existing private owner/type/mode
+and 16 KiB input bound.
+
+Only the exact matching row and graph may be converted to a terminal no-redelivery
+tombstone. Missing/inexact/stale evidence refuses without treating absence as
+proof of abort. The backend's exclusive owner and dirty fence remain mandatory;
+unknown commit outcomes are never retried. Success has no stdout and does not undo
+any prior handler effect. Subsequent serving release, tombstone disposition,
+external-evidence recovery and server-ring recovery are separate actions not
+implemented or authorized by this command.
