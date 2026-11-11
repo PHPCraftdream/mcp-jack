@@ -24,10 +24,15 @@ jack user-set-admin --config FILE --kid KID --admin true|false
 jack user-list --config FILE
 jack user-get --config FILE --kid KID
 jack user-revoke --config FILE --kid KID
+jack invite-create --config FILE --invite-file FILE --admin true|false [--ttl-seconds N] [--key-ttl-seconds N]
+jack invite-list --config FILE
+jack invite-revoke --config FILE --invite-id ID
 
 nonce-init-unused: только deployment, никогда не принимавший запросы.
 Не использовать для восстановления утраченной истории nonce или миграции volatile state.
 nonce-inspect не снимает dirty/unsafe и не разрешает запуск сервера.
+invite-create сохраняет code только в новом private file; stdout содержит лишь invite_id/expires_at.
+При ошибке invite-create reservation file сохраняется: не удаляйте его для автоматического повтора.
 `
 
 var errConfig = errors.New("invalid configuration or private storage")
@@ -138,6 +143,18 @@ func run(ctx context.Context, args []string, streams IO) error {
 			return err
 		}
 		return nonceInspect(f["config"], streams.Out)
+	case "invite-create":
+		return inviteCreate(ctx, args[1:], streams.Out)
+	case "invite-list", "invite-revoke":
+		names := []string{"config"}
+		if args[0] == "invite-revoke" {
+			names = append(names, "invite-id")
+		}
+		f, err := flags(args[0], args[1:], names...)
+		if err != nil {
+			return err
+		}
+		return inviteCommand(ctx, args[0], f["config"], f["invite-id"], streams.Out)
 	case "user-list", "user-get", "user-revoke":
 		names := []string{"config"}
 		if args[0] != "user-list" {
