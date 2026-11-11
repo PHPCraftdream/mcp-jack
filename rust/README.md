@@ -326,7 +326,27 @@ Any uncertain mutation fails closed with retained artifacts and no retry/reset.
 The 16MiB bound is logical, not a physical-volume or power-loss guarantee;
 checksums detect accidental corruption and are not a MAC or rollback oracle.
 
-This is a storage/ClockGuard API, not a complete rotating HTTP client or server.
-Carrier authentication, interval/freshness checks, explicit single-page refresh,
-and final network/lifetime gates still belong to the controller integration.
 Other operating systems do not export this Linux-only store API.
+
+### Candidate ordinary-response controller
+
+`RotationController::new(&mut store)` performs an initial exact-snapshot clock
+gate and borrows the store exclusively for the controller's scope. After the
+controller is dropped, the caller can inspect or explicitly close the store.
+`RotationResponse` owns the actual status, raw response-auth header values,
+exact request signature, and buffered response body. Its signature field binds
+the concrete signed request, not a JSON-RPC ID or a request-header substitute.
+The caller remains responsible for URL/TLS/redirect/deadline and transport bounds.
+
+`verify_response` rejects an unknown outer key before a clock callback or body
+verification, checks the exact signed bytes using the existing carrier verifier,
+and then requires both authoritative and final snapshot/clock/freshness/interval
+gates. Known cutoff equality is refused at both signed time and final authority.
+Only bounded interval/capacity arithmetic follows the final authoritative sample.
+The returned body is owned and opaque: ordinary responses are not decoded as
+rotation announcements, and failures return no body. Errors are local sanitized
+JackError values with http_status0. Static credentials and clients are unchanged.
+
+This controller does not send HTTP requests, fetch keys, retry, paginate, or
+perform a refresh ACK. Explicit refresh acceptance, product rotating transport,
+and candidate server integration remain separate unfinished work.

@@ -18,9 +18,9 @@ pub(super) fn crash_boundary(stage: &str) {
     }
 }
 
-struct Sandbox(PathBuf);
+pub(super) struct Sandbox(PathBuf);
 impl Sandbox {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let mut random = [0; 16];
         getrandom::fill(&mut random).unwrap();
         let path = std::env::temp_dir().join(format!(
@@ -30,7 +30,7 @@ impl Sandbox {
         fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
         Self(path)
     }
-    fn file(&self) -> PathBuf {
+    pub(super) fn file(&self) -> PathBuf {
         self.0.join("trust")
     }
 }
@@ -40,7 +40,7 @@ impl Drop for Sandbox {
     }
 }
 
-fn options() -> RotationStoreOptions {
+pub(super) fn options() -> RotationStoreOptions {
     let signer = InMemorySigner::from_seed(&[31; 32]).unwrap();
     RotationStoreOptions {
         binding: OwnedBinding {
@@ -57,7 +57,7 @@ fn options() -> RotationStoreOptions {
         },
     }
 }
-fn next(previous: &TrustSnapshot, clock: &ClockTuple) -> TrustSnapshot {
+pub(super) fn next(previous: &TrustSnapshot, clock: &ClockTuple) -> TrustSnapshot {
     let old = InMemorySigner::from_seed(&[31; 32]).unwrap();
     let new = InMemorySigner::from_seed(&[32; 32]).unwrap();
     let record = create_record(
@@ -89,7 +89,7 @@ fn next(previous: &TrustSnapshot, clock: &ClockTuple) -> TrustSnapshot {
     desired.revision += 1;
     desired
 }
-fn initialize(path: &Path) {
+pub(super) fn initialize(path: &Path) {
     RotationTrustStore::initialize_unused(path, options(), || Ok(100)).unwrap();
 }
 fn decoded_file(path: &Path) -> serde_json::Value {

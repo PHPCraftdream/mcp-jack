@@ -1,6 +1,10 @@
 //! Candidate rotation primitives; static credentials и runtime trust не меняются.
 
 mod chain;
+#[cfg(target_os = "linux")]
+mod controller;
+#[cfg(all(test, target_os = "linux"))]
+mod controller_tests;
 mod json_object;
 mod page;
 #[cfg(target_os = "linux")]
@@ -18,6 +22,8 @@ mod trust;
 mod trust_json;
 mod trust_json_wire;
 
+#[cfg(target_os = "linux")]
+pub use controller::{RotationController, RotationResponse};
 #[cfg(target_os = "linux")]
 pub use store::RotationTrustStore;
 #[cfg(target_os = "linux")]
