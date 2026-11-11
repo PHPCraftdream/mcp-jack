@@ -134,3 +134,62 @@ test("whole trust pending128 boundary uses actual signed equal-time chain", () =
   oversized.records = Array<string>(rotation.ROTATION_MAX_RETAINED_KEYS).fill("not parsed");
   assert.throws(() => validate(oversized), refusal);
 });
+
+test("local trust JSON codec roundtrips owned state and does not repair inspection fences", () => {
+  const input = example();
+  input.fenced = true;
+  input.clock.unsafe = true;
+  const encoded = rotation.encodeRotationTrustSnapshot(input, corpus.binding, 30, checkpoint);
+  const decoded = rotation.decodeRotationTrustSnapshot(encoded, corpus.binding, 30, checkpoint);
+  assert.deepEqual(decoded, input);
+  assert.equal(decoded.keys[decoded.keys.length - 1]?.knownCutoff, null);
+  assert.equal(rotation.rotationTrustClockCompatible(decoded, decoded.clock), false);
+  assert.deepEqual(rotation.encodeRotationTrustSnapshot(decoded, corpus.binding, 30, checkpoint), encoded);
+  const model = JSON.parse(Buffer.from(encoded).toString("utf8")) as Record<string, unknown>;
+  const reordered = Object.fromEntries(Object.entries(model).reverse());
+  assert.deepEqual(rotation.decodeRotationTrustSnapshot(Buffer.from(JSON.stringify(reordered)), corpus.binding, 30, checkpoint), decoded);
+  const first = decoded.records[0];
+  encoded.fill(0);
+  input.records[0] = "changed";
+  assert.equal(decoded.records[0], first);
+});
+
+test("local trust JSON rejects duplicate/extra/missing/null/noncanonical numeric evidence", () => {
+  const text = Buffer.from(rotation.encodeRotationTrustSnapshot(example(), corpus.binding, 30, checkpoint)).toString("utf8");
+  const escapedVersion = '"' + String.fromCharCode(92) + 'u0066ormat_version"';
+  const changes: readonly [string, string][] = [
+    ['"format_version":1', '"format_version":1,"format_version":1'],
+    ['"format_version":1', `"format_version":1,${escapedVersion}:1`],
+    ['"format_version":1', '"format_version":1,"signer_refs":[]'],
+    ['"format_version":1', '"format_version":1e0'],
+    ['"window":30', '"window":30.0'],
+    ['"clock_revision":1', '"clock_revision":1e0'],
+    ['"trust_revision":7', '"trust_revision":9007199254740992'],
+    ['"published_at":0', '"published_at":-0'],
+    ['"fenced":false', '"fenced":null'],
+    ['"unsafe":false', '"unsafe":"false"'],
+    [',"known_cutoff":null', ''],
+    [JSON.stringify(corpus.binding.endpoint), '"' + String.fromCharCode(92) + 'ud800"'],
+  ];
+  for (const [from, to] of changes) {
+    const changed = text.replace(from, to);
+    assert.notEqual(changed, text, from);
+    assert.throws(() => rotation.decodeRotationTrustSnapshot(Buffer.from(changed), corpus.binding, 30, checkpoint), refusal);
+  }
+  const model = JSON.parse(text) as Record<string, unknown>;
+  for (const name of ["records", "keys", "head", "binding", "checkpoint", "clock"]) {
+    assert.throws(() => rotation.decodeRotationTrustSnapshot(Buffer.from(JSON.stringify({ ...model, [name]: null })), corpus.binding, 30, checkpoint), refusal);
+  }
+  assert.throws(() => rotation.decodeRotationTrustSnapshot(Buffer.from(text + " {}"), corpus.binding, 30, checkpoint), refusal);
+  assert.throws(() => rotation.decodeRotationTrustSnapshot(Uint8Array.of(0xff), corpus.binding, 30, checkpoint), refusal);
+  assert.throws(() => rotation.decodeRotationTrustSnapshot(Buffer.from(text), { ...corpus.binding, aud: "other" }, 30, checkpoint), refusal);
+});
+
+test("local trust snapshot byte bound is inclusive and distinct from HTTP refresh cap", () => {
+  const encoded = rotation.encodeRotationTrustSnapshot(example(), corpus.binding, 30, checkpoint);
+  const padded = Buffer.alloc(rotation.ROTATION_MAX_TRUST_SNAPSHOT_BYTES, 32);
+  padded.set(encoded);
+  assert.equal(rotation.decodeRotationTrustSnapshot(padded, corpus.binding, 30, checkpoint).revision, 7);
+  assert.throws(() => rotation.decodeRotationTrustSnapshot(Buffer.alloc(rotation.ROTATION_MAX_TRUST_SNAPSHOT_BYTES + 1, 32), corpus.binding, 30, checkpoint), refusal);
+  assert.throws(() => rotation.encodeRotationTrustSnapshot({ ...example(), revision: 0 }, corpus.binding, 30, checkpoint), refusal);
+});
