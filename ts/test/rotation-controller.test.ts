@@ -9,8 +9,9 @@ import { join } from "node:path";
 import { test } from "node:test";
 import type { TestContext } from "node:test";
 import { client, Code, encodeBase64URL, formatResponseAuth, JackError, parseRequestAuth, responseSigningString, rotation } from "../src/index.js";
-import { RotationController } from "../src/rotation-controller.js";
-import type { RotationResponse } from "../src/rotation-controller.js";
+
+const RotationController = rotation.RotationController;
+type RotationResponse = rotation.RotationResponse;
 
 const linux = process.platform === "linux";
 const denied = (code: string) => (error: unknown): boolean => error instanceof JackError && error.httpStatus === 0 && error.code === code;
@@ -336,7 +337,7 @@ test("refresh controller: strict first bridge expiry; late final cutoff never ro
 });
 
 test("refresh controller: real pre/post-rename unknown CAS keeps one-attempt gate, never returns ACK or retries", { skip: !linux }, (context) => {
-  const moduleURL = new URL("../src/rotation-controller.js", import.meta.url).href;
+  const moduleURL = new URL("../src/index.js", import.meta.url).href;
   const sdkURL = new URL("../src/index.js", import.meta.url).href;
   for (const outcome of ["before", "after"]) {
     const environment = setup(context);
@@ -348,7 +349,7 @@ test("refresh controller: real pre/post-rename unknown CAS keeps one-attempt gat
       import fs from 'node:fs';
       import {syncBuiltinESMExports} from 'node:module';
       const {rotation} = await import(process.argv[1]);
-      const {RotationController} = await import(process.argv[2]);
+      const {RotationController} = (await import(process.argv[2])).rotation;
       const data = JSON.parse(process.argv[5]);
       data.options.now = () => 1000;
       const store = rotation.RotationTrustStore.open(process.argv[3], data.options);

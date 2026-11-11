@@ -376,7 +376,7 @@ test("trust store: each open/init captures the clock getter once and owns its ca
 });
 
 test("rotation namespace exposes semantic store without private file or wire helpers", () => {
-  for (const name of ["RotationFileOwner", "createUnusedOwner", "pack", "unpack", "invalidStore", "anchorSnapshot"]) {
+  for (const name of ["RotationFileOwner", "createUnusedOwner", "pack", "unpack", "invalidStore", "anchorSnapshot", "prepareRefreshExtension", "extendedRefreshSnapshot"]) {
     assert.equal(name in rotation, false, `private helper leaked: ${name}`);
   }
 });

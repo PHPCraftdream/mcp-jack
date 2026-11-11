@@ -106,6 +106,37 @@ non-reentrant; this API cannot preempt an arbitrary stalled callback.
 The local bundle limit is 16 MiB, distinct from the candidate refresh HTTP body
 limit of 256 KiB. Checksums detect accidental corruption; they are not a MAC, backup rollback
 oracle, physical-volume quota, power-loss certification or storage encryption.
-Raw file ownership and wire-format helpers are not namespace exports. Full
-candidate client/server controllers and independent release review remain separate
-gates.
+Raw file ownership and protected-bundle helpers are not namespace exports. Network
+client/server integration and independent release review remain separate gates.
+
+### Candidate response controller
+
+`rotation.RotationController` takes an explicitly opened `RotationTrustStore` and
+leaves its lifecycle with the caller. `RotationResponse` contains the actual HTTP
+status, raw `Jack-Auth` header values, the signature of the actual outgoing request
+(not its request ID or entire auth header), and the exact fully buffered response
+bytes. The caller's transport must enforce destination/TLS policy, reject redirects
+and bound the entire exchange, headers and body. This controller itself does not
+send requests, install transport hooks or change the existing static client.
+
+`verifyResponse(response)` returns an owned body only after known-carrier signature,
+whole-state/ClockGuard and final freshness/key-interval checks. Ordinary response
+bodies are not decoded as key announcements and never extend trust.
+
+`acceptRefresh(response, expectedId, cursor)` is only for a caller's explicitly
+requested single `jack.server.key` success page, with that request's actual ID,
+signature and ACKed cursor. It verifies the native envelope, carrier/current binding,
+record proofs, history/framing and strict first-bridge gate before one exact CAS.
+The returned `head` is the server's declaration; only `terminal` was considered for
+ACK. `committed: false` means an authenticated empty/duplicate no-op, not permission
+to adopt an advertised but unfetched head. The method performs no fetch, automatic
+pagination or retry. The caller must explicitly request each subsequent page.
+
+A thrown exception does **not** imply that trust remained unchanged: a final
+freshness/cutoff failure can follow a confirmed commit. That commit is never rolled
+back. An uncertain write instead fences the owner; do not retry, reset, delete the
+owner marker or silently replace trust. A snapshot's copied clock tuple remains a
+CAS dependency, not a fresh time source. Raw file ownership, protected-bundle
+serialization and refresh-state helpers remain internal. A complete rotating HTTP
+client and candidate server integration are separate work; this low-level API does
+not claim either.
