@@ -111,7 +111,9 @@ func (controller *Controller) acceptRefresh(response Response, expectedID json.R
 		return RefreshResult{}, localError("rotation_result_invalid")
 	}
 	if cursor != snapshot.Head || page.Head.Ordinal < cursor.Ordinal {
-		if requested != nil && !controller.equal(snapshot, *requested) { return RefreshResult{}, localError("rotation_state_changed") }
+		if requested != nil && !controller.equal(snapshot, *requested) {
+			return RefreshResult{}, localError("rotation_state_changed")
+		}
 		return RefreshResult{}, localError("rotation_gap")
 	}
 	records, hashes, err := pageRecords(snapshot, page)

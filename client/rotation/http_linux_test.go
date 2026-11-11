@@ -22,8 +22,8 @@ import (
 )
 
 type capturedRequest struct {
-	body []byte
-	nonce string
+	body   []byte
+	nonce  string
 	target string
 }
 
@@ -51,14 +51,19 @@ func TestHTTPExplicitRefreshAndExactSignedCalls(t *testing.T) {
 		}
 		select {
 		case requests <- capturedRequest{body: body, nonce: auth.Nonce, target: r.URL.RequestURI()}:
-		default: t.Error("unexpected request overflow"); w.WriteHeader(503); return
+		default:
+			t.Error("unexpected request overflow")
+			w.WriteHeader(503)
+			return
 		}
 		key := f.anchor
 		responseBody := []byte("public ordinary bytes")
 		if mode.Load() == 1 || mode.Load() == 2 {
 			responseBody = envelope(t, f.anchor, []rotation.Record{f.first, f.second}, rotation.ResultCursor{Ordinal: 2, Hash: f.second.Hash}, true)
 		}
-		if mode.Load() == 3 { key = f.next }
+		if mode.Load() == 3 {
+			key = f.next
+		}
 		kid := jack.KeyID(key.PublicKey())
 		message := jack.ResponseSigningString(200, auth.Sig, kid, 1200, responseBody)
 		w.Header().Set("Jack-Auth", jack.FormatResponseAuth(jack.ResponseAuth{Kid: kid, TS: 1200, Sig: jack.EncodeBase64URL(ed25519.Sign(key.key, []byte(message)))}))
@@ -69,30 +74,46 @@ func TestHTTPExplicitRefreshAndExactSignedCalls(t *testing.T) {
 	endpoint := remote.URL + "/mcp?raw=%2f&x=1"
 	f = setupEndpoint(t, func() int64 { return 1200 }, endpoint)
 	sender, err := rotationclient.NewHTTP(f.store, user, 2*time.Second)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	body := []byte(` {"jsonrpc":"2.0", "id":7,"method":"ping"} `)
 	reply, err := sender.Call(context.Background(), body)
-	if err != nil || reply.Status != 200 || string(reply.Body) != "public ordinary bytes" { t.Fatalf("signed ordinary HTTP failed: %v", err) }
+	if err != nil || reply.Status != 200 || string(reply.Body) != "public ordinary bytes" {
+		t.Fatalf("signed ordinary HTTP failed: %v", err)
+	}
 	first := <-requests
-	if !bytes.Equal(first.body, body) || first.target != "/mcp?raw=%2f&x=1" || calls.Load() != 1 { t.Fatal("exact caller body/target changed or retried") }
+	if !bytes.Equal(first.body, body) || first.target != "/mcp?raw=%2f&x=1" || calls.Load() != 1 {
+		t.Fatal("exact caller body/target changed or retried")
+	}
 	mode.Store(2)
-	if _, err := sender.Call(context.Background(), body); err != nil { t.Fatal(err) }
+	if _, err := sender.Call(context.Background(), body); err != nil {
+		t.Fatal(err)
+	}
 	second := <-requests
 	snapshot, _, err := f.store.Snapshot()
-	if err != nil || snapshot.Head.Ordinal != 0 { t.Fatal("ordinary HTTP response automatically extended trust") }
+	if err != nil || snapshot.Head.Ordinal != 0 {
+		t.Fatal("ordinary HTTP response automatically extended trust")
+	}
 	mode.Store(3)
-	if _, err := sender.Call(context.Background(), body); err == nil { t.Fatal("unknown HTTP carrier accepted without refresh") } else { requireCode(t, err, jack.CodeUnknownServerKey) }
+	if _, err := sender.Call(context.Background(), body); err == nil {
+		t.Fatal("unknown HTTP carrier accepted without refresh")
+	} else {
+		requireCode(t, err, jack.CodeUnknownServerKey)
+	}
 	third := <-requests
 	mode.Store(1)
 	refreshed, err := sender.Refresh(context.Background())
-	if err != nil || !refreshed.Committed || refreshed.Terminal.Ordinal != 2 || !refreshed.Complete { t.Fatalf("explicit HTTP refresh failed: %+v %v", refreshed, err) }
+	if err != nil || !refreshed.Committed || refreshed.Terminal.Ordinal != 2 || !refreshed.Complete {
+		t.Fatalf("explicit HTTP refresh failed: %+v %v", refreshed, err)
+	}
 	fourth := <-requests
 	var request struct {
 		JSONRPC string `json:"jsonrpc"`
-		ID int `json:"id"`
-		Method string `json:"method"`
-		Params struct {
-			Name string `json:"name"`
+		ID      int    `json:"id"`
+		Method  string `json:"method"`
+		Params  struct {
+			Name      string                     `json:"name"`
 			Arguments map[string]json.RawMessage `json:"arguments"`
 		} `json:"params"`
 	}
@@ -101,7 +122,9 @@ func TestHTTPExplicitRefreshAndExactSignedCalls(t *testing.T) {
 	}
 	nonces := map[string]bool{}
 	for _, capture := range []capturedRequest{first, second, third, fourth} {
-		if nonces[capture.nonce] { t.Fatal("distinct explicit calls reused nonce") }
+		if nonces[capture.nonce] {
+			t.Fatal("distinct explicit calls reused nonce")
+		}
 		nonces[capture.nonce] = true
 	}
 }
@@ -112,10 +135,18 @@ func TestHTTPRefreshRejectsConcurrentACKWithoutRepeatingRequest(t *testing.T) {
 	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		auth, err := jack.ParseRequestAuth(r.Header.Values("Jack-Auth"))
-		if err != nil { t.Error(err); w.WriteHeader(400); return }
+		if err != nil {
+			t.Error(err)
+			w.WriteHeader(400)
+			return
+		}
 		body := envelope(t, f.anchor, []rotation.Record{f.first}, rotation.ResultCursor{Ordinal: 1, Hash: f.first.Hash}, true)
 		acked, err := f.controller.AcceptRefresh(response(t, f.anchor, 1200, body), json.RawMessage("1"), rotation.ResultCursor{Hash: "-"})
-		if err != nil || !acked.Committed { t.Error("concurrent exact ACK fixture failed"); w.WriteHeader(500); return }
+		if err != nil || !acked.Committed {
+			t.Error("concurrent exact ACK fixture failed")
+			w.WriteHeader(500)
+			return
+		}
 		kid := jack.KeyID(f.anchor.PublicKey())
 		message := jack.ResponseSigningString(200, auth.Sig, kid, 1200, body)
 		w.Header().Set("Jack-Auth", jack.FormatResponseAuth(jack.ResponseAuth{Kid: kid, TS: 1200, Sig: jack.EncodeBase64URL(ed25519.Sign(f.anchor.key, []byte(message)))}))
@@ -125,11 +156,15 @@ func TestHTTPRefreshRejectsConcurrentACKWithoutRepeatingRequest(t *testing.T) {
 	defer remote.Close()
 	f = setupEndpoint(t, func() int64 { return 1200 }, remote.URL+"/mcp")
 	sender, err := rotationclient.NewHTTP(f.store, fixtureSigner(61), 2*time.Second)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	result, err := sender.Refresh(context.Background())
 	requireCode(t, err, "rotation_state_changed")
 	snapshot, _, readErr := f.store.Snapshot()
-	if result.Committed || readErr != nil || snapshot.Revision != 2 || snapshot.Head.Ordinal != 1 || calls.Load() != 1 { t.Fatal("stale request adopted/retried or undid concurrent ACK") }
+	if result.Committed || readErr != nil || snapshot.Revision != 2 || snapshot.Head.Ordinal != 1 || calls.Load() != 1 {
+		t.Fatal("stale request adopted/retried or undid concurrent ACK")
+	}
 }
 
 func TestHTTPRedirectAndUnknownWriteNeverRetry(t *testing.T) {
@@ -140,20 +175,37 @@ func TestHTTPRedirectAndUnknownWriteNeverRetry(t *testing.T) {
 			defer target.Close()
 			remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)
-				if redirect { w.Header().Set("Location", target.URL); w.WriteHeader(307); return }
-				if _, err := io.Copy(io.Discard, r.Body); err != nil { t.Error(err) }
+				if redirect {
+					w.Header().Set("Location", target.URL)
+					w.WriteHeader(307)
+					return
+				}
+				if _, err := io.Copy(io.Discard, r.Body); err != nil {
+					t.Error(err)
+				}
 				connection, _, err := w.(http.Hijacker).Hijack()
-				if err != nil { t.Error(err); return }
+				if err != nil {
+					t.Error(err)
+					return
+				}
 				_ = connection.Close()
 			}))
 			defer remote.Close()
 			f := setupEndpoint(t, func() int64 { return 1200 }, remote.URL+"/mcp")
 			sender, err := rotationclient.NewHTTP(f.store, fixtureSigner(61), 2*time.Second)
-			if err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatal(err)
+			}
 			if reply, err := sender.Call(context.Background(), []byte(`{"jsonrpc":"2.0","id":1,"method":"ping"}`)); err == nil || reply.Body != nil {
 				t.Fatal("redirect/unknown write exposed success")
-			} else if redirect && !errors.Is(err, client.ErrRedirectRefused) { t.Fatal("redirect refusal changed") } else if !redirect && !errors.Is(err, rotationclient.ErrRequestUnavailable) { t.Fatal("unknown HTTP outcome was misclassified as trust ACK") }
-			if calls.Load() != 1 || followed.Load() != 0 { t.Fatal("request retried or redirect followed") }
+			} else if redirect && !errors.Is(err, client.ErrRedirectRefused) {
+				t.Fatal("redirect refusal changed")
+			} else if !redirect && !errors.Is(err, rotationclient.ErrRequestUnavailable) {
+				t.Fatal("unknown HTTP outcome was misclassified as trust ACK")
+			}
+			if calls.Load() != 1 || followed.Load() != 0 {
+				t.Fatal("request retried or redirect followed")
+			}
 		})
 	}
 }
@@ -162,15 +214,22 @@ func TestHTTPAbsoluteDeadlineNeverRetries(t *testing.T) {
 	var calls atomic.Int32
 	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		if _, err := io.Copy(io.Discard, r.Body); err != nil { t.Error(err); return }
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			t.Error(err)
+			return
+		}
 		<-r.Context().Done()
 	}))
 	defer remote.Close()
 	f := setupEndpoint(t, func() int64 { return 1200 }, remote.URL+"/mcp")
 	sender, err := rotationclient.NewHTTP(f.store, fixtureSigner(61), time.Second)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	reply, err := sender.Call(context.Background(), []byte(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
-	if !errors.Is(err, context.DeadlineExceeded) || reply.Body != nil || calls.Load() != 1 { t.Fatalf("deadline failed or retried: %v", err) }
+	if !errors.Is(err, context.DeadlineExceeded) || reply.Body != nil || calls.Load() != 1 {
+		t.Fatalf("deadline failed or retried: %v", err)
+	}
 }
 
 func TestHTTPContextCancellationClosesOutstandingResponse(t *testing.T) {
@@ -179,22 +238,53 @@ func TestHTTPContextCancellationClosesOutstandingResponse(t *testing.T) {
 	var calls atomic.Int32
 	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		if _, err := io.Copy(io.Discard, r.Body); err != nil { t.Error(err); return }
-		select { case entered <- struct{}{}: default: t.Error("unexpected repeated request"); return }
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			t.Error(err)
+			return
+		}
+		select {
+		case entered <- struct{}{}:
+		default:
+			t.Error("unexpected repeated request")
+			return
+		}
 		<-r.Context().Done()
-		select { case closed <- struct{}{}: default: t.Error("unexpected repeated resource close") }
+		select {
+		case closed <- struct{}{}:
+		default:
+			t.Error("unexpected repeated resource close")
+		}
 	}))
 	defer remote.Close()
 	f := setupEndpoint(t, func() int64 { return 1200 }, remote.URL+"/mcp")
 	sender, err := rotationclient.NewHTTP(f.store, fixtureSigner(61), 2*time.Second)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	result := make(chan error, 1)
 	go func() { _, err := sender.Call(ctx, []byte(`{"jsonrpc":"2.0","id":1,"method":"ping"}`)); result <- err }()
-	select { case <-entered: case <-time.After(3*time.Second): t.Fatal("request never reached bounded fixture") }
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("request never reached bounded fixture")
+	}
 	cancel()
-	select { case err := <-result: if !errors.Is(err, context.Canceled) { t.Fatalf("cancellation lost: %v", err) }; case <-time.After(3*time.Second): t.Fatal("request did not stop") }
-	select { case <-closed: case <-time.After(3*time.Second): t.Fatal("HTTP response resource remained open") }
-	if calls.Load() != 1 { t.Fatal("cancelled request retried") }
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancellation lost: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("request did not stop")
+	}
+	select {
+	case <-closed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("HTTP response resource remained open")
+	}
+	if calls.Load() != 1 {
+		t.Fatal("cancelled request retried")
+	}
 }

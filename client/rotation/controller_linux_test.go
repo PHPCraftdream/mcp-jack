@@ -26,6 +26,10 @@ func fixtureSigner(seed byte) signer {
 func (key signer) PublicKey() []byte                   { return key.key.Public().(ed25519.PublicKey) }
 func (key signer) Sign(message []byte) ([]byte, error) { return ed25519.Sign(key.key, message), nil }
 
+func (key signer) KID() string {
+	return jack.KeyID(key.PublicKey())
+}
+
 type fixture struct {
 	controller *rotationclient.Controller
 	store      *durable.TrustStore
