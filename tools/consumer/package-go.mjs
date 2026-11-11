@@ -65,13 +65,13 @@ if (!/^module github\.com\/PHPCraftdream\/mcp-jack$/mu.test(goMod)) {
 if (!/^go 1\.25\.0$/mu.test(goMod)) fail('go.mod must declare the approved "go 1.25.0" floor');
 
 // Enumerate tracked files and keep ONLY the module scope: root-level *.go +
-// go.mod + client/*.go + server/*.go + userkey/*.go + spec/** (spec/spec.go
+// go.mod + client/*.go + client/rotation/*.go + server/*.go + userkey/*.go + spec/** (spec/spec.go
 // embeds spec/fixtures/*.json via //go:embed, so the whole spec/ tree is in
 // scope). The root LICENSE-MIT/LICENSE-APACHE files are also in scope so the
 // staged module artifact carries both exact dual-licence texts. Everything
 // else (rust/, ts/, tools/, interop/, docs/, .github/, readme files,
 // .gitattributes) is excluded by construction.
-const scope = /^(?:[^/]+\.go|go\.(?:mod|sum)|LICENSE-MIT|LICENSE-APACHE|client\/[^/]+\.go|server\/[^/]+\.go|userkey\/[^/]+\.go|rotation\/[^/]+\.go|durable\/[^/]+\.go|spec\/.+)$/u;
+const scope = /^(?:[^/]+\.go|go\.(?:mod|sum)|LICENSE-MIT|LICENSE-APACHE|client\/[^/]+\.go|client\/rotation\/[^/]+\.go|server\/[^/]+\.go|userkey\/[^/]+\.go|rotation\/[^/]+\.go|durable\/[^/]+\.go|spec\/.+)$/u;
 const listOutput = execFileSync("git", ["ls-files", "-z"], {
   cwd: repoRoot,
   encoding: "buffer",
@@ -107,6 +107,9 @@ await writeFile(path.join(stageDir, "inventory.json"), `${JSON.stringify(invento
 // Required members: the manifest, the embedded spec entrypoint, and every
 // root-level *.go file currently on disk per ls-files (fail on mismatch).
 if (!members.includes("go.mod")) fail("staged module snapshot omitted go.mod");
+for (const source of ["client/rotation/controller.go", "client/rotation/refresh.go"]) {
+  if (!members.includes(source)) fail(`staged module snapshot omitted ${source}`);
+}
 if (!members.includes("spec/spec.go")) fail("staged module snapshot omitted spec/spec.go (go:embed fixtures/*.json)");
 // The dual-licence texts must ship with the module artifact, byte-exact
 // against the repo root copies.

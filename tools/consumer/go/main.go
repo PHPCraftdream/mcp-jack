@@ -23,6 +23,7 @@ import (
 
 	"github.com/PHPCraftdream/mcp-jack"
 	"github.com/PHPCraftdream/mcp-jack/client"
+	rotationclient "github.com/PHPCraftdream/mcp-jack/client/rotation"
 	"github.com/PHPCraftdream/mcp-jack/server"
 	"github.com/PHPCraftdream/mcp-jack/userkey"
 )
@@ -87,6 +88,9 @@ func (t tamperRT) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func main() {
+	if _, err := rotationclient.New(nil); err == nil {
+		fail("rotation controller accepted missing durable owner", nil)
+	}
 	// (a) Client key lifecycle.
 	clientKey, err := userkey.GenerateClientKey()
 	if err != nil {

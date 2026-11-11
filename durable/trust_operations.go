@@ -8,18 +8,45 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
+// RawClock — только sample для outer checks, не durable time authority.
+func (store *TrustStore) RawClock() (int64, error) {
+	done, err := store.begin()
+	if err != nil { return 0, err }
+	defer done()
+	now, sampled := sampleTrustNow(store.options.Now)
+	if !sampled || store.fenced.Load() { return 0, store.failed() }
+	return now, nil
+}
+
 // AdvanceAndCheck — единственная операция, меняющая authoritative H/revision/unsafe.
 func (store *TrustStore) AdvanceAndCheck() (rotation.ClockTuple, error) {
+	return store.advanceTrustClock(nil)
+}
+
+// CheckSnapshotClock атомарно проверяет whole trust вместе с fresh guard operation.
+func (store *TrustStore) CheckSnapshotClock(expected rotation.TrustSnapshot) (rotation.ClockTuple, error) {
+	encoded, err := rotation.EncodeTrustSnapshot(expected, store.options.Binding, store.options.Window, store.options.Checkpoint)
+	if err != nil { return rotation.ClockTuple{}, err }
+	return store.advanceTrustClock(encoded)
+}
+
+func (store *TrustStore) advanceTrustClock(expected []byte) (rotation.ClockTuple, error) {
 	done, err := store.begin()
 	if err != nil {
 		return rotation.ClockTuple{}, trustError("rotation_clock_unavailable")
 	}
 	defer done()
 	var result rotation.ClockTuple
+	conflict := false
 	err = store.transact(func(tx *bolt.Tx) error {
 		guard, err := store.ownedGuard(tx)
 		if err != nil {
 			return err
+		}
+		if expected != nil {
+			payload, err := checkedPayload(tx.Bucket(trustBucket).Get(trustSnapshotKey))
+			if err != nil { return err }
+			conflict = !bytes.Equal(payload, expected)
 		}
 		result = guard.Clock
 		if result.Unsafe {
@@ -59,6 +86,7 @@ func (store *TrustStore) AdvanceAndCheck() (rotation.ClockTuple, error) {
 	if result.Unsafe {
 		return rotation.ClockTuple{}, trustError("rotation_clock_unsafe")
 	}
+	if conflict { return rotation.ClockTuple{}, trustError("rotation_state_changed") }
 	return result, nil
 }
 
