@@ -5,12 +5,16 @@ mod page;
 mod record;
 mod result;
 mod sign;
+mod trust;
 
 pub use chain::{assignment_valid, selected_ordinal, verify_chain, Checkpoint, MAX_RETAINED_KEYS};
 pub use page::{validate_page_framing, PageFraming, ResultCursor};
 pub use record::parse_record;
 pub use result::{decode_result, DecodedResult, MAX_PAGE_RECORDS, MAX_RESULT_BODY_BYTES};
 pub use sign::create_record;
+pub use trust::{
+    trust_clock_compatible, validate_trust_snapshot, ClockTuple, OwnedBinding, TrustKey, TrustSnapshot,
+};
 
 use std::fmt;
 
