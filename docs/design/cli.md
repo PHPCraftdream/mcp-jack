@@ -756,3 +756,19 @@ or repair. Offline announcement must acquire this same exclusive owner, so stop
 and drain the gateway before using the local announcement command. Server-store
 recovery/serving release and broader platform/process-kill qualification remain
 separate acceptance work; selecting this profile does not authorize them.
+
+### Shipping-binary restart qualification
+
+The mandatory Linux `Go CLI binary process qualification` job supplies the built
+CGO-disabled executable through `JACK_CLI_EXECUTABLE`. Both static and rotating
+gateway restart scenarios run through the existing owned child-process harness;
+ordinary source-only test jobs explicitly skip these binary-only scenarios.
+The rotation scenario initializes and announces through the real CLI, verifies
+native delivery and ordinary signed forwarding, checks clean nonce/ring shutdown,
+replays the exact still-fresh request after restart, and injects a crash only into
+the captured test-owned child. A following startup must fail without changing the
+dirty nonce history, public ring diagnostics or protected ring bytes. Only the
+known test-owned registry marker is explicitly archived to avoid attributing the
+refusal to an unrelated stale registry lock. This is process-crash qualification,
+not a power-loss, physical-volume or backup-rollback guarantee, and does not add a
+product recovery/reset path.

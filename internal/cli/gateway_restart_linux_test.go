@@ -21,10 +21,20 @@ import (
 	jack "github.com/PHPCraftdream/mcp-jack"
 	"github.com/PHPCraftdream/mcp-jack/client"
 	"github.com/PHPCraftdream/mcp-jack/durable"
+	"github.com/PHPCraftdream/mcp-jack/rotation"
 	"github.com/PHPCraftdream/mcp-jack/userkey"
 )
 
 func TestGatewayBinaryDurableCleanAndDirtyRestart(t *testing.T) {
+	testGatewayBinaryDurableRestart(t, false)
+}
+
+func TestGatewayBinaryRotationCleanAndDirtyRestart(t *testing.T) {
+	testGatewayBinaryDurableRestart(t, true)
+}
+
+func testGatewayBinaryDurableRestart(t *testing.T, rotationMode bool) {
+	t.Helper()
 	if os.Getenv("JACK_CLI_EXECUTABLE") == "" {
 		t.Skip("shipping executable supplied by the mandatory binary qualification job")
 	}
@@ -53,11 +63,33 @@ func TestGatewayBinaryDurableCleanAndDirtyRestart(t *testing.T) {
 	}
 	noncePath := filepath.Join(directory, "nonces.db")
 	profile := &gatewayDurableConfig{Path: noncePath, DeploymentID: "public-binary-restart-test", Window: 30}
-	gatewayPath := saveJSON(t, directory, "gateway.json", gatewayConfig{
+	gatewayConfiguration := gatewayConfig{
 		Version: 1, Aud: "svc", ServerSeedFile: save(t, directory, "server.seed", private.Seed()), StateFile: statePath,
 		Listen: listen, UpstreamSocket: socket, UpstreamURL: "http://upstream/mcp", CallTimeoutMS: 1000, MaxConcurrent: 4, DurableNonces: profile,
-	})
-	invoke := func(args ...string) {
+	}
+	var serverProfile serverKeyConfig
+	var serverProfilePath string
+	var ringOptions durable.ServerOptions
+	var publication serverKeyPublication
+	if rotationMode {
+		nextPublic, nextPrivate, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		serverProfile = serverKeyConfig{Version: 1, StoreFile: filepath.Join(directory, "ring.db"), Endpoint: "http://" + listen + "/mcp",
+			Aud: "svc", Window: 30, AnchorKID: jack.KeyID(public), AnchorPublicKey: jack.EncodeBase64URL(public), AnchorReference: "binary-anchor",
+			Signers: []serverKeySignerConfig{{Reference: "binary-anchor", KID: jack.KeyID(public), SeedFile: gatewayConfiguration.ServerSeedFile},
+				{Reference: "binary-next", KID: jack.KeyID(nextPublic), SeedFile: save(t, directory, "next.seed", nextPrivate.Seed())}}}
+		serverProfilePath = saveJSON(t, directory, "rotation.json", serverProfile)
+		_, ringOptions, err = offlineServerKeyProfile(serverProfilePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gatewayConfiguration.ServerSeedFile = ""
+		gatewayConfiguration.ServerRotationFile = rotationProfilePath(serverProfilePath)
+	}
+	gatewayPath := saveJSON(t, directory, "gateway.json", gatewayConfiguration)
+	invoke := func(args ...string) []byte {
 		t.Helper()
 		process, in, out, diagnostics := childArgs(t, args...)
 		_ = in.Close()
@@ -66,8 +98,15 @@ func TestGatewayBinaryDurableCleanAndDirtyRestart(t *testing.T) {
 		if err != nil || len(reply) > maxBody || waitErr != nil {
 			t.Fatalf("binary setup failed: %s", diagnostics.String())
 		}
+		return reply
 	}
 	invoke("nonce-init-unused", "--config", gatewayPath, "--confirm-unused-deployment", profile.DeploymentID)
+	if rotationMode {
+		invoke(serverKeyInitArgs(serverProfilePath, serverProfile)...)
+		if json.Unmarshal(invoke(announceArgs(serverProfilePath, serverProfile.Signers[1])...), &publication) != nil || publication.Ordinal != 1 || publication.StateRevision != 2 || publication.Record == "" {
+			t.Fatal("shipping binary did not confirm exact offline publication")
+		}
+	}
 	issued, _, err := userkey.IssueLocalPair()
 	if err != nil {
 		t.Fatal(err)
@@ -152,11 +191,33 @@ func TestGatewayBinaryDurableCleanAndDirtyRestart(t *testing.T) {
 	if status != 200 || client.VerifyResponse(conn.pin, status, responseAuth, auth.Sig, reply, time.Now(), 30*time.Second) != nil || upstreamCalls.Load() != 1 {
 		t.Fatal("first signed request did not dispatch exactly once")
 	}
+	expectedLive := 2
+	if rotationMode {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		nativeBody := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.server.key","arguments":{"after_ordinal":0,"after_hash":"-"}}}`)
+		nativeReply, nativeStatus, nativeErr := conn.post(ctx, nativeBody)
+		cancel()
+		page, decodeErr := rotation.DecodeResult(nativeReply, json.RawMessage(`1`))
+		if nativeErr != nil || nativeStatus != 200 || decodeErr != nil || len(page.Records) != 1 || page.Records[0] != publication.Record || page.Head.Hash != publication.Hash || !page.Complete || upstreamCalls.Load() != 1 {
+			t.Fatal("shipping rotating gateway did not deliver the exact native page", nativeErr, decodeErr)
+		}
+		expectedLive++
+	}
 	stop(first)
 	options := durable.Options{DeploymentID: profile.DeploymentID, Window: profile.Window}
 	inspect, err := durable.InspectRecovery(noncePath, options)
-	if err != nil || inspect.Dirty || inspect.Unsafe || len(inspect.Live) != 2 {
+	if err != nil || inspect.Dirty || inspect.Unsafe || len(inspect.Live) != expectedLive {
 		t.Fatal("clean binary shutdown lost reservations or left dirty owner")
+	}
+	if rotationMode {
+		ring, err := durable.InspectServer(serverProfile.StoreFile, ringOptions)
+		if err != nil || ring.Dirty || ring.Unsafe || ring.HeadOrdinal != 1 || ring.HeadHash != publication.Hash || ring.StateRevision != 2 {
+			t.Fatal("clean binary shutdown lost ring state or serving fence", err)
+		}
+		var cliReport durable.ServerInspection
+		if json.Unmarshal(invoke("server-key-status", "--config", serverProfilePath), &cliReport) != nil || cliReport != ring {
+			t.Fatal("shipping offline status changed ring evidence")
+		}
 	}
 	second := start()
 	status, reply, responseAuth = sendExact()
@@ -177,10 +238,22 @@ func TestGatewayBinaryDurableCleanAndDirtyRestart(t *testing.T) {
 		t.Fatal("owned gateway child was not stopped by the injected crash")
 	}
 	dirty, err := durable.InspectRecovery(noncePath, options)
-	if err != nil || !dirty.Dirty || len(dirty.Live) != 2 {
+	if err != nil || !dirty.Dirty || len(dirty.Live) != expectedLive {
 		t.Fatal("crash lost durable serving fence or reservation history")
 	}
-	// Отдельный registry lock архивируется явно; nonce fence не меняется.
+	var dirtyRing durable.ServerInspection
+	var dirtyRingBytes []byte
+	if rotationMode {
+		dirtyRing, err = durable.InspectServer(serverProfile.StoreFile, ringOptions)
+		if err != nil || !dirtyRing.Dirty || dirtyRing.HeadOrdinal != 1 || dirtyRing.HeadHash != publication.Hash || dirtyRing.StateRevision != 2 {
+			t.Fatal("owned process crash lost rotation serving fence or exact publication", err)
+		}
+		dirtyRingBytes, err = os.ReadFile(serverProfile.StoreFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Архивируется только собственный registry lock; durable fences не меняются.
 	ownerPath := statePath + ".owner"
 	owner, err := readPrivate(ownerPath, 64)
 	if err != nil || string(owner) != "jack owner\n" {
@@ -198,5 +271,15 @@ func TestGatewayBinaryDurableCleanAndDirtyRestart(t *testing.T) {
 	after, err := durable.InspectRecovery(noncePath, options)
 	if err != nil || !after.Dirty || after.Hash != dirty.Hash {
 		t.Fatal("refused restart changed dirty durable state")
+	}
+	if rotationMode {
+		afterRing, err := durable.InspectServer(serverProfile.StoreFile, ringOptions)
+		if err != nil || afterRing != dirtyRing {
+			t.Fatal("refused restart cleared or changed ring fence/evidence", err)
+		}
+		afterBytes, err := os.ReadFile(serverProfile.StoreFile)
+		if err != nil || !bytes.Equal(afterBytes, dirtyRingBytes) {
+			t.Fatal("refused rotation restart rewrote protected state")
+		}
 	}
 }

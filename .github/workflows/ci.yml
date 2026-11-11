@@ -60,7 +60,7 @@ jobs:
       - name: Exercise the real executable through the owned process harness
         env:
           JACK_CLI_EXECUTABLE: ${{ runner.temp }}/jack
-        run: go test -count=1 ./internal/cli
+        run: go test -count=1 -v ./internal/cli
 
   fixtures:
     name: fixtures are up to date
