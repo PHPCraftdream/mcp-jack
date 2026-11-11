@@ -17,18 +17,18 @@ import (
 )
 
 type gatewayConfig struct {
-	Version        int                   `json:"version"`
-	Aud            string                `json:"aud"`
-	ServerSeedFile string                `json:"server_seed_file"`
-	ServerRotationFile rotationProfilePath `json:"server_rotation_file,omitempty"`
-	StateFile      string                `json:"state_file"`
-	Listen         string                `json:"listen"`
-	UpstreamSocket string                `json:"upstream_socket"`
-	UpstreamURL    string                `json:"upstream_url"`
-	CallTimeoutMS  int                   `json:"call_timeout_ms"`
-	MaxConcurrent  int                   `json:"max_concurrent"`
-	DurableNonces  *gatewayDurableConfig `json:"durable_nonces,omitempty"`
-	NativeAdmin    nativeAdminFlag       `json:"native_admin,omitempty"`
+	Version            int                   `json:"version"`
+	Aud                string                `json:"aud"`
+	ServerSeedFile     string                `json:"server_seed_file"`
+	ServerRotationFile rotationProfilePath   `json:"server_rotation_file,omitempty"`
+	StateFile          string                `json:"state_file"`
+	Listen             string                `json:"listen"`
+	UpstreamSocket     string                `json:"upstream_socket"`
+	UpstreamURL        string                `json:"upstream_url"`
+	CallTimeoutMS      int                   `json:"call_timeout_ms"`
+	MaxConcurrent      int                   `json:"max_concurrent"`
+	DurableNonces      *gatewayDurableConfig `json:"durable_nonces,omitempty"`
+	NativeAdmin        nativeAdminFlag       `json:"native_admin,omitempty"`
 }
 
 type boundedState struct{ server.AdmissionStateStore }

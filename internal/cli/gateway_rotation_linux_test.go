@@ -54,7 +54,11 @@ func TestGatewaySelectsExplicitRotationWithoutStaticOrNonceFallback(t *testing.T
 		func(c *gatewayConfig) { c.DurableNonces = nil },
 		func(c *gatewayConfig) { c.Aud = "different" },
 		func(c *gatewayConfig) { value := *c.DurableNonces; value.Window++; c.DurableNonces = &value },
-		func(c *gatewayConfig) { value := *c.DurableNonces; value.Path = profile.StoreFile; c.DurableNonces = &value },
+		func(c *gatewayConfig) {
+			value := *c.DurableNonces
+			value.Path = profile.StoreFile
+			c.DurableNonces = &value
+		},
 		func(c *gatewayConfig) { c.StateFile = profile.StoreFile },
 	} {
 		bad := config
