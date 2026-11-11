@@ -44,6 +44,24 @@ jobs:
       - name: Repeat owned-pipe and admission regressions under race detector
         run: go test -race -count=5 ./internal/cli -run '^Test(OwnedPipeBrokenOutputAndBackpressure|BridgeAdmission.*)$'
 
+  go-cli-process:
+    name: Go CLI binary process qualification
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.10'
+      - name: Build the shipping CLI without CGO
+        run: go build -trimpath -o "$RUNNER_TEMP/jack" ./cmd/jack
+      - name: Exercise the real executable through the owned process harness
+        env:
+          JACK_CLI_EXECUTABLE: ${{ runner.temp }}/jack
+        run: go test -count=1 ./internal/cli
+
   fixtures:
     name: fixtures are up to date
     runs-on: ubuntu-latest
