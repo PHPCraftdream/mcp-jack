@@ -25,6 +25,7 @@ Commands:
 - `jack bridge --config FILE`
 - `jack server-key-init-unused --config FILE --confirm-unused-endpoint URL --confirm-unused-aud AUD`
 - `jack server-key-status --config FILE`
+- `jack server-key-announce --config FILE --reference HANDLE --kid KID`
 - `jack user-create --config FILE --public FILE --name NAME --admin true|false [--not-before TS] [--not-after TS]`
 - `jack user-list --config FILE`
 - `jack user-get --config FILE --kid KID`
@@ -680,4 +681,42 @@ metadata only, never protected references, private snapshots, or supplied paths.
 A dirty/unsafe report is diagnostic and still requires explicit recovery; the
 command does not authorize restart or certify absence of backup rollback.
 Malformed or missing stores produce a generic failure without creation or reset.
-These commands do not yet select a rotation gateway mode or publish a key.
+Initialization/status do not publish a key. They do not select a rotation gateway mode.
+
+### Explicit offline announcement
+
+The same private profile may include a `signers` array. Each entry has exactly
+`reference`, `kid`, and `seed_file`. `reference` is the protected opaque handle;
+`kid` is the independently provisioned canonical public-key ID; `seed_file` is
+an absolute private file containing exactly the 32 raw seed bytes written by
+`jack keygen server --secret FILE --public FILE`. The loader derives the actual
+public key and checks its ID before opening the rotation store. No seed is
+uploaded, included in a rotation record, or printed. Duplicate reference/KID
+pairs and malformed metadata are rejected. Distinct key IDs may share an opaque
+reference; the reference itself is not key authority. The profile still has its
+16 KiB input bound, independent of protocol history limits.
+
+Initialization and status validate inventory metadata only: missing seed files
+do not prevent these seed-free operations. Announcement loads the configured
+inventory and requires all configured files to be valid. Required current and
+pending ring handles must be available; unused future handles can be provisioned
+in advance. Retired seed entries may be removed once no longer required; retained
+public ring references and the original OOB anchor profile are not rewritten.
+
+`jack server-key-announce --config FILE --reference HANDLE --kid KID` selects
+one already configured next key. It is an offline operation under the same
+lifetime-exclusive store owner, so an active gateway/SDK owner must first stop
+and drain cleanly. There is no lock bypass, private-key network upload, unknown
+outcome retry, old-key fallback, one-pending policy, or implicit reset. The SDK
+fixes P once and commits one adjacent-tail authorization, even when that tail is
+not yet eligible for response signing. Store closure drains before private
+buffers are cleared or public stdout is emitted.
+
+Only confirmed publication and healthy owner closure produce JSON containing
+`ordinal`, `hash`, `published_at`, `activates_at`, `state_revision`, and the exact
+public `record`. No protected reference or seed path is included. A subsequent
+stdout/Close error does not roll back a committed publication. Do not automatically
+repeat after an error: inspect status and retain external evidence; dirty/unsafe
+or unknown outcomes remain subject to explicit recovery, not these commands.
+Repeating the same retained key is refused. This command does not add a gateway
+rotation mode or authorize release/registry publication.

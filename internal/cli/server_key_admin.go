@@ -22,11 +22,12 @@ type serverKeyConfig struct {
 	AnchorKID       string `json:"anchor_kid"`
 	AnchorPublicKey string `json:"anchor_public_key"`
 	AnchorReference string `json:"anchor_reference"`
+	Signers []serverKeySignerConfig `json:"signers,omitempty"`
 }
 
 func offlineServerKeyProfile(path string) (serverKeyConfig, durable.ServerOptions, error) {
 	var config serverKeyConfig
-	if decodeConfig(path, &config) != nil || config.Version != 1 || privateParent(config.StoreFile) != nil ||
+	if decodeConfig(path, &config) != nil || config.Version != 1 || privateParent(config.StoreFile) != nil || !validServerKeyInventory(config.Signers) ||
 		config.Endpoint == "" || len(config.Endpoint) > 2048 || !utf8.ValidString(config.Endpoint) ||
 		config.Aud == "" || len(config.Aud) > 1024 || !utf8.ValidString(config.Aud) || config.Window < 1 || config.Window > 120 ||
 		config.AnchorReference == "" || len(config.AnchorReference) > rotation.MaxSignerReferenceBytes || !utf8.ValidString(config.AnchorReference) {
