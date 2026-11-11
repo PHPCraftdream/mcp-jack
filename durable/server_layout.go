@@ -56,27 +56,49 @@ func readServerRows(tx *bolt.Tx) (guard, snapshot, intent []byte, result error) 
 	roots := 0
 	if err := tx.ForEach(func(name []byte, _ *bolt.Bucket) error {
 		roots++
-		if !bytes.Equal(name, serverBucket) { return ErrInvalidStore }
+		if !bytes.Equal(name, serverBucket) {
+			return ErrInvalidStore
+		}
 		return nil
-	}); err != nil || roots != 1 { return nil, nil, nil, ErrInvalidStore }
+	}); err != nil || roots != 1 {
+		return nil, nil, nil, ErrInvalidStore
+	}
 	bucket := tx.Bucket(serverBucket)
-	if bucket == nil { return nil, nil, nil, ErrInvalidStore }
+	if bucket == nil {
+		return nil, nil, nil, ErrInvalidStore
+	}
 	count := 0
 	if err := bucket.ForEach(func(key, value []byte) error {
-		if value == nil || (!bytes.Equal(key, serverGuardKey) && !bytes.Equal(key, serverSnapshotKey) && !bytes.Equal(key, serverIntentKey)) { return ErrInvalidStore }
+		if value == nil || (!bytes.Equal(key, serverGuardKey) && !bytes.Equal(key, serverSnapshotKey) && !bytes.Equal(key, serverIntentKey)) {
+			return ErrInvalidStore
+		}
 		count++
 		return nil
-	}); err != nil || count != 3 { return nil, nil, nil, ErrInvalidStore }
+	}); err != nil || count != 3 {
+		return nil, nil, nil, ErrInvalidStore
+	}
 	corrupt := false
-	for err := range tx.Check() { if err != nil { corrupt = true } }
-	if corrupt { return nil, nil, nil, ErrInvalidStore }
+	for err := range tx.Check() {
+		if err != nil {
+			corrupt = true
+		}
+	}
+	if corrupt {
+		return nil, nil, nil, ErrInvalidStore
+	}
 	encoded := bucket.Get(serverSnapshotKey)
-	if len(encoded) > rotation.MaxTrustSnapshotBytes+32 { return nil, nil, nil, ErrInvalidStore }
+	if len(encoded) > rotation.MaxTrustSnapshotBytes+32 {
+		return nil, nil, nil, ErrInvalidStore
+	}
 	snapshot, result = checkedPayload(encoded)
-	if result != nil { return nil, nil, nil, result }
+	if result != nil {
+		return nil, nil, nil, result
+	}
 	guard = append([]byte{}, bucket.Get(serverGuardKey)...)
 	snapshot = append([]byte{}, snapshot...)
 	intent = append([]byte{}, bucket.Get(serverIntentKey)...)
-	if len(intent) > 2*rotation.MaxTrustSnapshotBytes+len(serverIntentDomain)+40 { return nil, nil, nil, ErrInvalidStore }
+	if len(intent) > 2*rotation.MaxTrustSnapshotBytes+len(serverIntentDomain)+40 {
+		return nil, nil, nil, ErrInvalidStore
+	}
 	return guard, snapshot, intent, nil
 }

@@ -112,7 +112,9 @@ func (store *ServerStore) Snapshot() (rotation.ServerSnapshot, rotation.ClockTup
 	err = store.db.View(func(tx *bolt.Tx) error {
 		var err error
 		snapshot, guard, err = store.validateRows(tx)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		_, err = store.ownedGuard(tx)
 		return err
 	})
@@ -135,8 +137,12 @@ func (store *ServerStore) CompareAndSwap(expected, desired rotation.ServerSnapsh
 	if err != nil {
 		return err
 	}
-	if desired.Public.Clock != clock { return trustError("rotation_state_changed") }
-	if _, err := rotation.ValidateServerPublication(expected, desired, store.options.Binding, store.options.Window, store.options.Checkpoint); err != nil { return err }
+	if desired.Public.Clock != clock {
+		return trustError("rotation_state_changed")
+	}
+	if _, err := rotation.ValidateServerPublication(expected, desired, store.options.Binding, store.options.Window, store.options.Checkpoint); err != nil {
+		return err
+	}
 	done, err := store.begin()
 	if err != nil {
 		return err
@@ -158,7 +164,9 @@ func (store *ServerStore) CompareAndSwap(expected, desired rotation.ServerSnapsh
 		if !bytes.Equal(payload, previous) {
 			return errTrustConflict
 		}
-		if err := bucket.Put(serverIntentKey, encodeServerIntent(previous, next)); err != nil { return err }
+		if err := bucket.Put(serverIntentKey, encodeServerIntent(previous, next)); err != nil {
+			return err
+		}
 		return bucket.Put(serverSnapshotKey, sealPayload(next))
 	})
 	if errors.Is(err, errTrustConflict) {
