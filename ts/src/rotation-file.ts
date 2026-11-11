@@ -88,6 +88,13 @@ export class RotationFileOwner {
 
   /** Только explicit unused creation; existing/uncertain artifacts не удаляются. */
   static initializeUnused(path: string, bytes: Uint8Array): void {
+    const owner = this.createUnusedOwner(path, bytes);
+    try { owner.close(); }
+    catch { owner.fence(); refuse("rotation_state_unknown"); }
+  }
+
+  /** Higher store удерживает marker через dirty initialization и clock setup. */
+  static createUnusedOwner(path: string, bytes: Uint8Array): RotationFileOwner {
     let owner: RotationFileOwner | undefined;
     let created = false;
     try {
@@ -97,7 +104,7 @@ export class RotationFileOwner {
       created = true;
       try { writeOwned(fd, bytes); } finally { closeSync(fd); }
       syncDirectory(path);
-      owner.close();
+      return owner;
     } catch {
       if (owner !== undefined) {
         if (created) owner.fence();
