@@ -62,6 +62,38 @@ jobs:
           JACK_CLI_EXECUTABLE: ${{ runner.temp }}/jack
         run: go test -count=1 -v ./internal/cli
 
+  go-cli-artifacts:
+    name: Go CLI portable artifact qualification
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CGO_ENABLED: '0'
+      GOTOOLCHAIN: local
+      GOPROXY: https://proxy.golang.org
+      GOSUMDB: sum.golang.org
+      FEATURE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.11'
+      - name: Test inventory guards without running binary fixtures
+        run: python3 -I -m unittest discover -s tools/binaries -p 'test_*.py' -v
+      - name: Build six targets twice from independent source roots and caches
+        run: >-
+          python3 -I tools/binaries/qualify.py
+          --source "$GITHUB_WORKSPACE"
+          --output "$RUNNER_TEMP/jack-cli-portable"
+          --expected-sha "$GITHUB_SHA"
+          --feature-sha "$FEATURE_REVISION"
+      - name: Upload verified development binaries and inventory only
+        uses: actions/upload-artifact@v4
+        with:
+          name: jack-cli-development-${{ github.sha }}
+          path: ${{ runner.temp }}/jack-cli-portable/
+          if-no-files-found: error
+          compression-level: 1
+
   fixtures:
     name: fixtures are up to date
     runs-on: ubuntu-latest
