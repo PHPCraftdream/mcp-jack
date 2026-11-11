@@ -1,7 +1,5 @@
 use mcp_jack::client::signer::Signer;
-use mcp_jack::rotation::{
-    Checkpoint, OwnedBinding, RotationStoreOptions, RotationTrustStore,
-};
+use mcp_jack::rotation::{Checkpoint, OwnedBinding, RotationStoreOptions, RotationTrustStore};
 use std::cell::Cell;
 use std::fs;
 use std::os::unix::fs::DirBuilderExt;
@@ -48,29 +46,62 @@ pub(super) fn verify(signer: &dyn Signer) -> Result<(), String> {
         calls.set(calls.get() + 1);
         Ok(now)
     });
-    super::check(absent.is_err() && calls.get() == 0 && !path.exists(), "noncreating packaged store open")?;
+    super::check(
+        absent.is_err() && calls.get() == 0 && !path.exists(),
+        "noncreating packaged store open",
+    )?;
     RotationTrustStore::initialize_unused(&path, options.clone(), || Ok(now))
         .map_err(|_| "initialize packaged store")?;
     let mut store = RotationTrustStore::open(&path, options.clone(), || Ok(now))
         .map_err(|_| "open packaged store")?;
-    super::check(sandbox.0.join("trust.owner").exists(), "packaged store owner lifetime")?;
+    super::check(
+        sandbox.0.join("trust.owner").exists(),
+        "packaged store owner lifetime",
+    )?;
     let competing = RotationTrustStore::open(&path, options.clone(), || {
         calls.set(calls.get() + 1);
         Ok(now)
     });
-    super::check(competing.is_err() && calls.get() == 0, "packaged store exclusive owner")?;
+    super::check(
+        competing.is_err() && calls.get() == 0,
+        "packaged store exclusive owner",
+    )?;
     let (mut snapshot, clock) = store.snapshot().map_err(|_| "read packaged store")?;
-    super::check(snapshot.revision == 1 && clock.high_water == now, "packaged store initialized state")?;
-    let guarded = store.check_snapshot_clock(&snapshot).map_err(|_| "packaged store clock gate")?;
+    super::check(
+        snapshot.revision == 1 && clock.high_water == now,
+        "packaged store initialized state",
+    )?;
+    let guarded = store
+        .check_snapshot_clock(&snapshot)
+        .map_err(|_| "packaged store clock gate")?;
     super::check(guarded == clock, "packaged store stable guard")?;
     snapshot.head.hash = "caller-owned mutation".into();
-    super::check(store.snapshot().map_err(|_| "reread packaged store")?.0.head.hash == "-", "packaged store owned snapshot")?;
+    super::check(
+        store
+            .snapshot()
+            .map_err(|_| "reread packaged store")?
+            .0
+            .head
+            .hash
+            == "-",
+        "packaged store owned snapshot",
+    )?;
     store.close().map_err(|_| "close packaged store")?;
-    super::check(!sandbox.0.join("trust.owner").exists(), "packaged store owner release")?;
+    super::check(
+        !sandbox.0.join("trust.owner").exists(),
+        "packaged store owner release",
+    )?;
     let mut restored = RotationTrustStore::open(&path, options, || Ok(now))
         .map_err(|_| "reopen packaged store")?;
-    let (snapshot, clock) = restored.snapshot().map_err(|_| "read reopened packaged store")?;
-    super::check(snapshot.revision == 1 && snapshot.head.hash == "-" && clock.high_water == now, "packaged store durable reopen")?;
-    restored.close().map_err(|_| "close reopened packaged store")?;
+    let (snapshot, clock) = restored
+        .snapshot()
+        .map_err(|_| "read reopened packaged store")?;
+    super::check(
+        snapshot.revision == 1 && snapshot.head.hash == "-" && clock.high_water == now,
+        "packaged store durable reopen",
+    )?;
+    restored
+        .close()
+        .map_err(|_| "close reopened packaged store")?;
     Ok(())
 }

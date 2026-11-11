@@ -91,8 +91,8 @@ jobs:
           workspaces: rust
       - name: Format candidate Rust sources in CI
         run: cargo fmt --all
-      - name: Format standalone Rust consumer in CI
-        run: cargo fmt --manifest-path ../tools/consumer/rust/Cargo.toml
+      - name: Format standalone Rust store consumer in CI
+        run: rustfmt --edition 2024 ../tools/consumer/rust/src/rotation_store.rs
       - name: Test candidate rotation without default features
         timeout-minutes: 10
         run: cargo test --locked --no-default-features --lib --test rotation --test rotation_trust
