@@ -14,15 +14,15 @@ import (
 
 // Отдельный private OOB profile; init/status не загружают private signer material.
 type serverKeyConfig struct {
-	Version         int    `json:"version"`
-	StoreFile       string `json:"store_file"`
-	Endpoint        string `json:"endpoint"`
-	Aud             string `json:"aud"`
-	Window          int64  `json:"window"`
-	AnchorKID       string `json:"anchor_kid"`
-	AnchorPublicKey string `json:"anchor_public_key"`
-	AnchorReference string `json:"anchor_reference"`
-	Signers []serverKeySignerConfig `json:"signers,omitempty"`
+	Version         int                     `json:"version"`
+	StoreFile       string                  `json:"store_file"`
+	Endpoint        string                  `json:"endpoint"`
+	Aud             string                  `json:"aud"`
+	Window          int64                   `json:"window"`
+	AnchorKID       string                  `json:"anchor_kid"`
+	AnchorPublicKey string                  `json:"anchor_public_key"`
+	AnchorReference string                  `json:"anchor_reference"`
+	Signers         []serverKeySignerConfig `json:"signers,omitempty"`
 }
 
 func offlineServerKeyProfile(path string) (serverKeyConfig, durable.ServerOptions, error) {
