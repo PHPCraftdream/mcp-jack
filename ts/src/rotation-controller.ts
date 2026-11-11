@@ -3,6 +3,10 @@ import { verifyRotationCarrier } from "./client/rotation-auth.js";
 import type { RotationCarrier, RotationResponseKey } from "./client/rotation-auth.js";
 import { Code, JackError } from "./errors.js";
 import { ROTATION_MAX_RETAINED_KEYS } from "./rotation-chain.js";
+import { decodeRotationResult } from "./rotation-result.js";
+import { extendedRefreshSnapshot, prepareRefreshExtension } from "./rotation-refresh-state.js";
+import { encodeRotationTrustSnapshot } from "./rotation-trust-json.js";
+import type { RotationCursor } from "./rotation-page.js";
 import { RotationError, ROTATION_MAX_ORDINAL, ROTATION_MAX_TIMESTAMP } from "./rotation-record.js";
 import { RotationTrustStore } from "./rotation-store.js";
 import type { RotationTrustSnapshot } from "./rotation-trust.js";
@@ -12,6 +16,14 @@ export interface RotationResponse {
   readonly headers: readonly string[];
   readonly requestSignature: string;
   readonly body: Uint8Array;
+}
+
+export interface RotationRefreshResult {
+  readonly head: RotationCursor;
+  readonly terminal: RotationCursor;
+  readonly complete: boolean;
+  readonly committed: boolean;
+  readonly revision: number;
 }
 
 type Profile = Pick<RotationTrustSnapshot, "binding" | "window" | "checkpoint">;
@@ -40,6 +52,7 @@ function knownKeys(snapshot: RotationTrustSnapshot): ReadonlyMap<string, Rotatio
 /** Reference: Go client/rotation/controller.go; store lifecycle остаётся у caller. */
 export class RotationController {
   private readonly profile: Profile;
+  private writer = false;
 
   constructor(private readonly store: RotationTrustStore) {
     try {
@@ -76,7 +89,18 @@ export class RotationController {
     if (pending > 128 || retired > 1024) refuse("rotation_state_changed");
   }
 
-  private outer(input: RotationResponse): { readonly body: Uint8Array; readonly snapshot: RotationTrustSnapshot; readonly carrier: RotationCarrier } {
+  private equal(left: RotationTrustSnapshot, right: RotationTrustSnapshot): boolean {
+    const a = encodeRotationTrustSnapshot(left, this.profile.binding, this.profile.window, this.profile.checkpoint);
+    const b = encodeRotationTrustSnapshot(right, this.profile.binding, this.profile.window, this.profile.checkpoint);
+    return Buffer.from(a).equals(b);
+  }
+
+  private final(snapshot: RotationTrustSnapshot, carrier: RotationCarrier): void {
+    const clock = this.store.checkSnapshotClock(snapshot);
+    this.timeValid(snapshot, carrier, clock.highWater);
+  }
+
+  private outer(input: RotationResponse): { readonly status: number; readonly body: Uint8Array; readonly snapshot: RotationTrustSnapshot; readonly carrier: RotationCarrier } {
     const snapshot = this.state();
     const headers = [...input.headers];
     const auth = parseResponseAuth(headers);
@@ -92,15 +116,52 @@ export class RotationController {
     const carrier = verifyRotationCarrier(known, status, headers, requestSignature, body, raw, snapshot.window);
     const clock = this.store.checkSnapshotClock(snapshot);
     this.timeValid(snapshot, carrier, clock.highWater);
-    return { body, snapshot, carrier };
+    return { status, body, snapshot, carrier };
+  }
+
+  /** Explicit single-page success; late final error не откатывает уже подтверждённый ACK. */
+  acceptRefresh(input: RotationResponse, expectedId: string | number, cursor: RotationCursor): RotationRefreshResult {
+    try {
+      const owned = this.outer(input);
+      if (owned.status !== 200) refuse("rotation_result_invalid");
+      const requested = Object.freeze({ ordinal: cursor.ordinal, hash: cursor.hash });
+      const page = decodeRotationResult(owned.body, expectedId);
+      const key = owned.snapshot.keys.find((value) => value.kid === owned.carrier.kid);
+      if (key === undefined || page.current.kid !== owned.carrier.kid || page.current.publicKeyB64u !== key.publicKeyB64u) refuse("rotation_result_invalid");
+      const prepared = prepareRefreshExtension(owned.snapshot, page, requested, owned.carrier.timestamp);
+      const result: RotationRefreshResult = Object.freeze({ head: prepared.framing.head, terminal: prepared.framing.terminal,
+        complete: prepared.framing.complete, committed: false, revision: owned.snapshot.revision });
+      if (prepared.extension.length === 0) {
+        this.final(owned.snapshot, owned.carrier);
+        return result;
+      }
+      if (this.writer) refuse("rotation_state_changed");
+      this.writer = true;
+      try {
+        if (!this.equal(this.state(), owned.snapshot)) refuse("rotation_state_changed");
+        const clock = this.store.checkSnapshotClock(owned.snapshot);
+        this.timeValid(owned.snapshot, owned.carrier, clock.highWater);
+        const first = prepared.extension[0];
+        if (first === undefined) refuse("rotation_state_unknown");
+        if (clock.highWater >= first.activatesAt) refuse("rotation_bridge_expired");
+        const desired = extendedRefreshSnapshot(owned.snapshot, prepared.extension, clock);
+        this.store.compareAndSwap(owned.snapshot, desired, clock);
+        const committed = Object.freeze({ ...result, committed: true, revision: desired.revision });
+        this.final(desired, owned.carrier);
+        return committed;
+      } finally {
+        this.writer = false;
+      }
+    } catch (error) {
+      return mapped(error, "rotation_state_unknown");
+    }
   }
 
   /** Owned exact body только после final clock/snapshot/interval gate; без fetch/retry. */
   verifyResponse(input: RotationResponse): Uint8Array {
     try {
       const owned = this.outer(input);
-      const clock = this.store.checkSnapshotClock(owned.snapshot);
-      this.timeValid(owned.snapshot, owned.carrier, clock.highWater);
+      this.final(owned.snapshot, owned.carrier);
       return owned.body;
     } catch (error) {
       return mapped(error, "rotation_state_unknown");

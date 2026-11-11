@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { chmodSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { bodyHash, decodeBase64URLFixed } from "../src/encoding.js";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,9 +19,9 @@ function signer(label: string): client.InMemorySigner {
   return new client.InMemorySigner(createHash("sha256").update(`mcp-jack controller fixture ${label}`).digest());
 }
 
-function response(key: client.Signer, requestSignature: string, timestamp: number, body = Buffer.from("{not-json")): RotationResponse {
-  const message = responseSigningString(200, requestSignature, key.kid(), timestamp, body);
-  return { status: 200, requestSignature, body,
+function response(key: client.Signer, requestSignature: string, timestamp: number, body = Buffer.from("{not-json"), status = 200): RotationResponse {
+  const message = responseSigningString(status, requestSignature, key.kid(), timestamp, body);
+  return { status, requestSignature, body,
     headers: [formatResponseAuth({ kid: key.kid(), ts: timestamp, sig: encodeBase64URL(key.sign(Buffer.from(message))) })] };
 }
 
@@ -40,7 +42,7 @@ function setup(context: TestContext, endpoint = "https://controller.example.test
   const controller = new RotationController(store);
   const request = client.signRequest(user, binding.aud, "POST", "/mcp", new Uint8Array(), new Uint8Array(16), 1000);
   const requestSignature = parseRequestAuth([request]).sig;
-  return { key, next, user, binding, checkpoint, clock, options, store, controller, requestSignature };
+  return { key, next, user, binding, checkpoint, clock, options, path, root, store, controller, requestSignature };
 }
 
 function installNext(environment: ReturnType<typeof setup>): void {
@@ -199,4 +201,190 @@ test("controller: foreign callback/input errors are sanitized and clock failure 
   delete clock.hook;
   assert.throws(() => store.close(), (error) => error instanceof rotation.RotationError);
   assert.throws(() => controller.verifyResponse(input), denied("rotation_state_unavailable"));
+});
+
+interface PageOptions {
+  head?: rotation.RotationCursor;
+  complete?: boolean;
+  current?: client.Signer;
+  signer?: client.Signer;
+  timestamp?: number;
+  id?: string | number;
+  status?: number;
+}
+
+function signedPage(environment: ReturnType<typeof setup>, records: readonly rotation.RotationRecord[], options: PageOptions = {}): RotationResponse {
+  const signing = options.signer ?? environment.key;
+  const current = options.current ?? signing;
+  const tail = records[records.length - 1];
+  const head = options.head ?? (tail === undefined ? environment.store.snapshot().snapshot.head : { ordinal: tail.ordinal, hash: tail.hash });
+  const payload = { current: { kid: current.kid(), public_key: encodeBase64URL(current.publicKey()) },
+    records: records.map((record) => record.wire), head, complete: options.complete ?? true };
+  const id = options.id ?? "refresh";
+  const body = Buffer.from(JSON.stringify({ jsonrpc: "2.0", id,
+    result: { content: [{ type: "text", text: JSON.stringify(payload) }], structuredContent: payload, isError: false } }));
+  const timestamp = options.timestamp ?? environment.clock.now;
+  const cursor = environment.store.snapshot().snapshot.head;
+  const requestBody = Buffer.from(JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call",
+    params: { name: "jack.server.key", arguments: { after_ordinal: cursor.ordinal, after_hash: cursor.hash } } }));
+  const request = client.signRequest(environment.user, environment.binding.aud, "POST", "/mcp", requestBody, randomBytes(16), timestamp);
+  return response(signing, parseRequestAuth([request]).sig, timestamp, body, options.status ?? 200);
+}
+
+function firstRecord(environment: ReturnType<typeof setup>, publishedAt = 1000): rotation.RotationRecord {
+  return rotation.createRotationRecord(environment.binding, environment.checkpoint, environment.key, environment.next, publishedAt);
+}
+
+test("refresh controller: explicit overlapping pages ACK terminal only; duplicate is no-op and clean reopen retains state", { skip: !linux }, (context) => {
+  const environment = setup(context);
+  const { controller, store, clock, binding, next } = environment;
+  const empty = controller.acceptRefresh(signedPage(environment, []), "refresh", store.snapshot().snapshot.head);
+  assert.equal(empty.committed, false);
+  assert.equal(empty.revision, 1);
+  assert.deepEqual(empty.terminal, { ordinal: 0, hash: "-" });
+  const first = firstRecord(environment);
+  const third = signer("third");
+  const previous = { ordinal: first.ordinal, hash: first.hash, kid: first.newKid, publicKeyB64u: first.publicKeyB64u, publishedAt: first.publishedAt };
+  const second = rotation.createRotationRecord(binding, previous, next, third, 1000);
+  const head = { ordinal: second.ordinal, hash: second.hash };
+  const calls = clock.calls;
+  const one = controller.acceptRefresh(signedPage(environment, [first], { head, complete: false }), "refresh", environment.checkpoint);
+  assert.equal(clock.calls - calls, 4);
+  assert.deepEqual(one, { head, terminal: { ordinal: 1, hash: first.hash }, complete: false, committed: true, revision: 2 });
+  assert.equal(store.snapshot().snapshot.head.ordinal, 1, "advertised head does not ACK an unfetched page");
+  const two = controller.acceptRefresh(signedPage(environment, [second]), "refresh", one.terminal);
+  assert.deepEqual(two, { head, terminal: head, complete: true, committed: true, revision: 3 });
+  const before = store.snapshot();
+  const duplicateCalls = clock.calls;
+  const duplicate = controller.acceptRefresh(signedPage(environment, [second]), "refresh", head);
+  assert.equal(duplicate.committed, false);
+  assert.equal(duplicate.revision, 3);
+  assert.equal(clock.calls - duplicateCalls, 3);
+  assert.deepEqual(store.snapshot(), before);
+  store.close();
+  const reopened = rotation.RotationTrustStore.open(environment.path, environment.options);
+  context.after(() => { try { reopened.close(); } catch { /* Только test-owned cleanup. */ } });
+  assert.deepEqual(reopened.snapshot().snapshot, before.snapshot);
+  const restored = new RotationController(reopened);
+  clock.now = first.activatesAt;
+  const current = response(third, environment.requestSignature, first.activatesAt);
+  assert.deepEqual(restored.verifyResponse(current), current.body);
+  assert.throws(() => restored.verifyResponse(response(next, environment.requestSignature, first.activatesAt)), denied("rotation_key_interval"));
+  reopened.close();
+});
+
+test("refresh controller: unknown/current/ID/status/cursor/future-proof/reuse refusals do not ACK", { skip: !linux }, (context) => {
+  const environment = setup(context);
+  const { controller, store, clock } = environment;
+  const first = firstRecord(environment);
+  const cursor = store.snapshot().snapshot.head;
+  const unknown = signedPage(environment, [first], { signer: environment.next });
+  let reads = 0;
+  Object.defineProperty(unknown, "body", { get() { reads++; throw new Error("unknown carrier body inspected"); } });
+  const calls = clock.calls;
+  assert.throws(() => controller.acceptRefresh(unknown, "refresh", cursor), denied(Code.UNKNOWN_SERVER_KEY));
+  assert.equal(reads, 0);
+  assert.equal(clock.calls, calls);
+  const refused: [RotationResponse, string | number, rotation.RotationCursor, string][] = [
+    [signedPage(environment, [first], { current: environment.next }), "refresh", cursor, "rotation_result_invalid"],
+    [signedPage(environment, [first]), "wrong-id", cursor, "rotation_result_invalid"],
+    [signedPage(environment, [first], { status: 400 }), "refresh", cursor, "rotation_result_invalid"],
+    [signedPage(environment, [first]), "refresh", { ordinal: 1, hash: first.hash }, "rotation_gap"],
+    [signedPage(environment, [firstRecord(environment, 1001)]), "refresh", cursor, "rotation_record_invalid"],
+  ];
+  const retained = { ordinal: first.ordinal, hash: first.hash, kid: first.newKid, publicKeyB64u: first.publicKeyB64u, publishedAt: first.publishedAt };
+  const reused = rotation.createRotationRecord(environment.binding, retained, environment.next, environment.key, 1000);
+  refused.push([signedPage(environment, [first, reused]), "refresh", cursor, "rotation_record_invalid"]);
+  for (const proofIndex of [10, 11]) {
+    const lines = first.wire.split("\n");
+    const encoded = lines[proofIndex];
+    assert.ok(encoded);
+    const proof = decodeBase64URLFixed(encoded, 64);
+    proof[0] = (proof[0] as number) ^ 1;
+    lines[proofIndex] = encodeBase64URL(proof);
+    const wire = lines.join("\n");
+    const changed = { ...first, wire, hash: bodyHash(Buffer.from(wire)) };
+    refused.push([signedPage(environment, [changed]), "refresh", cursor, "rotation_record_invalid"]);
+  }
+  for (const [page, id, after, code] of refused) {
+    assert.throws(() => controller.acceptRefresh(page, id, after), denied(code));
+    assert.equal(store.snapshot().snapshot.revision, 1);
+    assert.equal(store.snapshot().snapshot.records.length, 0);
+  }
+});
+
+test("refresh controller: strict first bridge expiry; late final cutoff never rolls back confirmed ACK", { skip: !linux }, (context) => {
+  for (const lateAck of [false, true]) {
+    const environment = setup(context);
+    const first = firstRecord(environment);
+    const { controller, store, clock } = environment;
+    clock.now = first.activatesAt - 1;
+    const page = signedPage(environment, [first]);
+    const cursor = store.snapshot().snapshot.head;
+    const before = first.activatesAt - 1;
+    const sequence = lateAck ? [before, before, before, first.activatesAt] : [before, before, first.activatesAt];
+    clock.hook = () => { const value = sequence.shift(); assert.notEqual(value, undefined); return value as number; };
+    assert.throws(() => controller.acceptRefresh(page, "refresh", cursor), denied(lateAck ? "rotation_key_interval" : "rotation_bridge_expired"));
+    assert.equal(sequence.length, 0);
+    delete clock.hook;
+    const state = store.snapshot();
+    assert.equal(state.snapshot.revision, lateAck ? 2 : 1);
+    assert.equal(state.snapshot.head.ordinal, lateAck ? 1 : 0);
+    assert.equal(state.clock.highWater, first.activatesAt);
+    if (lateAck) assert.deepEqual(state.snapshot.records, [first.wire]);
+  }
+});
+
+test("refresh controller: real pre/post-rename unknown CAS keeps one-attempt gate, never returns ACK or retries", { skip: !linux }, (context) => {
+  const moduleURL = new URL("../src/rotation-controller.js", import.meta.url).href;
+  const sdkURL = new URL("../src/index.js", import.meta.url).href;
+  for (const outcome of ["before", "after"]) {
+    const environment = setup(context);
+    const first = firstRecord(environment);
+    const page = signedPage(environment, [first]);
+    environment.store.close();
+    const serialized = JSON.stringify({ options: environment.options, response: { ...page, body: Buffer.from(page.body).toString("base64url") } });
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", `
+      import fs from 'node:fs';
+      import {syncBuiltinESMExports} from 'node:module';
+      const {rotation} = await import(process.argv[1]);
+      const {RotationController} = await import(process.argv[2]);
+      const data = JSON.parse(process.argv[5]);
+      data.options.now = () => 1000;
+      const store = rotation.RotationTrustStore.open(process.argv[3], data.options);
+      const controller = new RotationController(store);
+      const input = {...data.response, body: Buffer.from(data.response.body, 'base64url')};
+      const cursor = store.snapshot().snapshot.head;
+      const rename = fs.renameSync;
+      let attempts = 0;
+      fs.renameSync = (...args) => {
+        attempts++;
+        if(process.argv[4] === 'after') rename(...args);
+        throw new Error('injected lost trust CAS outcome');
+      };
+      syncBuiltinESMExports();
+      let refused = false;
+      try { controller.acceptRefresh(input, 'refresh', cursor); }
+      catch(error) { if(error.code !== 'rotation_state_unknown' || error.httpStatus !== 0) throw error; refused = true; }
+      if(!refused || attempts !== 1) process.exit(2);
+      try { controller.acceptRefresh(input, 'refresh', cursor); process.exit(3); }
+      catch(error) { if(error.code !== 'rotation_state_unavailable') throw error; }
+      try { store.close(); process.exit(4); }
+      catch(error) { if(error.code !== 'rotation_state_unavailable') throw error; }
+      if(attempts !== 1 || !fs.existsSync(process.argv[3]+'.owner')) process.exit(5);
+    `, sdkURL, moduleURL, environment.path, outcome, serialized], { timeout: 10_000, encoding: "utf8" });
+    assert.equal(child.error, undefined);
+    assert.equal(child.status, 0, child.stderr);
+    const outer = JSON.parse(readFileSync(environment.path, "utf8")) as { payload: string };
+    const bundle = JSON.parse(outer.payload) as { snapshot: string; dirty: boolean };
+    const snapshot = JSON.parse(bundle.snapshot) as { trust_revision: number; head: { ordinal: number } };
+    assert.equal(snapshot.trust_revision, outcome === "after" ? 2 : 1);
+    assert.equal(snapshot.head.ordinal, outcome === "after" ? 1 : 0);
+    assert.equal(bundle.dirty, true);
+    assert.equal(existsSync(environment.path + ".owner"), true);
+    assert.throws(() => rotation.RotationTrustStore.open(environment.path, environment.options),
+      (error) => error instanceof rotation.RotationError && error.code === "rotation_state_unavailable");
+    const retained = readdirSync(environment.root).filter((name) => name.startsWith(".trust.") && name.endsWith(".tmp"));
+    assert.equal(retained.length, outcome === "before" ? 1 : 0);
+  }
 });
