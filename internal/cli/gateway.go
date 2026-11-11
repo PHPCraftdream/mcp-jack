@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"crypto/ed25519"
 	"io"
 	"log"
 	"net"
@@ -14,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	jack "github.com/PHPCraftdream/mcp-jack"
 	"github.com/PHPCraftdream/mcp-jack/server"
 )
 
@@ -22,6 +20,7 @@ type gatewayConfig struct {
 	Version        int                   `json:"version"`
 	Aud            string                `json:"aud"`
 	ServerSeedFile string                `json:"server_seed_file"`
+	ServerRotationFile rotationProfilePath `json:"server_rotation_file,omitempty"`
 	StateFile      string                `json:"state_file"`
 	Listen         string                `json:"listen"`
 	UpstreamSocket string                `json:"upstream_socket"`
@@ -89,11 +88,15 @@ func gateway(ctx context.Context, path string) (result error) {
 	if err != nil {
 		return err
 	}
-	seed, err := readPrivate(c.ServerSeedFile, 32)
-	if err != nil || len(seed) != 32 {
+	signing, err := selectGatewaySigning(c)
+	if err != nil {
 		return errConfig
 	}
-	defer clear(seed)
+	defer func() {
+		if err := signing.close(); err != nil && result == nil {
+			result = errConfig
+		}
+	}()
 	unlock, err := lockState(c.StateFile)
 	if err != nil {
 		return err
@@ -106,10 +109,8 @@ func gateway(ctx context.Context, path string) (result error) {
 	if err != nil || len(state.View().Keys) > 1024 || len(state.View().Invites) > 1024 {
 		return errConfig
 	}
-	serverKey := ed25519.NewKeyFromSeed(seed)
-	serverKID := jack.KeyID(serverKey.Public().(ed25519.PublicKey))
 	for _, entry := range state.View().Keys {
-		if entry.Kid == serverKID {
+		if signing.serverKIDs[entry.Kid] {
 			return errConfig
 		}
 	}
@@ -121,9 +122,15 @@ func gateway(ctx context.Context, path string) (result error) {
 		return (&net.Dialer{Timeout: timeout}).DialContext(ctx, "unix", c.UpstreamSocket)
 	}
 	defer base.CloseIdleConnections()
-	verification := server.Config{
-		Aud: c.Aud, State: boundedState{state},
-		Native: gatewayNative{native: server.NewNativeTools(server.NativeOptions{}), serverKID: serverKID, adminEnabled: bool(c.NativeAdmin)},
+	policy := gatewayNative{
+		native: server.NewNativeTools(server.NativeOptions{}), serverKID: signing.anchorKID,
+		serverKIDs: signing.serverKIDs, adminEnabled: bool(c.NativeAdmin),
+	}
+	verification := server.Config{Aud: c.Aud, State: boundedState{state}, Native: policy}
+	if signing.provider != nil {
+		policy.serverKeys = signing.provider
+		verification.Native = policy
+		verification.ServerKeys = policy
 	}
 	closeNonces, err := selectGatewayNonces(c, &verification)
 	if err != nil {
@@ -139,9 +146,12 @@ func gateway(ctx context.Context, path string) (result error) {
 	if err != nil {
 		return errConfig
 	}
-	h, err := server.NewHandler(server.HandlerConfig{
-		Verifier: v, ServerKey: serverKey, MaxBodyBytes: maxBody, MaxResponseBytes: maxBody,
-	}, upstreamHandler(c, base))
+	handlerConfig := server.HandlerConfig{Verifier: v, ServerKey: signing.key, MaxBodyBytes: maxBody, MaxResponseBytes: maxBody}
+	if signing.provider != nil {
+		handlerConfig.ServerKey = nil
+		handlerConfig.ResponseKeys = signing.provider
+	}
+	h, err := server.NewHandler(handlerConfig, upstreamHandler(c, base))
 	if err != nil {
 		return errConfig
 	}

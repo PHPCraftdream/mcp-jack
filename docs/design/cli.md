@@ -718,5 +718,41 @@ public `record`. No protected reference or seed path is included. A subsequent
 stdout/Close error does not roll back a committed publication. Do not automatically
 repeat after an error: inspect status and retain external evidence; dirty/unsafe
 or unknown outcomes remain subject to explicit recovery, not these commands.
-Repeating the same retained key is refused. This command does not add a gateway
-rotation mode or authorize release/registry publication.
+Repeating the same retained key is refused. This command does not itself select a gateway rotation mode or authorize
+release/registry publication.
+
+## Explicit gateway rotation profile
+
+A gateway may select `server_rotation_file` pointing to the private server-key
+profile above, **instead of** `server_seed_file`. Exactly one signing profile
+must be configured. `server_rotation_file` must be a JSON string when supplied;
+null, booleans, numbers and objects are rejected rather than silently selecting
+static mode. Existing static configurations keep their behavior; failed
+rotation initialization never falls back to a static key. Gateway startup does
+not initialize, reset, recover or replace either durable store.
+
+Rotation mode requires an explicitly initialized `durable_nonces` profile with
+the same immutable window. Ring and nonce stores must be distinct files; ring
+storage must also differ from registry state. The exact profile audience must
+match the gateway audience. The public endpoint in the profile is the independently
+configured external binding, not a value learned from requests or inferred from
+the loopback listen address or upstream socket.
+
+The gateway validates protected state and current/pending signer readiness before
+listening, selects the concrete ResponseKeys provider and the separate explicit
+candidate native route, and retains the ring's exclusive owner for its lifetime.
+`jack.server.key` requires ordinary authenticated processing and durable nonce
+reservation, but does not require `native_admin`. The existing admin opt-in and
+other native allowlist rules remain unchanged. All configured and retained
+response-key IDs are excluded as native callers on both routes, including the
+candidate route; registry collisions with these identities are refused at startup.
+
+Shutdown stops HTTP admission and drains owned connections/handlers before
+closing nonce and ring owners. The ring close drains physical-write serving
+leases before clearing dirty, and private signer buffers are cleared only after
+store closure. Missing, dirty, unsafe, corrupt, mismatched or unavailable ring
+state/readiness fails closed with no fallback, retry, automatic key initialization
+or repair. Offline announcement must acquire this same exclusive owner, so stop
+and drain the gateway before using the local announcement command. Server-store
+recovery/serving release and broader platform/process-kill qualification remain
+separate acceptance work; selecting this profile does not authorize them.
