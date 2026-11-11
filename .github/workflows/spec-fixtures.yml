@@ -91,6 +91,8 @@ jobs:
           workspaces: rust
       - name: Format candidate Rust sources in CI
         run: cargo fmt --all
+      - name: Format standalone Rust consumer in CI
+        run: cargo fmt --manifest-path ../tools/consumer/rust/Cargo.toml
       - name: Test candidate rotation without default features
         timeout-minutes: 10
         run: cargo test --locked --no-default-features --lib --test rotation --test rotation_trust
@@ -108,4 +110,13 @@ jobs:
             rust/tests/rotation.rs
             rust/tests/rotation_trust.rs
             rust/tests/rotation_trust/json.rs
+          if-no-files-found: error
+      - name: Upload formatted standalone consumer for parent integration
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-consumer-formatted-sources
+          path: |
+            tools/consumer/rust/src/main.rs
+            tools/consumer/rust/src/rotation_store.rs
           if-no-files-found: error
