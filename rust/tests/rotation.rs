@@ -966,7 +966,10 @@ fn strict_result_refuses_positional_arrays_at_every_candidate_object_boundary() 
         ("", &["jsonrpc", "id", "result"]),
         ("/result", &["content", "structuredContent", "isError"]),
         ("/result/content/0", &["type", "text"]),
-        ("/result/structuredContent", &["current", "records", "head", "complete"]),
+        (
+            "/result/structuredContent",
+            &["current", "records", "head", "complete"],
+        ),
         ("/result/structuredContent/current", &["kid", "public_key"]),
         ("/result/structuredContent/head", &["ordinal", "hash"]),
     ];
