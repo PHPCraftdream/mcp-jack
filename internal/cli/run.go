@@ -20,6 +20,8 @@ jack gateway --config FILE
 jack bridge --config FILE
 jack nonce-init-unused --config FILE --confirm-unused-deployment ID
 jack nonce-inspect --config FILE
+jack server-key-init-unused --config FILE --confirm-unused-endpoint URL --confirm-unused-aud AUD
+jack server-key-status --config FILE
 jack user-set-admin --config FILE --kid KID --admin true|false
 jack user-create --config FILE --public FILE --name NAME --admin true|false [--not-before TS] [--not-after TS]
 jack user-list --config FILE
@@ -32,6 +34,8 @@ jack invite-revoke --config FILE --invite-id ID
 nonce-init-unused: только deployment, никогда не принимавший запросы.
 Не использовать для восстановления утраченной истории nonce или миграции volatile state.
 nonce-inspect не снимает dirty/unsafe и не разрешает запуск сервера.
+server-key-init-unused: только binding, никогда не использовавший server rotation store; не recovery/reset.
+server-key-status работает offline без signer seeds, не снимает dirty/unsafe и не разрешает serving.
 invite-create сохраняет code только в новом private file; stdout содержит лишь invite_id/expires_at.
 При ошибке invite-create reservation file сохраняется: не удаляйте его для автоматического повтора.
 `
@@ -132,6 +136,18 @@ func run(ctx context.Context, args []string, streams IO) error {
 			return err
 		}
 		return bootstrap(f["state"], f["invite-file"])
+	case "server-key-init-unused":
+		f, err := flags(args[0], args[1:], "config", "confirm-unused-endpoint", "confirm-unused-aud")
+		if err != nil {
+			return err
+		}
+		return serverKeyInitializeUnused(f["config"], f["confirm-unused-endpoint"], f["confirm-unused-aud"])
+	case "server-key-status":
+		f, err := flags(args[0], args[1:], "config")
+		if err != nil {
+			return err
+		}
+		return serverKeyStatus(f["config"], streams.Out)
 	case "nonce-init-unused":
 		f, err := flags(args[0], args[1:], "config", "confirm-unused-deployment")
 		if err != nil {

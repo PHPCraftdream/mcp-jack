@@ -11,7 +11,8 @@ The entry point is `cmd/jack`; the command layer is `internal/cli.Run(ctx, args,
 IO)`. Exit status is zero for success and one for failure. `help` writes usage to
 stderr. All diagnostics are fixed, secret-free strings. No command prints a
 seed, invite, credential, HTTP error body, supplied path, or supplied URL.
-Bridge stdout contains verified protocol frames only. Other commands produce
+Bridge stdout contains verified protocol frames only. Commands with documented
+JSON output emit only their public result or diagnostics; other commands produce
 no stdout.
 
 Commands:
@@ -22,6 +23,8 @@ Commands:
 - `jack enroll --config FILE --invite-file FILE --name NAME`
 - `jack gateway --config FILE`
 - `jack bridge --config FILE`
+- `jack server-key-init-unused --config FILE --confirm-unused-endpoint URL --confirm-unused-aud AUD`
+- `jack server-key-status --config FILE`
 - `jack user-create --config FILE --public FILE --name NAME --admin true|false [--not-before TS] [--not-after TS]`
 - `jack user-list --config FILE`
 - `jack user-get --config FILE --kid KID`
@@ -632,3 +635,49 @@ checks are not a proof that an upstream has no additional listener; inspect that
 deployment separately. Official MCP SDK fixtures, their isolated toolchains,
 workflow wiring, and conformance/owner acceptance remain outside this bundle.
 Existing sibling threat-model/versioning/compatibility texts were read, not edited.
+
+## Offline candidate server-key initialization and status
+
+These commands use a separate private OOB profile, not client credentials or the
+static gateway configuration. The configuration is subject to the existing
+16 KiB private-config bound and strict known-field/duplicate checks. Replace the
+symbolic values below with independently provisioned values; this is a schema
+example, not a ready-to-run key fixture:
+
+```json
+{
+  "version": 1,
+  "store_file": "<absolute-private-store-file>",
+  "endpoint": "https://service.example/mcp",
+  "aud": "service-audience",
+  "window": 30,
+  "anchor_kid": "<canonical-base64url-SHA256-of-anchor-public-key>",
+  "anchor_public_key": "<canonical-base64url-32-byte-public-key>",
+  "anchor_reference": "local-provider/anchor"
+}
+```
+
+The configuration and store have the CLI's private owner/type/mode requirements;
+the parent directory must already exist and be private. This concrete durable
+profile is limited to the qualified Linux/filesystem backend. The anchor is the
+independently provisioned ordinal-zero public key, not a key discovered in a
+remote payload. `window` is explicit and immutable. The exact endpoint/audience
+and opaque anchor reference participate in the protected profile; these commands
+neither normalize the binding nor load a signer seed or make an HTTP request.
+
+`server-key-init-unused` requires both confirmation values to equal the configured
+binding exactly. This is an operator assertion that this rotation binding is
+unused, not proof or permission to migrate, replace a missing history, recover a
+dirty store, or reset an unsafe clock. Creation is exclusive and never replaces
+an existing file; an uncertain creation retains its artifact. Success has no
+stdout.
+
+`server-key-status` opens offline inspection under the lifetime-exclusive owner
+lock, so a concurrently serving owner prevents it. It does not enter serving,
+call the clock, increment owner/revision/H, clear recovery flags, or read signer
+material. Its JSON contains public store/owner/clock/state/head/count/flag
+metadata only, never protected references, private snapshots, or supplied paths.
+A dirty/unsafe report is diagnostic and still requires explicit recovery; the
+command does not authorize restart or certify absence of backup rollback.
+Malformed or missing stores produce a generic failure without creation or reset.
+These commands do not yet select a rotation gateway mode or publish a key.
