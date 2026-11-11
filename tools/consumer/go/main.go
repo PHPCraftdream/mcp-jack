@@ -91,6 +91,9 @@ func main() {
 	if _, err := rotationclient.New(nil); err == nil {
 		fail("rotation controller accepted missing durable owner", nil)
 	}
+	if _, err := rotationclient.NewHTTP(nil, nil, time.Second); err == nil {
+		fail("rotation HTTP client accepted missing durable owner", nil)
+	}
 	// (a) Client key lifecycle.
 	clientKey, err := userkey.GenerateClientKey()
 	if err != nil {

@@ -62,7 +62,7 @@ if (!Array.isArray(inventory.files) || inventory.files.length === 0) throw new E
 for (const member of inventory.files) {
   if (typeof member !== "string" || !allowed.test(member)) throw new Error(`out-of-scope staged module file: ${String(member)}`);
 }
-for (const member of ["go.mod", "go.sum", "LICENSE-MIT", "LICENSE-APACHE", "spec/spec.go", "durable/store.go", "client/rotation/controller.go", "client/rotation/refresh.go"]) {
+for (const member of ["go.mod", "go.sum", "LICENSE-MIT", "LICENSE-APACHE", "spec/spec.go", "durable/store.go", "client/rotation/controller.go", "client/rotation/refresh.go", "client/rotation/http.go"]) {
   if (!inventory.files.includes(member)) throw new Error(`missing staged module file: ${member}`);
 }
 

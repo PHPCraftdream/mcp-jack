@@ -38,10 +38,15 @@ type fixture struct {
 
 func setup(t *testing.T, now func() int64) fixture {
 	t.Helper()
+	return setupEndpoint(t, now, "https://public.invalid/mcp")
+}
+
+func setupEndpoint(t *testing.T, now func() int64, endpoint string) fixture {
+	t.Helper()
 	anchor, next, last := fixtureSigner(11), fixtureSigner(12), fixtureSigner(13)
 	checkpoint := rotation.Checkpoint{Hash: "-", KID: jack.KeyID(anchor.PublicKey())}
 	copy(checkpoint.PublicKey[:], anchor.PublicKey())
-	binding := rotation.Binding{Endpoint: "https://public.invalid/mcp", Audience: "public-controller-test"}
+	binding := rotation.Binding{Endpoint: endpoint, Audience: "public-controller-test"}
 	first, err := rotation.CreateRecord(binding, checkpoint, anchor, next, 1000)
 	if err != nil {
 		t.Fatal(err)

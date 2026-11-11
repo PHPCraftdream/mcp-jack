@@ -91,6 +91,10 @@ func desiredSnapshot(snapshot rotation.TrustSnapshot, extension []rotation.Recor
 // AcceptRefresh обрабатывает только явно запрошенный jack.server.key success page.
 // Нет fetch/retry/pagination. Committed ACK не откатывается при late final failure.
 func (controller *Controller) AcceptRefresh(response Response, expectedID json.RawMessage, cursor rotation.ResultCursor) (RefreshResult, error) {
+	return controller.acceptRefresh(response, expectedID, cursor, nil)
+}
+
+func (controller *Controller) acceptRefresh(response Response, expectedID json.RawMessage, cursor rotation.ResultCursor, requested *rotation.TrustSnapshot) (RefreshResult, error) {
 	owned, snapshot, carrier, err := controller.outer(response)
 	if err != nil {
 		return RefreshResult{}, err
@@ -107,6 +111,7 @@ func (controller *Controller) AcceptRefresh(response Response, expectedID json.R
 		return RefreshResult{}, localError("rotation_result_invalid")
 	}
 	if cursor != snapshot.Head || page.Head.Ordinal < cursor.Ordinal {
+		if requested != nil && !controller.equal(snapshot, *requested) { return RefreshResult{}, localError("rotation_state_changed") }
 		return RefreshResult{}, localError("rotation_gap")
 	}
 	records, hashes, err := pageRecords(snapshot, page)
