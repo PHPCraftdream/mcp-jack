@@ -21,6 +21,7 @@ jack bridge --config FILE
 jack nonce-init-unused --config FILE --confirm-unused-deployment ID
 jack nonce-inspect --config FILE
 jack user-set-admin --config FILE --kid KID --admin true|false
+jack user-create --config FILE --public FILE --name NAME --admin true|false [--not-before TS] [--not-after TS]
 jack user-list --config FILE
 jack user-get --config FILE --kid KID
 jack user-revoke --config FILE --kid KID
@@ -155,6 +156,8 @@ func run(ctx context.Context, args []string, streams IO) error {
 			return err
 		}
 		return inviteCommand(ctx, args[0], f["config"], f["invite-id"], streams.Out)
+	case "user-create":
+		return userCreate(ctx, args[1:], streams.Out)
 	case "user-list", "user-get", "user-revoke":
 		names := []string{"config"}
 		if args[0] != "user-list" {
