@@ -2,19 +2,19 @@ package rotation
 
 // ClockTuple — copied CAS dependency, не самостоятельная time authority.
 type ClockTuple struct {
-	Binding Binding
-	Window int64
+	Binding   Binding
+	Window    int64
 	HighWater int64
-	Revision uint64
-	Unsafe bool
+	Revision  uint64
+	Unsafe    bool
 }
 
 // TrustKey содержит только подтверждённые публичные metadata.
 type TrustKey struct {
-	Ordinal uint64
-	KID string
-	PublicKey [32]byte
-	NotBefore int64
+	Ordinal     uint64
+	KID         string
+	PublicKey   [32]byte
+	NotBefore   int64
 	KnownCutoff *int64
 }
 
@@ -22,15 +22,15 @@ type TrustKey struct {
 // History начинается от независимо provisioned checkpoint; auto-compaction нет.
 type TrustSnapshot struct {
 	FormatVersion uint32
-	Binding Binding
-	Window int64
-	Checkpoint Checkpoint
-	Head ResultCursor
-	Records []string
-	Keys []TrustKey
-	Revision uint64
-	Fenced bool
-	Clock ClockTuple
+	Binding       Binding
+	Window        int64
+	Checkpoint    Checkpoint
+	Head          ResultCursor
+	Records       []string
+	Keys          []TrustKey
+	Revision      uint64
+	Fenced        bool
+	Clock         ClockTuple
 }
 
 func validClockTuple(clock ClockTuple, binding Binding, window int64) bool {
