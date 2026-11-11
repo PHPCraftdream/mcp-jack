@@ -9,6 +9,19 @@ mod sign;
 mod trust;
 mod trust_json;
 mod trust_json_wire;
+#[cfg(target_os = "linux")]
+mod private_file;
+#[cfg(target_os = "linux")]
+mod store;
+#[cfg(target_os = "linux")]
+mod store_format;
+#[cfg(all(test, target_os = "linux"))]
+mod store_tests;
+
+#[cfg(target_os = "linux")]
+pub use store::RotationTrustStore;
+#[cfg(target_os = "linux")]
+pub use store_format::RotationStoreOptions;
 
 pub use chain::{assignment_valid, selected_ordinal, verify_chain, Checkpoint, MAX_RETAINED_KEYS};
 pub use page::{validate_page_framing, PageFraming, ResultCursor};

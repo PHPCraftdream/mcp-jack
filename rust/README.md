@@ -291,3 +291,42 @@ node tools/consumer/verify-rust.mjs tools/consumer/.scratch/rust-consumer
 The stage is a fresh direct child of `tools/consumer/.scratch/`; both drivers are restricted to GitHub Actions. The packaged `.crate` contains the crate sources (`src/`, including `src/bin/**`), the tests, this README, and byte-exact copies of `LICENSE-MIT` and `LICENSE-APACHE` committed under `rust/`; CI byte-compares the packaged licence files against the repository root copies, so licence-text drift fails the run.
 
 The consumer is a standalone edition-2024, rust-version-1.88 crate whose SDK dependency is only the extracted `.crate` — never the checkout (the adapter-driving harness crates named below are optional, feature-gated supporting dependencies). It resolves its dependency graph FRESH on Rust 1.88: no product lockfile is copied in, and the consumer-generated `Cargo.lock` must exist and differ byte-wise from the product `rust/Cargo.lock`, proving independent resolution (Cargo ignores a path-dependency's own lockfile). The feature matrix: the default features build first; `client-http` runs a real signed loopback request over a socket, and an unsigned 401 from the server must surface as `Unauthenticated`; `server-http` drives the real packaged adapter — the consumer constructs `JackLayer` from `HandlerConfig`, wraps an in-process inner service, and drives it through the SDK client, with wrong-pin and tampered-body refusals running through the same adapter. The adapter-only supporting crates `ed25519-dalek`/`getrandom`/`http`/`bytes`/`http-body-util`/`tower`/`futures` are optional harness-only deps behind the consumer's own `server-http` feature; the SDK dependency itself remains only the extracted `.crate`. CI uploads the `.crate` and inventory.json as workflow artifacts for parent inspection. This consumer run validates the packaged artifact on the declared MSRV with a fresh dependency resolution; it does not prove vulnerability-free dependencies or replace the locked product CI graph.
+
+## Candidate Linux client trust store
+
+On Linux, `mcp_jack::rotation` additionally exports `RotationStoreOptions` and
+`RotationTrustStore<C>`, where `C: FnMut() -> Result<u64, RotationError>` supplies
+Unix seconds. The independent out-of-band binding, window (1..120 seconds), and
+checkpoint are mandatory. They are not adopted from an opened file or network
+response. Static credentials and existing clients are unchanged.
+
+`initialize_unused` explicitly creates an unused store; `open` never creates or
+resets trust. The filesystem profile requires a private 0700 parent on local
+ext4/XFS/Btrfs, safe owned/root ancestors, no followed symlinks, and owner-only
+0600 regular single-link files. Operations are relative to an opened parent
+descriptor; subsequent use also verifies its pathname identity. A random O_EXCL
+owner marker remains held for the entire owner lifetime. There is no stale-PID
+break, automatic dirty-state recovery, or backup adoption.
+
+The protected bundle contains separate serialized snapshot and ClockGuard
+records. The copied snapshot clock is a CAS dependency, not fresh time authority.
+`advance_and_check` durably advances monotone H; rollback or an out-of-domain
+sample latches unsafe state, and catch-up does not clear it. `check_snapshot_clock`
+also checks the exact expected snapshot without suppressing clock advancement.
+`compare_and_swap` validates the whole extension and compares both exact snapshot
+and current guard, replacing only the snapshot record. A decoded page or a
+successful primitive file write is not an authenticated refresh or trust ACK.
+
+The callback and synchronous I/O must be bounded. The SDK does not preempt a
+stalled callback. Rust's mutable owner API serializes safe access; a callback
+panic leaves the owner busy and its dirty epoch/marker intact. Callback errors
+are sanitized. Callers own lifecycle: only explicit healthy `close` writes clean
+state and releases the marker. Dropping an owner never silently performs close.
+Any uncertain mutation fails closed with retained artifacts and no retry/reset.
+The 16MiB bound is logical, not a physical-volume or power-loss guarantee;
+checksums detect accidental corruption and are not a MAC or rollback oracle.
+
+This is a storage/ClockGuard API, not a complete rotating HTTP client or server.
+Carrier authentication, interval/freshness checks, explicit single-page refresh,
+and final network/lifetime gates still belong to the controller integration.
+Other operating systems do not export this Linux-only store API.
