@@ -1,5 +1,11 @@
 # Dependency vulnerability scanning
 
+## Current approved Go security compiler — 2026-11-11
+
+The owner explicitly approved replacing the affected Go 1.26.10 security/deployment/compiler pins with Go **1.26.11** after CI reported [GO-2026-6859](https://pkg.go.dev/vuln/GO-2026-6859) in `net/http`. The official [Go release history](https://go.dev/doc/devel/release#go1.26.11) records the patched compiler release on 2026-11-10. The security workflow pin is updated; module/package/symbol commands, scanner pin and failure gates are unchanged. New exact-head receipts are required. No language-floor/product/dependency version, Rust MSRV, lockfile or publication change is made by this compiler-only correction. Existing deployed binaries still require rebuilding and redeployment with a supported patched compiler.
+
+The dated 2026-11-09 baseline below retains historical Go 1.26.10 provenance; those compiler-version/status statements are superseded by this current notice, not treated as an evergreen security endorsement.
+
 **Review baseline: 2026-11-09.** This documents the CI-only dependency vulnerability checks in `.github/workflows/vulnerabilities.yml`; it is not a release approval or risk acceptance. Parent-reported results for PR #16 at head `efc07106783d07d7c01fceacfcb8f1193d5d2b8f` (not independently fetched receipts) include a Go 1.22.12 module scan with 66 advisories and exit code 3, and symbol analysis reaching `crypto/x509` and `net/http`. The reported Go advisories include GO-2026-6809 (fixed in Go 1.26.10) and GO-2026-6617 (fixed in Go 1.26.9). Other Rust/npm/package CI jobs encountered GitHub internal errors; no clean result can be inferred from them, and parent CI is retrying infrastructure failures. These are parent-reported results, not results from the approved follow-up lane.
 
 An owner has approved and the CI workflow now defines a separate security lane using patched Go 1.26.10 while retaining `go.mod`'s Go 1.22 language-version floor, existing Go 1.22 compatibility CI, and unchanged SDK/dependency versions. This approval is limited to the CI toolchain follow-up; it is not acceptance of vulnerabilities, evidence of a green run, release approval, or deployment endorsement. The lane's implementation is present, but no execution or validation result for it is claimed here.
