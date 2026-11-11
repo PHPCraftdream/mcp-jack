@@ -25,6 +25,7 @@ import (
 	"github.com/PHPCraftdream/mcp-jack/client"
 	rotationclient "github.com/PHPCraftdream/mcp-jack/client/rotation"
 	"github.com/PHPCraftdream/mcp-jack/server"
+	rotationserver "github.com/PHPCraftdream/mcp-jack/server/rotation"
 	"github.com/PHPCraftdream/mcp-jack/userkey"
 )
 
@@ -88,6 +89,9 @@ func (t tamperRT) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func main() {
+	if _, err := rotationserver.New(nil, nil); err == nil {
+		fail("rotation server accepted missing durable owner", nil)
+	}
 	if _, err := rotationclient.New(nil); err == nil {
 		fail("rotation controller accepted missing durable owner", nil)
 	}

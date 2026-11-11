@@ -212,7 +212,17 @@ func (store *ServerStore) ownedGuard(tx *bolt.Tx) (trustGuard, error) {
 func (store *ServerStore) failed() error { store.fenced.Store(true); return ErrUnavailable }
 func (store *ServerStore) Fence()        { store.fenced.Store(true) }
 
-// Close дожидается store operations; будущий provider обязан удерживать lease до wire completion.
+// AcquireServingLease удерживает dirty epoch до физического завершения response write.
+func (store *ServerStore) AcquireServingLease() (func(), error) {
+	done, err := store.begin()
+	if err != nil {
+		return nil, err
+	}
+	var once sync.Once
+	return func() { once.Do(done) }, nil
+}
+
+// Close дожидается store operations и serving leases; новые final gates отказывают.
 func (store *ServerStore) Close() error {
 	store.closeOnce.Do(func() {
 		store.mu.Lock()
