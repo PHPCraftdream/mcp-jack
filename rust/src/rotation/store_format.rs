@@ -137,24 +137,44 @@ pub(super) struct Bundle {
     pub snapshot: String,
 }
 
+/// Domain разделяет client/server private files: один не открывается как другой.
+pub(super) const CLIENT_DOMAIN: &str = "mcp-jack/client-trust/private-file/v1";
+
 impl Bundle {
+    /// Client trust profile; clock/snapshot берутся из anchor.
     pub(super) fn new(
         store_id: String,
         profile: String,
         anchor: &TrustSnapshot,
         options: &RotationStoreOptions,
     ) -> Result<Self, RotationError> {
-        Ok(Self {
-            domain: "mcp-jack/client-trust/private-file/v1".into(),
+        Ok(Self::sealed(
+            CLIENT_DOMAIN,
+            store_id,
+            profile,
+            clock_bytes(&anchor.clock)?,
+            options.encode(anchor)?,
+        ))
+    }
+
+    pub(super) fn sealed(
+        domain: &str,
+        store_id: String,
+        profile: String,
+        clock: String,
+        snapshot: String,
+    ) -> Self {
+        Self {
+            domain: domain.into(),
             format_version: Unsigned(1),
             store_id,
             profile,
             owner: Unsigned(1),
             dirty: true,
             fenced: false,
-            clock: clock_bytes(&anchor.clock)?,
-            snapshot: options.encode(anchor)?,
-        })
+            clock,
+            snapshot,
+        }
     }
 
     /// Checksum обнаруживает случайную порчу; это не MAC или backup rollback oracle.
@@ -169,6 +189,46 @@ impl Bundle {
     }
 }
 
+/// Envelope без snapshot decode: caller проверяет snapshot своего типа против clock.
+pub(super) struct Sealed {
+    pub bytes: Vec<u8>,
+    pub bundle: Bundle,
+    pub clock: ClockTuple,
+}
+
+pub(super) fn unpack_envelope(
+    bytes: Vec<u8>,
+    options: &RotationStoreOptions,
+    profile: &str,
+    domain: &str,
+) -> Result<Sealed, RotationError> {
+    if bytes.is_empty() || bytes.len() > MAX_TRUST_SNAPSHOT_BYTES {
+        return Err(refuse());
+    }
+    let Object(seal): Object<Seal> = serde_json::from_slice(&bytes).map_err(|_| refuse())?;
+    if body_hash(seal.payload.as_bytes()) != seal.checksum {
+        return Err(refuse());
+    }
+    let Object(bundle): Object<Bundle> =
+        serde_json::from_str(&seal.payload).map_err(|_| refuse())?;
+    let id = decode_b64url_fixed(&bundle.store_id, 16).map_err(|_| refuse())?;
+    if bundle.domain != domain
+        || bundle.format_version.0 != 1
+        || id.iter().all(|byte| *byte == 0)
+        || bundle.profile != profile
+        || bundle.owner.0 == 0
+        || bundle.owner.0 > MAX_ORDINAL
+    {
+        return Err(refuse());
+    }
+    let clock = read_clock(&bundle.clock, options)?;
+    Ok(Sealed {
+        bytes,
+        bundle,
+        clock,
+    })
+}
+
 pub(super) struct Loaded {
     pub bytes: Vec<u8>,
     pub bundle: Bundle,
@@ -181,26 +241,11 @@ pub(super) fn unpack(
     options: &RotationStoreOptions,
     profile: &str,
 ) -> Result<Loaded, RotationError> {
-    if bytes.is_empty() || bytes.len() > MAX_TRUST_SNAPSHOT_BYTES {
-        return Err(refuse());
-    }
-    let Object(seal): Object<Seal> = serde_json::from_slice(&bytes).map_err(|_| refuse())?;
-    if body_hash(seal.payload.as_bytes()) != seal.checksum {
-        return Err(refuse());
-    }
-    let Object(bundle): Object<Bundle> =
-        serde_json::from_str(&seal.payload).map_err(|_| refuse())?;
-    let id = decode_b64url_fixed(&bundle.store_id, 16).map_err(|_| refuse())?;
-    if bundle.domain != "mcp-jack/client-trust/private-file/v1"
-        || bundle.format_version.0 != 1
-        || id.iter().all(|byte| *byte == 0)
-        || bundle.profile != profile
-        || bundle.owner.0 == 0
-        || bundle.owner.0 > MAX_ORDINAL
-    {
-        return Err(refuse());
-    }
-    let clock = read_clock(&bundle.clock, options)?;
+    let Sealed {
+        bytes,
+        bundle,
+        clock,
+    } = unpack_envelope(bytes, options, profile, CLIENT_DOMAIN)?;
     let snapshot = decode_trust_snapshot(
         bundle.snapshot.as_bytes(),
         options.binding(),

@@ -172,9 +172,10 @@ body delivery. Transport/deadline helpers are not namespace exports.
 
 ### Candidate server ring state and `jack.server.key` page service
 
-The server side of the candidate protocol is built bottom-up; this layer is pure
-and has no persistence, serving lease, clock, signer selection or HTTP wiring yet,
-so it is not a running candidate server.
+The server side of the candidate protocol is built bottom-up. The state and page
+functions below are pure; `rotation.RotationServerStore` adds the concrete private
+Linux store. Signer selection, response authorization and HTTP/native wiring do not
+exist yet, so this is not a running candidate server.
 
 `rotation.validateRotationServerSnapshot`, `validateRotationServerPublication`,
 `encodeRotationServerSnapshot` and `decodeRotationServerSnapshot` model the
@@ -198,3 +199,24 @@ page reaches the head. A cursor outside the retained ring or with a wrong hash i
 `rotation_state_unavailable`. Callers must still perform the authoritative clock
 check and signer-eligibility selection before building a page and the final
 emission guard after it.
+
+`rotation.RotationServerStore` keeps one protected server ring in the same private
+file profile as the client trust store (exclusive owner marker, atomic
+temp-fsync-rename, directory fsync, checksum seal for accidental corruption only),
+under a separate file domain, so a client file and a server file can never be
+opened as each other. `initializeUnused(path, options)` takes the independent
+endpoint/audience/window/checkpoint plus the opaque `anchorReference` of the anchor
+key and never replaces an existing file; `open` acquires the exclusive owner, sets
+the dirty serving epoch before the first clock sample and refuses dirty, fenced or
+unsafe state without clearing it. The server ClockGuard is separate from the nonce
+store and the client trust: `advanceAndCheck` and `checkSnapshotClock` are the only
+operations that move the monotone high-water mark, a rollback or invalid sample
+latches `unsafe` and a later catch-up never clears it. `compareAndSwap(expected,
+desired, clock)` writes exactly one validated fixed-P publication when the stored
+ring and guard still equal the captured values; it never rewrites the ClockGuard,
+and an uncertain outcome fences the owner and reports `rotation_state_unknown`
+without retry. `acquireServingLease()` holds the dirty epoch until its idempotent
+release; `close()` refuses new operations at once but only completes after every
+lease is released, because synchronous code cannot wait. A fenced or crashed owner
+keeps its marker and dirty state until an explicit supported recovery exists; none
+is provided here. A self-consistent backup rollback is not detected.
