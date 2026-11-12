@@ -70,7 +70,9 @@ pub fn validate_server_publication(
         || after.fenced
         || !trust_clock_compatible(before, &after.clock)
         || !after.records.starts_with(&before.records)
-        || !next.signer_references.starts_with(&previous.signer_references)
+        || !next
+            .signer_references
+            .starts_with(&previous.signer_references)
     {
         return Err(refuse());
     }

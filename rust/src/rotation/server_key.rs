@@ -1,6 +1,8 @@
 use super::json_object::Object;
 use super::trust_json_wire::Unsigned;
-use super::{invalid, DecodedResult, ResultCursor, RotationError, ServerSnapshot, MAX_PAGE_RECORDS};
+use super::{
+    invalid, DecodedResult, ResultCursor, RotationError, ServerSnapshot, MAX_PAGE_RECORDS,
+};
 use crate::encoding::{body_hash, decode_b64url_fixed};
 use serde::{de, Deserialize, Deserializer};
 use serde_json::value::RawValue;
@@ -61,8 +63,8 @@ pub fn server_key_page(
     if cursor.ordinal < trust.checkpoint.ordinal || cursor.ordinal > trust.head.ordinal {
         return Err(unavailable());
     }
-    let offset = usize::try_from(cursor.ordinal - trust.checkpoint.ordinal)
-        .map_err(|_| unavailable())?;
+    let offset =
+        usize::try_from(cursor.ordinal - trust.checkpoint.ordinal).map_err(|_| unavailable())?;
     let expected = match offset.checked_sub(1) {
         None => trust.checkpoint.hash.clone(),
         Some(index) => {

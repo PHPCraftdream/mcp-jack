@@ -245,13 +245,23 @@ fn publication_accepts_exactly_one_fixed_p_overlapping_transition() {
     let accepted = publish(&base, &first).expect("first fixed-P publication");
     assert_eq!(accepted.public.revision, 2);
     publish(&first, &second).expect("pending-tail successor publication");
-    unavailable(publish(&base, &second), "one publication batched two authorizations");
-    unavailable(publish(&first, &first), "unchanged state treated as publication");
+    unavailable(
+        publish(&base, &second),
+        "one publication batched two authorizations",
+    );
+    unavailable(
+        publish(&first, &first),
+        "unchanged state treated as publication",
+    );
     unavailable(publish(&second, &first), "rollback treated as publication");
     let mutations: &[(&str, fn(&mut ServerSnapshot))] = &[
         ("revision skipped", |value| value.public.revision += 1),
-        ("fixed P resampled or moved", |value| value.public.clock.high_water += 1),
-        ("clock revision went backward", |value| value.public.clock.revision = 0),
+        ("fixed P resampled or moved", |value| {
+            value.public.clock.high_water += 1
+        }),
+        ("clock revision went backward", |value| {
+            value.public.clock.revision = 0
+        }),
         ("target fenced", |value| value.public.fenced = true),
         ("existing signer reference replaced", |value| {
             value.signer_references[0].reference = "replacement".to_owned()
@@ -279,7 +289,9 @@ fn snapshot_rejects_missing_mismatched_oversized_and_inconsistent_references() {
         ("kid mismatch", |value| {
             value.signer_references[0].kid = value.signer_references[1].kid.clone()
         }),
-        ("empty reference", |value| value.signer_references[0].reference.clear()),
+        ("empty reference", |value| {
+            value.signer_references[0].reference.clear()
+        }),
         ("oversized reference", |value| {
             value.signer_references[0].reference =
                 "x".repeat(rotation::MAX_SIGNER_REFERENCE_BYTES + 1)
@@ -288,7 +300,9 @@ fn snapshot_rejects_missing_mismatched_oversized_and_inconsistent_references() {
             value.signer_references[0].reference =
                 "\u{e9}".repeat(rotation::MAX_SIGNER_REFERENCE_BYTES / 2 + 1)
         }),
-        ("public key metadata", |value| value.public.keys[0].not_before += 1),
+        ("public key metadata", |value| {
+            value.public.keys[0].not_before += 1
+        }),
         ("record count", |value| {
             value.public.records.pop();
         }),
@@ -312,9 +326,15 @@ fn codec_is_strict_order_independent_and_never_repairs_fences() {
     let encoded = encode(&input, &corpus, &root).expect("encode");
     let encoded = String::from_utf8(encoded).expect("utf8 document");
     let negatives = [
-        (r#""format_version":1"#, r#""format_version":1,"format_version":1"#),
+        (
+            r#""format_version":1"#,
+            r#""format_version":1,"format_version":1"#,
+        ),
         (r#""format_version":1"#, r#""format_version":1e0"#),
-        (r#""reference":"#, r#""private_key":"forbidden","reference":"#),
+        (
+            r#""reference":"#,
+            r#""private_key":"forbidden","reference":"#,
+        ),
         (r#""reference":"#, r#""reference":null,"reference":"#),
         (r#""signer_refs":["#, r#""extra":0,"signer_refs":["#),
     ];
@@ -501,7 +521,10 @@ fn server_key_page_is_bounded_to_16_records_and_always_advances() {
     .expect("validated 20-record ring");
     let signer = snapshot.public.keys[0].public_key;
     let wires = |range: std::ops::Range<usize>| -> Vec<String> {
-        records[range].iter().map(|record| record.wire.clone()).collect()
+        records[range]
+            .iter()
+            .map(|record| record.wire.clone())
+            .collect()
     };
     let first = page(&snapshot, 0, "-", &signer).expect("first page");
     assert_eq!(first.records, wires(0..rotation::MAX_PAGE_RECORDS));
@@ -548,7 +571,10 @@ fn server_key_page_refuses_cursors_outside_the_ring_and_foreign_signers() {
     ];
     for (ordinal, hash) in refused {
         let error = page(&snapshot, ordinal, hash, &signer).expect_err("cursor outside ring");
-        assert_eq!(error.code, "rotation_checkpoint_unavailable", "{ordinal}:{hash}");
+        assert_eq!(
+            error.code, "rotation_checkpoint_unavailable",
+            "{ordinal}:{hash}"
+        );
     }
     // Подписант вне ring никогда не получает fallback на другой key.
     let mut outsider = signer;
