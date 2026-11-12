@@ -15,6 +15,9 @@ mod refresh_state;
 #[cfg(all(test, target_os = "linux"))]
 mod refresh_tests;
 mod result;
+mod server_key;
+mod server_state;
+mod server_state_json;
 mod sign;
 #[cfg(target_os = "linux")]
 mod store;
@@ -37,6 +40,12 @@ pub use chain::{assignment_valid, selected_ordinal, verify_chain, Checkpoint, MA
 pub use page::{validate_page_framing, PageFraming, ResultCursor};
 pub use record::parse_record;
 pub use result::{decode_result, DecodedResult, MAX_PAGE_RECORDS, MAX_RESULT_BODY_BYTES};
+pub use server_key::{decode_server_key_arguments, server_key_page};
+pub use server_state::{
+    validate_server_publication, validate_server_snapshot, ServerSnapshot, SignerReference,
+    MAX_SIGNER_REFERENCE_BYTES,
+};
+pub use server_state_json::{decode_server_snapshot, encode_server_snapshot};
 pub use sign::create_record;
 pub use trust::{
     trust_clock_compatible, validate_trust_snapshot, ClockTuple, OwnedBinding, TrustKey,

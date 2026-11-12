@@ -32,20 +32,9 @@ fn write_binding(value: OwnedBinding) -> Object<BindingDocument> {
     })
 }
 
-/// Strict local schema из Go rotation/trust_json.go; не HTTP carrier decoder/ACK.
-/// Все objects — map-only; serde проверяет duplicate/unknown/missing fields.
-pub fn decode_trust_snapshot(
-    bytes: &[u8],
-    binding: Binding<'_>,
-    window: u64,
-    checkpoint: &Checkpoint,
-) -> Result<TrustSnapshot, RotationError> {
-    let refuse = || invalid("rotation_state_unknown");
-    if bytes.is_empty() || bytes.len() > MAX_TRUST_SNAPSHOT_BYTES {
-        return Err(refuse());
-    }
-    let Object(wire): Object<TrustDocument> =
-        serde_json::from_slice(bytes).map_err(|_| refuse())?;
+/// Strict map-only document -> непроверенное значение; caller обязан вызвать validation.
+/// Общий шаг public decode и protected server snapshot, без собственной schema у server.
+pub(super) fn read_trust_document(wire: TrustDocument) -> Result<TrustSnapshot, RotationError> {
     let root = wire.checkpoint.0;
     let clock = wire.clock.0;
     let mut keys = Vec::with_capacity(wire.keys.0.len());
@@ -58,8 +47,9 @@ pub fn decode_trust_snapshot(
             known_cutoff: key.known_cutoff.0,
         });
     }
-    let input = TrustSnapshot {
-        format_version: u32::try_from(wire.format_version.0).map_err(|_| refuse())?,
+    Ok(TrustSnapshot {
+        format_version: u32::try_from(wire.format_version.0)
+            .map_err(|_| invalid("rotation_state_unknown"))?,
         binding: read_binding(wire.binding),
         window: wire.window.0,
         checkpoint: Checkpoint {
@@ -84,21 +74,14 @@ pub fn decode_trust_snapshot(
             revision: clock.clock_revision.0,
             unsafe_clock: clock.unsafe_clock,
         },
-    };
-    validate_trust_snapshot(&input, binding, window, checkpoint)
+    })
 }
 
-/// Детерминированный public-only encode после полной validation; без store/clock.
-pub fn encode_trust_snapshot(
-    input: &TrustSnapshot,
-    binding: Binding<'_>,
-    window: u64,
-    checkpoint: &Checkpoint,
-) -> Result<Vec<u8>, RotationError> {
-    let value = validate_trust_snapshot(input, binding, window, checkpoint)?;
+/// Уже validated значение -> document; без повторной validation, store или clock.
+pub(super) fn write_trust_document(value: TrustSnapshot) -> TrustDocument {
     let root = value.checkpoint;
     let clock = value.clock;
-    let wire = TrustDocument {
+    TrustDocument {
         format_version: Unsigned(u64::from(value.format_version)),
         binding: write_binding(value.binding),
         window: Unsigned(value.window),
@@ -138,8 +121,36 @@ pub fn encode_trust_snapshot(
             clock_revision: Unsigned(clock.revision),
             unsafe_clock: clock.unsafe_clock,
         }),
-    };
-    let encoded = serde_json::to_vec(&wire).map_err(|_| invalid("rotation_state_unknown"))?;
+    }
+}
+
+/// Strict local schema из Go rotation/trust_json.go; не HTTP carrier decoder/ACK.
+/// Все objects — map-only; serde проверяет duplicate/unknown/missing fields.
+pub fn decode_trust_snapshot(
+    bytes: &[u8],
+    binding: Binding<'_>,
+    window: u64,
+    checkpoint: &Checkpoint,
+) -> Result<TrustSnapshot, RotationError> {
+    let refuse = || invalid("rotation_state_unknown");
+    if bytes.is_empty() || bytes.len() > MAX_TRUST_SNAPSHOT_BYTES {
+        return Err(refuse());
+    }
+    let Object(wire): Object<TrustDocument> =
+        serde_json::from_slice(bytes).map_err(|_| refuse())?;
+    validate_trust_snapshot(&read_trust_document(wire)?, binding, window, checkpoint)
+}
+
+/// Детерминированный public-only encode после полной validation; без store/clock.
+pub fn encode_trust_snapshot(
+    input: &TrustSnapshot,
+    binding: Binding<'_>,
+    window: u64,
+    checkpoint: &Checkpoint,
+) -> Result<Vec<u8>, RotationError> {
+    let value = validate_trust_snapshot(input, binding, window, checkpoint)?;
+    let encoded = serde_json::to_vec(&write_trust_document(value))
+        .map_err(|_| invalid("rotation_state_unknown"))?;
     if encoded.len() > MAX_TRUST_SNAPSHOT_BYTES {
         return Err(invalid("rotation_state_unknown"));
     }

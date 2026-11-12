@@ -18,7 +18,7 @@ export const root: rotation.RotationCheckpoint = { ordinal: 0, hash: "-", kid: a
 export const WINDOW = 30;
 
 /** Независимо подписанные records overlapping-цепочки из общего fixture corpus. */
-export function overlapping(): rotation.RotationRecord[] {
+export function overlapping(): readonly rotation.RotationRecord[] {
   const wires = corpus.valid_chains["overlapping"];
   assert.ok(wires);
   return rotation.verifyRotationChain(wires.map((wire) => Buffer.from(wire, "utf8")), corpus.binding, root);

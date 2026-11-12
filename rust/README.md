@@ -369,3 +369,33 @@ gates, and is not retried or automatically recovered.
 There is no HTTP sender, automatic refresh, hidden key discovery, retry, or pagination.
 The caller explicitly requests any next page. Product rotating transport and
 candidate server integration remain separate unfinished work.
+
+### Candidate server ring state and `jack.server.key` page service
+
+This layer is pure and cross-platform. It has no persistence, serving lease,
+clock, signer selection or HTTP wiring yet, so it is not a running candidate server.
+
+`validate_server_snapshot`, `validate_server_publication`,
+`encode_server_snapshot` and `decode_server_snapshot` model the protected server
+snapshot: the same whole public `TrustSnapshot` as the client plus exactly one
+opaque `SignerReference` (at most 1024 UTF-8 bytes, never a key authority) per
+retained key. References never enter the public trust encoding. A publication is
+exactly one adjacent transition with revision + 1, byte-identical retained
+records and references, no fence on either side, monotone clock compatibility and
+fixed `P` equal to the new key's activation minus 48 hours; it is a validator,
+not authorization. The strict map-only codec rejects duplicate/unknown/missing
+members and non-canonical numbers, ignores object order, and preserves
+fence/unsafe flags instead of repairing them. Failures are sanitized to
+`rotation_state_unavailable`.
+
+`decode_server_key_arguments` accepts only the exact `{after_ordinal, after_hash}`
+object (canonical integer, `-` only at ordinal 0, canonical unpadded base64url
+SHA-256 otherwise) and reports every other shape as `invalid_params`.
+`server_key_page(snapshot, cursor, signer_public_key)` builds the same owned
+`DecodedResult` that the client decoder returns, from one validated snapshot: at
+most 16 records from the exact cursor, the selected signer as `current`, and
+`complete` only when the page reaches the head. A cursor outside the retained
+ring or with a wrong hash is `rotation_checkpoint_unavailable`; a signer outside
+the ring is `rotation_state_unavailable`. Callers must still perform the
+authoritative clock check and signer-eligibility selection before building a page
+and the final emission guard after it.
