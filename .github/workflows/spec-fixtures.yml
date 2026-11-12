@@ -30,7 +30,7 @@ jobs:
       - name: Verify regeneration is deterministic
         run: node spec/tools/gen-fixtures.mjs --check
       - name: Upload generated fixtures
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: spec-generated-fixtures
           path: |
@@ -64,7 +64,7 @@ jobs:
       - name: Test candidate fixtures
         run: node --test spec/tests/candidate/*.test.mjs
       - name: Upload generated candidate fixtures
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: spec-candidate-generated-fixtures
           path: |
