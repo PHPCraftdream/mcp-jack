@@ -1,8 +1,9 @@
 import { parseCandidateJsonRaw } from "./json-raw.js";
 import type { RawJsonNode } from "./json-raw.js";
+import { nodeBoolean, nodeField, nodeNumber, nodeObject, nodeText } from "./rotation-json-node.js";
 import { ROTATION_MAX_RETAINED_KEYS } from "./rotation-chain.js";
 import type { RotationCheckpoint } from "./rotation-chain.js";
-import { RotationError, ROTATION_MAX_ORDINAL } from "./rotation-record.js";
+import { RotationError } from "./rotation-record.js";
 import type { RotationBinding } from "./rotation-record.js";
 import { validateRotationTrustSnapshot } from "./rotation-trust.js";
 import type { RotationClockTuple, RotationTrustKey, RotationTrustSnapshot } from "./rotation-trust.js";
@@ -14,56 +15,28 @@ function fail(): never {
   throw new RotationError("rotation_state_unknown");
 }
 
-function object(node: RawJsonNode, names: readonly string[]): ReadonlyMap<string, RawJsonNode> {
-  const members = node.members;
-  if (members === undefined || members.size !== names.length || names.some((name) => !members.has(name))) fail();
-  return members;
-}
-
-function field(members: ReadonlyMap<string, RawJsonNode>, name: string): RawJsonNode {
-  const value = members.get(name);
-  if (value === undefined) fail();
-  return value;
-}
-
-function text(node: RawJsonNode): string {
-  if (typeof node.value !== "string") fail();
-  return node.value;
-}
-
-function number(node: RawJsonNode): number {
-  if (node.text.length > 16 || !/^(0|[1-9][0-9]*)$/.test(node.text) || typeof node.value !== "number" ||
-    !Number.isSafeInteger(node.value) || node.value > ROTATION_MAX_ORDINAL) fail();
-  return node.value;
-}
-
-function boolean(node: RawJsonNode): boolean {
-  if (typeof node.value !== "boolean") fail();
-  return node.value;
-}
-
 function binding(node: RawJsonNode): RotationBinding {
-  const value = object(node, ["endpoint", "aud"]);
-  return { endpoint: text(field(value, "endpoint")), aud: text(field(value, "aud")) };
+  const value = nodeObject(node, ["endpoint", "aud"]);
+  return { endpoint: nodeText(nodeField(value, "endpoint")), aud: nodeText(nodeField(value, "aud")) };
 }
 
 function checkpoint(node: RawJsonNode): RotationCheckpoint {
-  const value = object(node, ["ordinal", "hash", "kid", "public_key", "published_at"]);
-  return { ordinal: number(field(value, "ordinal")), hash: text(field(value, "hash")), kid: text(field(value, "kid")),
-    publicKeyB64u: text(field(value, "public_key")), publishedAt: number(field(value, "published_at")) };
+  const value = nodeObject(node, ["ordinal", "hash", "kid", "public_key", "published_at"]);
+  return { ordinal: nodeNumber(nodeField(value, "ordinal")), hash: nodeText(nodeField(value, "hash")), kid: nodeText(nodeField(value, "kid")),
+    publicKeyB64u: nodeText(nodeField(value, "public_key")), publishedAt: nodeNumber(nodeField(value, "published_at")) };
 }
 
 function key(node: RawJsonNode): RotationTrustKey {
-  const value = object(node, ["ordinal", "kid", "public_key", "not_before", "known_cutoff"]);
-  const cutoff = field(value, "known_cutoff");
-  return { ordinal: number(field(value, "ordinal")), kid: text(field(value, "kid")), publicKeyB64u: text(field(value, "public_key")),
-    notBefore: number(field(value, "not_before")), knownCutoff: cutoff.value === null ? null : number(cutoff) };
+  const value = nodeObject(node, ["ordinal", "kid", "public_key", "not_before", "known_cutoff"]);
+  const cutoff = nodeField(value, "known_cutoff");
+  return { ordinal: nodeNumber(nodeField(value, "ordinal")), kid: nodeText(nodeField(value, "kid")), publicKeyB64u: nodeText(nodeField(value, "public_key")),
+    notBefore: nodeNumber(nodeField(value, "not_before")), knownCutoff: cutoff.value === null ? null : nodeNumber(cutoff) };
 }
 
 function clock(node: RawJsonNode): RotationClockTuple {
-  const value = object(node, ["binding", "window", "high_water", "clock_revision", "unsafe"]);
-  return { binding: binding(field(value, "binding")), window: number(field(value, "window")), highWater: number(field(value, "high_water")),
-    revision: number(field(value, "clock_revision")), unsafe: boolean(field(value, "unsafe")) };
+  const value = nodeObject(node, ["binding", "window", "high_water", "clock_revision", "unsafe"]);
+  return { binding: binding(nodeField(value, "binding")), window: nodeNumber(nodeField(value, "window")), highWater: nodeNumber(nodeField(value, "high_water")),
+    revision: nodeNumber(nodeField(value, "clock_revision")), unsafe: nodeBoolean(nodeField(value, "unsafe")) };
 }
 
 /** Strict local parse сохраняет fences; не выполняет clock operation, persistence или ACK. */
@@ -75,16 +48,16 @@ export function decodeRotationTrustSnapshot(
 ): RotationTrustSnapshot {
   try {
     if (!(bytes instanceof Uint8Array) || bytes.length === 0 || bytes.length > ROTATION_MAX_TRUST_SNAPSHOT_BYTES) fail();
-    const root = object(parseCandidateJsonRaw(utf8.decode(bytes)), ["format_version", "binding", "window", "checkpoint", "head", "records", "keys", "trust_revision", "fenced", "clock"]);
-    const head = object(field(root, "head"), ["ordinal", "hash"]);
-    const records = field(root, "records").items;
-    const keys = field(root, "keys").items;
+    const root = nodeObject(parseCandidateJsonRaw(utf8.decode(bytes)), ["format_version", "binding", "window", "checkpoint", "head", "records", "keys", "trust_revision", "fenced", "clock"]);
+    const head = nodeObject(nodeField(root, "head"), ["ordinal", "hash"]);
+    const records = nodeField(root, "records").items;
+    const keys = nodeField(root, "keys").items;
     if (records === undefined || records.length >= ROTATION_MAX_RETAINED_KEYS || keys === undefined || keys.length > ROTATION_MAX_RETAINED_KEYS) fail();
     return validateRotationTrustSnapshot({
-      formatVersion: number(field(root, "format_version")), binding: binding(field(root, "binding")), window: number(field(root, "window")),
-      checkpoint: checkpoint(field(root, "checkpoint")), head: { ordinal: number(field(head, "ordinal")), hash: text(field(head, "hash")) },
-      records: records.map(text), keys: keys.map(key), revision: number(field(root, "trust_revision")),
-      fenced: boolean(field(root, "fenced")), clock: clock(field(root, "clock")),
+      formatVersion: nodeNumber(nodeField(root, "format_version")), binding: binding(nodeField(root, "binding")), window: nodeNumber(nodeField(root, "window")),
+      checkpoint: checkpoint(nodeField(root, "checkpoint")), head: { ordinal: nodeNumber(nodeField(head, "ordinal")), hash: nodeText(nodeField(head, "hash")) },
+      records: records.map(nodeText), keys: keys.map(key), revision: nodeNumber(nodeField(root, "trust_revision")),
+      fenced: nodeBoolean(nodeField(root, "fenced")), clock: clock(nodeField(root, "clock")),
     }, expectedBinding, window, expectedCheckpoint);
   } catch {
     return fail();

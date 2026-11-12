@@ -169,3 +169,32 @@ cannot be preempted, but expired work cannot dispatch or return a body. Abort an
 error paths destroy owned request/response resources. Store lifecycle remains
 caller-owned; closing/fencing it while an exchange is in flight prevents verified
 body delivery. Transport/deadline helpers are not namespace exports.
+
+### Candidate server ring state and `jack.server.key` page service
+
+The server side of the candidate protocol is built bottom-up; this layer is pure
+and has no persistence, serving lease, clock, signer selection or HTTP wiring yet,
+so it is not a running candidate server.
+
+`rotation.validateRotationServerSnapshot`, `validateRotationServerPublication`,
+`encodeRotationServerSnapshot` and `decodeRotationServerSnapshot` model the
+protected server snapshot: the same whole public trust value as the client plus
+exactly one opaque signer reference (at most 1024 UTF-8 bytes, never a key
+authority) per retained key. References never enter the public trust encoding.
+A publication is exactly one adjacent transition with revision + 1, byte-identical
+retained records and references, no fence on either side, and fixed `P` equal to
+the new key's activation minus 48 hours; it is a validator, not authorization.
+The strict codec rejects duplicate/extra/null members and non-canonical numbers,
+ignores object order, and preserves fence/unsafe flags instead of repairing them.
+
+`rotation.decodeRotationServerKeyArguments(text)` accepts only the exact
+`{after_ordinal, after_hash}` object (canonical integer, `-` only at ordinal 0,
+canonical unpadded base64url SHA-256 otherwise) and reports every other shape as
+`invalid_params`. `rotation.rotationServerKeyPage(snapshot, cursor, signerPublicKey)`
+builds the structured result from one validated snapshot: at most 16 records from
+the exact cursor, the selected signer as `current`, and `complete` only when the
+page reaches the head. A cursor outside the retained ring or with a wrong hash is
+`rotation_checkpoint_unavailable`; a signer outside the ring is
+`rotation_state_unavailable`. Callers must still perform the authoritative clock
+check and signer-eligibility selection before building a page and the final
+emission guard after it.
