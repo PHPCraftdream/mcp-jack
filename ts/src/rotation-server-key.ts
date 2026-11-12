@@ -22,7 +22,9 @@ export function decodeRotationServerKeyArguments(text: string | undefined): Rota
   try {
     if (text === undefined) throw new RotationError("invalid_params");
     const root = nodeObject(parseCandidateJsonRaw(text), ["after_ordinal", "after_hash"]);
-    const ordinal = nodeNumber(nodeField(root, "after_ordinal"));
+    const ordinalNode = nodeField(root, "after_ordinal");
+    // Literal -0 — JSON-целое ноль (Go reference parity); остальные формы canonical decimal.
+    const ordinal = ordinalNode.text === "-0" ? 0 : nodeNumber(ordinalNode);
     const hash = nodeText(nodeField(root, "after_hash"));
     if (ordinal === 0) {
       if (hash !== "-") throw new RotationError("invalid_params");

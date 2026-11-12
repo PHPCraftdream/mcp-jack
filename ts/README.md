@@ -188,8 +188,8 @@ The strict codec rejects duplicate/extra/null members and non-canonical numbers,
 ignores object order, and preserves fence/unsafe flags instead of repairing them.
 
 `rotation.decodeRotationServerKeyArguments(text)` accepts only the exact
-`{after_ordinal, after_hash}` object (canonical integer, `-` only at ordinal 0,
-canonical unpadded base64url SHA-256 otherwise) and reports every other shape as
+`{after_ordinal, after_hash}` object (integer literal 0..2^53-1 where the literal
+`-0` is zero, `-` only at ordinal 0, canonical unpadded base64url SHA-256 otherwise) and reports every other shape as
 `invalid_params`. `rotation.rotationServerKeyPage(snapshot, cursor, signerPublicKey)`
 builds the structured result from one validated snapshot: at most 16 records from
 the exact cursor, the selected signer as `current`, and `complete` only when the

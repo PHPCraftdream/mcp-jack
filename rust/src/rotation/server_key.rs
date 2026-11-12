@@ -2,13 +2,29 @@ use super::json_object::Object;
 use super::trust_json_wire::Unsigned;
 use super::{invalid, DecodedResult, ResultCursor, RotationError, ServerSnapshot, MAX_PAGE_RECORDS};
 use crate::encoding::{body_hash, decode_b64url_fixed};
-use serde::Deserialize;
+use serde::{de, Deserialize, Deserializer};
+use serde_json::value::RawValue;
+
+// Literal `-0` — JSON-целое ноль (Go reference parity); остальные формы canonical Unsigned.
+struct CursorOrdinal(u64);
+
+impl<'de> Deserialize<'de> for CursorOrdinal {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = Box::<RawValue>::deserialize(deserializer)?;
+        if raw.get() == "-0" {
+            return Ok(Self(0));
+        }
+        serde_json::from_str::<Unsigned>(raw.get())
+            .map(|Unsigned(value)| Self(value))
+            .map_err(<D::Error as de::Error>::custom)
+    }
+}
 
 // Map-only schema: serde отвергает duplicate/unknown/missing члены и positional sequence.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Arguments {
-    after_ordinal: Unsigned,
+    after_ordinal: CursorOrdinal,
     after_hash: String,
 }
 

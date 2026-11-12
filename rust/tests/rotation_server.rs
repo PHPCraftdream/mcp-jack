@@ -369,6 +369,19 @@ fn server_key_arguments_accept_only_one_canonical_cursor() {
         decode(r#" { "after_hash" : "-" ,"after_ordinal" : 0 } "#).expect("reordered"),
         cursor(0, "-")
     );
+    // JSON-литерал -0 — целое ноль; escaped member name декодируется до сравнения имён.
+    // Escapes (U+006F, U+0068) строятся без backslash-литералов в источнике.
+    let slash = char::from(92_u8);
+    let escaped_ordinal = format!("after_{slash}u006frdinal");
+    let escaped_hash = format!("after_{slash}u0068ash");
+    assert_eq!(
+        decode(&arguments("-0", "-")).expect("negative zero"),
+        cursor(0, "-")
+    );
+    assert_eq!(
+        decode(&format!(r#"{{"{escaped_ordinal}":0,"after_hash":"-"}}"#)).expect("escaped name"),
+        cursor(0, "-")
+    );
     let maximum = rotation::MAX_ORDINAL.to_string();
     assert_eq!(
         decode(&arguments(&maximum, &first.hash))
@@ -386,6 +399,11 @@ fn server_key_arguments_accept_only_one_canonical_cursor() {
         "0".to_owned(),
         r#""x""#.to_owned(),
         "{}".to_owned(),
+        "true".to_owned(),
+        format!(r#"{{"after_ordinal":0,"{escaped_ordinal}":0,"after_hash":"-"}}"#),
+        format!(r#"{{"after_ordinal":0,"after_hash":"-","{escaped_hash}":"-"}}"#),
+        r#"{"after_ordinal":1,"after_hash":"\ud800"}"#.to_owned(),
+        r#"{"after_ordinal":0,"after_hash":"-"} {}"#.to_owned(),
         r#"{"after_ordinal":0}"#.to_owned(),
         r#"{"after_hash":"-"}"#.to_owned(),
         r#"{"after_ordinal":0,"after_hash":"-","extra":1}"#.to_owned(),
@@ -401,8 +419,8 @@ fn server_key_arguments_accept_only_one_canonical_cursor() {
         arguments("0.0", "-"),
         arguments("0e0", "-"),
         arguments("1E0", &first.hash),
-        arguments("-0", "-"),
         arguments("-1", &first.hash),
+        arguments("-00", "-"),
         arguments("+1", &first.hash),
         arguments("01", &first.hash),
         arguments("9007199254740992", &first.hash),

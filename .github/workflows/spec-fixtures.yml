@@ -89,19 +89,26 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust
+      - name: Resolve approved hickory-net and hickory-resolver 0.26.2 pins and lock in CI
+        run: |
+          sed -i 's/^hickory-net = { version = "=0.26.1"/hickory-net = { version = "=0.26.2"/; s/^hickory-resolver = { version = "=0.26.1"/hickory-resolver = { version = "=0.26.2"/' Cargo.toml
+          cargo update -p hickory-net --precise 0.26.2
+          cargo update -p hickory-resolver --precise 0.26.2
+          git diff -- Cargo.toml Cargo.lock
       - name: Format candidate Rust sources in CI
         run: cargo fmt --all
       - name: Format standalone Rust store consumer in CI
         run: rustfmt --edition 2024 ../tools/consumer/rust/src/rotation_store.rs
       - name: Test candidate rotation without default features
         timeout-minutes: 10
-        run: cargo test --locked --no-default-features --lib --test rotation --test rotation_trust
+        run: cargo test --locked --no-default-features --lib --test rotation --test rotation_trust --test rotation_server
       - name: Upload formatted sources for parent integration
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: rust-sdk-formatted-sources
           path: |
+            rust/Cargo.toml
             rust/Cargo.lock
             rust/src/lib.rs
             rust/src/client/mod.rs
@@ -110,6 +117,7 @@ jobs:
             rust/tests/rotation.rs
             rust/tests/rotation_trust.rs
             rust/tests/rotation_trust/json.rs
+            rust/tests/rotation_server.rs
           if-no-files-found: error
       - name: Upload formatted standalone consumer for parent integration
         if: always()

@@ -389,8 +389,8 @@ fence/unsafe flags instead of repairing them. Failures are sanitized to
 `rotation_state_unavailable`.
 
 `decode_server_key_arguments` accepts only the exact `{after_ordinal, after_hash}`
-object (canonical integer, `-` only at ordinal 0, canonical unpadded base64url
-SHA-256 otherwise) and reports every other shape as `invalid_params`.
+object (integer literal 0..2^53-1 where the literal `-0` is zero, `-` only at
+ordinal 0, canonical unpadded base64url SHA-256 otherwise) and reports every other shape as `invalid_params`.
 `server_key_page(snapshot, cursor, signer_public_key)` builds the same owned
 `DecodedResult` that the client decoder returns, from one validated snapshot: at
 most 16 records from the exact cursor, the selected signer as `current`, and

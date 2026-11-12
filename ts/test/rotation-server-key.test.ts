@@ -6,6 +6,10 @@ import { denies, overlapping, serverFrom, signedChain, trustFrom, validateServer
 
 const invalidParams = denies("invalid_params");
 const checkpointUnavailable = denies("rotation_checkpoint_unavailable");
+// Escaped member names (U+006F "o", U+0068 "h") строятся без backslash-литералов в источнике.
+const slash = String.fromCharCode(92);
+const escapedOrdinal = `after_${slash}u006frdinal`;
+const escapedHash = `after_${slash}u0068ash`;
 
 function args(ordinal: string, cursorHash: string): string {
   return `{"after_ordinal":${ordinal},"after_hash":${JSON.stringify(cursorHash)}}`;
@@ -20,6 +24,9 @@ test("server-key arguments accept exactly one canonical cursor and own the resul
   assert.deepEqual(rotation.decodeRotationServerKeyArguments(args("1", first.hash)), { ordinal: 1, hash: first.hash });
   // Порядок членов и whitespace не значимы; семантика не зависит от last-wins map.
   assert.deepEqual(rotation.decodeRotationServerKeyArguments(' { "after_hash" : "-" ,\n"after_ordinal" : 0 } '), zero);
+  // JSON-литерал -0 — целое ноль; escaped member name декодируется до сравнения имён.
+  assert.deepEqual(rotation.decodeRotationServerKeyArguments(args("-0", "-")), zero);
+  assert.deepEqual(rotation.decodeRotationServerKeyArguments(`{"${escapedOrdinal}":0,"after_hash":"-"}`), zero);
   assert.equal(rotation.decodeRotationServerKeyArguments(args(String(Number.MAX_SAFE_INTEGER), first.hash)).ordinal, Number.MAX_SAFE_INTEGER);
 });
 
@@ -30,7 +37,12 @@ test("server-key arguments reject every non-canonical shape as invalid_params", 
   // Последний символ canonical hash имеет нулевые trailing bits; "B" их нарушает.
   const trailingBits = `${good.slice(0, 42)}B`;
   const bad: (string | undefined)[] = [
-    undefined, "", "null", "[]", "0", '"x"', "{}", "{ }",
+    undefined, "", "null", "[]", "0", '"x"', "{}", "{ }", "true",
+    `{"after_ordinal":0,"${escapedOrdinal}":0,"after_hash":"-"}`,
+    `{"after_ordinal":0,"after_hash":"-","${escapedHash}":"-"}`,
+    '{"after_ordinal":0,"after_ordinal":0,"after_hash":"-"}',
+    '{"after_ordinal":0,"after_hash":"-","after_hash":"-"}',
+    String.raw`{"after_ordinal":1,"after_hash":"\ud800"}`, '{"after_ordinal":0,"after_hash":"-"} {}',
     '{"after_ordinal":0}', '{"after_hash":"-"}',
     '{"after_ordinal":0,"after_hash":"-","extra":1}',
     '{"after_ordinal":0,"after_ordinal":0,"after_hash":"-"}',
@@ -38,7 +50,7 @@ test("server-key arguments reject every non-canonical shape as invalid_params", 
     '{"after_ordinal":0,"after_hash":null}', '{"after_ordinal":null,"after_hash":"-"}',
     '{"after_ordinal":"0","after_hash":"-"}', '{"after_ordinal":0,"after_hash":0}',
     '{"after_ordinal":true,"after_hash":"-"}', '{"after_ordinal":[0],"after_hash":"-"}',
-    args("0.0", "-"), args("0e0", "-"), args("1E0", good), args("-0", "-"), args("-1", good), args("+1", good), args("01", good),
+    args("0.0", "-"), args("0e0", "-"), args("1E0", good), args("-1", good), args("-00", "-"), args("+1", good), args("01", good),
     args("9007199254740992", good), args("99999999999999999999", good),
     args("0", ""), args("0", good), args("0", "-="), args("1", "-"), args("1", ""), args("1", `${good}=`),
     args("1", good.slice(1)), args("1", `${good}A`), args("1", `${good.slice(0, 42)}*`), args("1", trailingBits),
