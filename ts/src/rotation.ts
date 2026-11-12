@@ -14,3 +14,5 @@ export { RotationHTTPClient } from "./rotation-http.js";
 export type { RotationHTTPReply } from "./rotation-http.js";
 export * from "./rotation-server-state.js";
 export * from "./rotation-server-key.js";
+export { RotationServerStore } from "./rotation-server-store.js";
+export type { RotationServerStoreOptions } from "./rotation-server-store-format.js";
