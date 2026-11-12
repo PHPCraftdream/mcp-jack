@@ -92,7 +92,7 @@ jobs:
         working-directory: rust
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@1.120.0
       - run: cargo check --locked --all-targets --all-features
 
   ts:
@@ -218,7 +218,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@1.120.0
       - name: Package the .crate artifact
         run: node tools/consumer/package-rust.mjs tools/consumer/.scratch/rust-consumer
       - name: Verify from a standalone consumer crate
