@@ -11,6 +11,9 @@ use std::collections::BTreeMap;
 
 const WINDOW: u64 = 30;
 
+// Именованная мутация: метка для сообщения об ошибке и in-place изменение snapshot.
+type Mutation = (&'static str, fn(&mut ServerSnapshot));
+
 #[derive(Deserialize)]
 struct FixtureBinding {
     endpoint: String,
@@ -254,7 +257,7 @@ fn publication_accepts_exactly_one_fixed_p_overlapping_transition() {
         "unchanged state treated as publication",
     );
     unavailable(publish(&second, &first), "rollback treated as publication");
-    let mutations: &[(&str, fn(&mut ServerSnapshot))] = &[
+    let mutations: &[Mutation] = &[
         ("revision skipped", |value| value.public.revision += 1),
         ("fixed P resampled or moved", |value| {
             value.public.clock.high_water += 1
@@ -281,7 +284,7 @@ fn publication_accepts_exactly_one_fixed_p_overlapping_transition() {
 fn snapshot_rejects_missing_mismatched_oversized_and_inconsistent_references() {
     let corpus = corpus();
     let root = anchor(&corpus);
-    let mutations: &[(&str, fn(&mut ServerSnapshot))] = &[
+    let mutations: &[Mutation] = &[
         ("format version", |value| value.format_version = 2),
         ("missing reference", |value| {
             value.signer_references.pop();
