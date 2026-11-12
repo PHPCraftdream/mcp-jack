@@ -68,4 +68,4 @@ hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "service"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "net", "sync", "io-util"] }
 tower = { version = "0.5", features = ["util"] }
-time = { version = "=0.3.47", default-features = false, features = ["std", "parsing"] }
+time = { version = "=0.3.55", default-features = false, features = ["std", "parsing"] }
