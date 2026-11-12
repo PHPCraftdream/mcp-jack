@@ -97,11 +97,15 @@ func VerifyResponse(serverKey []byte, status int, headerValues []string, request
 	if auth.Kid != jack.KeyID(serverKey) {
 		return &jack.Error{HTTPStatus: 0, Code: jack.CodeUnknownServerKey, Message: "response signed by an unpinned key"}
 	}
+	// Signed subtraction может переполниться; ordered unsigned distance точен
+	// для любых int64 endpoints, включая полный диапазон до2^64-1.
+	var distance uint64
 	if ts := now.Unix(); ts < auth.TS {
-		if auth.TS-ts > windowSeconds {
-			return &jack.Error{HTTPStatus: 0, Code: jack.CodeTimestampOutOfWindow, Message: "response timestamp outside the acceptance window"}
-		}
-	} else if ts-auth.TS > windowSeconds {
+		distance = uint64(auth.TS) - uint64(ts)
+	} else {
+		distance = uint64(ts) - uint64(auth.TS)
+	}
+	if distance > uint64(windowSeconds) {
 		return &jack.Error{HTTPStatus: 0, Code: jack.CodeTimestampOutOfWindow, Message: "response timestamp outside the acceptance window"}
 	}
 	sig, err := jack.DecodeBase64URLFixed(auth.Sig, 64)

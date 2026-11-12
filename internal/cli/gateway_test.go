@@ -195,6 +195,11 @@ func TestGatewayFixedUnixHopAndSignedRefusals(t *testing.T) {
 }
 
 func TestGatewayBootstrapEnrollNoNativeForward(t *testing.T) {
+	testGatewayBootstrapEnrollNoNativeForward(t, nil)
+}
+
+func testGatewayBootstrapEnrollNoNativeForward(t *testing.T, configure func(*gatewayConfig)) {
+	t.Helper()
 	d := privateDir(t)
 	var upstreamCalls atomic.Int32
 	socket := unixUpstream(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { upstreamCalls.Add(1); w.WriteHeader(200) }))
@@ -210,6 +215,9 @@ func TestGatewayBootstrapEnrollNoNativeForward(t *testing.T) {
 		t.Fatal("bootstrap failed")
 	}
 	cfg := gatewayConfig{Version: 1, Aud: "svc", ServerSeedFile: save(t, d, "server.seed", priv.Seed()), StateFile: state, Listen: listen, UpstreamSocket: socket, UpstreamURL: "http://upstream/mcp", CallTimeoutMS: 1000, MaxConcurrent: 4}
+	if configure != nil {
+		configure(&cfg)
+	}
 	path := saveJSON(t, d, "gateway.json", cfg)
 	ctx, stop := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -309,7 +317,12 @@ func TestGatewayBootstrapEnrollNoNativeForward(t *testing.T) {
 	}
 	c, _ := loadConnection(clientPath)
 	adminBody, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": map[string]any{"name": server.ToolAdminInviteList}})
-	if _, status, err := c.post(context.Background(), adminBody); err == nil || status != 403 {
+	if cfg.NativeAdmin {
+		if _, status, err := c.post(context.Background(), adminBody); err != nil || status != 200 {
+			t.Fatal("explicit native admin opt-in failed")
+		}
+		testGatewayNativeAdminLifecycle(t, clientPath)
+	} else if _, status, err := c.post(context.Background(), adminBody); err == nil || status != 403 {
 		t.Fatal("excluded native admin enabled")
 	}
 	if upstreamCalls.Load() != 0 {

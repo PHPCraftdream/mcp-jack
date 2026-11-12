@@ -44,6 +44,82 @@ jobs:
       - name: Repeat owned-pipe and admission regressions under race detector
         run: go test -race -count=5 ./internal/cli -run '^Test(OwnedPipeBrokenOutputAndBackpressure|BridgeAdmission.*)$'
 
+  go-cli-process:
+    name: Go CLI binary process qualification
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.11'
+      - name: Build the shipping CLI without CGO
+        run: go build -trimpath -o "$RUNNER_TEMP/jack" ./cmd/jack
+      - name: Exercise the real executable through the owned process harness
+        env:
+          JACK_CLI_EXECUTABLE: ${{ runner.temp }}/jack
+        run: go test -count=1 -v ./internal/cli
+
+  go-cli-process-darwin:
+    name: Go CLI native Darwin process qualification
+    runs-on: macos-latest
+    timeout-minutes: 10
+    env:
+      CGO_ENABLED: '0'
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.11'
+      - name: Use a canonical runner temporary directory
+        run: |
+          printf 'TMPDIR=%s\n' "$(cd "$RUNNER_TEMP" && pwd -P)" >> "$GITHUB_ENV"
+      - name: Record native compiler and target
+        run: |
+          go version
+          go env GOOS GOARCH
+      - name: Build the shipping CLI without CGO
+        run: go build -trimpath -o "$RUNNER_TEMP/jack" ./cmd/jack
+      - name: Exercise the native executable through the owned process harness
+        env:
+          JACK_CLI_EXECUTABLE: ${{ runner.temp }}/jack
+        run: go test -count=1 -v ./internal/cli
+
+  go-cli-artifacts:
+    name: Go CLI portable artifact qualification
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CGO_ENABLED: '0'
+      GOTOOLCHAIN: local
+      GOPROXY: https://proxy.golang.org
+      GOSUMDB: sum.golang.org
+      FEATURE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.11'
+      - name: Test inventory guards without running binary fixtures
+        run: python3 -I -m unittest discover -s tools/binaries -p 'test_*.py' -v
+      - name: Build six targets twice from independent source roots and caches
+        run: >-
+          python3 -I tools/binaries/qualify.py
+          --source "$GITHUB_WORKSPACE"
+          --output "$RUNNER_TEMP/jack-cli-portable"
+          --expected-sha "$GITHUB_SHA"
+          --feature-sha "$FEATURE_REVISION"
+      - name: Upload verified development binaries and inventory only
+        uses: actions/upload-artifact@v4
+        with:
+          name: jack-cli-development-${{ github.sha }}
+          path: ${{ runner.temp }}/jack-cli-portable/
+          if-no-files-found: error
+          compression-level: 1
+
   fixtures:
     name: fixtures are up to date
     runs-on: ubuntu-latest
@@ -234,7 +310,7 @@ jobs:
           if-no-files-found: error
 
   consumer-go:
-    name: consumer go 1.22
+    name: consumer go 1.25
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

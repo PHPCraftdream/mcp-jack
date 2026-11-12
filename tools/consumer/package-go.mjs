@@ -18,9 +18,9 @@ import { fileURLToPath } from "node:url";
 // <stage>/module IS the module artifact; the consumer's go.mod documents the
 // resolution with a replace directive pointing at the snapshot
 // (`replace github.com/PHPCraftdream/mcp-jack => ../module`), never at the
-// repo checkout. Because the replaced module is a filesystem path, Go needs
-// no go.sum entries for it (no proxy fetch, no checksum database), so the
-// module ships without go.sum by design.
+// repo checkout.
+// Корневой replacement не требует checksum, но внешние зависимости требуют
+// точных reviewed go.mod/go.sum. Оба файла входят в staged snapshot.
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
@@ -62,16 +62,16 @@ const goMod = await readFile(goModPath, "utf8");
 if (!/^module github\.com\/PHPCraftdream\/mcp-jack$/mu.test(goMod)) {
   fail('go.mod module line must remain exactly "module github.com/PHPCraftdream/mcp-jack"');
 }
-if (!/^go 1\.22$/mu.test(goMod)) fail('go.mod must keep "go 1.22" unchanged');
+if (!/^go 1\.25\.0$/mu.test(goMod)) fail('go.mod must declare the approved "go 1.25.0" floor');
 
 // Enumerate tracked files and keep ONLY the module scope: root-level *.go +
-// go.mod + client/*.go + server/*.go + userkey/*.go + spec/** (spec/spec.go
+// go.mod + client/*.go + client/rotation/*.go + server/*.go + userkey/*.go + spec/** (spec/spec.go
 // embeds spec/fixtures/*.json via //go:embed, so the whole spec/ tree is in
 // scope). The root LICENSE-MIT/LICENSE-APACHE files are also in scope so the
 // staged module artifact carries both exact dual-licence texts. Everything
 // else (rust/, ts/, tools/, interop/, docs/, .github/, readme files,
 // .gitattributes) is excluded by construction.
-const scope = /^(?:[^/]+\.go|go\.mod|LICENSE-MIT|LICENSE-APACHE|client\/[^/]+\.go|server\/[^/]+\.go|userkey\/[^/]+\.go|spec\/.+)$/u;
+const scope = /^(?:[^/]+\.go|go\.(?:mod|sum)|LICENSE-MIT|LICENSE-APACHE|client\/[^/]+\.go|client\/rotation\/[^/]+\.go|server\/[^/]+\.go|server\/rotation\/[^/]+\.go|userkey\/[^/]+\.go|rotation\/[^/]+\.go|durable\/[^/]+\.go|spec\/.+)$/u;
 const listOutput = execFileSync("git", ["ls-files", "-z"], {
   cwd: repoRoot,
   encoding: "buffer",
@@ -98,7 +98,7 @@ for (const rel of members) {
 
 const inventory = {
   module: "github.com/PHPCraftdream/mcp-jack",
-  goVersion: "1.22",
+  goVersion: "1.25.0",
   files: members,
   snapshot: "staged",
 };
@@ -107,6 +107,9 @@ await writeFile(path.join(stageDir, "inventory.json"), `${JSON.stringify(invento
 // Required members: the manifest, the embedded spec entrypoint, and every
 // root-level *.go file currently on disk per ls-files (fail on mismatch).
 if (!members.includes("go.mod")) fail("staged module snapshot omitted go.mod");
+for (const source of ["client/rotation/controller.go", "client/rotation/refresh.go", "client/rotation/http.go", "server/rotation/provider.go", "server/rotation/publication.go", "server/rotation/native.go"]) {
+  if (!members.includes(source)) fail(`staged module snapshot omitted ${source}`);
+}
 if (!members.includes("spec/spec.go")) fail("staged module snapshot omitted spec/spec.go (go:embed fixtures/*.json)");
 // The dual-licence texts must ship with the module artifact, byte-exact
 // against the repo root copies.
@@ -127,11 +130,16 @@ const diskRootGo = (await readdir(repoRoot))
 for (const name of diskRootGo) {
   if (!members.includes(name)) fail(`root-level Go file on disk is missing from the staged snapshot: ${name}`);
 }
-// Forbidden members: nothing outside the module scope may slip into the
-// snapshot, and the module carries no go.sum (no external deps, stdlib only).
+// Ничего за пределами явного module scope не попадает в snapshot.
 for (const rel of members) {
   if (!scope.test(rel)) fail(`staged module snapshot included an out-of-scope file: ${rel}`);
-  if (rel.endsWith("go.sum")) fail("staged module snapshot must not contain go.sum (product has no deps)");
+}
+if (!members.includes("go.sum")) fail("reviewed dependency checksums are missing");
+for (const name of ["go.mod", "go.sum"]) {
+  const [staged, original] = await Promise.all([
+    readFile(path.join(moduleRoot, name)), readFile(path.join(repoRoot, name)),
+  ]);
+  if (!staged.equals(original)) fail(`staged ${name} differs from the reviewed source`);
 }
 
 console.log(`Go module snapshot: stage/module (${members.length} files)`);

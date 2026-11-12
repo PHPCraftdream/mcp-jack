@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"crypto/ed25519"
 	"io"
 	"log"
 	"net"
@@ -14,42 +13,34 @@ import (
 	"sync"
 	"time"
 
-	jack "github.com/PHPCraftdream/mcp-jack"
 	"github.com/PHPCraftdream/mcp-jack/server"
 )
 
 type gatewayConfig struct {
-	Version        int    `json:"version"`
-	Aud            string `json:"aud"`
-	ServerSeedFile string `json:"server_seed_file"`
-	StateFile      string `json:"state_file"`
-	Listen         string `json:"listen"`
-	UpstreamSocket string `json:"upstream_socket"`
-	UpstreamURL    string `json:"upstream_url"`
-	CallTimeoutMS  int    `json:"call_timeout_ms"`
-	MaxConcurrent  int    `json:"max_concurrent"`
+	Version            int                   `json:"version"`
+	Aud                string                `json:"aud"`
+	ServerSeedFile     string                `json:"server_seed_file"`
+	ServerRotationFile rotationProfilePath   `json:"server_rotation_file,omitempty"`
+	StateFile          string                `json:"state_file"`
+	Listen             string                `json:"listen"`
+	UpstreamSocket     string                `json:"upstream_socket"`
+	UpstreamURL        string                `json:"upstream_url"`
+	CallTimeoutMS      int                   `json:"call_timeout_ms"`
+	MaxConcurrent      int                   `json:"max_concurrent"`
+	DurableNonces      *gatewayDurableConfig `json:"durable_nonces,omitempty"`
+	NativeAdmin        nativeAdminFlag       `json:"native_admin,omitempty"`
 }
 
-type enrollmentOnly struct {
-	native    *server.Native
-	serverKID string
-}
+type boundedState struct{ server.AdmissionStateStore }
 
-func (n enrollmentOnly) Call(c *server.NativeCall) (server.NativeResult, *jack.Error) {
-	if c.Tool != server.ToolEnroll || c.Kid == n.serverKID {
-		return server.NativeResult{}, &jack.Error{HTTPStatus: 403, Code: jack.CodeOperationDenied, Message: "operation is not enabled"}
-	}
-	return n.native.Call(c)
-}
-
-type boundedState struct{ server.StateStore }
+var _ server.AdmissionStateStore = boundedState{}
 
 func (s boundedState) Update(update server.StateUpdate) error {
-	return s.StateStore.Update(func(e *server.StateEdit) error {
+	return s.AdmissionStateStore.Update(func(e *server.StateEdit) error {
 		if err := update(e); err != nil {
 			return err
 		}
-		if len(e.Keys()) > 1024 {
+		if len(e.Keys()) > 1024 || len(e.Invites()) > 1024 {
 			return errConfig
 		}
 		return nil
@@ -69,7 +60,7 @@ func socketOK(path string) error {
 
 func loadGateway(path string) (gatewayConfig, time.Duration, error) {
 	var c gatewayConfig
-	if decodeConfig(path, &c) != nil || c.Version != 1 || c.Aud == "" || c.MaxConcurrent < 1 || c.MaxConcurrent > 64 {
+	if decodeConfig(path, &c) != nil || c.Version != 1 || c.Aud == "" || c.MaxConcurrent < 1 || c.MaxConcurrent > 64 || c.DurableNonces.validate(c.MaxConcurrent) != nil {
 		return c, 0, errConfig
 	}
 	d, err := callDuration(c.CallTimeoutMS)
@@ -92,16 +83,20 @@ func loadGateway(path string) (gatewayConfig, time.Duration, error) {
 	return c, d, nil
 }
 
-func gateway(ctx context.Context, path string) error {
+func gateway(ctx context.Context, path string) (result error) {
 	c, timeout, err := loadGateway(path)
 	if err != nil {
 		return err
 	}
-	seed, err := readPrivate(c.ServerSeedFile, 32)
-	if err != nil || len(seed) != 32 {
+	signing, err := selectGatewaySigning(c)
+	if err != nil {
 		return errConfig
 	}
-	defer clear(seed)
+	defer func() {
+		if err := signing.close(); err != nil && result == nil {
+			result = errConfig
+		}
+	}()
 	unlock, err := lockState(c.StateFile)
 	if err != nil {
 		return err
@@ -114,10 +109,8 @@ func gateway(ctx context.Context, path string) error {
 	if err != nil || len(state.View().Keys) > 1024 || len(state.View().Invites) > 1024 {
 		return errConfig
 	}
-	serverKey := ed25519.NewKeyFromSeed(seed)
-	serverKID := jack.KeyID(serverKey.Public().(ed25519.PublicKey))
 	for _, entry := range state.View().Keys {
-		if entry.Kid == serverKID {
+		if signing.serverKIDs[entry.Kid] {
 			return errConfig
 		}
 	}
@@ -129,23 +122,42 @@ func gateway(ctx context.Context, path string) error {
 		return (&net.Dialer{Timeout: timeout}).DialContext(ctx, "unix", c.UpstreamSocket)
 	}
 	defer base.CloseIdleConnections()
-	nonces := server.NewNonceStore()
-	v, err := server.NewVerifier(server.Config{
-		Aud: c.Aud, State: boundedState{state}, Nonces: nonces,
-		Native: enrollmentOnly{native: server.NewNativeTools(server.NativeOptions{}), serverKID: serverKID},
-	})
+	policy := gatewayNative{
+		native: server.NewNativeTools(server.NativeOptions{}), serverKID: signing.anchorKID,
+		serverKIDs: signing.serverKIDs, adminEnabled: bool(c.NativeAdmin),
+	}
+	verification := server.Config{Aud: c.Aud, State: boundedState{state}, Native: policy}
+	if signing.provider != nil {
+		policy.serverKeys = signing.provider
+		verification.Native = policy
+		verification.ServerKeys = policy
+	}
+	closeNonces, err := selectGatewayNonces(c, &verification)
 	if err != nil {
 		return errConfig
 	}
-	h, err := server.NewHandler(server.HandlerConfig{
-		Verifier: v, ServerKey: serverKey, MaxBodyBytes: maxBody, MaxResponseBytes: maxBody,
-	}, upstreamHandler(c, base))
+	defer func() {
+		if err := closeNonces(); err != nil && result == nil {
+			result = errConfig
+		}
+	}()
+	nonces := verification.Nonces
+	v, err := server.NewVerifier(verification)
+	if err != nil {
+		return errConfig
+	}
+	handlerConfig := server.HandlerConfig{Verifier: v, ServerKey: signing.key, MaxBodyBytes: maxBody, MaxResponseBytes: maxBody}
+	if signing.provider != nil {
+		handlerConfig.ServerKey = nil
+		handlerConfig.ResponseKeys = signing.provider
+	}
+	h, err := server.NewHandler(handlerConfig, upstreamHandler(c, base))
 	if err != nil {
 		return errConfig
 	}
 	var connections sync.WaitGroup
 	slots := make(chan struct{}, c.MaxConcurrent)
-	// A fixed global admission rate also bounds the SDK's in-memory nonce growth.
+	// Общий transport limit действует до auth; durable capacity проверяет backend.
 	var rateMu sync.Mutex
 	var second int64
 	var admitted int
@@ -169,10 +181,12 @@ func gateway(ctx context.Context, path string) error {
 			http.Error(w, "busy", 503)
 			return
 		}
-		nonces.Purge(now)
-		if nonces.Len() >= 4096 {
-			http.Error(w, "busy", 503)
-			return
+		if nonces != nil {
+			nonces.Purge(now)
+			if nonces.Len() >= 4096 {
+				http.Error(w, "busy", 503)
+				return
+			}
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
