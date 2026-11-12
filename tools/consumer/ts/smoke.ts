@@ -96,6 +96,15 @@ async function rotationConsumer(baseUrl: string, signer: client.Signer, trusted:
       (error: unknown) => error instanceof JackError && error.httpStatus === 0 && error.code === Code.BAD_SIGNATURE,
       "installed candidate controller rejects tampered bytes");
     assert.equal(owner.snapshot().snapshot.revision, 1, "ordinary response never adopts rotation data");
+    // Installed explicit HTTP client: один physical POST через реальный server, без refresh/retry.
+    assert.throws(() => new rotation.RotationHTTPClient(owner as rotation.RotationTrustStore, signer, 0),
+      (error: unknown) => error instanceof JackError && error.httpStatus === 0, "installed HTTP client refuses an invalid deadline");
+    const sender = new rotation.RotationHTTPClient(owner, signer, 5000);
+    const sent = await sender.call(body);
+    assert.equal(sent.status, 200, "installed HTTP client receives the real server status");
+    const sentRpc = JSON.parse(new TextDecoder().decode(sent.body)) as { result?: { structuredContent?: { echoed?: boolean } } };
+    assert.equal(sentRpc.result?.structuredContent?.echoed, true, "installed HTTP client returns the authenticated real server reply");
+    assert.equal(owner.snapshot().snapshot.revision, 1, "installed HTTP call never adopts rotation data");
     consumerPhase = "candidate-reopen";
     owner.close();
     assert.equal(existsSync(stateFile + ".owner"), false, "clean close releases only the settled owner");
