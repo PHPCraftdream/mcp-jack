@@ -11,7 +11,8 @@ The entry point is `cmd/jack`; the command layer is `internal/cli.Run(ctx, args,
 IO)`. Exit status is zero for success and one for failure. `help` writes usage to
 stderr. All diagnostics are fixed, secret-free strings. No command prints a
 seed, invite, credential, HTTP error body, supplied path, or supplied URL.
-Bridge stdout contains verified protocol frames only. Other commands produce
+Bridge stdout contains verified protocol frames only. Commands with documented
+JSON output emit only their public result or diagnostics; other commands produce
 no stdout.
 
 Commands:
@@ -22,17 +23,51 @@ Commands:
 - `jack enroll --config FILE --invite-file FILE --name NAME`
 - `jack gateway --config FILE`
 - `jack bridge --config FILE`
+- `jack nonce-reconcile-terminal --config FILE --expected-hash HASH --receipt-file FILE --confirm-no-redelivery INTENT_ID`
+- `jack server-key-init-unused --config FILE --confirm-unused-endpoint URL --confirm-unused-aud AUD`
+- `jack server-key-status --config FILE`
+- `jack server-key-announce --config FILE --reference HANDLE --kid KID`
+- `jack user-create --config FILE --public FILE --name NAME --admin true|false [--not-before TS] [--not-after TS]`
+- `jack user-list --config FILE`
+- `jack user-get --config FILE --kid KID`
+- `jack user-set-admin --config FILE --kid KID --admin true|false`
+- `jack user-revoke --config FILE --kid KID`
+- `jack invite-create --config FILE --invite-file FILE --admin true|false [--ttl-seconds N] [--key-ttl-seconds N]`
+- `jack invite-list --config FILE`
+- `jack invite-revoke --config FILE --invite-id ID`
 
 Every path argument and every file path inside configuration must be an absolute,
 clean native path. Directory creation is deliberately not implicit: provision an
 owner-controlled directory before use. Examples below use symbolic placeholders,
 not paths from any developer machine.
 
-There are no admin commands, user/server rotation commands, external signer
-providers, restart guards, durable nonce stores, sessions, general policy engine,
-or D-2/D-3 mechanisms. The native dispatcher permits only `jack.enroll`; even an
-administrator cannot invoke the SDK's other native tools through this gateway.
-Application authorization for ordinary MCP operations remains upstream-owned.
+The original bootstrap-only scope now also includes the user/invite admin CLI
+and an explicit durable nonce profile; omission of that profile still selects
+the original volatile store. This does not supply server-key rotation runtime,
+sessions, a general policy engine, or automatic recovery.
+
+The gateway permits only `jack.enroll` by default. Optional configuration
+`"native_admin": true` enables exactly the existing SDK user list/get/create/
+set_admin/revoke and invite create/list/revoke tools. Omission or `false` keeps
+the closed default; `null`, strings and numbers are rejected. Older binaries
+that do not recognize this field reject the configuration; removing it restores
+the closed default rather than preserving admin enablement. Native SDK admin
+authorization and transactional last-admin checks still apply. Both registry
+keys and stored invite records are capped at 1024 by the atomic update wrapper;
+capacity exhaustion refuses the update without partially committing edits.
+`jack.whoami`, user-key rotation, server-key rotation and unknown `jack.*` tools
+remain disabled and are never forwarded upstream. The server response identity
+cannot enroll or act as a native client. Application authorization for ordinary
+MCP operations remains upstream-owned.
+
+Admin commands use the independently pinned client configuration and one signed,
+response-verified request, without retries. `user-create` reads only a public
+user-key envelope; it does not upload private key material. `invite-create`
+reserves a new private output file before the request and writes the code only
+after verifying the signed reply and code/ID relationship. Standard output
+contains only the public invite ID and expiry. A failed or unknown operation
+leaves the reservation file in place; it is not reset or retried automatically.
+Filesystem output and remote state are not a cross-file transaction.
 
 ## Custody and file contract
 
@@ -147,7 +182,7 @@ power-loss, replay-across-restart, or multi-instance guarantee.
 
 ## Fixed Unix-socket gateway
 
-Gateway configuration (all fields required):
+Gateway configuration (shown fields required; `native_admin` is optional and defaults to `false`):
 
 ```json
 {
@@ -602,3 +637,169 @@ checks are not a proof that an upstream has no additional listener; inspect that
 deployment separately. Official MCP SDK fixtures, their isolated toolchains,
 workflow wiring, and conformance/owner acceptance remain outside this bundle.
 Existing sibling threat-model/versioning/compatibility texts were read, not edited.
+
+## Offline candidate server-key initialization and status
+
+These commands use a separate private OOB profile, not client credentials or the
+static gateway configuration. The configuration is subject to the existing
+16 KiB private-config bound and strict known-field/duplicate checks. Replace the
+symbolic values below with independently provisioned values; this is a schema
+example, not a ready-to-run key fixture:
+
+```json
+{
+  "version": 1,
+  "store_file": "<absolute-private-store-file>",
+  "endpoint": "https://service.example/mcp",
+  "aud": "service-audience",
+  "window": 30,
+  "anchor_kid": "<canonical-base64url-SHA256-of-anchor-public-key>",
+  "anchor_public_key": "<canonical-base64url-32-byte-public-key>",
+  "anchor_reference": "local-provider/anchor"
+}
+```
+
+The configuration and store have the CLI's private owner/type/mode requirements;
+the parent directory must already exist and be private. This concrete durable
+profile is limited to the qualified Linux/filesystem backend. The anchor is the
+independently provisioned ordinal-zero public key, not a key discovered in a
+remote payload. `window` is explicit and immutable. The exact endpoint/audience
+and opaque anchor reference participate in the protected profile; these commands
+neither normalize the binding nor load a signer seed or make an HTTP request.
+
+`server-key-init-unused` requires both confirmation values to equal the configured
+binding exactly. This is an operator assertion that this rotation binding is
+unused, not proof or permission to migrate, replace a missing history, recover a
+dirty store, or reset an unsafe clock. Creation is exclusive and never replaces
+an existing file; an uncertain creation retains its artifact. Success has no
+stdout.
+
+`server-key-status` opens offline inspection under the lifetime-exclusive owner
+lock, so a concurrently serving owner prevents it. It does not enter serving,
+call the clock, increment owner/revision/H, clear recovery flags, or read signer
+material. Its JSON contains public store/owner/clock/state/head/count/flag
+metadata only, never protected references, private snapshots, or supplied paths.
+A dirty/unsafe report is diagnostic and still requires explicit recovery; the
+command does not authorize restart or certify absence of backup rollback.
+Malformed or missing stores produce a generic failure without creation or reset.
+Initialization/status do not publish a key. They do not select a rotation gateway mode.
+
+### Explicit offline announcement
+
+The same private profile may include a `signers` array. Each entry has exactly
+`reference`, `kid`, and `seed_file`. `reference` is the protected opaque handle;
+`kid` is the independently provisioned canonical public-key ID; `seed_file` is
+an absolute private file containing exactly the 32 raw seed bytes written by
+`jack keygen server --secret FILE --public FILE`. The loader derives the actual
+public key and checks its ID before opening the rotation store. No seed is
+uploaded, included in a rotation record, or printed. Duplicate reference/KID
+pairs and malformed metadata are rejected. Distinct key IDs may share an opaque
+reference; the reference itself is not key authority. The profile still has its
+16 KiB input bound, independent of protocol history limits.
+
+Initialization and status validate inventory metadata only: missing seed files
+do not prevent these seed-free operations. Announcement loads the configured
+inventory and requires all configured files to be valid. Required current and
+pending ring handles must be available; unused future handles can be provisioned
+in advance. Retired seed entries may be removed once no longer required; retained
+public ring references and the original OOB anchor profile are not rewritten.
+
+`jack server-key-announce --config FILE --reference HANDLE --kid KID` selects
+one already configured next key. It is an offline operation under the same
+lifetime-exclusive store owner, so an active gateway/SDK owner must first stop
+and drain cleanly. There is no lock bypass, private-key network upload, unknown
+outcome retry, old-key fallback, one-pending policy, or implicit reset. The SDK
+fixes P once and commits one adjacent-tail authorization, even when that tail is
+not yet eligible for response signing. Store closure drains before private
+buffers are cleared or public stdout is emitted.
+
+Only confirmed publication and healthy owner closure produce JSON containing
+`ordinal`, `hash`, `published_at`, `activates_at`, `state_revision`, and the exact
+public `record`. No protected reference or seed path is included. A subsequent
+stdout/Close error does not roll back a committed publication. Do not automatically
+repeat after an error: inspect status and retain external evidence; dirty/unsafe
+or unknown outcomes remain subject to explicit recovery, not these commands.
+Repeating the same retained key is refused. This command does not itself select a gateway rotation mode or authorize
+release/registry publication.
+
+## Explicit gateway rotation profile
+
+A gateway may select `server_rotation_file` pointing to the private server-key
+profile above, **instead of** `server_seed_file`. Exactly one signing profile
+must be configured. `server_rotation_file` must be a JSON string when supplied;
+null, booleans, numbers and objects are rejected rather than silently selecting
+static mode. Existing static configurations keep their behavior; failed
+rotation initialization never falls back to a static key. Gateway startup does
+not initialize, reset, recover or replace either durable store.
+
+Rotation mode requires an explicitly initialized `durable_nonces` profile with
+the same immutable window. Ring and nonce stores must be distinct files; ring
+storage must also differ from registry state. The exact profile audience must
+match the gateway audience. The public endpoint in the profile is the independently
+configured external binding, not a value learned from requests or inferred from
+the loopback listen address or upstream socket.
+
+The gateway validates protected state and current/pending signer readiness before
+listening, selects the concrete ResponseKeys provider and the separate explicit
+candidate native route, and retains the ring's exclusive owner for its lifetime.
+`jack.server.key` requires ordinary authenticated processing and durable nonce
+reservation, but does not require `native_admin`. The existing admin opt-in and
+other native allowlist rules remain unchanged. All configured and retained
+response-key IDs are excluded as native callers on both routes, including the
+candidate route; registry collisions with these identities are refused at startup.
+
+Shutdown stops HTTP admission and drains owned connections/handlers before
+closing nonce and ring owners. The ring close drains physical-write serving
+leases before clearing dirty, and private signer buffers are cleared only after
+store closure. Missing, dirty, unsafe, corrupt, mismatched or unavailable ring
+state/readiness fails closed with no fallback, retry, automatic key initialization
+or repair. Offline announcement must acquire this same exclusive owner, so stop
+and drain the gateway before using the local announcement command. Server-store
+recovery/serving release and broader platform/process-kill qualification remain
+separate acceptance work; selecting this profile does not authorize them.
+
+### Shipping-binary restart qualification
+
+The mandatory Linux `Go CLI binary process qualification` job supplies the built
+CGO-disabled executable through `JACK_CLI_EXECUTABLE`. Both static and rotating
+gateway restart scenarios run through the existing owned child-process harness;
+ordinary source-only test jobs explicitly skip these binary-only scenarios.
+The rotation scenario initializes and announces through the real CLI, verifies
+native delivery and ordinary signed forwarding, checks clean nonce/ring shutdown,
+replays the exact still-fresh request after restart, and injects a crash only into
+the captured test-owned child. A following startup must fail without changing the
+dirty nonce history, public ring diagnostics or protected ring bytes. Only the
+known test-owned registry marker is explicitly archived to avoid attributing the
+refusal to an unrelated stale registry lock. This is process-crash qualification,
+not a power-loss, physical-volume or backup-rollback guarantee, and does not add a
+product recovery/reset path.
+
+## Explicit terminal nonce reconciliation
+
+`jack nonce-reconcile-terminal --config FILE --expected-hash HASH --receipt-file
+FILE --confirm-no-redelivery INTENT_ID` is an offline operator action over an
+already closed dirty nonce store. It uses only the existing gateway durable-nonce
+profile and the SDK's exact `ReconcileUnknown` transaction. It never loads server
+signer material, sends HTTP, redelivers the request, clears dirty/unsafe, releases
+serving, or resets/migrates storage. A successful terminal disposition is not
+permission to restart.
+
+The expected hash must be the exact current logical graph hash from
+`nonce-inspect`. It is an integrity/concurrency check, not a MAC, external ledger
+or proof against backup rollback. The private receipt file contains exactly one
+complete `NonceReceipt` object copied from that inspection/evidence, not the whole
+report. Its fields retain the SDK's exact names: `Version`, `DeploymentID`,
+`StoreGeneration`, `OwnerGeneration`, `IntentID`, `OperationID`, `KID`, `Nonce`,
+`Signature`, `RequestHash`, `Timestamp`, `RetainUntil`, `HighWater`. All are required;
+unknown/duplicate/null fields and an OperationID array other than exactly sixteen
+non-null byte values are refused before storage. The explicit confirmation must
+equal that receipt's IntentID. The file uses the existing private owner/type/mode
+and 16 KiB input bound.
+
+Only the exact matching row and graph may be converted to a terminal no-redelivery
+tombstone. Missing/inexact/stale evidence refuses without treating absence as
+proof of abort. The backend's exclusive owner and dirty fence remain mandatory;
+unknown commit outcomes are never retried. Success has no stdout and does not undo
+any prior handler effect. Subsequent serving release, tombstone disposition,
+external-evidence recovery and server-ring recovery are separate actions not
+implemented or authorized by this command.

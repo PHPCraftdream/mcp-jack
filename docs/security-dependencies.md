@@ -1,10 +1,12 @@
 # Dependency vulnerability scanning
 
-## Current approved Go security compiler — 2026-11-11
+## Current approved Go compiler — 2026-11-11
 
-The owner explicitly approved replacing the affected Go 1.26.10 security/deployment/compiler pins with Go **1.26.11** after CI reported [GO-2026-6859](https://pkg.go.dev/vuln/GO-2026-6859) in `net/http`. The official [Go release history](https://go.dev/doc/devel/release#go1.26.11) records the patched compiler release on 2026-11-10. The security workflow pin is updated; module/package/symbol commands, scanner pin and failure gates are unchanged. New exact-head receipts are required. No language-floor/product/dependency version, Rust MSRV, lockfile or publication change is made by this compiler-only correction. Existing deployed binaries still require rebuilding and redeployment with a supported patched compiler.
+The owner explicitly approved Go **1.26.11** for the security/deployment/build compiler profiles after CI reported [GO-2026-6859](https://pkg.go.dev/vuln/GO-2026-6859), an HTTP/1 server crash in `net/http`, against Go 1.26.10. Module, package and symbol scans failed; this is an advisory finding, not a scanner/network error. CI jobs 130307698088/130307698298/130307698266 retain the concrete detection evidence. No advisory ignore, threshold reduction or successful-exit override is authorized.
 
-The dated 2026-11-09 baseline below retains historical Go 1.26.10 provenance; those compiler-version/status statements are superseded by this current notice, not treated as an evergreen security endorsement.
+The official [Go release history](https://go.dev/doc/devel/release#go1.26.11) records Go 1.26.11 on 2026-11-10, including `net/http` security fixes. The affected explicit workflow pins now select 1.26.11. The Go module language floor remains 1.25.0 in this implementation branch; package versions, dependency versions/locks, Rust MSRV and publication restrictions are unchanged. Updating a CI compiler does not repair deployed binaries: rebuild/redeploy with a supported patched compiler and verify the actual toolchain and full CI results. New exact-head scan/build receipts are still required for this change.
+
+The dated 2026-11-09 baseline below is retained as historical provenance, including its earlier Go 1.22 language-floor and Go 1.26.10 scan-lane statements; those version/status statements are superseded by the current paragraph and the implementation branch manifests. Scanner commands and failure semantics remain unchanged.
 
 ## Current approved Rust security patch — 2026-11-11
 

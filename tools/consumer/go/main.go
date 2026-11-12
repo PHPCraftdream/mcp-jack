@@ -23,7 +23,9 @@ import (
 
 	"github.com/PHPCraftdream/mcp-jack"
 	"github.com/PHPCraftdream/mcp-jack/client"
+	rotationclient "github.com/PHPCraftdream/mcp-jack/client/rotation"
 	"github.com/PHPCraftdream/mcp-jack/server"
+	rotationserver "github.com/PHPCraftdream/mcp-jack/server/rotation"
 	"github.com/PHPCraftdream/mcp-jack/userkey"
 )
 
@@ -87,6 +89,15 @@ func (t tamperRT) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func main() {
+	if _, err := rotationserver.New(nil, nil); err == nil {
+		fail("rotation server accepted missing durable owner", nil)
+	}
+	if _, err := rotationclient.New(nil); err == nil {
+		fail("rotation controller accepted missing durable owner", nil)
+	}
+	if _, err := rotationclient.NewHTTP(nil, nil, time.Second); err == nil {
+		fail("rotation HTTP client accepted missing durable owner", nil)
+	}
 	// (a) Client key lifecycle.
 	clientKey, err := userkey.GenerateClientKey()
 	if err != nil {
@@ -336,5 +347,8 @@ func main() {
 		fail("shutdown", err)
 	}
 
-	fmt.Println("PASS: go consumer smoke (key lifecycle, credential flow, signed loopback round trip, verified identity, application denial, wrong pin, tamper)")
+	if err := verifyDurableArtifact(); err != nil {
+		fail("durable staged artifact lifecycle", err)
+	}
+	fmt.Println("PASS: go consumer smoke (key lifecycle, credential flow, signed loopback round trip, verified identity, application denial, wrong pin, tamper, durable ownership lifecycle)")
 }

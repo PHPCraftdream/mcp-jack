@@ -219,6 +219,11 @@ func TestPrivateStorageRefusals(t *testing.T) {
 
 func signedFixture(t *testing.T, next http.Handler) (string, clientConfig, *server.MemoryState) {
 	t.Helper()
+	return signedFixtureWithNative(t, next, nil)
+}
+
+func signedFixtureWithNative(t *testing.T, next http.Handler, native server.NativeTools) (string, clientConfig, *server.MemoryState) {
+	t.Helper()
 	d := privateDir(t)
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	issued, retained, err := userkey.IssueLocalPair()
@@ -232,7 +237,7 @@ func signedFixture(t *testing.T, next http.Handler) (string, clientConfig, *serv
 	}); err != nil {
 		t.Fatal(err)
 	}
-	v, err := server.NewVerifier(server.Config{Aud: "svc", State: state, Nonces: server.NewNonceStore()})
+	v, err := server.NewVerifier(server.Config{Aud: "svc", State: state, Nonces: server.NewNonceStore(), Native: native})
 	if err != nil {
 		t.Fatal(err)
 	}

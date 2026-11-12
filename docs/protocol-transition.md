@@ -55,7 +55,7 @@ Candidate native errors: `400 invalid_params`; `409 rotation_checkpoint_unavaila
 
 ### Owner-selected directions recorded in the read-only baselines
 
-The owner-selected directions are a durable authenticated nonce reservation before authorization/mutation/dispatch, fail-closed/no-retry on unknown outcome, and rejection of timestamp startup floors. The 48-hour next-successor grace and unlimited pending announcements with no one-pending/cooldown restriction are also owner-selected. The logical event that samples `P_i` is a candidate default, not a separate approval. The owner-approved Go direction is selection of a vetted transactional library; bbolt v1.5.0 is a source-reviewed proposal pending future dependency/security/platform qualification. Go 1.25 is approved as the whole module target; deployment uses Go 1.26.10. No manifest/dependency migration occurs here.
+The owner-selected directions are a durable authenticated nonce reservation before authorization/mutation/dispatch, fail-closed/no-retry on unknown outcome, and rejection of timestamp startup floors. The 48-hour next-successor grace and unlimited pending announcements with no one-pending/cooldown restriction are also owner-selected. The logical event that samples `P_i` is a candidate default, not a separate approval. The owner-approved Go direction is selection of a vetted transactional library; bbolt v1.5.0 is a source-reviewed proposal pending future dependency/security/platform qualification. Go 1.25 is approved as the whole module target; deployment uses Go 1.26.11. No manifest/dependency migration occurs here.
 
 ### Candidate technical defaults, not additional approvals
 

@@ -17,6 +17,7 @@ const DefaultWindow = 30
 // Names of the protocol-native tools (spec 03). Tools with the "jack." prefix
 // never reach the wrapped handler.
 const (
+	ToolServerKey         = "jack.server.key"
 	ToolEnroll            = "jack.enroll"
 	ToolWhoAmI            = "jack.whoami"
 	ToolRotateKey         = "jack.key.rotate"
@@ -94,10 +95,14 @@ type Config struct {
 	State StateStore
 	// Nonces records seen (kid, nonce) pairs.
 	Nonces *NonceStore
+	// DurableNonces выбирается явно вместо volatile Nonces.
+	DurableNonces DurableNonceStore
 	// Audit receives audit events for protocol-native admin calls; optional.
 	Audit AuditSink
-	// Native implements the jack.* tools; when nil every jack.* tool is denied.
+	// Native — current-v1 tools; nil запрещает их, ServerKeys выбирается отдельно.
 	Native NativeTools
+	// ServerKeys включает только candidate jack.server.key; default native allowlist неизменен.
+	ServerKeys NativeTools
 	// Window is the timestamp window in seconds; zero means DefaultWindow.
 	Window int64
 	// Now returns the current Unix time in seconds; nil means the wall clock.
@@ -116,8 +121,18 @@ func NewVerifier(cfg Config) (*Verifier, error) {
 		return nil, errors.New("server: Config.Aud must be non-empty")
 	case cfg.State == nil:
 		return nil, errors.New("server: Config.State must be set")
-	case cfg.Nonces == nil:
+	case cfg.Nonces == nil && cfg.DurableNonces == nil:
 		return nil, errors.New("server: Config.Nonces must be set")
+	case cfg.Nonces != nil && cfg.DurableNonces != nil:
+		return nil, errors.New("server: select exactly one nonce profile")
+	}
+	if cfg.DurableNonces != nil {
+		if _, ok := cfg.State.(AdmissionStateStore); !ok {
+			return nil, errors.New("server: durable admission requires coordinated state")
+		}
+		if cfg.Window < 0 || cfg.Window > 120 {
+			return nil, errors.New("server: durable window must be between 1 and 120 seconds")
+		}
 	}
 	if cfg.Window <= 0 {
 		cfg.Window = DefaultWindow
@@ -170,7 +185,8 @@ type Result struct {
 	// Structured is the structuredContent of a successful native tool call.
 	Structured any
 	// Audit is the audit event written for the call, if any.
-	Audit *AuditEvent
+	Audit     *AuditEvent
+	admission *admissionLease
 }
 
 func rejection(status int, code, message string) Result {
@@ -221,7 +237,13 @@ func (v *Verifier) Verify(req Request) Result {
 		verifyKey = key
 	}
 
-	if d := now - auth.TS; d > v.cfg.Window || -d > v.cfg.Window {
+	var distance uint64
+	if now < auth.TS {
+		distance = uint64(auth.TS) - uint64(now)
+	} else {
+		distance = uint64(now) - uint64(auth.TS)
+	}
+	if distance > uint64(v.cfg.Window) {
 		return rejection(401, jack.CodeTimestampOutOfWindow, "timestamp is outside the acceptance window")
 	}
 
@@ -232,6 +254,27 @@ func (v *Verifier) Verify(req Request) Result {
 	signing := jack.RequestSigningString(req.Method, req.Target, v.cfg.Aud, auth.Kid, auth.TS, auth.Nonce, req.Body)
 	if !jack.Verify(verifyKey, []byte(signing), sig) {
 		return rejection(401, jack.CodeBadSignature, "signature does not verify")
+	}
+
+	if v.cfg.DurableNonces != nil {
+		res, finalNow := v.reserveDurable(auth, signing, caller, known)
+		handedOff := false
+		defer func() {
+			if !handedOff {
+				res.Done()
+			}
+		}()
+		if res.HTTPStatus != 0 {
+			handedOff = true
+			return res
+		}
+		var callerPtr *RegistryEntry
+		if known {
+			callerPtr = &caller
+		}
+		out := v.authorize(req, auth, finalNow, callerPtr, res)
+		handedOff = true
+		return out
 	}
 
 	// The nonce is recorded only after the signature verified, so
@@ -279,14 +322,20 @@ func (v *Verifier) authorize(req Request, auth jack.RequestAuth, now int64, call
 
 	if msg.hasTool && strings.HasPrefix(msg.tool, "jack.") {
 		res.Native = true
-		if !IsNativeTool(msg.tool) || v.cfg.Native == nil {
+		native := v.cfg.Native
+		if msg.tool == ToolServerKey {
+			native = v.cfg.ServerKeys
+		} else if !IsNativeTool(msg.tool) {
+			return fail(403, jack.CodeOperationDenied, "operation is not permitted")
+		}
+		if native == nil {
 			return fail(403, jack.CodeOperationDenied, "operation is not permitted")
 		}
 		call := &NativeCall{
 			Tool: msg.tool, Arguments: msg.arguments, Caller: caller, Kid: auth.Kid, TS: auth.TS,
 			Now: now, Aud: v.cfg.Aud, State: v.cfg.State,
 		}
-		out, jerr := v.cfg.Native.Call(call)
+		out, jerr := native.Call(call)
 		var event *AuditEvent
 		if auditedTool(msg.tool) {
 			event = &AuditEvent{Time: now, Tool: msg.tool, Outcome: AuditSuccess, ActorKid: auth.Kid, Target: call.Target}
