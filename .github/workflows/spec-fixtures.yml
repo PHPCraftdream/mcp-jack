@@ -73,32 +73,3 @@ jobs:
             spec/fixtures/candidate/rotation-state-vectors.json
             spec/tests/candidate/CASES.md
           if-no-files-found: error
-
-  rust-source-preparation:
-    name: prepare Rust SDK sources
-    if: github.ref == 'refs/heads/release-server-store-1112'
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: rust
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rust
-      - name: Format candidate Rust sources in CI
-        run: cargo fmt --all
-      - name: Test the server ring store without default features
-        timeout-minutes: 10
-        run: cargo test --locked --no-default-features --lib server_store
-      - name: Upload formatted sources for parent integration
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: rust-sdk-formatted-sources
-          path: |
-            rust/src/rotation/*.rs
-          if-no-files-found: error

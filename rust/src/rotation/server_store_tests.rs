@@ -55,13 +55,11 @@ fn lifecycle_exclusive_owner_one_fixed_p_publication_and_clean_reopen() {
     let path = sandbox.file();
     let marker = marker_path(&path);
     let calls = Cell::new(0);
-    assert!(
-        RotationServerStore::open(&path, server_options(), || {
-            calls.set(calls.get() + 1);
-            Ok(100)
-        })
-        .is_err()
-    );
+    assert!(RotationServerStore::open(&path, server_options(), || {
+        calls.set(calls.get() + 1);
+        Ok(100)
+    })
+    .is_err());
     assert_eq!(calls.get(), 0);
     RotationServerStore::initialize_unused(&path, server_options(), || {
         assert_eq!(payload(&path)["dirty"], true);
@@ -85,9 +83,7 @@ fn lifecycle_exclusive_owner_one_fixed_p_publication_and_clean_reopen() {
     wrong.anchor_reference = "opaque-provider/other".into();
     assert!(RotationServerStore::open(&path, wrong, || panic!("wrong profile")).is_err());
     let mut store = RotationServerStore::open(&path, server_options(), || Ok(100)).unwrap();
-    assert!(
-        RotationServerStore::open(&path, server_options(), || panic!("second owner")).is_err()
-    );
+    assert!(RotationServerStore::open(&path, server_options(), || panic!("second owner")).is_err());
     let (previous, captured) = store.snapshot().unwrap();
     assert_eq!(previous.signer_references.len(), 1);
     let desired = published(&previous, &captured);
@@ -129,10 +125,26 @@ fn publication_refusals_leave_the_ring_and_guard_untouched() {
     let good = published(&previous, &clock);
     let before = fs::read(&path).unwrap();
     let refusals: &[Refusal] = &[
-        ("replaced reference", |value| value.signer_references[0].reference = "replacement".to_owned(), "rotation_state_unavailable"),
-        ("fenced target", |value| value.public.fenced = true, "rotation_state_unavailable"),
-        ("moved P", |value| value.public.clock.high_water += 1, "rotation_state_changed"),
-        ("clock tuple of another revision", |value| value.public.clock.revision += 1, "rotation_state_changed"),
+        (
+            "replaced reference",
+            |value| value.signer_references[0].reference = "replacement".to_owned(),
+            "rotation_state_unavailable",
+        ),
+        (
+            "fenced target",
+            |value| value.public.fenced = true,
+            "rotation_state_unavailable",
+        ),
+        (
+            "moved P",
+            |value| value.public.clock.high_water += 1,
+            "rotation_state_changed",
+        ),
+        (
+            "clock tuple of another revision",
+            |value| value.public.clock.revision += 1,
+            "rotation_state_changed",
+        ),
     ];
     for (label, mutate, code) in refusals {
         let mut desired = good.clone();
@@ -165,8 +177,7 @@ fn rollback_or_invalid_time_latches_unsafe_and_blocks_clean_close() {
         let time = Rc::new(Cell::new(100));
         let callback = time.clone();
         let mut store =
-            RotationServerStore::open(&path, server_options(), move || Ok(callback.get()))
-                .unwrap();
+            RotationServerStore::open(&path, server_options(), move || Ok(callback.get())).unwrap();
         time.set(invalid_time);
         let error = store.advance_and_check().unwrap_err();
         assert_eq!(error.code, "rotation_clock_unsafe");
@@ -194,7 +205,11 @@ fn serving_leases_hold_the_dirty_epoch_and_drain_before_a_clean_close() {
     let one = store.acquire_serving_lease().unwrap();
     let two = store.acquire_serving_lease().unwrap();
     assert!(store.close().is_err());
-    assert_eq!(payload(&path)["dirty"], true, "a lease keeps the dirty epoch");
+    assert_eq!(
+        payload(&path)["dirty"],
+        true,
+        "a lease keeps the dirty epoch"
+    );
     assert!(store.snapshot().is_err(), "closing refuses new final gates");
     assert!(store.acquire_serving_lease().is_err());
     drop(one);
