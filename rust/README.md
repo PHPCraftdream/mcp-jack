@@ -291,3 +291,111 @@ node tools/consumer/verify-rust.mjs tools/consumer/.scratch/rust-consumer
 The stage is a fresh direct child of `tools/consumer/.scratch/`; both drivers are restricted to GitHub Actions. The packaged `.crate` contains the crate sources (`src/`, including `src/bin/**`), the tests, this README, and byte-exact copies of `LICENSE-MIT` and `LICENSE-APACHE` committed under `rust/`; CI byte-compares the packaged licence files against the repository root copies, so licence-text drift fails the run.
 
 The consumer is a standalone edition-2024, rust-version-1.88 crate whose SDK dependency is only the extracted `.crate` — never the checkout (the adapter-driving harness crates named below are optional, feature-gated supporting dependencies). It resolves its dependency graph FRESH on Rust 1.88: no product lockfile is copied in, and the consumer-generated `Cargo.lock` must exist and differ byte-wise from the product `rust/Cargo.lock`, proving independent resolution (Cargo ignores a path-dependency's own lockfile). The feature matrix: the default features build first; `client-http` runs a real signed loopback request over a socket, and an unsigned 401 from the server must surface as `Unauthenticated`; `server-http` drives the real packaged adapter — the consumer constructs `JackLayer` from `HandlerConfig`, wraps an in-process inner service, and drives it through the SDK client, with wrong-pin and tampered-body refusals running through the same adapter. The adapter-only supporting crates `ed25519-dalek`/`getrandom`/`http`/`bytes`/`http-body-util`/`tower`/`futures` are optional harness-only deps behind the consumer's own `server-http` feature; the SDK dependency itself remains only the extracted `.crate`. CI uploads the `.crate` and inventory.json as workflow artifacts for parent inspection. This consumer run validates the packaged artifact on the declared MSRV with a fresh dependency resolution; it does not prove vulnerability-free dependencies or replace the locked product CI graph.
+
+## Candidate Linux client trust store
+
+On Linux, `mcp_jack::rotation` additionally exports `RotationStoreOptions` and
+`RotationTrustStore<C>`, where `C: FnMut() -> Result<u64, RotationError>` supplies
+Unix seconds. The independent out-of-band binding, window (1..120 seconds), and
+checkpoint are mandatory. They are not adopted from an opened file or network
+response. Static credentials and existing clients are unchanged.
+
+`initialize_unused` explicitly creates an unused store; `open` never creates or
+resets trust. The filesystem profile requires a private 0700 parent on local
+ext4/XFS/Btrfs, safe owned/root ancestors, no followed symlinks, and owner-only
+0600 regular single-link files. Operations are relative to an opened parent
+descriptor; subsequent use also verifies its pathname identity. A random O_EXCL
+owner marker remains held for the entire owner lifetime. There is no stale-PID
+break, automatic dirty-state recovery, or backup adoption.
+
+The protected bundle contains separate serialized snapshot and ClockGuard
+records. The copied snapshot clock is a CAS dependency, not fresh time authority.
+`advance_and_check` durably advances monotone H; rollback or an out-of-domain
+sample latches unsafe state, and catch-up does not clear it. `check_snapshot_clock`
+also checks the exact expected snapshot without suppressing clock advancement.
+`compare_and_swap` validates the whole extension and compares both exact snapshot
+and current guard, replacing only the snapshot record. A decoded page or a
+successful primitive file write is not an authenticated refresh or trust ACK.
+
+The callback and synchronous I/O must be bounded. The SDK does not preempt a
+stalled callback. Rust's mutable owner API serializes safe access; a callback
+panic leaves the owner busy and its dirty epoch/marker intact. Callback errors
+are sanitized. Callers own lifecycle: only explicit healthy `close` writes clean
+state and releases the marker. Dropping an owner never silently performs close.
+Any uncertain mutation fails closed with retained artifacts and no retry/reset.
+The 16MiB bound is logical, not a physical-volume or power-loss guarantee;
+checksums detect accidental corruption and are not a MAC or rollback oracle.
+
+Other operating systems do not export this Linux-only store API.
+
+### Candidate ordinary-response controller
+
+`RotationController::new(&mut store)` performs an initial exact-snapshot clock
+gate and borrows the store exclusively for the controller's scope. After the
+controller is dropped, the caller can inspect or explicitly close the store.
+`RotationResponse` owns the actual status, raw response-auth header values,
+exact request signature, and buffered response body. Its signature field binds
+the concrete signed request, not a JSON-RPC ID or a request-header substitute.
+The caller remains responsible for URL/TLS/redirect/deadline and transport bounds.
+
+`verify_response` rejects an unknown outer key before a clock callback or body
+verification, checks the exact signed bytes using the existing carrier verifier,
+and then requires both authoritative and final snapshot/clock/freshness/interval
+gates. Known cutoff equality is refused at both signed time and final authority.
+Only bounded interval/capacity arithmetic follows the final authoritative sample.
+The returned body is owned and opaque: ordinary responses are not decoded as
+rotation announcements, and failures return no body. Errors are local sanitized
+JackError values with http_status0. Static credentials and clients are unchanged.
+
+### Explicit single-page refresh
+
+`accept_refresh(response, expected_id, cursor)` accepts one caller-requested native
+`jack.server.key` result. The ID is the expected raw JSON scalar; the cursor is
+the currently ACKed terminal, not an unverified server-declared head. Known outer
+authentication and an authoritative gate precede strict result decoding. The
+controller binds current metadata to that carrier, verifies publication times,
+both proofs, full-record hashes, framing, contiguous extension, adjacent
+publication order, and retained-key nonreuse. It then checks the exact snapshot,
+a fresh guard and the strict first-bridge deadline, performs one exact CAS,
+and applies a final gate.
+
+`RotationRefreshResult` distinguishes declared `head` from ACKed `terminal` and
+reports complete/committed/revision. Empty or duplicate pages are no-ops and do
+not increment trust revision. A late final error can follow a confirmed durable
+ACK: an exception does not mean that trust stayed unchanged, and the SDK never
+rolls back that ACK. An uncertain CAS returns no ACK, retains the dirty/owner
+gates, and is not retried or automatically recovered.
+
+There is no HTTP sender, automatic refresh, hidden key discovery, retry, or pagination.
+The caller explicitly requests any next page. Product rotating transport and
+candidate server integration remain separate unfinished work.
+
+### Candidate server ring state and `jack.server.key` page service
+
+This layer is pure and cross-platform. It has no persistence, serving lease,
+clock, signer selection or HTTP wiring yet, so it is not a running candidate server.
+
+`validate_server_snapshot`, `validate_server_publication`,
+`encode_server_snapshot` and `decode_server_snapshot` model the protected server
+snapshot: the same whole public `TrustSnapshot` as the client plus exactly one
+opaque `SignerReference` (at most 1024 UTF-8 bytes, never a key authority) per
+retained key. References never enter the public trust encoding. A publication is
+exactly one adjacent transition with revision + 1, byte-identical retained
+records and references, no fence on either side, monotone clock compatibility and
+fixed `P` equal to the new key's activation minus 48 hours; it is a validator,
+not authorization. The strict map-only codec rejects duplicate/unknown/missing
+members and non-canonical numbers, ignores object order, and preserves
+fence/unsafe flags instead of repairing them. Failures are sanitized to
+`rotation_state_unavailable`.
+
+`decode_server_key_arguments` accepts only the exact `{after_ordinal, after_hash}`
+object (integer literal 0..2^53-1 where the literal `-0` is zero, `-` only at
+ordinal 0, canonical unpadded base64url SHA-256 otherwise) and reports every other shape as `invalid_params`.
+`server_key_page(snapshot, cursor, signer_public_key)` builds the same owned
+`DecodedResult` that the client decoder returns, from one validated snapshot: at
+most 16 records from the exact cursor, the selected signer as `current`, and
+`complete` only when the page reaches the head. A cursor outside the retained
+ring or with a wrong hash is `rotation_checkpoint_unavailable`; a signer outside
+the ring is `rotation_state_unavailable`. Callers must still perform the
+authoritative clock check and signer-eligibility selection before building a page
+and the final emission guard after it.

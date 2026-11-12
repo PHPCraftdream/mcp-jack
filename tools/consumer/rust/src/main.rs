@@ -17,6 +17,9 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::Arc;
 
+#[cfg(target_os = "linux")]
+mod rotation_store;
+
 use mcp_jack::auth_header::{format_response_auth, ResponseAuth};
 use mcp_jack::client::error::ClientError as ClientErr;
 use mcp_jack::client::rpc;
@@ -956,6 +959,8 @@ fn run() -> Result<(), String> {
     let service_signer = Arc::new(
         ClientSigningKey::generate().map_err(|e| format!("service key generate failed: {e}"))?,
     );
+    #[cfg(target_os = "linux")]
+    rotation_store::verify(service_signer.as_ref())?;
     let wrong_pin =
         ClientSigningKey::generate().map_err(|e| format!("wrong-pin key generate failed: {e}"))?;
     let (connection, expected) = section_b(&service_signer, &wrong_pin)?;

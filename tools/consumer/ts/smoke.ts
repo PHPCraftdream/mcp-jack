@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import {
   Code,
@@ -19,6 +22,8 @@ import {
   jackFetchHandler,
   jackIdentity,
   keyId,
+  parseRequestAuth,
+  rotation,
   serveNode,
   validateUserKeyCredentialForServer,
   verify,
@@ -27,6 +32,7 @@ import type { ExpectedServerIdentity, RegistryEntry } from "mcp-jack";
 
 const AUDIENCE = "https://consumer.example.test";
 const NOW = 1_800_000_000;
+let consumerPhase: "static-client" | "candidate-store" | "candidate-http" | "candidate-reopen" = "static-client";
 const utf8 = (value: string): Uint8Array<ArrayBuffer> => new TextEncoder().encode(value);
 const boundedFetch: typeof fetch = (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(5000) });
 
@@ -46,6 +52,70 @@ async function close(server: ReturnType<typeof createServer>): Promise<void> {
     server.close(() => resolve());
     server.closeAllConnections();
   });
+}
+
+async function rotationConsumer(baseUrl: string, signer: client.Signer, trusted: ExpectedServerIdentity): Promise<void> {
+  consumerPhase = "candidate-store";
+  assert.equal(process.platform, "linux", "candidate store consumer qualification requires Linux");
+  client.checkDestination(baseUrl);
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "mcp-jack-rotation-consumer-")));
+  chmodSync(root, 0o700);
+  const stateFile = join(root, "trust");
+  const options: rotation.RotationStoreOptions = {
+    binding: { endpoint: baseUrl, aud: trusted.aud }, window: 30,
+    checkpoint: { ordinal: 0, hash: "-", kid: trusted.server_kid,
+      publicKeyB64u: trusted.server_public_key, publishedAt: 0 }, now: () => NOW,
+  };
+  let owner: rotation.RotationTrustStore | undefined;
+  try {
+    rotation.RotationTrustStore.initializeUnused(stateFile, options);
+    assert.equal(existsSync(stateFile), true, "installed store creates concrete state");
+    assert.equal(existsSync(stateFile + ".owner"), false, "explicit initialization settles cleanly");
+    owner = rotation.RotationTrustStore.open(stateFile, options);
+    assert.equal(existsSync(stateFile + ".owner"), true, "installed store holds its owner gate");
+    const controller = new rotation.RotationController(owner);
+    consumerPhase = "candidate-http";
+    const body = utf8(JSON.stringify({ jsonrpc: "2.0", id: "candidate-consumer", method: "tools/call",
+      params: { name: "consumer.echo", arguments: {} } }));
+    const target = new URL(baseUrl);
+    const header = client.signRequest(signer, trusted.aud, "POST", target.pathname + target.search, body, client.randomNonce(), NOW);
+    const requestSignature = parseRequestAuth([header]).sig;
+    const received = await boundedFetch(baseUrl, { method: "POST", redirect: "error",
+      headers: { "Jack-Auth": header, "Content-Type": "application/json" }, body });
+    const auth = received.headers.get("jack-auth");
+    assert.ok(auth, "installed controller receives an actual response signature");
+    const reply: rotation.RotationResponse = { status: received.status, headers: [auth], requestSignature,
+      body: new Uint8Array(await received.arrayBuffer()) };
+    assert.ok(reply.body.length <= 1024 * 1024, "controlled consumer response stays within the candidate cap");
+    const verified = controller.verifyResponse(reply);
+    const rpc = JSON.parse(new TextDecoder().decode(verified)) as { result?: { structuredContent?: { echoed?: boolean } } };
+    assert.equal(rpc.result?.structuredContent?.echoed, true, "installed candidate controller authenticates the real server reply");
+    const changed = new Uint8Array(reply.body);
+    changed[0] = (changed[0] ?? 0) ^ 1;
+    assert.throws(() => controller.verifyResponse({ ...reply, body: changed }),
+      (error: unknown) => error instanceof JackError && error.httpStatus === 0 && error.code === Code.BAD_SIGNATURE,
+      "installed candidate controller rejects tampered bytes");
+    assert.equal(owner.snapshot().snapshot.revision, 1, "ordinary response never adopts rotation data");
+    // Installed explicit HTTP client: один physical POST через реальный server, без refresh/retry.
+    assert.throws(() => new rotation.RotationHTTPClient(owner as rotation.RotationTrustStore, signer, 0),
+      (error: unknown) => error instanceof JackError && error.httpStatus === 0, "installed HTTP client refuses an invalid deadline");
+    const sender = new rotation.RotationHTTPClient(owner, signer, 5000);
+    const sent = await sender.call(body);
+    assert.equal(sent.status, 200, "installed HTTP client receives the real server status");
+    const sentRpc = JSON.parse(new TextDecoder().decode(sent.body)) as { result?: { structuredContent?: { echoed?: boolean } } };
+    assert.equal(sentRpc.result?.structuredContent?.echoed, true, "installed HTTP client returns the authenticated real server reply");
+    assert.equal(owner.snapshot().snapshot.revision, 1, "installed HTTP call never adopts rotation data");
+    consumerPhase = "candidate-reopen";
+    owner.close();
+    assert.equal(existsSync(stateFile + ".owner"), false, "clean close releases only the settled owner");
+    owner = rotation.RotationTrustStore.open(stateFile, options);
+    const restored = new rotation.RotationController(owner);
+    assert.deepEqual(Buffer.from(restored.verifyResponse(reply)), Buffer.from(reply.body), "clean reopen retains the independently provisioned trust bytes");
+    assert.deepEqual(owner.snapshot().snapshot.head, { ordinal: 0, hash: "-" });
+  } finally {
+    try { owner?.close(); }
+    finally { rmSync(root, { recursive: true, force: true }); }
+  }
 }
 
 async function main(): Promise<void> {
@@ -159,6 +229,8 @@ async function main(): Promise<void> {
       applicationDenialVerified = error instanceof client.HTTPError && error.status === 403 && error.code === "app_denied";
     }
     assert.equal(applicationDenialVerified, true, "the wrapped application denies its own tool for the verified non-admin caller");
+    await rotationConsumer(baseUrl, importedClient.signer, trustedServer);
+    consumerPhase = "static-client";
 
     const wrongPinClient = new client.Client({
       baseUrl,
@@ -205,6 +277,6 @@ async function main(): Promise<void> {
 
 main().catch(() => {
   // Static failure label only: never print credentials, seeds, key objects, or exception material.
-  console.error("TS consumer smoke failed");
+  console.error("TS consumer smoke failed:", consumerPhase);
   process.exitCode = 1;
 });

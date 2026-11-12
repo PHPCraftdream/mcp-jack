@@ -286,3 +286,32 @@ test('generated candidate vector bytes match source and saved cases execute', ()
   assert.equal(counts.rotationClient, 14);
   assert.equal(counts.rotationEvents, 8);
 });
+
+test('valid-schema head/completeness contradictions are rotation_gap before trust CAS', () => {
+  const anchor = named('candidate-server-anchor');
+  const { r1, r2 } = rotationRecordsForVerification;
+  const snapshot = newRotationSnapshot({ endpoint: ENDPOINT, aud: AUDIENCE, anchorKid: anchor.kid, anchorPublicKey: anchor.publicKey });
+  const check = (head, complete, records = [r1.wireText]) => validateRefreshPreResponse({
+    state: snapshot,
+    response: signedResponse({ signer: anchor, ts: 1000, body: responseBody(makeEnvelope(records, anchor, head, complete)) }),
+    expectedId: 7,
+    cursor: { ordinal: 0, hash: '-' },
+  });
+  assert.equal(check({ ordinal: 1, hash: r1.hash }, true).ok, true);
+  for (const [head, complete, records] of [
+    [{ ordinal: 2, hash: r2.hash }, true, [r1.wireText]],
+    [{ ordinal: 1, hash: r2.hash }, true, [r1.wireText]],
+    [{ ordinal: 1, hash: r1.hash }, false, [r1.wireText]],
+    [{ ordinal: 0, hash: '-' }, true, [r1.wireText]],
+    [{ ordinal: 1, hash: r1.hash }, false, []],
+  ]) {
+    assert.equal(check(head, complete, records).error, 'rotation_gap');
+    const response = signedResponse({ signer: anchor, ts: 1000, body: responseBody(makeEnvelope(records, anchor, head, complete)) });
+    const outcome = acceptRefresh({ snapshot, response, expectedId: 7, cursor: { ordinal: 0, hash: '-' }, preCallbackNow: 1000, finalNow: 1000, finalClockGeneration: 1 });
+    assert.equal(outcome.error, 'rotation_gap');
+    assert.equal(outcome.callbacks, 0);
+    assert.equal(outcome.snapshot.ackOrdinal, 0);
+  }
+  assert.equal(check({ ordinal: 1, hash: '-' }, true).error, 'rotation_result_invalid');
+  assert.equal(snapshot.ackOrdinal, 0);
+});

@@ -65,3 +65,136 @@ node tools/consumer/verify-ts.mjs tools/consumer/.scratch/ts-consumer
 The preparation script is CI-only and requires `GITHUB_ACTIONS=true`; the stage must be a new direct child under `tools/consumer/.scratch/`. It builds into that stage, then stages only library `dist` JavaScript/declarations, this README, and byte-for-byte copies of the root `LICENSE-MIT` and `LICENSE-APACHE`; it runs `npm pack` with the private metadata retained. The stage contains the tarball, inventory, and intermediate `build/`, `package/`, and `npm-cache/` directories. `tools/consumer/.scratch/` is ignored by Git. The verification driver installs the tarball and the consumer fixture's own TypeScript tooling into a stage-local `consumer/` directory, checks the installed-file inventory and exact license bytes, type-checks `smoke.ts` using only the `mcp-jack` package-root import, then executes it against a bounded real loopback server. The smoke covers client-key public transfer, issuer credential import against a separately constructed trusted server tuple, a signed client/server round trip, wrong-server-pin refusal, and tampered-request refusal. No consumer lockfile is copied from the SDK.
 
 CI runs the pair above as the consumer ts job (Node 20 and 22): the stage below `tools/consumer/.scratch/` is created fresh per run by the packaging driver, and the verification driver installs the tarball into a stage-local `consumer/` directory there; the tarball, inventory, and generated install/compiler files remain in that stage.
+
+## Candidate rotation trust store
+
+The additive `rotation` namespace exposes `RotationTrustStore` and the type
+`RotationStoreOptions`. This is an explicit candidate-profile storage API; the
+existing static `client.Client`, credentials, server adapters and authorization
+rules do not opt into it automatically. The store itself does not send requests;
+the explicit candidate HTTP client below is separate. Native server tools,
+publication and recovery workflows are not implemented by this storage API.
+
+Provision `binding`, immutable `window` (1–120 seconds) and `checkpoint` from an
+independently trusted source, never from an unverified response or a store file
+being adopted. `RotationTrustStore.initializeUnused(stateFile, options)` is a
+separate, explicit operation for a proven unused profile and never overwrites an
+existing file. Normal startup uses only `RotationTrustStore.open(stateFile,
+options)`; missing, incompatible, dirty, unsafe or uncertain state is a refusal,
+not an instruction to initialize, reset or retry.
+
+The concrete profile is synchronous, single-process/cooperating-owner storage on
+private Linux ext4/XFS/Btrfs directories. The immediate parent must belong to the
+current UID with mode 0700; state and owner files use mode 0600. Symlink/hardlink,
+unsafe-owner/mode and unsupported-platform/filesystem cases fail closed. An
+exclusive random owner marker and a dirty logical epoch prevent accidental
+concurrent/restart admission. Stale markers are never broken by PID checks or
+removed automatically. Unknown write outcomes retain the startup gate and
+artifacts; do not delete them to make startup succeed.
+
+The protected bundle contains separate logical whole-snapshot and authoritative
+ClockGuard records. `snapshot()` is a committed read, not a fresh clock sample,
+readiness proof or ACK. `rawClock()` is preliminary; `advanceAndCheck()` and
+`checkSnapshotClock(expected)` perform the authoritative monotone clock operation.
+`compareAndSwap(expected, desired, clock)` requires the exact current snapshot and
+captured guard, extends validated history and leaves logical guard bytes unchanged;
+a copied snapshot tuple alone is not time authority. No method retries an unknown
+operation or clears an unsafe rollback latch on catch-up. `close()` releases a
+healthy, settled owner only; network callers need their own final authority and
+response-lifetime gates. All synchronous callbacks and I/O must be bounded and
+non-reentrant; this API cannot preempt an arbitrary stalled callback.
+
+The local bundle limit is 16 MiB, distinct from the candidate refresh HTTP body
+limit of 256 KiB. Checksums detect accidental corruption; they are not a MAC, backup rollback
+oracle, physical-volume quota, power-loss certification or storage encryption.
+Raw file ownership and protected-bundle helpers are not namespace exports. Network
+client/server integration and independent release review remain separate gates.
+
+### Candidate response controller
+
+`rotation.RotationController` takes an explicitly opened `RotationTrustStore` and
+leaves its lifecycle with the caller. `RotationResponse` contains the actual HTTP
+status, raw `Jack-Auth` header values, the signature of the actual outgoing request
+(not its request ID or entire auth header), and the exact fully buffered response
+bytes. The caller's transport must enforce destination/TLS policy, reject redirects
+and bound the entire exchange, headers and body. This controller itself does not
+send requests, install transport hooks or change the existing static client.
+
+`verifyResponse(response)` returns an owned body only after known-carrier signature,
+whole-state/ClockGuard and final freshness/key-interval checks. Ordinary response
+bodies are not decoded as key announcements and never extend trust.
+
+`acceptRefresh(response, expectedId, cursor)` is only for a caller's explicitly
+requested single `jack.server.key` success page, with that request's actual ID,
+signature and ACKed cursor. It verifies the native envelope, carrier/current binding,
+record proofs, history/framing and strict first-bridge gate before one exact CAS.
+The returned `head` is the server's declaration; only `terminal` was considered for
+ACK. `committed: false` means an authenticated empty/duplicate no-op, not permission
+to adopt an advertised but unfetched head. The method performs no fetch, automatic
+pagination or retry. The caller must explicitly request each subsequent page.
+
+A thrown exception does **not** imply that trust remained unchanged: a final
+freshness/cutoff failure can follow a confirmed commit. That commit is never rolled
+back. An uncertain write instead fences the owner; do not retry, reset, delete the
+owner marker or silently replace trust. A snapshot's copied clock tuple remains a
+CAS dependency, not a fresh time source. Raw file ownership, protected-bundle
+serialization and refresh-state helpers remain internal. This low-level controller
+does not send HTTP requests. The separate explicit client below adds transport;
+candidate server integration remains unfinished.
+
+### Explicit candidate HTTP client
+
+`new rotation.RotationHTTPClient(store, signer, timeoutMs)` binds an explicitly
+opened store and request signer to the store's independent endpoint/audience.
+The deadline must be an integer from 1 through 30000 milliseconds. There is no URL,
+audience, trust-key, redirect, proxy, agent, retry, or per-request signer override.
+The existing static `createSigningFetch` and clients are unchanged.
+
+`call(body, optionalAbortSignal)` sends one POST of owned buffered bytes (at most
+1 MiB) and returns authenticated status/body only after controller and final
+exchange-lifetime checks. Ordinary replies never extend trust. `refresh(signal)`
+explicitly sends one `jack.server.key` page request from the captured ACKed cursor,
+limits its response to 256 KiB, and delegates one-page acceptance to the controller.
+It never requests another page automatically. A late deadline/cancellation error,
+like a late controller error, can follow a confirmed ACK without rolling it back.
+
+Transport uses Node's native HTTP/HTTPS request API with a fresh connection,
+normal certificate verification and TLS 1.2 minimum, no environment proxy,
+redirect following, transparent decompression or automatic retries. Raw auth
+header values are preserved; headers are bounded at 16 KiB. Encoded responses and
+text/event-stream are refused. The exact raw path/query is signed and transmitted;
+URL fragments are not sent. A monotonic total deadline spans storage, signing,
+connection, headers, body and final controller work; synchronous callbacks still
+cannot be preempted, but expired work cannot dispatch or return a body. Abort and
+error paths destroy owned request/response resources. Store lifecycle remains
+caller-owned; closing/fencing it while an exchange is in flight prevents verified
+body delivery. Transport/deadline helpers are not namespace exports.
+
+### Candidate server ring state and `jack.server.key` page service
+
+The server side of the candidate protocol is built bottom-up; this layer is pure
+and has no persistence, serving lease, clock, signer selection or HTTP wiring yet,
+so it is not a running candidate server.
+
+`rotation.validateRotationServerSnapshot`, `validateRotationServerPublication`,
+`encodeRotationServerSnapshot` and `decodeRotationServerSnapshot` model the
+protected server snapshot: the same whole public trust value as the client plus
+exactly one opaque signer reference (at most 1024 UTF-8 bytes, never a key
+authority) per retained key. References never enter the public trust encoding.
+A publication is exactly one adjacent transition with revision + 1, byte-identical
+retained records and references, no fence on either side, and fixed `P` equal to
+the new key's activation minus 48 hours; it is a validator, not authorization.
+The strict codec rejects duplicate/extra/null members and non-canonical numbers,
+ignores object order, and preserves fence/unsafe flags instead of repairing them.
+
+`rotation.decodeRotationServerKeyArguments(text)` accepts only the exact
+`{after_ordinal, after_hash}` object (integer literal 0..2^53-1 where the literal
+`-0` is zero, `-` only at ordinal 0, canonical unpadded base64url SHA-256 otherwise) and reports every other shape as
+`invalid_params`. `rotation.rotationServerKeyPage(snapshot, cursor, signerPublicKey)`
+builds the structured result from one validated snapshot: at most 16 records from
+the exact cursor, the selected signer as `current`, and `complete` only when the
+page reaches the head. A cursor outside the retained ring or with a wrong hash is
+`rotation_checkpoint_unavailable`; a signer outside the ring is
+`rotation_state_unavailable`. Callers must still perform the authoritative clock
+check and signer-eligibility selection before building a page and the final
+emission guard after it.

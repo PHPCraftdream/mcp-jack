@@ -185,8 +185,8 @@ export const validateRefreshPreResponse = ({ state, response, expectedId, cursor
   }
   const terminal = delivered.length ? delivered[delivered.length - 1] : { ordinal: cursor.ordinal, hash: cursor.hash };
   if (envelope.complete) {
-    if (envelope.head.ordinal !== terminal.ordinal || envelope.head.hash !== terminal.hash) return { ok: false, error: 'rotation_result_invalid' };
-  } else if (envelope.head.ordinal <= terminal.ordinal) return { ok: false, error: 'rotation_result_invalid' };
+    if (envelope.head.ordinal !== terminal.ordinal || envelope.head.hash !== terminal.hash) return { ok: false, error: 'rotation_gap' };
+  } else if (envelope.head.ordinal <= terminal.ordinal) return { ok: false, error: 'rotation_gap' };
   if (delivered.length === 0 && (!envelope.complete || envelope.head.ordinal !== cursor.ordinal || envelope.head.hash !== cursor.hash)) return { ok: false, error: 'rotation_gap' };
   return { ok: true, records: delivered, duplicates: duplicatePrefix, extension, head: envelope.head, complete: envelope.complete, carrierOrdinal };
 };
