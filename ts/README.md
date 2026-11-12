@@ -220,3 +220,27 @@ release; `close()` refuses new operations at once but only completes after every
 lease is released, because synchronous code cannot wait. A fenced or crashed owner
 keeps its marker and dirty state until an explicit supported recovery exists; none
 is provided here. A self-consistent backup rollback is not detected.
+
+`rotation.RotationServerProvider(store, keys)` binds a `RotationServerStore` to the
+out-of-band signer inventory: each `{reference, signer}` handle is pinned (public
+key copied, 32 bytes, valid Ed25519; reference at most 1024 UTF-8 bytes) and must
+match the ring's opaque reference and key. The constructor refuses to build unless
+the committed ring, a fresh ClockGuard sample and every handle the ring needs are
+ready: the handles of all pending keys and of the current signer are required,
+retired handles are optional. `selectSigner(snapshot, clock)` picks the eligible
+key with the greatest ordinal and never falls back to another key.
+`announce(reference, kid)` is one explicit authorization of an already configured
+next handle: the record's `P` is the single fresh clock sample, the new key joins
+the ring through one exact CAS, and any refusal, conflict or unknown outcome is
+reported without retry. Re-entering `announce` from a signer callback is refused.
+
+`ServerKeyTool(store, provider)` (a `NativeTools` implementation, exported with the
+server modules) serves only the candidate `jack.server.key` route and never
+forwards: it decodes the strict arguments (`400 invalid_params`), takes a serving
+lease, reads one committed snapshot, checks the audience, the cursor (`409
+rotation_checkpoint_unavailable`), a fresh server ClockGuard and the selected
+signer, and returns one page of at most 16 records. Storage, clock or signer
+failures map to `503 rotation_state_unavailable` without details. It is not yet
+wired into the verifier or the HTTP handlers, and the response-signing gate that
+must sign the outer response with the selected key is a separate unfinished layer.
+

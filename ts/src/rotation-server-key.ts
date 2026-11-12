@@ -37,6 +37,26 @@ export function decodeRotationServerKeyArguments(text: string | undefined): Rota
   }
 }
 
+/** Offset курсора в retained ring; вне ring или с неверным hash -> rotation_checkpoint_unavailable. */
+function cursorOffset(snapshot: RotationServerSnapshot, cursor: RotationCursor): number {
+  const trust = snapshot.trust;
+  const records = trust.records;
+  const unavailable = (): never => { throw new RotationError("rotation_checkpoint_unavailable"); };
+  if (cursor.ordinal < trust.checkpoint.ordinal || cursor.ordinal > trust.head.ordinal) unavailable();
+  const offset = cursor.ordinal - trust.checkpoint.ordinal;
+  if (offset > records.length) unavailable();
+  const previous = offset === 0 ? undefined : records[offset - 1];
+  if (offset !== 0 && previous === undefined) unavailable();
+  const expected = previous === undefined ? trust.checkpoint.hash : bodyHash(Buffer.from(previous, "utf8"));
+  if (cursor.hash !== expected) unavailable();
+  return offset;
+}
+
+/** Проверяет только cursor против retained ring; clock и signer остаются отдельными gates caller. */
+export function validateRotationServerKeyCursor(snapshot: RotationServerSnapshot, cursor: RotationCursor): void {
+  cursorOffset(snapshot, cursor);
+}
+
 /**
  * Строит страницу из уже validated snapshot и выбранного response-signer; повторных чтений нет.
  * Caller обязан выполнить authoritative clock check и signer-eligibility до вызова и final guard после.
@@ -49,14 +69,7 @@ export function rotationServerKeyPage(
 ): RotationServerKeyPage {
   const trust = snapshot.trust;
   const records = trust.records;
-  const unavailable = (): never => { throw new RotationError("rotation_checkpoint_unavailable"); };
-  if (cursor.ordinal < trust.checkpoint.ordinal || cursor.ordinal > trust.head.ordinal) unavailable();
-  const offset = cursor.ordinal - trust.checkpoint.ordinal;
-  if (offset > records.length) unavailable();
-  const previous = offset === 0 ? undefined : records[offset - 1];
-  if (offset !== 0 && previous === undefined) unavailable();
-  const expected = previous === undefined ? trust.checkpoint.hash : bodyHash(Buffer.from(previous, "utf8"));
-  if (cursor.hash !== expected) unavailable();
+  const offset = cursorOffset(snapshot, cursor);
   const signer = trust.keys.find((key) => key.publicKeyB64u === signerPublicKeyB64u);
   if (signer === undefined) throw new RotationError("rotation_state_unavailable");
   const end = Math.min(offset + ROTATION_MAX_PAGE_RECORDS, records.length);
