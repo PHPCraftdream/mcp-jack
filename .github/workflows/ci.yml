@@ -113,7 +113,7 @@ jobs:
           --expected-sha "$GITHUB_SHA"
           --feature-sha "$FEATURE_REVISION"
       - name: Upload verified development binaries and inventory only
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: jack-cli-development-${{ github.sha }}
           path: ${{ runner.temp }}/jack-cli-portable/
@@ -277,7 +277,7 @@ jobs:
         run: node tools/consumer/verify-ts.mjs tools/consumer/.scratch/ts-consumer
       - name: Upload package artifact and inventory
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: consumer-ts-node${{ matrix.node }}-artifact
           path: |
@@ -301,7 +301,7 @@ jobs:
         run: node tools/consumer/verify-rust.mjs tools/consumer/.scratch/rust-consumer
       - name: Upload package artifact and inventory
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: consumer-rust-artifact
           path: |
@@ -329,7 +329,7 @@ jobs:
         run: node tools/consumer/verify-go.mjs tools/consumer/.scratch/go-consumer
       - name: Upload package artifact and inventory
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: consumer-go-artifact
           path: |
