@@ -398,7 +398,7 @@ fn new_harness(
             });
             JackLayer::rotating(RotatingHandlerConfig {
                 verifier,
-                response_keys: Arc::clone(&provider),
+                response_keys: provider.clone(),
                 max_body_bytes: 0,
                 max_response_bytes: 0,
             })

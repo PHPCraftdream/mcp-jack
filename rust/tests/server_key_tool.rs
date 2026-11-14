@@ -232,7 +232,7 @@ fn valid_cursor_returns_one_exact_page() {
         structured["head"]["hash"].as_str().expect("head.hash"),
         first.record.hash
     );
-    assert_eq!(structured["complete"].as_bool().expect("complete"), true);
+    assert!(structured["complete"].as_bool().expect("complete"));
     assert_eq!(
         f.now.load(Ordering::SeqCst),
         1000,
@@ -257,9 +257,8 @@ fn head_cursor_yields_empty_complete_page() {
     let page = NativeTools::call(&tool, &mut req).expect("the head cursor must serve a page");
     let records = page.structured["records"].as_array().expect("records is an array");
     assert!(records.is_empty(), "the head cursor yields no records");
-    assert_eq!(
+    assert!(
         page.structured["complete"].as_bool().expect("complete"),
-        true,
         "an empty page at the head is complete"
     );
 }
@@ -461,9 +460,9 @@ fn page_limit_and_explicit_next_cursor() {
     let (_caller, caller) = caller_entry();
 
     let mut publications = Vec::new();
-    for i in 1..keys.len() {
+    for (i, key) in keys.iter().enumerate().skip(1) {
         publications.push(
-            provider.announce(&format!("r{i}"), keys[i].kid()).expect("sequential announcement"),
+            provider.announce(&format!("r{i}"), key.kid()).expect("sequential announcement"),
         );
     }
     assert_eq!(publications.len(), 17, "records 1..=17 are committed");
@@ -478,9 +477,8 @@ fn page_limit_and_explicit_next_cursor() {
     let page = NativeTools::call(&tool, &mut req).expect("the first page must serve");
     let records = page.structured["records"].as_array().expect("records is an array");
     assert_eq!(records.len(), 16, "one page never exceeds MAX_PAGE_RECORDS");
-    assert_eq!(
-        page.structured["complete"].as_bool().expect("complete"),
-        false,
+    assert!(
+        !page.structured["complete"].as_bool().expect("complete"),
         "17 committed records leave the first page incomplete"
     );
     assert_eq!(
@@ -505,8 +503,5 @@ fn page_limit_and_explicit_next_cursor() {
         records[0].as_str().expect("record wire"),
         publications[16].record.wire
     );
-    assert_eq!(
-        tail_page.structured["complete"].as_bool().expect("complete"),
-        true
-    );
+    assert!(tail_page.structured["complete"].as_bool().expect("complete"));
 }
