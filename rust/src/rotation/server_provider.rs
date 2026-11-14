@@ -49,7 +49,7 @@ pub struct PinnedRotationSigner {
 }
 
 impl AsRef<dyn Signer> for PinnedRotationSigner {
-    fn as_ref(&self) -> &dyn Signer {
+    fn as_ref(&self) -> &(dyn Signer + 'static) {
         self.signer.as_ref()
     }
 }
