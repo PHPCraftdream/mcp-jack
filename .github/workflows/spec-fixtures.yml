@@ -106,4 +106,4 @@ jobs:
       - name: Tests on the formatted sources
         if: always()
         timeout-minutes: 10
-        run: cargo test --locked --all-features
+        run: cargo test --locked --all-features --no-fail-fast

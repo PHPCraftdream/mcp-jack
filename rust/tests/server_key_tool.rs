@@ -445,13 +445,13 @@ fn closed_store_refuses_before_cursor() {
 fn page_limit_and_explicit_next_cursor() {
     let dir = TempDirGuard::new("page-limit");
     let f = fixture(dir.path());
-    // 18 ring keys; every key gets its own inventory reference "r{i}".
+    // 18 ring keys; the anchor keeps the store reference, every later key gets "r{i}".
     let keys: Vec<InMemorySigner> = (31u8..=48)
         .map(|seed| InMemorySigner::from_seed(&[seed; 32]).expect("distinct test signer"))
         .collect();
     let ring: Vec<RotationServerKey> = (0..keys.len())
         .map(|i| RotationServerKey {
-            reference: format!("r{i}"),
+            reference: if i == 0 { "anchor".to_owned() } else { format!("r{i}") },
             signer: Arc::new(keys[i].clone()),
         })
         .collect();
