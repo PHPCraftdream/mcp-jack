@@ -399,3 +399,26 @@ ring or with a wrong hash is `rotation_checkpoint_unavailable`; a signer outside
 the ring is `rotation_state_unavailable`. Callers must still perform the
 authoritative clock check and signer-eligibility selection before building a page
 and the final emission guard after it.
+
+### Candidate Linux server ring store
+
+`RotationServerStore` keeps the protected `ServerSnapshot` in the same private-file
+profile as the client trust store (exclusive owner marker, atomic temp-fsync-rename,
+directory fsync, checksum seal for accidental corruption only) under a separate
+file domain, so a client file and a server file are never interchangeable.
+`initialize_unused` takes `RotationServerStoreOptions` (independent endpoint/audience,
+window, checkpoint and the opaque `anchor_reference` of the anchor key) and never
+replaces an existing file; `open` acquires the exclusive owner, marks the dirty
+serving epoch before the first clock sample and refuses dirty, fenced or unsafe
+state without clearing it. The server ClockGuard is separate from the nonce store
+and from client trust: `advance_and_check` and `check_snapshot_clock` are the only
+operations that move the monotone high-water mark, and a rollback or invalid sample
+latches `unsafe`. `compare_and_swap(expected, desired, captured)` writes exactly one
+validated fixed-P publication when the stored ring and guard still equal the
+captured values; it never rewrites the ClockGuard, and an uncertain outcome fences
+the owner and reports `rotation_state_unknown` without retry. `acquire_serving_lease`
+returns a `ServingLease` that holds the dirty epoch until dropped; `close` refuses
+new operations at once but only completes after every lease is dropped. Drop never
+cleans the store. There is no signer selection, response authorization or HTTP
+wiring yet, and no recovery of dirty/fenced/unsafe state.
+

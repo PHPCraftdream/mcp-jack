@@ -69,16 +69,19 @@ export function readClock(bytes: string, options: RotationStoreOptions): Rotatio
   return Object.freeze({ binding: options.binding, window: options.window, highWater, revision, unsafe: boolean(get(root, "unsafe")) });
 }
 
-/** Seal — accidental corruption check, не MAC/backup rollback oracle. */
-export function pack(bundle: StoreBundle): Uint8Array {
-  const payload = JSON.stringify({ domain: "mcp-jack/client-trust/private-file/v1", format_version: 1, store_id: bundle.storeId, profile: bundle.profile, owner: bundle.owner,
+const CLIENT_DOMAIN = "mcp-jack/client-trust/private-file/v1";
+
+/** Seal — accidental corruption check, не MAC/backup rollback oracle; domain разделяет client/server profiles. */
+export function packBundle(bundle: StoreBundle, domain: string): Uint8Array {
+  const payload = JSON.stringify({ domain, format_version: 1, store_id: bundle.storeId, profile: bundle.profile, owner: bundle.owner,
     dirty: bundle.dirty, fenced: bundle.fenced, clock: bundle.clockBytes, snapshot: bundle.snapshotBytes });
   const bytes = Buffer.from(JSON.stringify({ payload, checksum: bodyHash(Buffer.from(payload, "utf8")) }), "utf8");
   if (bytes.length > ROTATION_MAX_TRUST_SNAPSHOT_BYTES) invalidStore();
   return bytes;
 }
 
-export function unpack(bytes: Uint8Array, options: RotationStoreOptions, profile: string): { readonly bundle: StoreBundle; readonly clock: RotationClockTuple; readonly snapshot: RotationTrustSnapshot } {
+/** Envelope без snapshot decode: caller проверяет snapshot своего типа против clock. */
+export function unpackBundle(bytes: Uint8Array, options: RotationStoreOptions, profile: string, domain: string): { readonly bundle: StoreBundle; readonly clock: RotationClockTuple } {
   if (bytes.length === 0 || bytes.length > ROTATION_MAX_TRUST_SNAPSHOT_BYTES) invalidStore();
   const outer = fields(parseCandidateJsonRaw(utf8.decode(bytes)), ["payload", "checksum"]);
   const payload = text(get(outer, "payload"));
@@ -87,10 +90,18 @@ export function unpack(bytes: Uint8Array, options: RotationStoreOptions, profile
   const storeId = text(get(root, "store_id"));
   const identity = decodeBase64URLFixed(storeId, 16);
   const owner = integer(get(root, "owner"));
-  if (text(get(root, "domain")) !== "mcp-jack/client-trust/private-file/v1" || integer(get(root, "format_version")) !== 1 || identity.every((byte) => byte === 0) || text(get(root, "profile")) !== profile || owner < 1 || owner > ROTATION_MAX_ORDINAL) invalidStore();
+  if (text(get(root, "domain")) !== domain || integer(get(root, "format_version")) !== 1 || identity.every((byte) => byte === 0) || text(get(root, "profile")) !== profile || owner < 1 || owner > ROTATION_MAX_ORDINAL) invalidStore();
   const bundle = Object.freeze({ storeId, profile, owner, dirty: boolean(get(root, "dirty")), fenced: boolean(get(root, "fenced")),
     clockBytes: text(get(root, "clock")), snapshotBytes: text(get(root, "snapshot")) });
-  const clock = readClock(bundle.clockBytes, options);
+  return { bundle, clock: readClock(bundle.clockBytes, options) };
+}
+
+export function pack(bundle: StoreBundle): Uint8Array {
+  return packBundle(bundle, CLIENT_DOMAIN);
+}
+
+export function unpack(bytes: Uint8Array, options: RotationStoreOptions, profile: string): { readonly bundle: StoreBundle; readonly clock: RotationClockTuple; readonly snapshot: RotationTrustSnapshot } {
+  const { bundle, clock } = unpackBundle(bytes, options, profile, CLIENT_DOMAIN);
   const snapshot = decodeRotationTrustSnapshot(Buffer.from(bundle.snapshotBytes, "utf8"), options.binding, options.window, options.checkpoint);
   if (snapshot.clock.highWater > clock.highWater || snapshot.clock.revision > clock.revision) invalidStore();
   return { bundle, clock, snapshot };
