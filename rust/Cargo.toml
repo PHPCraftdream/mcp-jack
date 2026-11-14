@@ -73,3 +73,18 @@ hyper-util = { version = "0.1", features = ["tokio", "service"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "net", "sync", "io-util"] }
 tower = { version = "0.5", features = ["util"] }
 time = { version = "=0.3.47", default-features = false, features = ["std", "parsing"] }
+
+# Ed25519/SHA-2 в debug медленнее release в десятки раз, а property-тесты подписывают и
+# проверяют цепочки до 1153 записей. Оптимизируются только крипто-зависимости dev/test-профиля;
+# release-сборка и потребители crate не затрагиваются.
+[profile.dev.package."curve25519-dalek@4.1.3"]
+opt-level = 3
+
+[profile.dev.package."curve25519-dalek@5.0.0"]
+opt-level = 3
+
+[profile.dev.package.ed25519-dalek]
+opt-level = 3
+
+[profile.dev.package.sha2]
+opt-level = 3
