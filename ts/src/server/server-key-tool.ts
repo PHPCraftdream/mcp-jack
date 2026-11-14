@@ -2,10 +2,10 @@ import { Code, JackError } from "../errors.js";
 import { decodeRotationServerKeyArguments, rotationServerKeyPage, validateRotationServerKeyCursor } from "../rotation-server-key.js";
 import type { RotationServerProvider } from "../rotation-server-provider.js";
 import type { RotationServerStore } from "../rotation-server-store.js";
+import { TOOL_SERVER_KEY } from "./verify.js";
 import type { NativeCall, NativeResult, NativeTools } from "./verify.js";
 
-/** Candidate read-only tool; не входит в 11 current-v1 native tools и не достижим через Native. */
-export const TOOL_SERVER_KEY = "jack.server.key";
+// TOOL_SERVER_KEY ("jack.server.key") lives in verify.ts next to the other TOOL_* constants.
 
 function refusal(status: number, code: string): JackError {
   return new JackError(status, code, "server key request unavailable");
