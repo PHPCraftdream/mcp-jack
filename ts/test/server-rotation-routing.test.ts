@@ -71,6 +71,20 @@ function errorCode(body: Uint8Array): string {
 const unusedProvider: ResponseKeyProvider = { authorizeResponse: (): never => { throw new Error("authorizeResponse must not be called"); } };
 const unusedTool: NativeTools = { call: (): never => { throw new Error("call must not be reached"); } };
 
+/** Rotation profile stub: always authorizes the fixed signer at NOW and has a no-op final gate (selection/final-gate behaviour is covered by the store-backed wiring tests). */
+const fixedProvider: ResponseKeyProvider = {
+  authorizeResponse: () => ({
+    signer: {
+      publicKeyB64u: encodeBase64URL(serverSigner.publicKey()),
+      publicKey: () => serverSigner.publicKey(),
+      sign: (message: Uint8Array) => serverSigner.sign(message),
+    },
+    timestamp: NOW,
+    final: (): void => {},
+    release: (): void => {},
+  }),
+};
+
 test("handler config: both response-signing profiles are a construction error", () => {
   assert.throws(() => jackFetchHandler({ verifier: baseVerifier(), serverKey: serverSeed, rotationKeys: unusedProvider }, echo),
     /select exactly one response signing profile/);
@@ -121,7 +135,7 @@ test("with serverKeys configured jack.server.key is dispatched to serverKeys, no
   };
   const handle = jackFetchHandler({
     verifier: baseVerifier({ native: new Native(), serverKeys }),
-    serverKey: serverSeed,
+    rotationKeys: fixedProvider,
   }, echo);
   const { request, sig } = signedRequest(toolCall(TOOL_SERVER_KEY, "{}"));
   const response = await handle(request);
@@ -138,7 +152,7 @@ test("current-v1 tools keep native routing while serverKeys is configured", asyn
   };
   const handle = jackFetchHandler({
     verifier: baseVerifier({ native: new Native(), serverKeys }),
-    serverKey: serverSeed,
+    rotationKeys: fixedProvider,
   }, echo);
   const { request, sig } = signedRequest(toolCall("jack.whoami", "{}"));
   const response = await handle(request);
