@@ -3,6 +3,9 @@ import { createPrivateKey, createPublicKey, sign } from "node:crypto";
 import type { KeyObject } from "node:crypto";
 import { formatResponseAuth } from "../auth-header.js";
 import { keyId, encodeBase64URL } from "../encoding.js";
+import { validatePublicKey, verify as verifyEd25519 } from "../ed25519.js";
+import { ROTATION_MAX_TIMESTAMP } from "../rotation-record.js";
+import type { RotationResponseAuthorization, RotationResponseKeyRequest } from "../rotation-server-provider.js";
 import { responseSigningString } from "../signing.js";
 import type { Verifier, VerifyResult } from "./verify.js";
 import type { JackIdentity } from "./verify.js";
@@ -11,12 +14,33 @@ import type { JackIdentity } from "./verify.js";
 // its factory shape, so configuration problems THROW a plain Error instead.
 // This is the one deliberate divergence of the factory.
 
+/**
+ * Rotation response-signing profile (Go ResponseKeyProvider): selects the
+ * signer under a serving lease and runs the one-shot final gate. Implemented
+ * by rotation.RotationServerProvider; the static serverKey profile needs none.
+ */
+export interface ResponseKeyProvider {
+  authorizeResponse(input: RotationResponseKeyRequest): RotationResponseAuthorization;
+}
+
 /** Configuration for jackFetchHandler (Go HandlerConfig). */
 export interface HandlerConfig {
   /** Authenticates and authorizes every request. */
   verifier: Verifier;
-  /** 32-byte Ed25519 seed, or an ed25519 private KeyObject. */
-  serverKey: Uint8Array | KeyObject;
+  /**
+   * Static profile: 32-byte Ed25519 seed, or an ed25519 private KeyObject.
+   * REQUIRED unless rotationKeys is set; the two response-signing profiles
+   * are mutually exclusive (Go HandlerConfig.ServerKey / ResponseKeys).
+   */
+  serverKey?: Uint8Array | KeyObject;
+  /**
+   * Rotation profile (Go ResponseKeys): the rotating signer source. Exactly
+   * one of serverKey / rotationKeys must be supplied — both or neither make
+   * jackFetchHandler throw like every other configuration error. When set, a
+   * verifier configured to route jack.server.key (VerifierConfig.serverKeys)
+   * is REQUIRED: candidate server-key delivery needs ResponseKeys.
+   */
+  rotationKeys?: ResponseKeyProvider;
   /**
    * Request body cap. undefined, <= 0 or NaN means 1 MiB (Go defaultMaxBodyBytes);
    * +Infinity or a value above Number.MAX_SAFE_INTEGER makes jackFetchHandler throw,
@@ -105,20 +129,51 @@ export function jackIdentity(req: Request): JackIdentity | undefined {
  * Response; to bound body reads and cancel as well, the caller must wrap the
  * returned handler (race/abort around the whole handle(req) call). There is no
  * timeout option.
+ *
+ * Response signing profile: HandlerConfig takes EITHER the static serverKey
+ * OR rotationKeys (Go ResponseKeys), never both and never neither — any other
+ * combination throws at construction. On the rotation profile every signed
+ * answer first selects the signer from the store (the serving lease is held
+ * until the response is built; upstream bodies are fully buffered before
+ * signing, so no lease logic blocks on network I/O), computes the signature
+ * with the selected key and the fresh ClockGuard sample as the timestamp, and
+ * then runs the one-shot final gate: a second fresh sample must still select
+ * the same key, otherwise the computed signature is discarded. Every failure
+ * of that pipeline — an unavailable, closing or fenced store, a failing
+ * signer callback, or a jack.server.key page that does not match the
+ * committed ring — is answered with the UNSIGNED 503
+ * rotation_state_unavailable "response authorization unavailable" (mirrors
+ * Go writeAuthorized). A verifier configured to route jack.server.key
+ * without a rotation profile is a construction error.
  */
 export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => Promise<Response>): (req: Request) => Promise<Response> {
   if (config.verifier === undefined) throw new Error("server: HandlerConfig.verifier must be set");
-  let priv: KeyObject;
-  if (config.serverKey instanceof Uint8Array) {
-    if (config.serverKey.length !== 32) {
+  const rotation = config.rotationKeys;
+  if (rotation !== undefined && config.serverKey !== undefined) {
+    throw new Error("server: select exactly one response signing profile");
+  }
+  if (config.verifier.routesServerKey && rotation === undefined) {
+    throw new Error("server: candidate server-key delivery requires ResponseKeys");
+  }
+  let priv: KeyObject | undefined;
+  let kid = "";
+  if (rotation === undefined) {
+    if (config.serverKey instanceof Uint8Array) {
+      if (config.serverKey.length !== 32) {
+        throw new Error("server: HandlerConfig.serverKey must be an Ed25519 private key");
+      }
+      priv = createPrivateKey({ key: Buffer.concat([PKCS8_PREFIX, Buffer.from(config.serverKey)]), format: "der", type: "pkcs8" });
+    } else if (config.serverKey === undefined) {
       throw new Error("server: HandlerConfig.serverKey must be an Ed25519 private key");
+    } else {
+      if (config.serverKey.type !== "private" || config.serverKey.asymmetricKeyType !== "ed25519") {
+        throw new Error("server: HandlerConfig.serverKey must be an Ed25519 private key");
+      }
+      priv = config.serverKey;
     }
-    priv = createPrivateKey({ key: Buffer.concat([PKCS8_PREFIX, Buffer.from(config.serverKey)]), format: "der", type: "pkcs8" });
-  } else {
-    if (config.serverKey.type !== "private" || config.serverKey.asymmetricKeyType !== "ed25519") {
-      throw new Error("server: HandlerConfig.serverKey must be an Ed25519 private key");
-    }
-    priv = config.serverKey;
+    // SPKI DER is a fixed 44-byte header followed by the 32-byte raw key (client/signer.ts).
+    const der = createPublicKey(priv).export({ type: "spki", format: "der" });
+    kid = keyId(new Uint8Array(der.subarray(der.length - 32)));
   }
   if (next === undefined) throw new Error("server: next handler must be set");
   const mb = config.maxBodyBytes;
@@ -131,10 +186,6 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     throw new Error("server: HandlerConfig.maxResponseBytes must be 0 or a positive safe integer");
   }
   const respLimit = mr === undefined || mr === 0 ? DEFAULT_MAX_RESPONSE_BYTES : (mr as number);
-  // SPKI DER is a fixed 44-byte header followed by the 32-byte raw key (client/signer.ts).
-  const der = createPublicKey(priv).export({ type: "spki", format: "der" });
-  const pub = new Uint8Array(der.subarray(der.length - 32));
-  const kid = keyId(pub);
 
   // Renders the rejection body of spec 01 section 4 (field order code,message like Go's structs).
   function errorBody(code: string, message: string): Uint8Array {
@@ -153,14 +204,66 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
   }
 
   // Signs the response over its status, the request signature and the exact
-  // body bytes (spec 01 section 5) with the INJECTED verifier clock, never
-  // Date.now, and writes it.
-  function writeSigned(status: number, headers: Headers, body: Uint8Array, requestSig: string, statusText = ""): Response {
+  // body bytes (spec 01 section 5) — with the INJECTED verifier clock on the
+  // static profile, with the rotation profile's selected signer, fresh-sample
+  // timestamp and final gate otherwise — and writes it.
+  function writeSigned(status: number, headers: Headers, body: Uint8Array, requestSig: string, tool: string, statusText = ""): Response {
+    if (rotation !== undefined) {
+      return writeAuthorized(rotation, status, headers, body, requestSig, tool, statusText);
+    }
+    if (priv === undefined) {
+      // Unreachable: the rotation profile owns every response when configured;
+      // kept defensive like the zero-value checks of the Go adapter.
+      return writeError(500, "internal_error", "internal error");
+    }
     const now = config.verifier.clock();
     const signing = responseSigningString(status, requestSig, kid, now, body);
     const sig = sign(null, Buffer.from(signing, "utf-8"), priv);
     headers.set("jack-auth", formatResponseAuth({ kid, ts: now, sig: encodeBase64URL(sig) }));
     return writeRaw(status, headers, body, statusText);
+  }
+
+  // Rotation profile (Go writeAuthorized): the signer is selected and the
+  // serving lease taken BEFORE the signature is computed; the one-shot final
+  // gate re-samples the clock and re-selects the signer, and any mismatch
+  // discards the computed signature. Every failure — authorization, signer
+  // callback, final gate — answers the same UNSIGNED 503: no retry, no other
+  // key, no unsigned answer that could pass for a signed success. The lease is
+  // held until the response is built (upstream bodies are buffered before
+  // signing, so no lock or lease logic ever blocks on network I/O).
+  function writeAuthorized(provider: ResponseKeyProvider, status: number, headers: Headers, body: Uint8Array, requestSig: string, tool: string, statusText: string): Response {
+    const refuse = (): Response => writeError(503, "rotation_state_unavailable", "response authorization unavailable");
+    let authorization: RotationResponseAuthorization;
+    try {
+      authorization = provider.authorizeResponse({ status, tool, requestSignature: requestSig, body });
+    } catch {
+      return refuse();
+    }
+    try {
+      const signer = authorization.signer;
+      const publicKey = signer.publicKey();
+      // Authorization shape and pinned identity are re-checked here exactly
+      // like Go authorizeResponse/responsePublicKey; provider details never leak.
+      if (!Number.isSafeInteger(authorization.timestamp) || authorization.timestamp < 0 || authorization.timestamp > ROTATION_MAX_TIMESTAMP ||
+        publicKey.length !== 32 || validatePublicKey(publicKey) !== null) {
+        return refuse();
+      }
+      const responseKid = keyId(publicKey);
+      const message = Buffer.from(responseSigningString(status, requestSig, responseKid, authorization.timestamp, body), "utf-8");
+      const supplied = signer.sign(message);
+      // Provider callback output is never trusted: length plus an independent
+      // verification against the pinned identity (Go responseSignature).
+      if (!(supplied instanceof Uint8Array) || supplied.length !== 64 || !verifyEd25519(publicKey, message, supplied)) {
+        return refuse();
+      }
+      authorization.final();
+      headers.set("jack-auth", formatResponseAuth({ kid: responseKid, ts: authorization.timestamp, sig: encodeBase64URL(supplied) }));
+      return writeRaw(status, headers, body, statusText);
+    } catch {
+      return refuse();
+    } finally {
+      authorization.release();
+    }
   }
 
   // Writes an unsigned JSON error for requests that never reached authentication.
@@ -182,7 +285,7 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     }
     const body = errorBody(res.code, res.message);
     if (res.nonceRecorded) {
-      return writeSigned(res.httpStatus, headers, body, res.requestSig);
+      return writeSigned(res.httpStatus, headers, body, res.requestSig, res.tool);
     }
     return writeRaw(res.httpStatus, headers, body, "");
   }
@@ -200,7 +303,7 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
       // BigInt / circular structures: Go's json.Marshal error path.
       const headers = new Headers();
       headers.set("content-type", "application/json");
-      return writeSigned(500, headers, errorBody("internal_error", "internal error"), res.requestSig);
+      return writeSigned(500, headers, errorBody("internal_error", "internal error"), res.requestSig, res.tool);
     }
     const body =
       '{"jsonrpc":"2.0","id":' +
@@ -212,7 +315,7 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
       ',"isError":false}}';
     const headers = new Headers();
     headers.set("content-type", "application/json");
-    return writeSigned(200, headers, new TextEncoder().encode(body), res.requestSig);
+    return writeSigned(200, headers, new TextEncoder().encode(body), res.requestSig, res.tool);
   }
 
   // Hands an authorized request to the wrapped server and signs what it answers.
@@ -261,7 +364,7 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     if (ct !== null && ct.split(";")[0]?.trim().toLowerCase() === "text/event-stream") {
       const headers = new Headers();
       headers.set("content-type", "application/json");
-      const out = writeSigned(501, headers, errorBody("streaming_unsupported", "streaming responses cannot be signed in v0.1"), res.requestSig);
+      const out = writeSigned(501, headers, errorBody("streaming_unsupported", "streaming responses cannot be signed in v0.1"), res.requestSig, res.tool);
       try {
         await resp.body?.cancel();
       } catch {
@@ -308,6 +411,7 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
               headers,
               errorBody("response_too_large", "upstream response exceeds the configured limit"),
               res.requestSig,
+              res.tool,
             );
             try {
               await reader.cancel();
@@ -332,7 +436,7 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
 
     const headers = new Headers(resp.headers);
     headers.delete("content-length");
-    return writeSigned(resp.status, headers, respBody, res.requestSig, resp.statusText);
+    return writeSigned(resp.status, headers, respBody, res.requestSig, res.tool, resp.statusText);
   }
 
   return async (req: Request): Promise<Response> => {

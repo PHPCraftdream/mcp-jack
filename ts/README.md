@@ -174,8 +174,8 @@ body delivery. Transport/deadline helpers are not namespace exports.
 
 The server side of the candidate protocol is built bottom-up. The state and page
 functions below are pure; `rotation.RotationServerStore` adds the concrete private
-Linux store. Signer selection, response authorization and HTTP/native wiring do not
-exist yet, so this is not a running candidate server.
+Linux store. Signer selection and response authorization exist on the provider; the HTTP and
+native wiring below is additive to the unchanged current-v1 adapters.
 
 `rotation.validateRotationServerSnapshot`, `validateRotationServerPublication`,
 `encodeRotationServerSnapshot` and `decodeRotationServerSnapshot` model the
@@ -240,7 +240,46 @@ forwards: it decodes the strict arguments (`400 invalid_params`), takes a servin
 lease, reads one committed snapshot, checks the audience, the cursor (`409
 rotation_checkpoint_unavailable`), a fresh server ClockGuard and the selected
 signer, and returns one page of at most 16 records. Storage, clock or signer
-failures map to `503 rotation_state_unavailable` without details. It is not yet
-wired into the verifier or the HTTP handlers, and the response-signing gate that
-must sign the outer response with the selected key is a separate unfinished layer.
+failures map to `503 rotation_state_unavailable` without details. It is wired
+into the verifier through the separate `serverKeys` tool route described below.
+
+### Candidate server wiring: rotation response signing and the `jack.server.key` route
+
+`HandlerConfig` takes either the static `serverKey` or the rotation profile
+`rotationKeys` — a `ResponseKeyProvider`; `rotation.RotationServerProvider`
+implements it structurally — never both and never neither: any other
+combination throws at construction, exactly like the existing configuration
+errors. A verifier configured to route `jack.server.key` (new
+`VerifierConfig.serverKeys`, reported by `verifier.routesServerKey`) without a
+rotation profile is also a construction error: candidate server-key delivery
+requires ResponseKeys, mirroring Go's `NewHandler`.
+
+Verifier dispatch: `serverKeys` routes only the candidate `jack.server.key`
+tool (read-only, authenticated caller required, audience check inside the
+tool); it is not a member of the 11 current-v1 native tool names, and those
+tools keep their existing routing and audit behaviour, while the candidate
+tool writes no audit event. Without `serverKeys` the tool stays denied exactly
+as today (`403 operation_denied`), and the static server-key path is
+byte-for-byte unchanged.
+
+Response signing under rotation mirrors Go `writeAuthorized`. The upstream
+answer is fully buffered before authorization, so the serving lease is never
+held across network I/O. The provider then selects the signer with one fresh
+ClockGuard sample; the response timestamp is that sample, with the existing
+signing string, kid derivation and header format unchanged. After the
+signature is computed, a one-shot final gate takes a second fresh sample and
+re-selects the signer: any retirement, clock regression, snapshot change,
+unavailable/closing/fenced store, failing signer callback, or a
+`jack.server.key` page whose exact wire bytes do not decode and match the
+committed ring discards the computed signature and answers the unsigned `503
+rotation_state_unavailable` "response authorization unavailable". No retry, no
+other key, no unsigned fallback that could pass for success; the nonce stays
+consumed.
+
+Deliberately not provided: no remote reset or recovery (dirty/fenced/unknown
+state keeps its startup gate); `announce` stays an explicit single-publication
+operation; and the Go gateway's refusal of callers authenticated by server
+keys (the `serverKIDs` deny in `internal/cli/gateway_native.go`) is a
+gateway-layer rule the SDK server package does not implement — a TS gateway
+would have to enforce it itself.
 

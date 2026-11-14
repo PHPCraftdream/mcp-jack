@@ -10,9 +10,14 @@ import type { RotationServerSnapshot } from "./rotation-server-state.js";
 import { ROTATION_MAX_SIGNER_REFERENCE_BYTES } from "./rotation-server-state.js";
 import type { RotationServerStore } from "./rotation-server-store.js";
 import type { RotationClockTuple, RotationTrustKey } from "./rotation-trust.js";
+import { parseCandidateJsonRaw } from "./json-raw.js";
+import { decodeRotationResult, ROTATION_MAX_BODY_BYTES } from "./rotation-result.js";
+import type { DecodedRotationResult } from "./rotation-result.js";
+import { TOOL_SERVER_KEY } from "./server/verify.js";
 
 const MAX_PENDING = 128;
 const MAX_RETIRED = 1024;
+const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 /** Заранее настроенный handle подписанта: reference не заменяет проверку публичного ключа. */
 export interface RotationServerKey {
@@ -29,6 +34,24 @@ export interface RotationPublication {
 /** Pinned identity подписанта: публичный ключ скопирован и не меняется вместе с callback. */
 export interface PinnedRotationSigner extends RotationSigner {
   readonly publicKeyB64u: string;
+}
+
+/** Owned copy тела ответа; payload не является источником key authority (Go server.ResponseKeyRequest). */
+export interface RotationResponseKeyRequest {
+  readonly status: number;
+  readonly tool: string;
+  readonly requestSignature: string;
+  readonly body: Uint8Array;
+}
+
+/** identity/time/lease закреплены до построения ответа; final однократен (Go server.ResponseKeyAuthorization). */
+export interface RotationResponseAuthorization {
+  readonly signer: PinnedRotationSigner;
+  readonly timestamp: number;
+  /** Одноразовый final gate: свежий completion sample и re-selection; отказ бросает RotationError. */
+  readonly final: () => void;
+  /** Идемпотентный release; caller вызывает после построения или отказа ответа. */
+  readonly release: () => void;
 }
 
 function unavailable(): never {
@@ -58,6 +81,7 @@ function pin(input: RotationServerKey): PinnedRotationSigner {
  * Связывает concrete server store с заранее настроенным inventory подписанием: выбор подписанта,
  * явная публикация одного next key. Inventory задаётся только out-of-band; custody и lifecycle
  * signer handles принадлежат caller. Signer callbacks должны быть bounded и не reentrant.
+ * authorizeResponse — выбор signer + final gate для подписи ответа (Go ResponseKeyProvider), без fallback.
  */
 export class RotationServerProvider {
   private readonly keys = new Map<string, PinnedRotationSigner>();
@@ -130,6 +154,87 @@ export class RotationServerProvider {
     } finally {
       this.publishing = false;
     }
+  }
+
+  /**
+   * Выбор signer и fresh clock sample до вычисления подписи ответа; serving lease удерживается
+   * до release и никакой network I/O под ним не выполняется. Final однократен: второй свежий
+   * sample обязан выбрать того же signer, иначе подпись отбрасывается (Go writeAuthorized).
+   * Никакого fallback, retry или подписанного ответа при отказе.
+   */
+  authorizeResponse(input: RotationResponseKeyRequest): RotationResponseAuthorization {
+    const page = this.decodeNativeResponse(input);
+    const release = this.store.acquireServingLease();
+    let ready = false;
+    try {
+      const { snapshot } = this.store.snapshot();
+      const clock = this.store.checkSnapshotClock(snapshot);
+      const signer = this.selectSigner(snapshot, clock);
+      if (!this.matchesNativeResponse(page, snapshot, signer)) return unavailable();
+      let finalized = false;
+      let released = false;
+      ready = true;
+      return Object.freeze({
+        signer,
+        timestamp: clock.highWater,
+        release: (): void => {
+          if (released) return;
+          released = true;
+          release();
+        },
+        final: (): void => {
+          if (released || finalized) unavailable();
+          finalized = true;
+          const fresh = this.store.checkSnapshotClock(snapshot);
+          if (fresh.highWater < clock.highWater || fresh.highWater - clock.highWater > snapshot.trust.window) unavailable();
+          const current = this.selectSigner(snapshot, fresh);
+          if (current.publicKeyB64u !== signer.publicKeyB64u || released) unavailable();
+        },
+      });
+    } finally {
+      if (!ready) release();
+    }
+  }
+
+  /** Полный envelope/parity parse до signing-time clock; payload не key authority (Go decodeNativeResponse). */
+  private decodeNativeResponse(input: RotationResponseKeyRequest): DecodedRotationResult | undefined {
+    if (input.tool !== TOOL_SERVER_KEY || input.status !== 200) return undefined;
+    if (!(input.body instanceof Uint8Array) || input.body.length > ROTATION_MAX_BODY_BYTES) return unavailable();
+    try {
+      const root = parseCandidateJsonRaw(utf8.decode(input.body));
+      const members = root.members;
+      if (typeof root.value !== "object" || root.value === null || Array.isArray(root.value) || members === undefined) return unavailable();
+      const id = members.get("id");
+      if (id === undefined || (typeof id.value !== "string" && typeof id.value !== "number")) return unavailable();
+      return decodeRotationResult(input.body, id.value);
+    } catch {
+      return unavailable();
+    }
+  }
+
+  /** Страница wire-ответа обязана описывать exactly этот snapshot и выбранного signer (Go matchesNativeResponse). */
+  private matchesNativeResponse(page: DecodedRotationResult | undefined, snapshot: RotationServerSnapshot, signer: PinnedRotationSigner): boolean {
+    if (page === undefined) return true;
+    const trust = snapshot.trust;
+    if (page.current.publicKeyB64u !== signer.publicKeyB64u || page.current.kid !== this.snapshotSignerKid(snapshot, signer) ||
+      page.head.ordinal !== trust.head.ordinal || page.head.hash !== trust.head.hash) return false;
+    if (page.records.length === 0) return page.complete;
+    const first = page.records[0];
+    for (let start = 0; start < trust.records.length; start++) {
+      if (trust.records[start] !== first) continue;
+      const end = start + page.records.length;
+      if (end > trust.records.length || page.complete !== (end === trust.records.length)) return false;
+      for (let index = 0; index < page.records.length; index++) {
+        if (trust.records[start + index] !== page.records[index]) return false;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  private snapshotSignerKid(snapshot: RotationServerSnapshot, signer: PinnedRotationSigner): string {
+    const key = snapshot.trust.keys.find((entry) => entry.publicKeyB64u === signer.publicKeyB64u);
+    return key === undefined ? "" : key.kid;
   }
 
   private publish(next: PinnedRotationSigner, reference: string, kid: string): RotationPublication {
