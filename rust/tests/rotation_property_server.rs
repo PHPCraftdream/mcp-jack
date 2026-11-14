@@ -116,7 +116,7 @@ fn signer(index: u64) -> InMemorySigner {
 fn generated_chain(
     corpus: &Corpus,
     count: u64,
-    published_at: impl FnMut(u64) -> u64,
+    mut published_at: impl FnMut(u64) -> u64,
 ) -> (Checkpoint, Vec<Record>) {
     let mut old = signer(0);
     let root = Checkpoint {
@@ -764,7 +764,8 @@ mod linux_store {
             write_file(&case_path, &mutated);
             let label = format!("seed {SEED:#x} byte {byte_index} xor 1");
             let error = RotationServerStore::open(&case_path, options.clone(), || Ok(1000))
-                .expect_err(&label);
+                .err()
+                .expect(&label);
             assert_eq!(error.code, "rotation_state_unavailable", "{label}");
             exercised += 1;
         }
@@ -776,7 +777,8 @@ mod linux_store {
             write_file(&case_path, &mutated);
             let label = format!("seed {SEED:#x} sample {sample} byte {byte_index} xor 128");
             let error = RotationServerStore::open(&case_path, options.clone(), || Ok(1000))
-                .expect_err(&label);
+                .err()
+                .expect(&label);
             assert_eq!(error.code, "rotation_state_unavailable", "{label}");
         }
         assert_eq!(

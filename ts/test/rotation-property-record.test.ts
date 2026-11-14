@@ -192,7 +192,7 @@ test("line-targeted mutations fail with the exact candidate error code", () => {
 
 test("chain order, duplication, gaps and signer references are rejected with exact codes", () => {
   const { base, records } = generatedChain(5, (index) => 1000 + index);
-  const wires = records.map((record) => Buffer.from(record.wire, "utf8"));
+  const wires: Uint8Array[] = records.map((record) => Buffer.from(record.wire, "utf8"));
   const wire = (index: number): Uint8Array => {
     const value = wires[index];
     assert.ok(value !== undefined, `seed=${SEED} wire=${index}`);

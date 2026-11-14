@@ -93,7 +93,7 @@ fn signer(index: u64) -> InMemorySigner {
 fn generated_chain(
     corpus: &Corpus,
     count: u64,
-    published_at: impl FnMut(u64) -> u64,
+    mut published_at: impl FnMut(u64) -> u64,
 ) -> (Checkpoint, Vec<Record>) {
     let mut old = signer(0);
     let root = Checkpoint {
@@ -445,7 +445,7 @@ fn chain_order_duplication_gaps_and_signer_references_are_rejected() {
         .expect(&full_label);
     assert_eq!(verified.len(), 5, "seed {SEED:#x} verified length");
 
-    let reorderings: &[(&str, fn(&[&[u8]]) -> Vec<&[u8]>)] = &[
+    let reorderings: &[(&str, for<'a> fn(&'a [&'a [u8]]) -> Vec<&'a [u8]>)] = &[
         ("swap first two wires", |wires: &[&[u8]]| {
             let mut reordered = wires.to_vec();
             reordered.swap(0, 1);

@@ -95,7 +95,7 @@ fn signer(index: u64) -> InMemorySigner {
 fn generated_chain(
     corpus: &Corpus,
     count: u64,
-    published_at: impl FnMut(u64) -> u64,
+    mut published_at: impl FnMut(u64) -> u64,
 ) -> (Checkpoint, Vec<Record>) {
     let mut old = signer(0);
     let root = Checkpoint {
@@ -161,8 +161,9 @@ fn result_body(kid: &str, public_key: &str, filler: &str) -> String {
     let payload = format!(
         r#"{{"current":{{"kid":"{kid}","public_key":"{public_key}"}},"records":["{filler}"],"head":{{"ordinal":0,"hash":"-"}},"complete":true}}"#
     );
+    let text = serde_json::to_string(&payload).expect("payload encodes as a JSON string");
     format!(
-        r#"{{"jsonrpc":"2.0", "id":7,"result":{{"content":[{{"type":"text","text":{payload}}}],"structuredContent":{payload}},"isError":false}}}}"#
+        r#"{{"jsonrpc":"2.0", "id":7,"result":{{"content":[{{"type":"text","text":{text}}}],"structuredContent":{payload},"isError":false}}}}"#
     )
 }
 
