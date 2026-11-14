@@ -159,6 +159,13 @@ function identitySnapshot(entry: RegistryEntry): JackIdentity {
 /** Timestamp acceptance window in seconds (spec 01 section 4). */
 export const DEFAULT_WINDOW = 30;
 
+/**
+ * Candidate read-only server-key tool; not one of the 11 current-v1 native
+ * tools. Routed ONLY when the verifier is configured with serverKeys
+ * (Go ToolServerKey / Config.ServerKeys); otherwise it is denied like today.
+ */
+export const TOOL_SERVER_KEY = "jack.server.key";
+
 /** Names of the protocol-native tools (spec 03). */
 export const TOOL_ENROLL = "jack.enroll";
 export const TOOL_WHOAMI = "jack.whoami";
@@ -289,6 +296,12 @@ export interface VerifierConfig {
   readonly audit?: AuditSink;
   /** When undefined every jack.* tool is 403 operation_denied. */
   readonly native?: NativeTools;
+  /**
+   * Routes ONLY the candidate jack.server.key call (Go Config.ServerKeys);
+   * undefined denies it exactly like an unknown jack.* tool. The current-v1
+   * allowlist checked by isNativeTool is unchanged.
+   */
+  readonly serverKeys?: NativeTools;
   /** Seconds; undefined or <= 0 => DEFAULT_WINDOW. */
   readonly window?: number;
   /**
@@ -327,6 +340,7 @@ export class Verifier {
   private readonly nonces: NonceStore;
   private readonly audit: AuditSink | undefined;
   private readonly native: NativeTools | undefined;
+  private readonly serverKeys: NativeTools | undefined;
   private readonly window: number;
   private readonly now: () => number;
 
@@ -341,6 +355,7 @@ export class Verifier {
     this.nonces = cfg.nonces;
     this.audit = cfg.audit;
     this.native = cfg.native;
+    this.serverKeys = cfg.serverKeys;
     this.window = cfg.window === undefined || cfg.window <= 0 ? DEFAULT_WINDOW : cfg.window;
     this.now = cfg.now;
   }
@@ -348,6 +363,11 @@ export class Verifier {
   /** The injected clock (Go cfg.Now): adapters sign responses with the same injected clock that verified the request, never the wall clock. */
   get clock(): () => number {
     return this.now;
+  }
+
+  /** Whether candidate jack.server.key routing is configured (Go cfg.ServerKeys != nil); the fetch adapter requires a rotation profile when it is. */
+  get routesServerKey(): boolean {
+    return this.serverKeys !== undefined;
   }
 
   /** Runs the pipeline of spec 01 section 4 / spec 02 section 4; stops at the first failing step. */
@@ -509,7 +529,16 @@ export class Verifier {
     // which does its own admin gating.
     if (msg.hasTool && msg.tool.startsWith("jack.")) {
       b.native = true;
-      if (!isNativeTool(msg.tool) || this.native === undefined) {
+      // The candidate jack.server.key route is dispatched separately (Go
+      // cfg.ServerKeys); the current-v1 allowlist covers every other tool.
+      let tools: NativeTools | undefined = this.native;
+      if (msg.tool === TOOL_SERVER_KEY) {
+        tools = this.serverKeys;
+      } else if (!isNativeTool(msg.tool)) {
+        // NO audit event: the call never reached a tool (spec 03 section 8).
+        return fail(403, Code.OPERATION_DENIED, "operation is not permitted");
+      }
+      if (tools === undefined) {
         // NO audit event: the call never reached a tool (spec 03 section 8).
         return fail(403, Code.OPERATION_DENIED, "operation is not permitted");
       }
@@ -552,7 +581,7 @@ export class Verifier {
         }
       };
       try {
-        const out = this.native.call(call);
+        const out = tools.call(call);
         writeAudit(undefined);
         b.accepted = true;
         b.structured = out.structured;
