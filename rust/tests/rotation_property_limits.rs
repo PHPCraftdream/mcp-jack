@@ -66,7 +66,7 @@ fn signer(index: u64) -> InMemorySigner {
 fn generated_chain(
     corpus: &Corpus,
     count: u64,
-    published_at: impl FnMut(u64) -> u64,
+    mut published_at: impl FnMut(u64) -> u64,
 ) -> (Checkpoint, Vec<Record>) {
     let mut old = signer(0);
     let root = Checkpoint {
