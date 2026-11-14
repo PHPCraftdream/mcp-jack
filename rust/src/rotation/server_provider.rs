@@ -1,7 +1,7 @@
 use super::{
     create_record, decode_result, invalid, Binding, Checkpoint, ClockTuple, DecodedResult, Record,
     ResultCursor, RotationError, RotationServerStore, ServerSnapshot, SignerReference, TrustKey,
-    GRACE_SECONDS, MAX_ORDINAL, MAX_RETAINED_KEYS, MAX_RESULT_BODY_BYTES,
+    GRACE_SECONDS, MAX_ORDINAL, MAX_RESULT_BODY_BYTES, MAX_RETAINED_KEYS,
     MAX_SIGNER_REFERENCE_BYTES, MAX_TIMESTAMP,
 };
 use crate::client::Signer;
@@ -113,12 +113,17 @@ fn select_pinned(
     let mut retired = 0usize;
     for (index, key) in snapshot.public.keys.iter().enumerate() {
         let eligible = key.not_before <= clock.high_water
-            && key.known_cutoff.is_none_or(|cutoff| clock.high_water < cutoff);
+            && key
+                .known_cutoff
+                .is_none_or(|cutoff| clock.high_water < cutoff);
         let is_pending = key.not_before > clock.high_water;
         if is_pending {
             pending += 1;
         }
-        if key.known_cutoff.is_some_and(|cutoff| cutoff <= clock.high_water) {
+        if key
+            .known_cutoff
+            .is_some_and(|cutoff| cutoff <= clock.high_water)
+        {
             retired += 1;
         }
         if pending > MAX_PENDING || retired > MAX_RETIRED {

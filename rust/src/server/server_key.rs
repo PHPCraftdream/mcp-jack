@@ -134,7 +134,9 @@ fn validate_cursor(snapshot: &ServerSnapshot, cursor: &ResultCursor) -> Result<(
     let expected = match offset.checked_sub(1) {
         // offset == 0: курсор якорится на сам checkpoint.
         None => trust.checkpoint.hash.clone(),
-        Some(index) => match usize::try_from(index).ok().and_then(|index| trust.records.get(index))
+        Some(index) => match usize::try_from(index)
+            .ok()
+            .and_then(|index| trust.records.get(index))
         {
             // Недостижимо при действующем offset-ограничении; отказ вместо panic.
             Some(wire) => body_hash(wire.as_bytes()),

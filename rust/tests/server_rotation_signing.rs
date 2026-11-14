@@ -38,9 +38,7 @@ use mcp_jack::server::nonce::NonceStore;
 use mcp_jack::server::response_keys::{ResponseKeyRequest, ResponseKeys};
 use mcp_jack::server::server_key::ServerKeyTool;
 use mcp_jack::server::state::{MemoryState, RegistryEntry, StateStore};
-use mcp_jack::server::verify::{
-    Clock, Config, NativeCall, NativeResult, NativeTools, Verifier,
-};
+use mcp_jack::server::verify::{Clock, Config, NativeCall, NativeResult, NativeTools, Verifier};
 use mcp_jack::signing::response_signing_string;
 
 /// The boxed inner service behind every harness (same shape as http_layer.rs;
@@ -76,13 +74,13 @@ struct TempDirGuard(PathBuf);
 
 impl TempDirGuard {
     fn new(tag: &str) -> Self {
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join(
-            format!(
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!(
                 "mcp-jack-server-rotation-signing-{tag}-{}-{}",
                 std::process::id(),
                 UNIQUE.fetch_add(1, Ordering::SeqCst)
-            ),
-        );
+            ));
         fs::create_dir_all(&dir).expect("create temp dir");
         // The rotation store requires EXACTLY 0700 on the parent directory.
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))
@@ -228,9 +226,7 @@ struct Harness<C: FnMut() -> Result<u64, RotationError> + Send + 'static> {
 impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> Harness<C> {
     /// Locks the shared store (Go f.store).
     fn lock_store(&self) -> MutexGuard<'_, RotationServerStore<C>> {
-        self.store
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        self.store.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// One candidate `jack.server.key` call (Go nativeHTTP's returned
@@ -378,7 +374,10 @@ fn new_harness(
             mutation,
         } => {
             let tool: Arc<dyn NativeTools> = match mutation {
-                None => Arc::new(ServerKeyTool::new(Arc::clone(&store), Arc::clone(&provider))),
+                None => Arc::new(ServerKeyTool::new(
+                    Arc::clone(&store),
+                    Arc::clone(&provider),
+                )),
                 Some(mode) => Arc::new(MutatingTool {
                     inner: ServerKeyTool::new(Arc::clone(&store), Arc::clone(&provider)),
                     provider: Arc::clone(&provider),
@@ -632,7 +631,11 @@ async fn native_page_is_signed_by_selected_signer() {
     );
     assert_eq!(page.head_ordinal, 1);
     assert!(page.complete, "one record page is complete");
-    assert_eq!(h.inner_calls.load(Ordering::SeqCst), 0, "the candidate is never forwarded");
+    assert_eq!(
+        h.inner_calls.load(Ordering::SeqCst),
+        0,
+        "the candidate is never forwarded"
+    );
 }
 
 /// Go page half, head cursor: the cursor anchored at the head yields an empty
@@ -766,7 +769,11 @@ async fn candidate_route_requires_server_keys() {
         0,
         "ordinary Native must not enable the candidate route"
     );
-    assert_eq!(h.inner_calls.load(Ordering::SeqCst), 0, "nothing is forwarded");
+    assert_eq!(
+        h.inner_calls.load(Ordering::SeqCst),
+        0,
+        "nothing is forwarded"
+    );
 }
 
 /// Go TestConcreteProviderThroughMiddlewareFinalBeforeWireAndConsumedReplay,
@@ -835,14 +842,21 @@ async fn forwarded_answer_is_signed_and_replay_is_unsigned() {
             .expect("no inner error"),
     )
     .await;
-    assert_eq!(replay.status, 401, "a consumed request must not be redelivered");
+    assert_eq!(
+        replay.status, 401,
+        "a consumed request must not be redelivered"
+    );
     assert_eq!(error_code(&replay.body), "replayed_nonce");
     assert_eq!(
         replay.jack_auth,
         Vec::<String>::new(),
         "the replay answer is unsigned"
     );
-    assert_eq!(h.inner_calls.load(Ordering::SeqCst), 1, "no second dispatch");
+    assert_eq!(
+        h.inner_calls.load(Ordering::SeqCst),
+        1,
+        "no second dispatch"
+    );
     assert_eq!(h.signs.load(Ordering::SeqCst), 1, "no second sign");
 
     // The middleware released its serving lease on every path.
@@ -885,7 +899,10 @@ async fn late_final_gate_discards_signature() {
             .expect("no inner error"),
     )
     .await;
-    assert_eq!(got.status, 503, "the late final gate must fail the response");
+    assert_eq!(
+        got.status, 503,
+        "the late final gate must fail the response"
+    );
     assert_eq!(
         got.jack_auth,
         Vec::<String>::new(),
@@ -901,9 +918,21 @@ async fn late_final_gate_discards_signature() {
         got.x_private_app, None,
         "inner headers are discarded on refusal"
     );
-    assert_eq!(h.now.load(Ordering::SeqCst), 1031, "the hook moved the clock");
-    assert_eq!(h.signs.load(Ordering::SeqCst), 1, "the signature was computed once");
-    assert_eq!(h.inner_calls.load(Ordering::SeqCst), 1, "the forward already happened");
+    assert_eq!(
+        h.now.load(Ordering::SeqCst),
+        1031,
+        "the hook moved the clock"
+    );
+    assert_eq!(
+        h.signs.load(Ordering::SeqCst),
+        1,
+        "the signature was computed once"
+    );
+    assert_eq!(
+        h.inner_calls.load(Ordering::SeqCst),
+        1,
+        "the forward already happened"
+    );
 
     // Go shared tail: the replay is a consumed nonce, and the refusal path
     // released the lease, so the store closes cleanly.
@@ -913,9 +942,16 @@ async fn late_final_gate_discards_signature() {
             .expect("no inner error"),
     )
     .await;
-    assert_eq!(replay.status, 401, "a consumed request must not be redelivered");
+    assert_eq!(
+        replay.status, 401,
+        "a consumed request must not be redelivered"
+    );
     assert_eq!(h.signs.load(Ordering::SeqCst), 1, "no second sign");
-    assert_eq!(h.inner_calls.load(Ordering::SeqCst), 1, "no second dispatch");
+    assert_eq!(
+        h.inner_calls.load(Ordering::SeqCst),
+        1,
+        "no second dispatch"
+    );
     h.lock_store()
         .close()
         .expect("middleware leaked serving lease");
@@ -1033,7 +1069,10 @@ async fn static_profile_still_signs_with_static_key() {
         key_id(&static_pub),
         "the static key signs, not a rotation key"
     );
-    assert_eq!(response.ts, NOW, "the static profile signs at the verifier clock");
+    assert_eq!(
+        response.ts, NOW,
+        "the static profile signs at the verifier clock"
+    );
     let sig = decode_b64url_fixed(&response.sig, 64).expect("sig decodes to 64 bytes");
     let message = response_signing_string(
         200,

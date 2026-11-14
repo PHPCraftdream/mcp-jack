@@ -217,14 +217,20 @@ fn valid_cursor_returns_one_exact_page() {
         "the anchor key is still the selected signer"
     );
     assert_eq!(
-        structured["current"]["public_key"].as_str().expect("current.public_key"),
+        structured["current"]["public_key"]
+            .as_str()
+            .expect("current.public_key"),
         encode_b64url(&f.keys[0].public_key()),
     );
-    let records = structured["records"].as_array().expect("records is an array");
+    let records = structured["records"]
+        .as_array()
+        .expect("records is an array");
     assert_eq!(records.len(), 1, "exactly one record was announced");
     assert_eq!(records[0].as_str().expect("record wire"), first.record.wire);
     assert_eq!(
-        structured["head"]["ordinal"].as_u64().expect("head.ordinal"),
+        structured["head"]["ordinal"]
+            .as_u64()
+            .expect("head.ordinal"),
         1,
         "the announced record is the new head"
     );
@@ -252,10 +258,15 @@ fn head_cursor_yields_empty_complete_page() {
         .expect("announcing the pending next key must succeed");
 
     // A cursor anchored on the announced head has nothing left to serve.
-    let arguments = format!(r#"{{"after_ordinal":1,"after_hash":"{}"}}"#, first.record.hash);
+    let arguments = format!(
+        r#"{{"after_ordinal":1,"after_hash":"{}"}}"#,
+        first.record.hash
+    );
     let mut req = call_req(TOOL_SERVER_KEY, Some(&arguments), Some(&caller), AUD);
     let page = NativeTools::call(&tool, &mut req).expect("the head cursor must serve a page");
-    let records = page.structured["records"].as_array().expect("records is an array");
+    let records = page.structured["records"]
+        .as_array()
+        .expect("records is an array");
     assert!(records.is_empty(), "the head cursor yields no records");
     assert!(
         page.structured["complete"].as_bool().expect("complete"),
@@ -291,8 +302,8 @@ fn argument_matrix_is_invalid_params() {
     // An absent `params.arguments` is invalid_params like any undecodable
     // payload.
     let mut req = call_req(TOOL_SERVER_KEY, None, Some(&caller), AUD);
-    let err = NativeTools::call(&tool, &mut req)
-        .expect_err("absent arguments must be invalid_params");
+    let err =
+        NativeTools::call(&tool, &mut req).expect_err("absent arguments must be invalid_params");
     assert_refusal(err, 400, "invalid_params");
 }
 
@@ -318,8 +329,7 @@ fn unknown_cursor_is_checkpoint_unavailable() {
     // Decodable but outside the committed ring: 409 as well.
     let arguments = format!(r#"{{"after_ordinal":5,"after_hash":"{unknown_hash}"}}"#);
     let mut req = call_req(TOOL_SERVER_KEY, Some(&arguments), Some(&caller), AUD);
-    let err = NativeTools::call(&tool, &mut req)
-        .expect_err("a cursor beyond the head must refuse");
+    let err = NativeTools::call(&tool, &mut req).expect_err("a cursor beyond the head must refuse");
     assert_refusal(err, 409, "rotation_checkpoint_unavailable");
 
     // NOTE (deviation from the task text): `"after_hash":"-"` is only legal at
@@ -363,8 +373,8 @@ fn wrong_route_or_caller_denied() {
         None,
         AUD,
     );
-    let err = NativeTools::call(&tool, &mut req)
-        .expect_err("a call without a caller must be denied");
+    let err =
+        NativeTools::call(&tool, &mut req).expect_err("a call without a caller must be denied");
     assert_refusal(err, 403, "operation_denied");
 
     // The candidate route stays OUT of the closed current-v1 allowlist.
@@ -399,7 +409,12 @@ fn audience_checked_before_cursor() {
     // audience is checked before the cursor.
     let unknown_hash = "A".repeat(43);
     let arguments = format!(r#"{{"after_ordinal":9,"after_hash":"{unknown_hash}"}}"#);
-    let mut req = call_req(TOOL_SERVER_KEY, Some(&arguments), Some(&caller), "other-aud");
+    let mut req = call_req(
+        TOOL_SERVER_KEY,
+        Some(&arguments),
+        Some(&caller),
+        "other-aud",
+    );
     let err = NativeTools::call(&tool, &mut req)
         .expect_err("a wrong audience must refuse before cursor validation");
     assert_refusal(err, 503, "rotation_state_unavailable");
@@ -426,7 +441,9 @@ fn closed_store_refuses_before_cursor() {
 
     {
         let mut store = lock(&f);
-        store.close().expect("clean close with no outstanding serving leases");
+        store
+            .close()
+            .expect("clean close with no outstanding serving leases");
     }
     // The serving lease is taken before the cursor is validated, so even a
     // valid cursor collapses into the fault-state refusal.
@@ -451,7 +468,11 @@ fn page_limit_and_explicit_next_cursor() {
         .collect();
     let ring: Vec<RotationServerKey> = (0..keys.len())
         .map(|i| RotationServerKey {
-            reference: if i == 0 { "anchor".to_owned() } else { format!("r{i}") },
+            reference: if i == 0 {
+                "anchor".to_owned()
+            } else {
+                format!("r{i}")
+            },
             signer: Arc::new(keys[i].clone()),
         })
         .collect();
@@ -462,7 +483,9 @@ fn page_limit_and_explicit_next_cursor() {
     let mut publications = Vec::new();
     for (i, key) in keys.iter().enumerate().skip(1) {
         publications.push(
-            provider.announce(&format!("r{i}"), key.kid()).expect("sequential announcement"),
+            provider
+                .announce(&format!("r{i}"), key.kid())
+                .expect("sequential announcement"),
         );
     }
     assert_eq!(publications.len(), 17, "records 1..=17 are committed");
@@ -475,14 +498,18 @@ fn page_limit_and_explicit_next_cursor() {
         AUD,
     );
     let page = NativeTools::call(&tool, &mut req).expect("the first page must serve");
-    let records = page.structured["records"].as_array().expect("records is an array");
+    let records = page.structured["records"]
+        .as_array()
+        .expect("records is an array");
     assert_eq!(records.len(), 16, "one page never exceeds MAX_PAGE_RECORDS");
     assert!(
         !page.structured["complete"].as_bool().expect("complete"),
         "17 committed records leave the first page incomplete"
     );
     assert_eq!(
-        page.structured["head"]["ordinal"].as_u64().expect("head.ordinal"),
+        page.structured["head"]["ordinal"]
+            .as_u64()
+            .expect("head.ordinal"),
         17
     );
     assert_eq!(
@@ -497,11 +524,15 @@ fn page_limit_and_explicit_next_cursor() {
     );
     let mut req = call_req(TOOL_SERVER_KEY, Some(&arguments), Some(&caller), AUD);
     let tail_page = NativeTools::call(&tool, &mut req).expect("the next cursor must serve");
-    let records = tail_page.structured["records"].as_array().expect("records is an array");
+    let records = tail_page.structured["records"]
+        .as_array()
+        .expect("records is an array");
     assert_eq!(records.len(), 1, "exactly the 17th record remains");
     assert_eq!(
         records[0].as_str().expect("record wire"),
         publications[16].record.wire
     );
-    assert!(tail_page.structured["complete"].as_bool().expect("complete"));
+    assert!(tail_page.structured["complete"]
+        .as_bool()
+        .expect("complete"));
 }

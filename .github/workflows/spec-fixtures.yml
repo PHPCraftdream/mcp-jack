@@ -73,37 +73,3 @@ jobs:
             spec/fixtures/candidate/rotation-state-vectors.json
             spec/tests/candidate/CASES.md
           if-no-files-found: error
-
-  rust-source-preparation:
-    name: prepare Rust SDK sources
-    if: github.ref == 'refs/heads/release-rust-server-provider-1114'
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: rust
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rust
-      - name: Format candidate Rust sources in CI
-        run: cargo fmt --all
-      - name: Upload formatted sources for parent integration
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: rust-sdk-formatted-sources
-          path: |
-            rust/src/**/*.rs
-            rust/tests/**/*.rs
-          if-no-files-found: error
-      - name: Clippy on the formatted sources
-        if: always()
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings
-      - name: Tests on the formatted sources
-        if: always()
-        timeout-minutes: 10
-        run: cargo test --locked --all-features --no-fail-fast

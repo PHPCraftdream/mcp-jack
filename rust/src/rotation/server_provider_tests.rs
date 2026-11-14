@@ -223,16 +223,18 @@ fn missing_pending_or_current_signer_never_falls_back() {
     let provider = new_provider(&f, [None, None, None]);
     let first = provider.announce("next", f.keys[1].kid()).unwrap();
     // До активации pending handle обязателен.
-    assert!(
-        RotationServerProvider::new(Arc::clone(&f.store), vec![entry(&f.keys, "anchor", 0, None)])
-            .is_err()
-    );
+    assert!(RotationServerProvider::new(
+        Arc::clone(&f.store),
+        vec![entry(&f.keys, "anchor", 0, None)]
+    )
+    .is_err());
     f.now.store(first.record.activates_at, Ordering::SeqCst);
     // После активации отсутствие текущего signer не откатывается на retired anchor.
-    assert!(
-        RotationServerProvider::new(Arc::clone(&f.store), vec![entry(&f.keys, "anchor", 0, None)])
-            .is_err()
-    );
+    assert!(RotationServerProvider::new(
+        Arc::clone(&f.store),
+        vec![entry(&f.keys, "anchor", 0, None)]
+    )
+    .is_err());
     // Retired anchor handle необязателен.
     let provider =
         RotationServerProvider::new(Arc::clone(&f.store), vec![entry(&f.keys, "next", 1, None)])
@@ -278,7 +280,9 @@ fn freshness_equality_and_release_idempotence() {
     // lease падает и при drop без вызова, поэтому leaked lease не создаётся.
     {
         let mut store = lock(&f);
-        store.close().expect("lease must be released before clean close");
+        store
+            .close()
+            .expect("lease must be released before clean close");
     }
     assert!(provider.authorize_response(&selector_request()).is_err());
 }
@@ -360,8 +364,9 @@ fn announce_concurrent_clock_conflict_does_not_retry_or_publish() {
             proof_count.fetch_add(1, Ordering::SeqCst);
             conflict_now.store(1001, Ordering::SeqCst);
             // Возможен только потому, что announce не держит store lock во время callbacks.
-            let mut store =
-                hook_store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut store = hook_store
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             store.advance_and_check().unwrap();
         }) as Hook),
         None,
@@ -377,7 +382,11 @@ fn announce_concurrent_clock_conflict_does_not_retry_or_publish() {
     let mut store = lock(&f);
     let (snapshot, _) = store.snapshot().unwrap();
     assert_eq!(snapshot.public.revision, 1);
-    assert_eq!(snapshot.public.records.len(), 0, "conflict must not publish");
+    assert_eq!(
+        snapshot.public.records.len(),
+        0,
+        "conflict must not publish"
+    );
 }
 
 #[test]
