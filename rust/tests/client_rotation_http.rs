@@ -67,10 +67,7 @@ fn http_url(path: &str, addr: SocketAddr) -> String {
 
 fn single_record(endpoint: &str) -> Vec<Record> {
     vec![create_record(
-        Binding {
-            endpoint,
-            aud: AUD,
-        },
+        Binding { endpoint, aud: AUD },
         &anchor_checkpoint(),
         &anchor_signer(),
         &next_signer(),
@@ -265,7 +262,15 @@ impl LiveServer {
             }
         });
 
-        Self { addr, handle, requests, followed, captures, violations, action }
+        Self {
+            addr,
+            handle,
+            requests,
+            followed,
+            captures,
+            violations,
+            action,
+        }
     }
 
     fn one(&self) -> CapturedRequest {
@@ -375,23 +380,12 @@ fn verify_client_request(
     if content_type.map(|(_, value)| value.as_str()) != Some("application/json") {
         return Err("request content type is not application/json".to_owned());
     }
-    let signing = request_signing_string(
-        method,
-        target,
-        AUD,
-        &auth.kid,
-        auth.ts,
-        &auth.nonce,
-        body,
-    );
+    let signing =
+        request_signing_string(method, target, AUD, &auth.kid, auth.ts, &auth.nonce, body);
     let Ok(sig) = decode_b64url_fixed(&auth.sig, 64) else {
         return Err("request signature is not canonical base64url".to_owned());
     };
-    if !mcp_jack::ed25519::verify(
-        &client_signer().public_key(),
-        signing.as_bytes(),
-        &sig,
-    ) {
+    if !mcp_jack::ed25519::verify(&client_signer().public_key(), signing.as_bytes(), &sig) {
         return Err("request signature does not verify".to_owned());
     }
     Ok(auth)
@@ -401,13 +395,7 @@ fn verify_client_request(
 fn signed_response_auth(status: u16, request_sig: &str, body: &[u8]) -> String {
     let anchor = anchor_signer();
     let kid = key_id(&anchor.public_key());
-    let signing = response_signing_string(
-        i64::from(status),
-        request_sig,
-        &kid,
-        TS,
-        body,
-    );
+    let signing = response_signing_string(i64::from(status), request_sig, &kid, TS, body);
     let signature = anchor.sign(signing.as_bytes()).expect("anchor sign");
     format_response_auth(&ResponseAuth {
         kid,
@@ -489,7 +477,13 @@ async fn handle_connection(
     };
     let request_sig = auth.sig.clone();
     let nonce = auth.nonce.clone();
-    let captured = CapturedRequest { target, method, headers, body, nonce };
+    let captured = CapturedRequest {
+        target,
+        method,
+        headers,
+        body,
+        nonce,
+    };
     captures.lock().expect("captures").push(captured);
 
     let action = action.lock().expect("action").clone();
@@ -554,8 +548,7 @@ async fn assert_refresh_fails(action: ServerAction, want_code: &str) {
     let opts = store_options(&endpoint);
     let sandbox = Sandbox::new();
     let path = sandbox.file();
-    RotationTrustStore::initialize_unused(&path, opts.clone(), || Ok(TS_U))
-        .expect("initialize");
+    RotationTrustStore::initialize_unused(&path, opts.clone(), || Ok(TS_U)).expect("initialize");
     let mut store = RotationTrustStore::open(&path, opts, || Ok(TS_U)).expect("open");
     let client = http_client(&endpoint);
     let error = client.refresh(&mut store).expect_err("refresh must fail");
@@ -578,8 +571,7 @@ async fn explicit_refresh_commits_one_signed_page_per_call_and_never_repeats() {
     let opts = store_options(&endpoint);
     let sandbox = Sandbox::new();
     let path = sandbox.file();
-    RotationTrustStore::initialize_unused(&path, opts.clone(), || Ok(TS_U))
-        .expect("initialize");
+    RotationTrustStore::initialize_unused(&path, opts.clone(), || Ok(TS_U)).expect("initialize");
     let mut store = RotationTrustStore::open(&path, opts, || Ok(TS_U)).expect("open");
     let client = http_client(&endpoint);
     let records = single_record(&endpoint);
@@ -685,8 +677,7 @@ async fn redirect_is_refused_and_never_followed() {
     let opts = store_options(&endpoint);
     let sandbox = Sandbox::new();
     let path = sandbox.file();
-    RotationTrustStore::initialize_unused(&path, opts.clone(), || Ok(TS_U))
-        .expect("initialize");
+    RotationTrustStore::initialize_unused(&path, opts.clone(), || Ok(TS_U)).expect("initialize");
     let mut store = RotationTrustStore::open(&path, opts, || Ok(TS_U)).expect("open");
     let client = http_client(&endpoint);
     let error = client.refresh(&mut store).expect_err("redirect refused");
@@ -725,8 +716,7 @@ async fn stalled_response_head_hits_the_absolute_deadline_without_retry() {
     let opts = store_options(&endpoint);
     let sandbox = Sandbox::new();
     let path = sandbox.file();
-    RotationTrustStore::initialize_unused(&path, opts.clone(), || Ok(TS_U))
-        .expect("initialize");
+    RotationTrustStore::initialize_unused(&path, opts.clone(), || Ok(TS_U)).expect("initialize");
     let mut store = RotationTrustStore::open(&path, opts, || Ok(TS_U)).expect("open");
     let client = RotationHttpClient::new(
         OwnedBinding {
@@ -847,8 +837,7 @@ async fn failed_refresh_leaves_the_acked_state_unchanged() {
     let opts = store_options(&endpoint);
     let sandbox = Sandbox::new();
     let path = sandbox.file();
-    RotationTrustStore::initialize_unused(&path, opts.clone(), || Ok(TS_U))
-        .expect("initialize");
+    RotationTrustStore::initialize_unused(&path, opts.clone(), || Ok(TS_U)).expect("initialize");
     let mut store = RotationTrustStore::open(&path, opts, || Ok(TS_U)).expect("open");
     let client = http_client(&endpoint);
     // Proof a page was AVAILABLE; the signed non-200 must still be refused.

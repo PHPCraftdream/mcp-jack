@@ -10,9 +10,9 @@ use crate::client::transport::{HttpRequest, Transport, TransportError};
 use crate::client::url::{request_target, validate_base_url};
 use crate::error::JackError;
 use crate::rotation::{
-    Checkpoint, OwnedBinding, ResultCursor, RotationController, RotationError, RotationResponse,
-    RotationRefreshResult, RotationTrustStore, TrustSnapshot, MAX_ORDINAL, MAX_RESULT_BODY_BYTES,
-    MAX_RETAINED_KEYS,
+    Checkpoint, OwnedBinding, ResultCursor, RotationController, RotationError,
+    RotationRefreshResult, RotationResponse, RotationTrustStore, TrustSnapshot, MAX_ORDINAL,
+    MAX_RESULT_BODY_BYTES, MAX_RETAINED_KEYS,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -113,7 +113,14 @@ impl RotationHttpClient {
             Ok(transport) => transport,
             Err(_) => return Err(refuse("rotation_state_unknown")),
         };
-        Ok(Self { binding, window, checkpoint, target, signer, transport })
+        Ok(Self {
+            binding,
+            window,
+            checkpoint,
+            target,
+            signer,
+            transport,
+        })
     }
 
     /// Transport failures never look like a trust outcome (Go:
@@ -124,7 +131,11 @@ impl RotationHttpClient {
             TransportError::Streaming => {
                 JackError::new(0, "rotation_result_invalid", "rotation response refused")
             }
-            _ => JackError::new(0, "rotation_request_unavailable", "rotation response refused"),
+            _ => JackError::new(
+                0,
+                "rotation_request_unavailable",
+                "rotation response refused",
+            ),
         }
     }
 
@@ -183,7 +194,10 @@ impl RotationHttpClient {
             ],
             body: body.to_vec(),
         };
-        let response = self.transport.round_trip(request).map_err(Self::wire_error)?;
+        let response = self
+            .transport
+            .round_trip(request)
+            .map_err(Self::wire_error)?;
         // Strict status/header handling (rotation-http-wire.ts exchange()).
         // HttpTransport never follows redirects; the whole 3xx range is
         // refused (Go: ErrRedirectRefused).

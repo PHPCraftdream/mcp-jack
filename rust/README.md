@@ -366,9 +366,10 @@ ACK: an exception does not mean that trust stayed unchanged, and the SDK never
 rolls back that ACK. An uncertain CAS returns no ACK, retains the dirty/owner
 gates, and is not retried or automatically recovered.
 
-There is no HTTP sender, automatic refresh, hidden key discovery, retry, or pagination.
-The caller explicitly requests any next page. Product rotating transport and
-candidate server integration remain separate unfinished work.
+There is no automatic refresh, hidden key discovery, retry, or pagination.
+The caller explicitly requests any next page; the explicit HTTP sender is
+`RotationHttpClient` (see the next section). Server-side signing integration is
+documented separately.
 
 ### Candidate rotation HTTP refresh client (Linux + `client-http`)
 
