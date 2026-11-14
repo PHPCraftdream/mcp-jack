@@ -159,16 +159,17 @@ test("page and body limits hold exactly", () => {
     { ordinal: 0, hash: "-" }, partial, new Map());
   assert.equal(partialFraming.extensionStart, 0, `seed=${SEED} subject=page-15-accepted`);
   assert.deepEqual(partialFraming.terminal, { ordinal: 15, hash: partialTail.hash }, `seed=${SEED} subject=page-15-terminal`);
-  // Both payload slots share one literal: one JSON whitespace byte outside the slots keeps the filler integral.
+  // Both payload slots share one literal: padding whitespace outside the slots (1 or 2 bytes) keeps the filler length integral.
   const payload = (filler: string): string =>
     `{"current":{"kid":"${root.kid}","public_key":"${root.publicKeyB64u}"},"records":["${filler}"],"head":{"ordinal":0,"hash":"-"},"complete":true}`;
-  const envelope = (body: string): Uint8Array =>
-    Buffer.from(`{"jsonrpc":"2.0", "id":7,"result":{"content":[{"type":"text","text":${JSON.stringify(body)}}],"structuredContent":${body},"isError":false}}`, "utf8");
-  const base = Buffer.byteLength(envelope(payload("")));
+  const envelope = (body: string, pad = 1): Uint8Array =>
+    Buffer.from(`{"jsonrpc":"2.0",${" ".repeat(pad)}"id":7,"result":{"content":[{"type":"text","text":${JSON.stringify(body)}}],"structuredContent":${body},"isError":false}}`, "utf8");
+  const pad = 1 + ((rotation.ROTATION_MAX_BODY_BYTES - Buffer.byteLength(envelope(payload("")))) % 2);
+  const base = Buffer.byteLength(envelope(payload(""), pad));
   const fillerLength = (rotation.ROTATION_MAX_BODY_BYTES - base) / 2;
   assert.ok(Number.isInteger(fillerLength) && fillerLength > 0, `seed=${SEED} filler=${String(fillerLength)} base=${String(base)}`);
   const filler = `rotation-property-${"p".repeat(fillerLength - 18)}`;
-  const body = envelope(payload(filler));
+  const body = envelope(payload(filler), pad);
   assert.equal(Buffer.byteLength(body), rotation.ROTATION_MAX_BODY_BYTES, `seed=${SEED} subject=body-at-limit`);
   assert.deepEqual(rotation.decodeRotationResult(body, 7).records, [filler], `seed=${SEED} subject=body-at-limit-decodes`);
   throwsCode(() => rotation.decodeRotationResult(Buffer.concat([body, Buffer.from(" ")]), 7), "rotation_result_invalid", "scenario=body-limit+1");

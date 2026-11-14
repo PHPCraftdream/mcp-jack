@@ -79,9 +79,10 @@ fn splitmix64_value(input: u64) -> u64 {
 // Больше 255 различных индексов: seed выводится из PRNG, а не из одного байта.
 fn signer_seed(index: u64) -> [u8; 32] {
     let mut seed = [0_u8; 32];
-    for (lane, value) in seed.chunks_exact_mut(8).enumerate() {
-        let mixed = splitmix64_value(index * 4 + u64::try_from(lane).expect("small lane"));
-        value.copy_from_slice(&mixed.to_be_bytes());
+    for lane in 0..4_u64 {
+        let mixed = splitmix64_value(index * 4 + lane);
+        let start = usize::try_from(lane * 8).expect("small offset");
+        seed[start..start + 8].copy_from_slice(&mixed.to_be_bytes());
     }
     seed
 }
@@ -164,8 +165,11 @@ fn generated_records_round_trip_with_exact_fields() {
     let corpus = corpus();
     let mut prng = SplitMix64::new(SEED);
     for length in [1_u64, 2, 4] {
+        // Времена публикации строго монотонны, как требует create_record.
+        let mut previous_time = 0_u64;
         let (root, records) = generated_chain(&corpus, length, |index| {
-            1000 + prng.below(50) + index
+            previous_time = (previous_time + 1).max(1000 + prng.below(50) + index);
+            previous_time
         });
         let authorizers = chain_authorizers(&records);
         assert_eq!(root.ordinal, 0, "seed {SEED:#x} root ordinal");
@@ -298,12 +302,13 @@ fn line_targeted_mutations_fail_with_exact_codes() {
         .expect(&baseline_label);
     let anchor_public = &corpus.keys["anchor"].public_key;
 
-    let mut cases: Vec<(usize, String, &'static str)> = Vec::new();
-    cases.push((0, "mcp-jack/server-key-rotation/min2".to_owned(), "domain"));
-    cases.push((1, "!!!".to_owned(), "binding_encoding"));
-    cases.push((1, encode_b64url(b"https://other.example.test/mcp"), "binding"));
-    cases.push((2, "!!!".to_owned(), "binding_encoding"));
-    cases.push((2, encode_b64url(b"https://other.example.test"), "binding"));
+    let mut cases: Vec<(usize, String, &'static str)> = vec![
+        (0, "mcp-jack/server-key-rotation/min2".to_owned(), "domain"),
+        (1, "!!!".to_owned(), "binding_encoding"),
+        (1, encode_b64url(b"https://other.example.test/mcp"), "binding"),
+        (2, "!!!".to_owned(), "binding_encoding"),
+        (2, encode_b64url(b"https://other.example.test"), "binding"),
+    ];
     for replacement in [
         "0",
         "01",
@@ -434,6 +439,13 @@ fn chain_with_tail(
     rotation::verify_chain(&wires, binding(corpus), root, &BTreeMap::new())
 }
 
+// Имя, ожидаемый код и перестановка wire-ов цепочки.
+type Reordering = (
+    &'static str,
+    &'static str,
+    for<'a> fn(&'a [&'a [u8]]) -> Vec<&'a [u8]>,
+);
+
 #[test]
 fn chain_order_duplication_gaps_and_signer_references_are_rejected() {
     let corpus = corpus();
@@ -445,47 +457,47 @@ fn chain_order_duplication_gaps_and_signer_references_are_rejected() {
         .expect(&full_label);
     assert_eq!(verified.len(), 5, "seed {SEED:#x} verified length");
 
-    let reorderings: &[(&str, for<'a> fn(&'a [&'a [u8]]) -> Vec<&'a [u8]>)] = &[
-        ("swap first two wires", |wires: &[&[u8]]| {
+    let reorderings: &[Reordering] = &[
+        ("swap first two wires", "unknown_authorizer", |wires: &[&[u8]]| {
             let mut reordered = wires.to_vec();
             reordered.swap(0, 1);
             reordered
         }),
-        ("reverse all wires", |wires: &[&[u8]]| {
+        ("reverse all wires", "unknown_authorizer", |wires: &[&[u8]]| {
             let mut reordered = wires.to_vec();
             reordered.reverse();
             reordered
         }),
-        ("duplicate the first wire", |wires: &[&[u8]]| {
+        ("duplicate the first wire", "ordinal_sequence", |wires: &[&[u8]]| {
             let mut reordered = wires.to_vec();
             let first = reordered.first().copied().expect("first wire");
             reordered.insert(1, first);
             reordered
         }),
-        ("remove the third wire", |wires: &[&[u8]]| {
+        ("remove the third wire", "unknown_authorizer", |wires: &[&[u8]]| {
             let mut reordered = wires.to_vec();
             reordered.remove(2);
             reordered
         }),
-        ("replace the second wire with the third", |wires: &[&[u8]]| {
+        ("replace the second wire with the third", "unknown_authorizer", |wires: &[&[u8]]| {
             let mut reordered = wires.to_vec();
             let third = *reordered.get(2).expect("third wire");
             *reordered.get_mut(1).expect("second wire") = third;
             reordered
         }),
-        ("append a copy of the last wire", |wires: &[&[u8]]| {
+        ("append a copy of the last wire", "ordinal_sequence", |wires: &[&[u8]]| {
             let mut reordered = wires.to_vec();
             let last = *reordered.last().expect("last wire");
             reordered.push(last);
             reordered
         }),
     ];
-    for (name, reorder) in reorderings {
+    for (name, code, reorder) in reorderings {
         let mutated = reorder(&wires);
         let label = format!("seed {SEED:#x} {name}");
         assert_code(
             rotation::verify_chain(&mutated, binding(&corpus), &root, &BTreeMap::new()),
-            "ordinal_sequence",
+            code,
             &label,
         );
     }

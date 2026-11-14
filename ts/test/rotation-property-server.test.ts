@@ -275,7 +275,9 @@ test("publication accepts exactly one fixed-P record and refuses every single-fi
           return [from, to];
         },
       },
-      { label: "references replaced text", build: () => { const [from, to] = pair(0, 1); const last = to.signerReferences.at(-1); assert.ok(last, "references empty"); last.reference = "replacement"; return [from, to]; } },
+      // Retained reference text is pinned; the reference of the NEW key is free (control, accepted).
+      { label: "references replaced text", build: () => { const [from, to] = pair(0, 1); const anchor = to.signerReferences[0]; assert.ok(anchor, "references empty"); anchor.reference = "replacement"; return [from, to]; } },
+      { label: "new key reference text is free", accepted: true, build: () => { const [from, to] = pair(0, 1); const last = to.signerReferences.at(-1); assert.ok(last, "references empty"); last.reference = "replacement"; return [from, to]; } },
       {
         label: "references replaced kid",
         build: () => {

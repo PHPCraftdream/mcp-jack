@@ -486,14 +486,17 @@ fn page_and_body_limits_hold_exactly() {
 
     // Тело ровно MAX_RESULT_BODY_BYTES: текущий ключ — реальный fixture anchor.
     // Payload входит в тело ДВАЖДЫ (text и structuredContent), поэтому filler
-    // получает ровно половину разницы; она чётна при фиксированных 43-символьных
-    // kid/public_key fixture anchor.
+    // получает половину разницы, а нечётный остаток добирается пробелом вне payload.
     let anchor = &corpus.keys["anchor"];
     let anchor_public = decode_b64url_fixed(&anchor.public_key, 32).expect("fixture anchor key");
     let empty = result_body(&anchor.kid, &anchor.public_key, "");
-    let filler_len = (rotation::MAX_RESULT_BODY_BYTES - empty.len()) / 2;
-    let filler = filler_text(&mut prng, filler_len);
-    let exact = result_body(&anchor.kid, &anchor.public_key, &filler);
+    let deficit = rotation::MAX_RESULT_BODY_BYTES - empty.len();
+    let filler = filler_text(&mut prng, deficit / 2);
+    let mut exact = result_body(&anchor.kid, &anchor.public_key, &filler);
+    if deficit % 2 == 1 {
+        // Нечётная разница: один пробел вне payload добирает ровно до лимита.
+        exact = exact.replacen(r#""2.0", "id""#, r#""2.0",  "id""#, 1);
+    }
     assert_eq!(
         exact.len(),
         rotation::MAX_RESULT_BODY_BYTES,
