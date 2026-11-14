@@ -102,9 +102,10 @@ fn splitmix64_value(input: u64) -> u64 {
 // Больше 255 различных индексов: seed выводится из PRNG, а не из одного байта.
 fn signer_seed(index: u64) -> [u8; 32] {
     let mut seed = [0_u8; 32];
-    for (lane, value) in seed.chunks_exact_mut(8).enumerate() {
-        let mixed = splitmix64_value(index * 4 + u64::try_from(lane).expect("small lane"));
-        value.copy_from_slice(&mixed.to_be_bytes());
+    for lane in 0..4_u64 {
+        let mixed = splitmix64_value(index * 4 + lane);
+        let start = usize::try_from(lane * 8).expect("small offset");
+        seed[start..start + 8].copy_from_slice(&mixed.to_be_bytes());
     }
     seed
 }
@@ -585,7 +586,7 @@ fn server_key_pages_serve_generated_rings_exactly_and_refuse_wrong_cursors() {
         &root,
     )
     .expect("validated 20-record ring");
-    let signer = snapshot.public.keys.get(0).expect("first key").public_key;
+    let signer = snapshot.public.keys.first().expect("first key").public_key;
     let wires: Vec<String> = records.iter().map(|record| record.wire.clone()).collect();
     for k in 0..=20_u64 {
         let index = usize::try_from(k).expect("cursor index");
@@ -615,7 +616,7 @@ fn server_key_pages_serve_generated_rings_exactly_and_refuse_wrong_cursors() {
         );
         assert_eq!(
             page.current_kid,
-            snapshot.public.keys.get(0).expect("first key").kid,
+            snapshot.public.keys.first().expect("first key").kid,
             "{label} current kid"
         );
     }
@@ -656,7 +657,7 @@ fn server_key_pages_serve_generated_rings_exactly_and_refuse_wrong_cursors() {
         &root,
     )
     .expect("validated 17-record ring");
-    let bounded_signer = bounded.public.keys.get(0).expect("first key").public_key;
+    let bounded_signer = bounded.public.keys.first().expect("first key").public_key;
     let label = format!("seed {SEED:#x} first bounded page");
     let first_page = rotation::server_key_page(
         &bounded,
@@ -674,7 +675,7 @@ fn server_key_pages_serve_generated_rings_exactly_and_refuse_wrong_cursors() {
         &bounded,
         &ResultCursor {
             ordinal: 1,
-            hash: records.get(0).expect("first record").hash.clone(),
+            hash: records.first().expect("first record").hash.clone(),
         },
         &bounded_signer,
     )

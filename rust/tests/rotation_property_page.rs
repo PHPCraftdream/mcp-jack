@@ -81,9 +81,10 @@ fn splitmix64_value(input: u64) -> u64 {
 // Больше 255 различных индексов: seed выводится из PRNG, а не из одного байта.
 fn signer_seed(index: u64) -> [u8; 32] {
     let mut seed = [0_u8; 32];
-    for (lane, value) in seed.chunks_exact_mut(8).enumerate() {
-        let mixed = splitmix64_value(index * 4 + u64::try_from(lane).expect("small lane"));
-        value.copy_from_slice(&mixed.to_be_bytes());
+    for lane in 0..4_u64 {
+        let mixed = splitmix64_value(index * 4 + lane);
+        let start = usize::try_from(lane * 8).expect("small offset");
+        seed[start..start + 8].copy_from_slice(&mixed.to_be_bytes());
     }
     seed
 }
@@ -265,7 +266,7 @@ fn generated_pages_frame_one_contiguous_extension_from_the_exact_cursor() {
         ordinal: 2,
         hash: records.get(1).expect("second record").hash.clone(),
     };
-    let acknowledged = BTreeMap::from([(1, records.get(0).expect("first record").hash.clone())]);
+    let acknowledged = BTreeMap::from([(1, records.first().expect("first record").hash.clone())]);
     let label = format!("seed {SEED:#x} acknowledged prefix page");
     let result = result_literal(&root, &wires, 6, &tail.hash, true);
     let framing = rotation::validate_page_framing(&result, &cursor, &records, &acknowledged)
@@ -300,7 +301,7 @@ fn base_case(root: &Checkpoint, records: &[Record]) -> FramingCase {
             ordinal: 2,
             hash: records.get(1).expect("second record").hash.clone(),
         },
-        acknowledged: BTreeMap::from([(1, records.get(0).expect("first record").hash.clone())]),
+        acknowledged: BTreeMap::from([(1, records.first().expect("first record").hash.clone())]),
     }
 }
 
