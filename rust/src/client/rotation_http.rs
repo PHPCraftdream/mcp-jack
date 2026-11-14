@@ -183,7 +183,7 @@ impl RotationHttpClient {
             ],
             body: body.to_vec(),
         };
-        let response = self.transport.round_trip(request).map_err(wire_error)?;
+        let response = self.transport.round_trip(request).map_err(Self::wire_error)?;
         // Strict status/header handling (rotation-http-wire.ts exchange()).
         // HttpTransport never follows redirects; the whole 3xx range is
         // refused (Go: ErrRedirectRefused).
