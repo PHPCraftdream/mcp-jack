@@ -2,7 +2,7 @@ use super::store_tests::{options, Sandbox};
 use super::*;
 use crate::client::{ClientError, InMemorySigner, Signer};
 use crate::ed25519::verify;
-use crate::server::response_keys::{ResponseKeyRequest, ResponseKeys, ResponseSigner};
+use crate::server::response_keys::{ResponseKeyRequest, ResponseKeys};
 use crate::signing::response_signing_string;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -367,7 +367,10 @@ fn announce_concurrent_clock_conflict_does_not_retry_or_publish() {
         None,
     ];
     let provider = new_provider(&f, hooks);
-    let error = provider.announce("next", f.keys[1].kid()).unwrap_err();
+    let error = provider
+        .announce("next", f.keys[1].kid())
+        .err()
+        .expect("announce must be refused");
     assert_eq!(error.code, "rotation_state_changed");
     assert_eq!(proofs.load(Ordering::SeqCst), 1);
     assert_eq!(authorizations.load(Ordering::SeqCst), 1, "no retry");
@@ -390,7 +393,10 @@ fn announce_invalid_proof_never_invokes_old_authorization() {
         }),
     };
     let provider = RotationServerProvider::new(Arc::clone(&f.store), mixed).unwrap();
-    let error = provider.announce("next", f.keys[1].kid()).unwrap_err();
+    let error = provider
+        .announce("next", f.keys[1].kid())
+        .err()
+        .expect("announce must be refused");
     assert_eq!(error.code, "rotation_state_unavailable");
     assert_eq!(old_signs.load(Ordering::SeqCst), 0, "old signer stays idle");
     let mut store = lock(&f);
@@ -410,7 +416,7 @@ fn constructor_inventory_validation() {
     let oversized: Vec<RotationServerKey> = (0..=MAX_RETAINED_KEYS)
         .map(|index| RotationServerKey {
             reference: format!("key-{index}"),
-            signer: Arc::clone(&shared),
+            signer: shared.clone(),
         })
         .collect();
     assert_eq!(oversized.len(), MAX_RETAINED_KEYS + 1);

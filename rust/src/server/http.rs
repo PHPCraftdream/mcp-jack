@@ -67,7 +67,7 @@ const DEFAULT_MAX_RESPONSE_BYTES: usize = 1 << 20;
 enum SigningProfile {
     /// Static Ed25519 key; the existing current-v1 behavior.
     Static {
-        key: ed25519_dalek::SigningKey,
+        key: Box<ed25519_dalek::SigningKey>,
         kid: String,
     },
     /// Rotating authorization profile (Go: HandlerConfig.ResponseKeys).
@@ -173,7 +173,7 @@ impl JackLayer {
         Self {
             signing: SigningProfile::Static {
                 kid: key_id(cfg.server_key.verifying_key().as_bytes()),
-                key: cfg.server_key,
+                key: Box::new(cfg.server_key),
             },
             verifier: cfg.verifier,
             limit,
