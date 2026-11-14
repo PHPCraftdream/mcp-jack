@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use mcp_jack::auth_header::{format_response_auth, parse_request_auth, ResponseAuth};
+use mcp_jack::auth_header::{format_response_auth, parse_request_auth, RequestAuth, ResponseAuth};
 use mcp_jack::client::rotation_http::RotationHttpClient;
 use mcp_jack::client::{InMemorySigner, Signer};
 use mcp_jack::encoding::{decode_b64url_fixed, encode_b64url, key_id};
@@ -766,7 +766,8 @@ fn constructor_bounds_refuse_bad_profiles_without_side_effects() {
         Arc::new(client_signer()),
         Duration::from_secs(0),
     )
-    .expect_err("zero timeout is refused");
+    .err()
+    .expect("zero timeout is refused");
     assert_eq!(error.code, "rotation_state_unknown");
     // Deadlines above 30 seconds are refused.
     let error = RotationHttpClient::new(
@@ -779,7 +780,8 @@ fn constructor_bounds_refuse_bad_profiles_without_side_effects() {
         Arc::new(client_signer()),
         Duration::from_secs(31),
     )
-    .expect_err("31 second timeout is refused");
+    .err()
+    .expect("31 second timeout is refused");
     assert_eq!(error.code, "rotation_state_unknown");
     // Window 0 is refused.
     let error = RotationHttpClient::new(
@@ -792,7 +794,8 @@ fn constructor_bounds_refuse_bad_profiles_without_side_effects() {
         Arc::new(client_signer()),
         TIMEOUT,
     )
-    .expect_err("zero window is refused");
+    .err()
+    .expect("zero window is refused");
     assert_eq!(error.code, "rotation_state_unknown");
     // Window above 120 is refused.
     let error = RotationHttpClient::new(
@@ -805,7 +808,8 @@ fn constructor_bounds_refuse_bad_profiles_without_side_effects() {
         Arc::new(client_signer()),
         TIMEOUT,
     )
-    .expect_err("121 window is refused");
+    .err()
+    .expect("121 window is refused");
     assert_eq!(error.code, "rotation_state_unknown");
     // Plain http is refused for a non-loopback-literal host.
     let error = RotationHttpClient::new(
@@ -818,7 +822,8 @@ fn constructor_bounds_refuse_bad_profiles_without_side_effects() {
         Arc::new(client_signer()),
         TIMEOUT,
     )
-    .expect_err("non-loopback plain http is refused");
+    .err()
+    .expect("non-loopback plain http is refused");
     assert_eq!(error.code, "rotation_state_unknown");
     // Positive control: a well-formed https profile constructs.
     let ok = RotationHttpClient::new(
