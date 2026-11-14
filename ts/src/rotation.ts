@@ -17,4 +17,4 @@ export * from "./rotation-server-key.js";
 export { RotationServerStore } from "./rotation-server-store.js";
 export type { RotationServerStoreOptions } from "./rotation-server-store-format.js";
 export { RotationServerProvider } from "./rotation-server-provider.js";
-export type { PinnedRotationSigner, RotationPublication, RotationServerKey } from "./rotation-server-provider.js";
+export type { PinnedRotationSigner, RotationPublication, RotationResponseAuthorization, RotationResponseKeyRequest, RotationServerKey } from "./rotation-server-provider.js";
