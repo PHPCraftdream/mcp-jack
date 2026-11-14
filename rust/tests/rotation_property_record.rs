@@ -108,14 +108,9 @@ fn generated_chain(
     let mut records = Vec::new();
     for index in 1..=count {
         let next = signer(index);
-        let record = rotation::create_record(
-            binding(corpus),
-            &previous,
-            &old,
-            &next,
-            published_at(index),
-        )
-        .expect("generated rotation record");
+        let record =
+            rotation::create_record(binding(corpus), &previous, &old, &next, published_at(index))
+                .expect("generated rotation record");
         previous = Checkpoint {
             ordinal: record.ordinal,
             hash: record.hash.clone(),
@@ -175,18 +170,24 @@ fn generated_records_round_trip_with_exact_fields() {
         assert_eq!(root.ordinal, 0, "seed {SEED:#x} root ordinal");
         for (index, record) in records.iter().enumerate() {
             let base = format!("seed {SEED:#x} chain {length} record {index}");
-            let parsed = rotation::parse_record(
-                record.wire.as_bytes(),
-                binding(&corpus),
-                &authorizers,
-            )
-            .expect(&base);
+            let parsed =
+                rotation::parse_record(record.wire.as_bytes(), binding(&corpus), &authorizers)
+                    .expect(&base);
             assert_eq!(parsed.ordinal, record.ordinal, "{base} field ordinal");
-            assert_eq!(parsed.previous_hash, record.previous_hash, "{base} field previous_hash");
+            assert_eq!(
+                parsed.previous_hash, record.previous_hash,
+                "{base} field previous_hash"
+            );
             assert_eq!(parsed.old_kid, record.old_kid, "{base} field old_kid");
             assert_eq!(parsed.new_kid, record.new_kid, "{base} field new_kid");
-            assert_eq!(parsed.public_key, record.public_key, "{base} field public_key");
-            assert_eq!(parsed.published_at, record.published_at, "{base} field published_at");
+            assert_eq!(
+                parsed.public_key, record.public_key,
+                "{base} field public_key"
+            );
+            assert_eq!(
+                parsed.published_at, record.published_at,
+                "{base} field published_at"
+            );
             assert_eq!(
                 parsed.activates_at,
                 record.published_at + rotation::GRACE_SECONDS,
@@ -198,12 +199,9 @@ fn generated_records_round_trip_with_exact_fields() {
                 body_hash(record.wire.as_bytes()),
                 "{base} field hash"
             );
-            let second = rotation::parse_record(
-                record.wire.as_bytes(),
-                binding(&corpus),
-                &authorizers,
-            )
-            .expect(&base);
+            let second =
+                rotation::parse_record(record.wire.as_bytes(), binding(&corpus), &authorizers)
+                    .expect(&base);
             assert_eq!(second, parsed, "{base} second parse is equal");
         }
     }
@@ -224,18 +222,12 @@ fn every_single_byte_mutation_of_a_generated_record_is_rejected() {
     let full = records4.get(full_position).expect("swept record");
     let other = records2.get(other_position).expect("sampled record");
     let baseline_label = format!("seed {SEED:#x} baseline parses");
-    let baseline_full = rotation::parse_record(
-        full.wire.as_bytes(),
-        binding(&corpus),
-        &authorizers4,
-    )
-    .expect(&baseline_label);
-    let baseline_other = rotation::parse_record(
-        other.wire.as_bytes(),
-        binding(&corpus),
-        &authorizers2,
-    )
-    .expect(&baseline_label);
+    let baseline_full =
+        rotation::parse_record(full.wire.as_bytes(), binding(&corpus), &authorizers4)
+            .expect(&baseline_label);
+    let baseline_other =
+        rotation::parse_record(other.wire.as_bytes(), binding(&corpus), &authorizers2)
+            .expect(&baseline_label);
 
     // Полный sweep по одной записи: каждый одиночный байт-переворот отклонён.
     let mut exercised = 0_usize;
@@ -247,12 +239,9 @@ fn every_single_byte_mutation_of_a_generated_record_is_rejected() {
             rotation::parse_record(&mutated, binding(&corpus), &authorizers4).is_err(),
             "{label}"
         );
-        let reparsed = rotation::parse_record(
-            full.wire.as_bytes(),
-            binding(&corpus),
-            &authorizers4,
-        )
-        .expect(&label);
+        let reparsed =
+            rotation::parse_record(full.wire.as_bytes(), binding(&corpus), &authorizers4)
+                .expect(&label);
         assert_eq!(reparsed, baseline_full, "{label} original unchanged");
         exercised += 1;
     }
@@ -285,7 +274,11 @@ fn every_single_byte_mutation_of_a_generated_record_is_rejected() {
             "{label} xor 128"
         );
     }
-    assert_eq!(baseline_other.ordinal, other_index + 1, "seed {SEED:#x} other ordinal");
+    assert_eq!(
+        baseline_other.ordinal,
+        other_index + 1,
+        "seed {SEED:#x} other ordinal"
+    );
 }
 
 #[test]
@@ -305,7 +298,11 @@ fn line_targeted_mutations_fail_with_exact_codes() {
     let mut cases: Vec<(usize, String, &'static str)> = vec![
         (0, "mcp-jack/server-key-rotation/min2".to_owned(), "domain"),
         (1, "!!!".to_owned(), "binding_encoding"),
-        (1, encode_b64url(b"https://other.example.test/mcp"), "binding"),
+        (
+            1,
+            encode_b64url(b"https://other.example.test/mcp"),
+            "binding",
+        ),
         (2, "!!!".to_owned(), "binding_encoding"),
         (2, encode_b64url(b"https://other.example.test"), "binding"),
     ];
@@ -324,10 +321,17 @@ fn line_targeted_mutations_fail_with_exact_codes() {
     }
     cases.push((4, "x".to_owned(), "new_proof"));
     cases.push((5, "!".to_owned(), "key_id"));
-    cases.push((5, encode_b64url(&prng_bytes(&mut prng)), "unknown_authorizer"));
+    cases.push((
+        5,
+        encode_b64url(&prng_bytes(&mut prng)),
+        "unknown_authorizer",
+    ));
     cases.push((6, "!".to_owned(), "key_id"));
     cases.push((6, encode_b64url(&prng_bytes(&mut prng)), "new_key_id"));
-    let anchor_prefix = anchor_public.get(..42).expect("42-character prefix").to_owned();
+    let anchor_prefix = anchor_public
+        .get(..42)
+        .expect("42-character prefix")
+        .to_owned();
     cases.push((7, anchor_prefix, "base64url"));
     cases.push((7, encode_b64url(&forced_invalid_key(&mut prng)), "new_key"));
     cases.push((8, "01".to_owned(), "timestamp"));
@@ -434,7 +438,10 @@ fn chain_with_tail(
     records: &[Record],
     tail: &str,
 ) -> Result<Vec<Record>, RotationError> {
-    let mut wires: Vec<&[u8]> = records.iter().map(|record| record.wire.as_bytes()).collect();
+    let mut wires: Vec<&[u8]> = records
+        .iter()
+        .map(|record| record.wire.as_bytes())
+        .collect();
     wires.push(tail.as_bytes());
     rotation::verify_chain(&wires, binding(corpus), root, &BTreeMap::new())
 }
@@ -451,46 +458,73 @@ fn chain_order_duplication_gaps_and_signer_references_are_rejected() {
     let corpus = corpus();
     let (root, records) = generated_chain(&corpus, 5, |index| 1000 + index);
     assert_eq!(records.len(), 5, "seed {SEED:#x} chain length");
-    let wires: Vec<&[u8]> = records.iter().map(|record| record.wire.as_bytes()).collect();
+    let wires: Vec<&[u8]> = records
+        .iter()
+        .map(|record| record.wire.as_bytes())
+        .collect();
     let full_label = format!("seed {SEED:#x} full chain verifies");
     let verified = rotation::verify_chain(&wires, binding(&corpus), &root, &BTreeMap::new())
         .expect(&full_label);
     assert_eq!(verified.len(), 5, "seed {SEED:#x} verified length");
 
     let reorderings: &[Reordering] = &[
-        ("swap first two wires", "unknown_authorizer", |wires: &[&[u8]]| {
-            let mut reordered = wires.to_vec();
-            reordered.swap(0, 1);
-            reordered
-        }),
-        ("reverse all wires", "unknown_authorizer", |wires: &[&[u8]]| {
-            let mut reordered = wires.to_vec();
-            reordered.reverse();
-            reordered
-        }),
-        ("duplicate the first wire", "ordinal_sequence", |wires: &[&[u8]]| {
-            let mut reordered = wires.to_vec();
-            let first = reordered.first().copied().expect("first wire");
-            reordered.insert(1, first);
-            reordered
-        }),
-        ("remove the third wire", "unknown_authorizer", |wires: &[&[u8]]| {
-            let mut reordered = wires.to_vec();
-            reordered.remove(2);
-            reordered
-        }),
-        ("replace the second wire with the third", "unknown_authorizer", |wires: &[&[u8]]| {
-            let mut reordered = wires.to_vec();
-            let third = *reordered.get(2).expect("third wire");
-            *reordered.get_mut(1).expect("second wire") = third;
-            reordered
-        }),
-        ("append a copy of the last wire", "ordinal_sequence", |wires: &[&[u8]]| {
-            let mut reordered = wires.to_vec();
-            let last = *reordered.last().expect("last wire");
-            reordered.push(last);
-            reordered
-        }),
+        (
+            "swap first two wires",
+            "unknown_authorizer",
+            |wires: &[&[u8]]| {
+                let mut reordered = wires.to_vec();
+                reordered.swap(0, 1);
+                reordered
+            },
+        ),
+        (
+            "reverse all wires",
+            "unknown_authorizer",
+            |wires: &[&[u8]]| {
+                let mut reordered = wires.to_vec();
+                reordered.reverse();
+                reordered
+            },
+        ),
+        (
+            "duplicate the first wire",
+            "ordinal_sequence",
+            |wires: &[&[u8]]| {
+                let mut reordered = wires.to_vec();
+                let first = reordered.first().copied().expect("first wire");
+                reordered.insert(1, first);
+                reordered
+            },
+        ),
+        (
+            "remove the third wire",
+            "unknown_authorizer",
+            |wires: &[&[u8]]| {
+                let mut reordered = wires.to_vec();
+                reordered.remove(2);
+                reordered
+            },
+        ),
+        (
+            "replace the second wire with the third",
+            "unknown_authorizer",
+            |wires: &[&[u8]]| {
+                let mut reordered = wires.to_vec();
+                let third = *reordered.get(2).expect("third wire");
+                *reordered.get_mut(1).expect("second wire") = third;
+                reordered
+            },
+        ),
+        (
+            "append a copy of the last wire",
+            "ordinal_sequence",
+            |wires: &[&[u8]]| {
+                let mut reordered = wires.to_vec();
+                let last = *reordered.last().expect("last wire");
+                reordered.push(last);
+                reordered
+            },
+        ),
     ];
     for (name, code, reorder) in reorderings {
         let mutated = reorder(&wires);
@@ -586,11 +620,19 @@ fn chain_order_duplication_gaps_and_signer_references_are_rejected() {
         }
         generated_keys.insert(key.kid().to_owned(), key.public_key());
     }
-    assert_eq!(generated_keys.len(), 1153, "seed {SEED:#x} generated key count");
+    assert_eq!(
+        generated_keys.len(),
+        1153,
+        "seed {SEED:#x} generated key count"
+    );
     let mut with_checkpoint = generated_keys.clone();
     with_checkpoint.insert(root.kid.clone(), root.public_key);
     with_checkpoint.remove(&dropped_kid);
-    assert_eq!(with_checkpoint.len(), 1153, "seed {SEED:#x} retained with anchor");
+    assert_eq!(
+        with_checkpoint.len(),
+        1153,
+        "seed {SEED:#x} retained with anchor"
+    );
     let kept_label = format!("seed {SEED:#x} retained map with the checkpoint kid");
     rotation::verify_chain(&[], binding(&corpus), &root, &with_checkpoint).expect(&kept_label);
     let label = format!("seed {SEED:#x} retained map without the checkpoint kid");
@@ -601,7 +643,11 @@ fn chain_order_duplication_gaps_and_signer_references_are_rejected() {
     );
     let mut oversized = generated_keys.clone();
     oversized.insert(root.kid.clone(), root.public_key);
-    assert_eq!(oversized.len(), 1154, "seed {SEED:#x} retained past the limit");
+    assert_eq!(
+        oversized.len(),
+        1154,
+        "seed {SEED:#x} retained past the limit"
+    );
     let label = format!("seed {SEED:#x} retained map one past the limit");
     assert_code(
         rotation::verify_chain(&[], binding(&corpus), &root, &oversized),
@@ -630,7 +676,11 @@ fn chain_order_duplication_gaps_and_signer_references_are_rejected() {
 fn record_framing_bounds_hold_exactly_at_8192_bytes() {
     let corpus = corpus();
     let authorizers = BTreeMap::new();
-    assert_eq!(rotation::MAX_RECORD_BYTES, 8192, "seed {SEED:#x} record limit");
+    assert_eq!(
+        rotation::MAX_RECORD_BYTES,
+        8192,
+        "seed {SEED:#x} record limit"
+    );
     assert_code(
         rotation::parse_record(&[], binding(&corpus), &authorizers),
         "record_size",

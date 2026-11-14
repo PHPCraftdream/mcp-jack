@@ -81,14 +81,9 @@ fn generated_chain(
     let mut records = Vec::new();
     for index in 1..=count {
         let next = signer(index);
-        let record = rotation::create_record(
-            binding(corpus),
-            &previous,
-            &old,
-            &next,
-            published_at(index),
-        )
-        .expect("generated rotation record");
+        let record =
+            rotation::create_record(binding(corpus), &previous, &old, &next, published_at(index))
+                .expect("generated rotation record");
         previous = Checkpoint {
             ordinal: record.ordinal,
             hash: record.hash.clone(),
@@ -186,13 +181,9 @@ fn limits_hold_exactly_at_pending_retired_and_retained_boundaries() {
     let mut retired_edge = trust_from(&corpus, &root, records.get(..1152).expect("1152 prefix"));
     retired_edge.clock.high_water = 1000 + 1024 + rotation::GRACE_SECONDS;
     let label = format!("seed {SEED:#x} boundary snapshot accepted");
-    let validated = rotation::validate_trust_snapshot(
-        &retired_edge,
-        binding(&corpus),
-        WINDOW,
-        &root,
-    )
-    .expect(&label);
+    let validated =
+        rotation::validate_trust_snapshot(&retired_edge, binding(&corpus), WINDOW, &root)
+            .expect(&label);
     assert_eq!(
         validated.keys.len(),
         rotation::MAX_RETAINED_KEYS,
@@ -211,8 +202,14 @@ fn limits_hold_exactly_at_pending_retired_and_retained_boundaries() {
             retired += 1;
         }
     }
-    assert_eq!(pending, 128, "seed {SEED:#x} pending {pending} at the boundary");
-    assert_eq!(retired, 1024, "seed {SEED:#x} retired {retired} at the boundary");
+    assert_eq!(
+        pending, 128,
+        "seed {SEED:#x} pending {pending} at the boundary"
+    );
+    assert_eq!(
+        retired, 1024,
+        "seed {SEED:#x} retired {retired} at the boundary"
+    );
 
     // Retained + 1: shape-проверка records.len() >= MAX_RETAINED_KEYS срабатывает
     // до любого парсинга и подписей — все 1153 wire при этом настоящие.

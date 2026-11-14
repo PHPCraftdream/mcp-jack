@@ -115,7 +115,11 @@ fn differential_corpus_is_well_formed_and_sized() {
         41
     );
     assert_eq!(
-        corpus.result_bodies.iter().filter(|case| case.accept).count(),
+        corpus
+            .result_bodies
+            .iter()
+            .filter(|case| case.accept)
+            .count(),
         8
     );
     assert_eq!(

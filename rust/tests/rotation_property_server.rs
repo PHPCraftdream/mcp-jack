@@ -131,14 +131,9 @@ fn generated_chain(
     let mut records = Vec::new();
     for index in 1..=count {
         let next = signer(index);
-        let record = rotation::create_record(
-            binding(corpus),
-            &previous,
-            &old,
-            &next,
-            published_at(index),
-        )
-        .expect("generated rotation record");
+        let record =
+            rotation::create_record(binding(corpus), &previous, &old, &next, published_at(index))
+                .expect("generated rotation record");
         previous = Checkpoint {
             ordinal: record.ordinal,
             hash: record.hash.clone(),
@@ -163,7 +158,10 @@ fn prng_bytes(prng: &mut SplitMix64) -> [u8; 32] {
 fn flip_first_char(text: &str) -> String {
     let first = text.chars().next().expect("non-empty string");
     let replacement = if first == 'A' { 'B' } else { 'A' };
-    let flipped = format!("{replacement}{}", text.get(first.len_utf8()..).expect("tail"));
+    let flipped = format!(
+        "{replacement}{}",
+        text.get(first.len_utf8()..).expect("tail")
+    );
     assert_ne!(flipped, text, "flip must change the string");
     flipped
 }
@@ -306,14 +304,26 @@ fn assert_only_free_fields_changed(
             changed.push(name.to_owned());
         }
     };
-    same("public.binding", decoded.public.binding == original.public.binding);
-    same("public.window", decoded.public.window == original.public.window);
+    same(
+        "public.binding",
+        decoded.public.binding == original.public.binding,
+    );
+    same(
+        "public.window",
+        decoded.public.window == original.public.window,
+    );
     same(
         "checkpoint.ordinal",
         decoded.public.checkpoint.ordinal == original.public.checkpoint.ordinal,
     );
-    same("checkpoint.hash", decoded.public.checkpoint.hash == original.public.checkpoint.hash);
-    same("checkpoint.kid", decoded.public.checkpoint.kid == original.public.checkpoint.kid);
+    same(
+        "checkpoint.hash",
+        decoded.public.checkpoint.hash == original.public.checkpoint.hash,
+    );
+    same(
+        "checkpoint.kid",
+        decoded.public.checkpoint.kid == original.public.checkpoint.kid,
+    );
     same(
         "checkpoint.public_key",
         decoded.public.checkpoint.public_key == original.public.checkpoint.public_key,
@@ -322,15 +332,33 @@ fn assert_only_free_fields_changed(
         "checkpoint.published_at",
         decoded.public.checkpoint.published_at == original.public.checkpoint.published_at,
     );
-    same("head.ordinal", decoded.public.head.ordinal == original.public.head.ordinal);
-    same("head.hash", decoded.public.head.hash == original.public.head.hash);
-    same("public.records", decoded.public.records == original.public.records);
-    same("keys.len", decoded.public.keys.len() == original.public.keys.len());
+    same(
+        "head.ordinal",
+        decoded.public.head.ordinal == original.public.head.ordinal,
+    );
+    same(
+        "head.hash",
+        decoded.public.head.hash == original.public.head.hash,
+    );
+    same(
+        "public.records",
+        decoded.public.records == original.public.records,
+    );
+    same(
+        "keys.len",
+        decoded.public.keys.len() == original.public.keys.len(),
+    );
     for (index, decoded_key) in decoded.public.keys.iter().enumerate() {
         let original_key = original.public.keys.get(index).expect("original key");
         let position = format!("keys[{index}]");
-        same(&format!("{position}.ordinal"), decoded_key.ordinal == original_key.ordinal);
-        same(&format!("{position}.kid"), decoded_key.kid == original_key.kid);
+        same(
+            &format!("{position}.ordinal"),
+            decoded_key.ordinal == original_key.ordinal,
+        );
+        same(
+            &format!("{position}.kid"),
+            decoded_key.kid == original_key.kid,
+        );
         same(
             &format!("{position}.public_key"),
             decoded_key.public_key == original_key.public_key,
@@ -344,9 +372,18 @@ fn assert_only_free_fields_changed(
             decoded_key.known_cutoff == original_key.known_cutoff,
         );
     }
-    same("clock.binding", decoded.public.clock.binding == original.public.clock.binding);
-    same("clock.window", decoded.public.clock.window == original.public.clock.window);
-    same("format_version", decoded.format_version == original.format_version);
+    same(
+        "clock.binding",
+        decoded.public.clock.binding == original.public.clock.binding,
+    );
+    same(
+        "clock.window",
+        decoded.public.clock.window == original.public.clock.window,
+    );
+    same(
+        "format_version",
+        decoded.format_version == original.format_version,
+    );
     same(
         "signer_references.len",
         decoded.signer_references.len() == original.signer_references.len(),
@@ -396,11 +433,17 @@ fn generated_server_snapshots_round_trip_and_freeze() {
     // на байт длиннее — отказ и validate, и encode.
     let (root, records) = generated_chain(&corpus, 2, |index| 1000 + index);
     let mut boundary = server_from(trust_from(&corpus, &root, &records));
-    let reference = boundary.signer_references.first_mut().expect("anchor reference");
+    let reference = boundary
+        .signer_references
+        .first_mut()
+        .expect("anchor reference");
     reference.reference = "x".repeat(rotation::MAX_SIGNER_REFERENCE_BYTES);
     validate(&boundary, &corpus, &root).expect("inclusive reference limit");
     let mut oversized = boundary;
-    let reference = oversized.signer_references.first_mut().expect("anchor reference");
+    let reference = oversized
+        .signer_references
+        .first_mut()
+        .expect("anchor reference");
     reference.reference = "x".repeat(rotation::MAX_SIGNER_REFERENCE_BYTES + 1);
     let label = format!("seed {SEED:#x} reference past the limit");
     unavailable(validate(&oversized, &corpus, &root), &label);
@@ -491,11 +534,19 @@ fn publication_accepts_exactly_one_fixed_p_record_and_refuses_every_single_field
         let mutations: &[Mutation] = &[
             ("revision+1", |value| value.public.revision += 1),
             ("revision 0", |value| value.public.revision = 0),
-            ("clock.high_water+1", |value| value.public.clock.high_water += 1),
-            ("clock.high_water-1", |value| value.public.clock.high_water -= 1),
-            ("clock window changed", |value| value.public.clock.window += 1),
+            ("clock.high_water+1", |value| {
+                value.public.clock.high_water += 1
+            }),
+            ("clock.high_water-1", |value| {
+                value.public.clock.high_water -= 1
+            }),
+            ("clock window changed", |value| {
+                value.public.clock.window += 1
+            }),
             ("clock.revision 0", |value| value.public.clock.revision = 0),
-            ("clock.unsafe", |value| value.public.clock.unsafe_clock = true),
+            ("clock.unsafe", |value| {
+                value.public.clock.unsafe_clock = true
+            }),
             ("fenced desired", |value| value.public.fenced = true),
             ("records pop", |value| {
                 value.public.records.pop();
@@ -527,7 +578,9 @@ fn publication_accepts_exactly_one_fixed_p_record_and_refuses_every_single_field
             ("references pop", |value| {
                 value.signer_references.pop();
             }),
-            ("references swap", |value| value.signer_references.swap(0, 1)),
+            ("references swap", |value| {
+                value.signer_references.swap(0, 1)
+            }),
             ("references replaced text", |value| {
                 value.signer_references[0].reference = "replacement".to_owned()
             }),
@@ -625,7 +678,11 @@ fn server_key_pages_serve_generated_rings_exactly_and_refuse_wrong_cursors() {
     }
     for k in 1..=20_u64 {
         let index = usize::try_from(k).expect("cursor index");
-        let wrong = records.get((index + 3) % 20).expect("wrong record").hash.clone();
+        let wrong = records
+            .get((index + 3) % 20)
+            .expect("wrong record")
+            .hash
+            .clone();
         let correct = records.get(index - 1).expect("cursor record").hash.clone();
         assert_ne!(wrong, correct, "seed {SEED:#x} wrong hash for cursor {k}");
         let cursor = ResultCursor {
@@ -671,7 +728,11 @@ fn server_key_pages_serve_generated_rings_exactly_and_refuse_wrong_cursors() {
         &bounded_signer,
     )
     .expect(&label);
-    assert_eq!(first_page.records.len(), 16, "seed {SEED:#x} first page records");
+    assert_eq!(
+        first_page.records.len(),
+        16,
+        "seed {SEED:#x} first page records"
+    );
     assert!(!first_page.complete, "seed {SEED:#x} first page incomplete");
     let label = format!("seed {SEED:#x} second bounded page");
     let second_page = rotation::server_key_page(
@@ -683,7 +744,11 @@ fn server_key_pages_serve_generated_rings_exactly_and_refuse_wrong_cursors() {
         &bounded_signer,
     )
     .expect(&label);
-    assert_eq!(second_page.records.len(), 16, "seed {SEED:#x} second page records");
+    assert_eq!(
+        second_page.records.len(),
+        16,
+        "seed {SEED:#x} second page records"
+    );
     assert!(second_page.complete, "seed {SEED:#x} second page complete");
 }
 
@@ -691,7 +756,7 @@ fn server_key_pages_serve_generated_rings_exactly_and_refuse_wrong_cursors() {
 // Все импорты — внутри модуля, чтобы windows-сборка не видела неиспользуемых use.
 #[cfg(target_os = "linux")]
 mod linux_store {
-    use super::{anchor, corpus, SEED, SplitMix64};
+    use super::{anchor, corpus, SplitMix64, SEED};
     use mcp_jack::rotation::{OwnedBinding, RotationServerStore, RotationServerStoreOptions};
     use std::fs;
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
@@ -736,7 +801,10 @@ mod linux_store {
             std::process::id(),
             line!()
         ));
-        fs::DirBuilder::new().mode(0o700).create(&dir).expect("sandbox dir");
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&dir)
+            .expect("sandbox dir");
         let sandbox = Sandbox(dir);
 
         let path = sandbox.0.join("ring");
@@ -748,8 +816,8 @@ mod linux_store {
         let control = sandbox.0.join("control");
         write_file(&control, &original);
         let label = format!("seed {SEED:#x} control open");
-        let mut store = RotationServerStore::open(&control, options.clone(), || Ok(1000))
-            .expect(&label);
+        let mut store =
+            RotationServerStore::open(&control, options.clone(), || Ok(1000)).expect(&label);
         let label = format!("seed {SEED:#x} control snapshot");
         let (control_snapshot, _) = store.snapshot().expect(&label);
         assert_eq!(

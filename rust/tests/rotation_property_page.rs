@@ -110,14 +110,9 @@ fn generated_chain(
     let mut records = Vec::new();
     for index in 1..=count {
         let next = signer(index);
-        let record = rotation::create_record(
-            binding(corpus),
-            &previous,
-            &old,
-            &next,
-            published_at(index),
-        )
-        .expect("generated rotation record");
+        let record =
+            rotation::create_record(binding(corpus), &previous, &old, &next, published_at(index))
+                .expect("generated rotation record");
         previous = Checkpoint {
             ordinal: record.ordinal,
             hash: record.hash.clone(),
@@ -151,7 +146,10 @@ fn result_literal(
 fn flip_first_char(text: &str) -> String {
     let first = text.chars().next().expect("non-empty string");
     let replacement = if first == 'A' { 'B' } else { 'A' };
-    let flipped = format!("{replacement}{}", text.get(first.len_utf8()..).expect("tail"));
+    let flipped = format!(
+        "{replacement}{}",
+        text.get(first.len_utf8()..).expect("tail")
+    );
     assert_ne!(flipped, text, "flip must change the string");
     flipped
 }
@@ -227,16 +225,16 @@ fn generated_pages_frame_one_contiguous_extension_from_the_exact_cursor() {
             let partial = records.get(index..index + 2).expect("partial records");
             let partial_wires = wires.get(index..index + 2).expect("partial wires");
             let result = result_literal(&root, partial_wires, 6, &tail.hash, false);
-            let framing = rotation::validate_page_framing(
-                &result,
-                &cursor,
-                partial,
-                &BTreeMap::new(),
-            )
-            .expect(&label);
+            let framing =
+                rotation::validate_page_framing(&result, &cursor, partial, &BTreeMap::new())
+                    .expect(&label);
             let terminal = ResultCursor {
                 ordinal: k + 2,
-                hash: records.get(index + 1).expect("terminal record").hash.clone(),
+                hash: records
+                    .get(index + 1)
+                    .expect("terminal record")
+                    .hash
+                    .clone(),
             };
             assert_eq!(
                 framing,
@@ -269,8 +267,8 @@ fn generated_pages_frame_one_contiguous_extension_from_the_exact_cursor() {
     let acknowledged = BTreeMap::from([(1, records.first().expect("first record").hash.clone())]);
     let label = format!("seed {SEED:#x} acknowledged prefix page");
     let result = result_literal(&root, &wires, 6, &tail.hash, true);
-    let framing = rotation::validate_page_framing(&result, &cursor, &records, &acknowledged)
-        .expect(&label);
+    let framing =
+        rotation::validate_page_framing(&result, &cursor, &records, &acknowledged).expect(&label);
     assert_eq!(
         framing,
         PageFraming {
@@ -348,51 +346,91 @@ fn every_framing_mutation_is_rejected_with_its_exact_code() {
 
     let mut case = base_case(&root, &records);
     case.result.records.swap(0, 1);
-    assert_refused(&case, "rotation_record_invalid", "seed 0x5eed00b2 case 1 swap result wires");
+    assert_refused(
+        &case,
+        "rotation_record_invalid",
+        "seed 0x5eed00b2 case 1 swap result wires",
+    );
 
     let mut case = base_case(&root, &records);
     case.records.swap(0, 1);
     case.result.records.swap(0, 1);
-    assert_refused(&case, "rotation_gap", "seed 0x5eed00b2 case 2 swap page records");
+    assert_refused(
+        &case,
+        "rotation_gap",
+        "seed 0x5eed00b2 case 2 swap page records",
+    );
 
     let mut case = base_case(&root, &records);
     let first_record = case.records.first().expect("first record").clone();
     let first_wire = case.result.records.first().expect("first wire").clone();
     case.records.insert(1, first_record);
     case.result.records.insert(1, first_wire);
-    assert_refused(&case, "rotation_gap", "seed 0x5eed00b2 case 3 duplicate record");
+    assert_refused(
+        &case,
+        "rotation_gap",
+        "seed 0x5eed00b2 case 3 duplicate record",
+    );
 
     let mut case = base_case(&root, &records);
     case.records.remove(1);
     case.result.records.remove(1);
-    assert_refused(&case, "rotation_gap", "seed 0x5eed00b2 case 4 remove record");
+    assert_refused(
+        &case,
+        "rotation_gap",
+        "seed 0x5eed00b2 case 4 remove record",
+    );
 
     let mut case = base_case(&root, &records);
     *case.result.records.get_mut(2).expect("third wire") = "x".to_owned();
-    assert_refused(&case, "rotation_record_invalid", "seed 0x5eed00b2 case 5 replace wire");
+    assert_refused(
+        &case,
+        "rotation_record_invalid",
+        "seed 0x5eed00b2 case 5 replace wire",
+    );
 
     let mut case = base_case(&root, &records);
     let mutated = case.records.get_mut(2).expect("third record");
     mutated.hash = flip_first_char(&mutated.hash);
-    assert_refused(&case, "rotation_record_invalid", "seed 0x5eed00b2 case 6 flip record hash");
+    assert_refused(
+        &case,
+        "rotation_record_invalid",
+        "seed 0x5eed00b2 case 6 flip record hash",
+    );
 
     let mut case = base_case(&root, &records);
     case.cursor.hash = case.records.first().expect("first record").hash.clone();
-    assert_refused(&case, "rotation_conflict", "seed 0x5eed00b2 case 7 cursor hash stale");
+    assert_refused(
+        &case,
+        "rotation_conflict",
+        "seed 0x5eed00b2 case 7 cursor hash stale",
+    );
 
     let mut case = base_case(&root, &records);
     let saved = case.acknowledged.get_mut(&1).expect("acknowledged entry");
     *saved = flip_first_char(saved);
-    assert_refused(&case, "rotation_conflict", "seed 0x5eed00b2 case 8 flip acked hash");
+    assert_refused(
+        &case,
+        "rotation_conflict",
+        "seed 0x5eed00b2 case 8 flip acked hash",
+    );
 
     let mut case = base_case(&root, &records);
     case.acknowledged.clear();
-    assert_refused(&case, "rotation_gap", "seed 0x5eed00b2 case 9 drop acked map");
+    assert_refused(
+        &case,
+        "rotation_gap",
+        "seed 0x5eed00b2 case 9 drop acked map",
+    );
 
     let mut case = base_case(&root, &records);
     case.records.truncate(1);
     case.result.records.truncate(1);
-    assert_refused(&case, "rotation_gap", "seed 0x5eed00b2 case 10 cursor-only page");
+    assert_refused(
+        &case,
+        "rotation_gap",
+        "seed 0x5eed00b2 case 10 cursor-only page",
+    );
 
     // Отклонение от literal-спецификации: cursor 2 со страницей [r3, r4] —
     // каноническое продолжение, оно ПРИНИМАЕТСЯ; настоящий gap — старт записи
@@ -406,48 +444,88 @@ fn every_framing_mutation_is_rejected_with_its_exact_code() {
     let fourth_wire = case.result.records.get(3).expect("fourth wire").clone();
     case.records = vec![third, fourth];
     case.result.records = vec![third_wire, fourth_wire];
-    assert_refused(&case, "rotation_gap", "seed 0x5eed00b2 case 11 skip past cursor");
+    assert_refused(
+        &case,
+        "rotation_gap",
+        "seed 0x5eed00b2 case 11 skip past cursor",
+    );
 
     let mut case = base_case(&root, &records);
     case.result.head_ordinal = 3;
-    assert_refused(&case, "rotation_gap", "seed 0x5eed00b2 case 12 head ordinal low");
+    assert_refused(
+        &case,
+        "rotation_gap",
+        "seed 0x5eed00b2 case 12 head ordinal low",
+    );
 
     let mut case = base_case(&root, &records);
     case.result.head_hash = flip_first_char(&case.result.head_hash);
-    assert_refused(&case, "rotation_gap", "seed 0x5eed00b2 case 13 flip head hash");
+    assert_refused(
+        &case,
+        "rotation_gap",
+        "seed 0x5eed00b2 case 13 flip head hash",
+    );
 
     let mut case = base_case(&root, &records);
     case.result.complete = false;
-    assert_refused(&case, "rotation_gap", "seed 0x5eed00b2 case 14 complete at head");
+    assert_refused(
+        &case,
+        "rotation_gap",
+        "seed 0x5eed00b2 case 14 complete at head",
+    );
 
     let mut case = base_case(&root, &records);
     case.records.clear();
     case.result.records.clear();
     case.result.complete = false;
-    assert_refused(&case, "rotation_gap", "seed 0x5eed00b2 case 15 empty incomplete");
+    assert_refused(
+        &case,
+        "rotation_gap",
+        "seed 0x5eed00b2 case 15 empty incomplete",
+    );
 
     let mut case = base_case(&root, &records);
     case.records.truncate(2);
     case.result.records.truncate(2);
-    assert_refused(&case, "rotation_gap", "seed 0x5eed00b2 case 16 complete partial");
+    assert_refused(
+        &case,
+        "rotation_gap",
+        "seed 0x5eed00b2 case 16 complete partial",
+    );
 
     let mut case = base_case(&root, &records);
     case.cursor.ordinal = 0;
     case.cursor.hash = "x".to_owned();
-    assert_refused(&case, "rotation_gap", "seed 0x5eed00b2 case 17 zero cursor hash");
+    assert_refused(
+        &case,
+        "rotation_gap",
+        "seed 0x5eed00b2 case 17 zero cursor hash",
+    );
 
     let mut case = base_case(&root, &records);
     case.cursor.ordinal = 1;
     case.cursor.hash = "-".to_owned();
-    assert_refused(&case, "rotation_gap", "seed 0x5eed00b2 case 18 ordinal one dash");
+    assert_refused(
+        &case,
+        "rotation_gap",
+        "seed 0x5eed00b2 case 18 ordinal one dash",
+    );
 
     let mut case = base_case(&root, &records);
     case.result.head_ordinal = rotation::MAX_ORDINAL + 1;
-    assert_refused(&case, "rotation_gap", "seed 0x5eed00b2 case 19 head ordinal max");
+    assert_refused(
+        &case,
+        "rotation_gap",
+        "seed 0x5eed00b2 case 19 head ordinal max",
+    );
 
     let mut case = base_case(&root, &records);
     case.cursor.ordinal = rotation::MAX_ORDINAL + 1;
-    assert_refused(&case, "rotation_gap", "seed 0x5eed00b2 case 20 cursor ordinal max");
+    assert_refused(
+        &case,
+        "rotation_gap",
+        "seed 0x5eed00b2 case 20 cursor ordinal max",
+    );
 }
 
 #[test]
@@ -505,7 +583,10 @@ fn page_and_body_limits_hold_exactly() {
     );
     let label = format!("seed {SEED:#x} exact body decodes");
     let decoded = rotation::decode_result(exact.as_bytes(), b"7").expect(&label);
-    assert_eq!(decoded.current_kid, anchor.kid, "seed {SEED:#x} current kid");
+    assert_eq!(
+        decoded.current_kid, anchor.kid,
+        "seed {SEED:#x} current kid"
+    );
     assert_eq!(
         decoded.current_public_key,
         anchor_public.as_slice(),
