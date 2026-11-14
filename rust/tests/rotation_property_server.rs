@@ -245,6 +245,9 @@ fn trust_from(corpus: &Corpus, root: &Checkpoint, records: &[Record]) -> TrustSn
 }
 
 /// Каждому key соответствует opaque provider handle, не private-key material.
+// Имя мутации и её in-place применение к snapshot.
+type Mutation = (&'static str, fn(&mut ServerSnapshot));
+
 fn server_from(public: TrustSnapshot) -> ServerSnapshot {
     let signer_references = public
         .keys
@@ -485,7 +488,7 @@ fn publication_accepts_exactly_one_fixed_p_record_and_refuses_every_single_field
         let label = format!("seed {SEED:#x} {shape} unchanged state");
         unavailable(publish(&first, &first), &label);
 
-        let mutations: &[(&str, fn(&mut ServerSnapshot))] = &[
+        let mutations: &[Mutation] = &[
             ("revision+1", |value| value.public.revision += 1),
             ("revision 0", |value| value.public.revision = 0),
             ("clock.high_water+1", |value| value.public.clock.high_water += 1),
