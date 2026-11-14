@@ -16,6 +16,10 @@ mod refresh_state;
 mod refresh_tests;
 mod result;
 mod server_key;
+#[cfg(target_os = "linux")]
+mod server_provider;
+#[cfg(all(test, target_os = "linux"))]
+mod server_provider_tests;
 mod server_state;
 mod server_state_json;
 #[cfg(target_os = "linux")]
@@ -37,6 +41,10 @@ mod trust_json_wire;
 
 #[cfg(target_os = "linux")]
 pub use controller::{RotationController, RotationRefreshResult, RotationResponse};
+#[cfg(target_os = "linux")]
+pub use server_provider::{
+    PinnedRotationSigner, RotationPublication, RotationServerKey, RotationServerProvider,
+};
 #[cfg(target_os = "linux")]
 pub use server_store::{RotationServerStore, ServingLease};
 #[cfg(target_os = "linux")]

@@ -19,6 +19,11 @@ pub const TOOL_ENROLL: &str = "jack.enroll";
 pub const TOOL_WHOAMI: &str = "jack.whoami";
 /// Protocol-native tool: rotate a key (spec 03 section 3.1).
 pub const TOOL_ROTATE_KEY: &str = "jack.key.rotate";
+/// Candidate native tool: one published page of the server key ring (Go:
+/// ToolServerKey). NOT part of the closed current-v1 set (`is_native_tool`
+/// stays false); reachable only through a separately configured rotation
+/// handler (`Verifier::with_server_keys`).
+pub const TOOL_SERVER_KEY: &str = "jack.server.key";
 /// Protocol-native admin tool (spec 03 section 6).
 pub const TOOL_ADMIN_USER_LIST: &str = "jack.admin.user.list";
 /// Protocol-native admin tool (spec 03 section 6).
@@ -135,6 +140,10 @@ pub struct Config {
 /// section 4).
 pub struct Verifier {
     cfg: Config,
+    /// Candidate jack.server.key handler (Go: Config.ServerKeys); None
+    /// denies the route. Deliberately NOT a Config field: adding a field
+    /// would break every existing struct literal of the static public API.
+    server_keys: Option<Arc<dyn NativeTools>>,
 }
 
 impl Verifier {
@@ -144,7 +153,19 @@ impl Verifier {
         if cfg.aud.is_empty() {
             return Err("server: Config.Aud must be non-empty".to_owned());
         }
-        Ok(Self { cfg })
+        Ok(Self {
+            cfg,
+            server_keys: None,
+        })
+    }
+
+    /// Routes `jack.server.key` to this handler (Go: Config.ServerKeys). The
+    /// caller must pair it with a rotating response profile at the HTTP
+    /// layer; the library cannot enforce that pairing without breaking the
+    /// infallible static constructor.
+    pub fn with_server_keys(mut self, server_keys: Arc<dyn NativeTools>) -> Self {
+        self.server_keys = Some(server_keys);
+        self
     }
 
     /// Effective window: a non-positive window means the default (Go:
@@ -314,9 +335,17 @@ impl Verifier {
         if let Some(tool) = jack_tool {
             // Set BEFORE any denial: a denied native call is still native.
             res.native = true;
-            // Unknown jack.* tool or missing handler: 403 with NO audit
-            // event — the call never reached a tool.
-            let Some(handler) = self.cfg.native.as_ref().filter(|_| is_native_tool(&tool)) else {
+            // The candidate route bypasses the current-v1 allowlist and goes
+            // to its own lane (Go: `if msg.tool == ToolServerKey { native =
+            // v.cfg.ServerKeys }`). Unknown jack.* tool, candidate route
+            // without a rotation profile, or missing handler: 403 with NO
+            // audit event — the call never reached a tool.
+            let handler = if tool == TOOL_SERVER_KEY {
+                self.server_keys.as_ref()
+            } else {
+                self.cfg.native.as_ref().filter(|_| is_native_tool(&tool))
+            };
+            let Some(handler) = handler else {
                 return fail(
                     res,
                     403,

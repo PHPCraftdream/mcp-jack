@@ -422,3 +422,76 @@ new operations at once but only completes after every lease is dropped. Drop nev
 cleans the store. There is no signer selection, response authorization or HTTP
 wiring yet, and no recovery of dirty/fenced/unsafe state.
 
+### Candidate Linux server rotation provider, `jack.server.key` tool and rotating response signing
+
+On Linux, `mcp_jack::rotation` additionally exports `RotationServerProvider<C>`,
+`RotationServerKey`, `PinnedRotationSigner` and `RotationPublication` over the
+`RotationServerStore` of the previous section (the same clock shape
+`C: FnMut() -> Result<u64, RotationError>`). The provider binds one concrete
+store, shared as `Arc<Mutex<RotationServerStore<C>>>`, to an out-of-band signer
+inventory of caller-owned `{reference, signer}` handles. Construction pins each
+inventory entry's public key exactly once (the kid is derived from that copy, so
+later signer callbacks cannot change the identity), accepts 1..=`MAX_RETAINED_KEYS`
+entries, refuses duplicate `(reference, kid)` identities, and then refuses
+construction entirely unless the ring is ready to serve: a committed snapshot, a
+fresh ClockGuard check, and inventory handles for ALL pending keys and the
+current signer; retired handles are optional.
+
+`select_signer` is a pure function with no store or lock access: it picks the
+greatest eligible ordinal under strict cutoffs (`not_before <= high_water` and
+any `known_cutoff` still in the future) and never falls back — a missing
+handle, a pinned-key/committed-key mismatch, or a pending/retired limit
+overflow refuses with `rotation_state_unavailable`.
+
+`announce(reference, kid)` performs one explicit fixed-P publication through the
+store's `compare_and_swap`. It takes exactly one fresh clock sample and refuses
+reentrancy (an announce already in progress), an unknown inventory handle
+(checked before the store and before any clock sample), a duplicate kid or
+public key in the ring, a full ring, or a concurrent ring/clock change; the
+store's `rotation_state_changed` error passes through verbatim and fences
+nothing. There is no automatic retry or recovery. The returned
+`RotationPublication` — the published record and the new trust revision — is
+produced only after the exact durable ACK of that single CAS.
+
+`RotationServerProvider` implements
+`mcp_jack::server::response_keys::ResponseKeys`, and
+`JackLayer::rotating(RotatingHandlerConfig { verifier, response_keys,
+max_body_bytes, max_response_bytes })` replaces the static key for every
+verified answer, including signed rejections. The signer is selected before the
+signature is computed, and a fresh completion-sample final gate re-confirms
+eligibility: a key retired or a ring/head changed meanwhile discards the
+computed signature and the response fails with the UNSIGNED 503
+`rotation_state_unavailable` — never another key, never a retry. The HTTP
+adapter re-verifies the signature under the pinned public key before the final
+gate runs. A `jack.server.key` 200 answer additionally carries a parity gate
+against the committed snapshot: current kid and public key, head, and the exact
+contiguous records. The static-key path is byte-for-byte unchanged
+(`JackLayer::new`).
+
+`mcp_jack::server::server_key::ServerKeyTool` implements the candidate native
+tool `jack.server.key`; it is not part of the closed 11-name current-v1
+allowlist (`is_native_tool` stays false), never forwards, and the verifier
+denies the route (403, no audit event) unless a handler is registered. It is
+reachable only through `Verifier::with_server_keys`, and the gateway must pair
+that verifier with the rotating handler profile: Go enforces the pairing at
+NewHandler, the Rust constructors make mixing unrepresentable, but the library
+cannot cross-check the verifier and the layer. The check order is audience,
+cursor, fresh server ClockGuard, then signer. Refusals are exactly 403
+`operation_denied`, 400 `invalid_params`, 409 `rotation_checkpoint_unavailable`
+and 503 `rotation_state_unavailable`, all with the same opaque message; storage
+and signer details never leak. One serving lease is held for the whole call.
+
+Signer callbacks must be bounded and non-reentrant: an announce issued from
+within a callback is refused, and other reentrant store operations deadlock
+exactly as in Go. Announce never holds the store lock across signing, so a
+callback may itself move the committed clock. A provider callback panic
+propagates, where Go recovers it into a sanitized error — a deliberate
+divergence. Go's single-use Final/release-idempotence discipline is enforced by
+the `FnOnce` release plus the RAII release guard at the HTTP layer.
+
+Not provided: no key generation and no storage of private keys (inventory
+handles are caller-owned), no reset or recovery of dirty/fenced/unsafe state,
+no automatic publication, refresh scheduling, pagination beyond the explicit
+cursor, or HTTP delivery guarantees; announce is explicit and single-shot.
+Gateway wiring (Go `internal/cli`) remains external composition.
+
