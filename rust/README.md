@@ -370,6 +370,74 @@ There is no HTTP sender, automatic refresh, hidden key discovery, retry, or pagi
 The caller explicitly requests any next page. Product rotating transport and
 candidate server integration remain separate unfinished work.
 
+### Candidate rotation HTTP refresh client (Linux + `client-http`)
+
+On Linux with the `client-http` feature, `mcp_jack::client::RotationHttpClient` (module
+`mcp_jack::client::rotation_http`) pairs the candidate ordinary-response controller with one
+explicit POST. Each call reads the caller-owned `RotationTrustStore`, requests exactly one
+`jack.server.key` page after the store's ACKed head cursor, and feeds the raw signed response
+to `RotationController::accept_refresh` with the expected id `"1"`. There is still no automatic
+refresh, hidden retry, pagination, fallback key, proxy, or reset on this path.
+
+Construction takes the same caller-pinned, out-of-band profile as the store (`OwnedBinding`,
+window, `Checkpoint` — never adopted from a file or a response), a `Signer`, and a deadline
+bounded to 1..=30 seconds; zero or more than 30 seconds, a window outside 1..=120, and an
+endpoint that fails the client URL policy are refused up front with `rotation_state_unknown`.
+The shared `HttpTransport` is built once in the constructor, outside the refresh deadline, so
+the TLS policy (rustls with certificate validation, no insecure mode), no-proxy, no-redirect,
+DNS-snapshot, and origin-form-target properties are exactly the ordinary client's. That build
+snapshots system DNS, hosts, and certificate roots and can fail for environmental reasons
+(`rotation_state_unknown`).
+
+`refresh(&mut store)` takes the store by `&mut`; no borrow is held between calls. It verifies
+that the store snapshot still matches the pinned profile (drift is `rotation_state_unknown`,
+mirroring the Go client's pinned-state check), samples the durable ClockGuard for the signing
+timestamp, runs a pre-send capacity check, signs with a fresh nonce, and re-checks the guard
+after signing: a sample that moved more than the window from the signed timestamp is
+`timestamp_out_of_window`. Exactly one POST follows. Statuses 300..=399 are refused as
+`rotation_redirect_refused` (the transport never follows redirects); a `Content-Encoding`
+response or a body above the 256 KiB `MAX_RESULT_BODY_BYTES` cap is `rotation_result_invalid`.
+Transport-level failures — DNS, connect, TLS, non-UTF-8 headers, a truncated or stalled body —
+are `rotation_request_unavailable`; the streaming-content-type refusal is
+`rotation_result_invalid`, because a stream cannot be fully read and hence cannot be verified.
+Neither is ever a trust outcome. Response `Jack-Auth` values are collected in order, and a
+non-200 page is refused by the controller with `rotation_result_invalid`.
+
+Every client-produced failure is a sanitized local `JackError` with http_status 0 and a fixed
+rotation code (`rotation_state_unknown`, `rotation_state_changed`, `rotation_clock_unavailable`,
+`rotation_result_invalid`, `rotation_redirect_refused`, `rotation_request_unavailable`,
+`timestamp_out_of_window`); controller and store failures keep their existing sanitized codes.
+No URL, header, or body bytes appear in an error. `refresh_response(&mut store)` returns only
+the wire half: the owned `RotationResponse` (status, response-auth header values, exact request
+signature, body) in the shape `RotationController` already consumes, plus the cursor that was
+requested — for callers that own their controller handling.
+
+```rust,ignore
+use std::sync::Arc;
+use std::time::Duration;
+use mcp_jack::client::RotationHttpClient;
+
+// `binding` and `checkpoint` are pinned out of band, exactly as for the store.
+let mut store = /* open the trust store as documented above */;
+let client = RotationHttpClient::new(
+    binding,
+    window,
+    checkpoint,
+    Arc::new(signer),
+    Duration::from_secs(15),
+)?;
+let result = client.refresh(&mut store)?;
+// RotationRefreshResult reports declared `head`, ACKed `terminal`, complete,
+// committed and revision. An empty or duplicate page is a no-op and does not
+// extend trust.
+```
+
+The deadline is the configured transport timeout: an asynchronous round-trip budget, not exact
+wall-clock return. DNS, hosts, and roots are snapshotted at construction, and the loopback
+http/loopback-only URL policy applies as documented earlier in this README. Nothing here is a
+verified-runtime claim. Product rotating transport and candidate server integration remain
+separate unfinished work.
+
 ### Candidate server ring state and `jack.server.key` page service
 
 This layer is pure and cross-platform. It has no persistence, serving lease,

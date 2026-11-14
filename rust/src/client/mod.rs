@@ -9,6 +9,8 @@ pub mod error;
 #[cfg(feature = "client-http")]
 pub mod http_transport;
 pub mod profile;
+#[cfg(all(target_os = "linux", feature = "client-http"))]
+pub mod rotation_http;
 pub mod rotation_auth;
 pub mod rpc;
 pub mod signer;
@@ -21,6 +23,8 @@ pub use error::{ClientError, HttpError, RpcError, ToolError, UnauthenticatedResp
 #[cfg(feature = "client-http")]
 pub use http_transport::{HttpTransport, HttpTransportBuilder};
 pub use profile::{load_profile, save_profile, Profile};
+#[cfg(all(target_os = "linux", feature = "client-http"))]
+pub use rotation_http::RotationHttpClient;
 pub use rotation_auth::{verify_rotation_carrier, RotationCarrier, RotationResponseKey};
 pub use rpc::{Client, Config};
 pub use signer::{InMemorySigner, Signer};
