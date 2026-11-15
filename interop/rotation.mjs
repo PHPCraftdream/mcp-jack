@@ -362,8 +362,7 @@ async function runMatrix(opts) {
     const modePath = join(tmp, 'mode');
     for (const p of [clkSrvPri, clkSrvFresh, clkFakeSrv, clkCliMain, clkCliFake]) setClock(p, T);
     // Registry с ключами fixture: без неё сервер не знает вызывающего (unknown_key).
-    writeFileSync(join(tmp, 'state.json'), JSON.stringify({ version: 1, keys: registry.keys, invites: [] }, null, 2) + '
-');
+    writeFileSync(join(tmp, 'state.json'), JSON.stringify({ version: 1, keys: registry.keys, invites: [] }, null, 2) + String.fromCharCode(10));
 
     const serverArgs = (port, store, clock) => ([
       '--aud', registry.aud,
