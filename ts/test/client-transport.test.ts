@@ -11,6 +11,7 @@ import type { SigningFetch } from "../src/client/transport.js";
 import type { Clock } from "../src/client/auth.js";
 import { fixtureAud, fixtureNow, generateKeypair, newTestServer, rpcResultBody, seedSignerByName } from "./client-harness.js";
 import type { TestServer } from "./client-harness.js";
+import { fixture } from "./fixtures.js";
 
 const utf8 = (s: string): Uint8Array => new TextEncoder().encode(s);
 
@@ -316,4 +317,73 @@ test("readBodyCapped propagates a rejected read and releases the lock", async ()
   // The rejection is surfaced, not swallowed; node would report any additional
   // unhandled rejection as a crash. The second reader proves the lock is free.
   assert.doesNotThrow(() => resp.body?.getReader(), "the lock must be released after a rejected read");
+});
+
+/** One row of the shared streaming-refusal table. */
+interface StreamingRefusalCase {
+  readonly name: string;
+  readonly content_type: readonly string[];
+  readonly refused: boolean;
+}
+
+/** Reads and strictly decodes spec/fixtures/client-streaming-refusal.json. */
+function loadStreamingRefusalCases(): readonly StreamingRefusalCase[] {
+  const doc = fixture("client-streaming-refusal.json");
+  if (typeof doc !== "object" || doc === null || Array.isArray(doc)) {
+    throw new Error("client-streaming-refusal.json: not an object");
+  }
+  const cases = doc["cases"];
+  if (!Array.isArray(cases)) {
+    throw new Error("client-streaming-refusal.json: cases is not an array");
+  }
+  return cases.map((item, index): StreamingRefusalCase => {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) {
+      throw new Error(`client-streaming-refusal.json: cases[${index}] is not an object`);
+    }
+    const name = item["name"];
+    const contentType = item["content_type"];
+    const refused = item["refused"];
+    if (
+      typeof name !== "string" ||
+      !Array.isArray(contentType) ||
+      !contentType.every((v) => typeof v === "string") ||
+      typeof refused !== "boolean"
+    ) {
+      throw new Error(`client-streaming-refusal.json: cases[${index}] has a wrong field type`);
+    }
+    return { name, content_type: contentType, refused };
+  });
+}
+
+// Shared client streaming-refusal table (spec 01 section 5, open question Q1):
+// every row is answered by the fake server with exactly the listed
+// Content-Type header values (a Response built over an explicit Headers object
+// preserves duplicates). A refused row must reject with
+// StreamingUnsupportedError; a non-refused row must reach verification and
+// fail as an unsigned answer (missing_auth), proving the stream guard did not
+// fire. All Content-Type lines take part (joined with commas, any member decides).
+test("client-streaming-refusal.json table", async () => {
+  const cases = loadStreamingRefusalCases();
+  assert.ok(cases.some((c) => c.refused) && cases.some((c) => !c.refused), "table has both kinds of rows");
+  for (const c of cases) {
+    const server = newTestServer();
+    server.handle = () => {
+      if (c.content_type.length === 0) {
+        // new Response(null) carries no Content-Type at all.
+        return new Response(null, { status: 200 });
+      }
+      const headers = new Headers();
+      for (const v of c.content_type) headers.append("content-type", v);
+      return new Response("data: x\n\n", { status: 200, headers });
+    };
+    const call = postMCP(newTransport(server));
+    await assert.rejects(
+      call,
+      (err: unknown) =>
+        c.refused
+          ? err instanceof StreamingUnsupportedError
+          : err instanceof JackError && err.code === "missing_auth" && err.httpStatus === 0,
+      `${c.name}: refused=${c.refused}`,
+    );
+  }
 });

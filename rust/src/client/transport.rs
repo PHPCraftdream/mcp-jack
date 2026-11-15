@@ -103,7 +103,7 @@ impl HttpResponse {
 ///
 /// | response | outcome |
 /// |---|---|
-/// | Content-Type media type is `text/event-stream` (case-insensitive, up to the first `;`) | `Streaming` — refused before verification |
+/// | Any comma-separated member of the Content-Type lines has media type `text/event-stream` (case-insensitive, up to the first `;`) | `Streaming` — refused before verification |
 /// | body larger than MAX_BODY_BYTES | `Client("...response body exceeds...")` — refused before verification |
 /// | the inner transport errors | passed through unchanged |
 /// | verification fails with `missing_auth` AND status 401 (unsigned answer) | `Unauthenticated` — HTTP status only; the body is never parsed (spec 01 section 5) |
@@ -301,10 +301,8 @@ impl<T: Transport> SigningTransport<T> {
 
         // Streaming guard BEFORE verification: a stream cannot be verified
         // (spec 01 section 5, open question Q1).
-        if let Some(ct) = resp.header("Content-Type") {
-            if media_type(ct) == "text/event-stream" {
-                return Err(TransportError::Streaming);
-            }
+        if is_event_stream(resp.header_values("Content-Type")) {
+            return Err(TransportError::Streaming);
         }
 
         // Body cap BEFORE verification (Go reads with a LimitReader and
@@ -354,18 +352,22 @@ impl<T: Transport> Transport for SigningTransport<T> {
     }
 }
 
-/// The media type of a Content-Type value: everything up to the first ';',
-/// trimmed and lowercased. Deliberate difference from Go: mime.ParseMediaType
-/// rejects malformed parameters (e.g. "text/event-stream; charset" without a
-/// value) and Go then does NOT refuse the stream; this port refuses whenever
-/// the type itself is text/event-stream — a stream cannot be verified (spec 01
-/// section 5, open question Q1) regardless of its parameter list.
-pub(crate) fn media_type(ct: &str) -> String {
-    let base = match ct.find(';') {
-        Some(i) => &ct[..i],
-        None => ct,
-    };
-    base.trim().to_ascii_lowercase()
+/// Reports whether the Content-Type field lines declare a stream. The lines
+/// are joined with commas (the combined form a fetch client also sees) and any
+/// comma-separated member whose media type is text/event-stream refuses the
+/// response: the media type is the text before the first ';' with SP and HTAB
+/// trimmed, compared ASCII case-insensitively. A stream cannot be verified
+/// (spec 01 section 5, open question Q1) whatever its parameter list or a
+/// malformed combined value looks like.
+pub(crate) fn is_event_stream<'a>(values: impl IntoIterator<Item = &'a str>) -> bool {
+    values
+        .into_iter()
+        .flat_map(|value| value.split(','))
+        .any(|member| {
+            let base = member.split(';').next().unwrap_or("");
+            base.trim_matches(|c| c == ' ' || c == '\t')
+                .eq_ignore_ascii_case("text/event-stream")
+        })
 }
 
 /// The default clock: Unix seconds, negative before the epoch (mirroring Go's

@@ -193,3 +193,43 @@ fn transport_rejects_stale_timestamp() {
         other => panic!("expected Protocol(timestamp_out_of_window), got {other:?}"),
     }
 }
+
+/// Shared client streaming-refusal table (spec 01 section 5, open question
+/// Q1): every row of spec/fixtures/client-streaming-refusal.json is answered
+/// by the fake server with exactly the listed Content-Type header values. A
+/// refused row must yield exactly TransportError::Streaming before any
+/// verification; a non-refused row must reach verification and fail with
+/// Protocol(missing_auth), proving the stream guard did not fire. All
+/// Content-Type lines take part (joined with commas, any member decides).
+#[test]
+fn streaming_refusal_fixture() {
+    let f = common::fixtures::load_client_streaming_refusal()
+        .expect("load client-streaming-refusal.json");
+    assert!(f.cases.iter().any(|c| c.refused) && f.cases.iter().any(|c| !c.refused));
+    for c in &f.cases {
+        let srv = TestServer::new();
+        let headers: Vec<(String, String)> = c
+            .content_type
+            .iter()
+            .map(|v| ("Content-Type".to_string(), v.clone()))
+            .collect();
+        srv.set_handler(Box::new(move |_srv, _method, _target, _auth, _body| {
+            // Unsigned suffices: the streaming guard fires before verification.
+            HttpResponse {
+                status: 200,
+                headers: headers.clone(),
+                body: b"data: x\n\n".to_vec(),
+            }
+        }));
+        let tr = new_transport(&srv);
+        let res = tr.round_trip(post_mcp(br#"{"ping":1}"#));
+        match res {
+            Err(TransportError::Streaming) if c.refused => {}
+            Err(TransportError::Protocol(j)) if !c.refused && j.code == codes::MISSING_AUTH => {}
+            other => panic!(
+                "{}: refused={} but round_trip gave {:?}",
+                c.name, c.refused, other
+            ),
+        }
+    }
+}

@@ -9,6 +9,35 @@ import (
 	"github.com/PHPCraftdream/mcp-jack/rotation"
 )
 
+func TestDecodeResultExactDecimalAboveSafeInteger(t *testing.T) {
+	payload := resultPayload(t)
+	// Точная канонизация: 9007199254740993 не представим в float64 точно,
+	// но канонический текст совпадает byte-for-byte.
+	body := resultEnvelope(t, payload, nil, json.RawMessage(`9007199254740993`))
+	if _, err := rotation.DecodeResult(body, json.RawMessage(`9007199254740993`)); err != nil {
+		t.Fatal("exact lexeme above 2^53 rejected:", err)
+	}
+	for _, lexeme := range []string{`9007199254740992`, `9007199254740993.0`, `9.007199254740993e15`} {
+		var rejected *rotation.Error
+		rejectBody := bytes.Replace(body, []byte(`"id":9007199254740993,`), []byte(`"id":`+lexeme+`,`), 1)
+		if bytes.Equal(rejectBody, body) {
+			t.Fatalf("id lexeme %s was not substituted", lexeme)
+		}
+		if _, err := rotation.DecodeResult(rejectBody, json.RawMessage(`9007199254740993`)); !errors.As(err, &rejected) || rejected.Code != "rotation_result_invalid" {
+			t.Fatalf("lexeme %s accepted: %v", lexeme, err)
+		}
+	}
+	// -0 канонизируется в "0": ожидание -0 принимает ответ 0.
+	if _, err := rotation.DecodeResult(resultEnvelope(t, payload, nil, json.RawMessage(`0`)), json.RawMessage(`-0`)); err != nil {
+		t.Fatal("-0 expected did not accept response 0:", err)
+	}
+	// 1e999 за гейтом 2^1024: Number() в TS даёт Infinity — reject с обеих сторон.
+	var rejected *rotation.Error
+	if _, err := rotation.DecodeResult(resultEnvelope(t, payload, nil, json.RawMessage(`1`)), json.RawMessage(`1e999`)); !errors.As(err, &rejected) || rejected.Code != "rotation_result_invalid" {
+		t.Fatalf("1e999 expected accepted: %v", err)
+	}
+}
+
 func TestDecodeResultRejectsNonCanonicalNumericResponseIDLexemes(t *testing.T) {
 	payload := resultPayload(t)
 	// json.Marshal отвергает невалидные лексемы (+7, 07, 7.), поэтому id подставляется в готовое тело.
