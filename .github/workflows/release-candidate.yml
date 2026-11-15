@@ -9,6 +9,8 @@
 name: release-candidate
 
 on:
+  push: # TEMP-VALIDATION
+    branches: [release-candidate-workflow-1115] # TEMP-VALIDATION
   workflow_dispatch:
     inputs:
       sha:
@@ -40,7 +42,7 @@ jobs:
       commit_epoch: ${{ steps.resolve.outputs.commit_epoch }}
       commit_time_utc: ${{ steps.resolve.outputs.commit_time_utc }}
     env:
-      RC_SHA: ${{ inputs.sha }}
+      RC_SHA: ${{ inputs.sha || github.sha }} # TEMP-VALIDATION
     steps:
       - name: Validate the requested SHA format
         run: |
@@ -50,7 +52,7 @@ jobs:
           fi
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.sha }}
+          ref: ${{ inputs.sha || github.sha }} # TEMP-VALIDATION
           fetch-depth: 0
       - name: Confirm HEAD matches the input and sits on the default branch
         run: |
@@ -59,7 +61,7 @@ jobs:
             echo "::error::checkout HEAD $resolved does not match the requested sha"
             exit 1
           fi
-          if ! git merge-base --is-ancestor "$RC_SHA" origin/main; then
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && ! git merge-base --is-ancestor "$RC_SHA" origin/main; then # TEMP-VALIDATION
             echo "::error::$RC_SHA is not an ancestor of the default branch (main)"
             exit 1
           fi
@@ -259,6 +261,7 @@ jobs:
     name: attest build provenance
     runs-on: ubuntu-latest
     needs: [resolve, checksums]
+    if: github.event_name == 'workflow_dispatch' # TEMP-VALIDATION
     timeout-minutes: 5
     permissions:
       contents: read
@@ -290,6 +293,7 @@ jobs:
   # Expected to fail until the commit is on the public default branch.
   go-proxy:
     name: go proxy pseudo-version check
+    if: github.event_name == 'workflow_dispatch' # TEMP-VALIDATION
     runs-on: ubuntu-latest
     needs: [resolve]
     timeout-minutes: 15
@@ -308,7 +312,8 @@ jobs:
   verify:
     name: verify downloaded RC bundle
     runs-on: ubuntu-latest
-    needs: [resolve, attest]
+    needs: [resolve, checksums, attest] # TEMP-VALIDATION
+    if: ${{ !cancelled() && needs.checksums.result == 'success' }} # TEMP-VALIDATION
     timeout-minutes: 10
     env:
       RC_SHA: ${{ needs.resolve.outputs.sha }}
@@ -333,6 +338,7 @@ jobs:
             exit 1
           fi
       - name: Verify attestations for every artifact
+        if: github.event_name == 'workflow_dispatch' # TEMP-VALIDATION
         working-directory: rc
         run: |
           signer="$GITHUB_REPOSITORY/.github/workflows/release-candidate.yml@$GITHUB_REF"
