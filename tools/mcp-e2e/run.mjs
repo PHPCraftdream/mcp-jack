@@ -967,6 +967,7 @@ async function runCellFlow(ctx) {
   chk.note(`client stderr tail: ${JSON.stringify(run.stderr.slice(-1500))}`);
   chk.note(`client stdout tail: ${JSON.stringify(run.stdout.slice(-600))}`);
   chk.note(`proxy received (${proxy.received.length}): ${JSON.stringify(proxy.received.slice(0, 8))}`);
+  chk.note(`upstream server log: ${(() => { try { return JSON.stringify(readFileSync(SERVER_LOG, 'utf8').slice(0, 1500)); } catch (e) { return `unreadable (${e.code ?? 'error'})`; } })()}`);
   chk.note(`gateway stderr tail: ${JSON.stringify(held.gatewayChild._stderr().slice(-1500))}`);
   chk.note(`proxy captures (${proxy.captures.length}): ${(() => { try { return JSON.stringify(proxy.captures.slice(0, 6)).slice(0, 1500); } catch { return 'unserializable'; } })()}`);
   const stdoutLines = run.stdout.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== '');
