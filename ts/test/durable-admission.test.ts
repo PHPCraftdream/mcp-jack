@@ -28,7 +28,7 @@ import type { VerifyRequest } from "../src/server/verify.js";
 import { jackFetchHandler } from "../src/server/fetch.js";
 import { serveNode } from "../src/server/node.js";
 import { DurableNonceStore } from "../src/server/durable-store.js";
-import { DurableNonceAdmission } from "../src/server/durable-admission.js";
+import { DurableNonceAdmission, takeResultFinish } from "../src/server/durable-admission.js";
 
 const linux = process.platform === "linux";
 
@@ -349,6 +349,8 @@ test("durable admission: enrollment reserves durably before invite consumption a
     assert.equal(store.state().counts.live, 1, "nonce reserved durably");
     assert.equal(state.lookupInvite(inviteIdOf(raw)), undefined, "invite consumed after the reservation");
     assert.equal(nonces.len(), 0, "volatile store untouched");
+    // The adapters finish the admission after the response; the direct verifier call does it here.
+    takeResultFinish(res)?.();
     store.close();
   });
 

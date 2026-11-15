@@ -453,11 +453,12 @@ export class DurableNonceStore {
       intentId, operationId, kid: request.kid, nonce: request.nonce, signature: request.signature,
       requestHash, timestamp: request.timestamp, retainUntil: request.timestamp + request.window, highWater: intentNow,
     };
-    validateReceipt(prepared, this.doc.meta);
     this.transact("intent", (work) => {
       const replayed = this.lookup(work, key, intentNow);
       if (replayed !== undefined) return replayed;
       this.purge(work, intentNow, key);
+      // The intent sample advanced H first (spec section 3), so the prepared row is checked against it.
+      validateReceipt(prepared, work.meta);
       if (work.meta.live + work.meta.intents >= DURABLE_MAX_COMBINED ||
         work.meta.tombstones >= DURABLE_MAX_TOMBSTONES) {
         return durableAdmissionError(503, "capacity_exhausted");
