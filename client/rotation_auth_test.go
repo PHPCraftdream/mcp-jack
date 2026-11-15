@@ -43,7 +43,7 @@ func TestRotationCarrierKnownMapPrecedesFreshnessSignatureAndPayload(t *testing.
 			t.Fatalf("got %v want %s", err, want)
 		}
 	}
-	// Exact bytes аутентифицируются без eager JSON parsing.
+	// Exact bytes are authenticated without eager JSON parsing.
 	metadata, err := client.VerifyRotationCarrier(known, 200, carrierHeader(key, 200, requestSig, 109, body), requestSig, body, time.Unix(109, 0), 30*time.Second)
 	if err != nil || metadata.KID != kid || metadata.Timestamp != 109 {
 		t.Fatalf("valid known carrier: %+v %v", metadata, err)

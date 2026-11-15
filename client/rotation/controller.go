@@ -1,4 +1,4 @@
-// Package rotationclient соединяет candidate client gates с concrete durable store.
+// Package rotationclient connects candidate client gates to the concrete durable store.
 package rotationclient
 
 import (
@@ -13,7 +13,7 @@ import (
 	"github.com/PHPCraftdream/mcp-jack/rotation"
 )
 
-// Controller не владеет lifecycle store и не делает network fetch/retry.
+// Controller does not own the store lifecycle and does no network fetch/retry.
 type Controller struct {
 	store      *durable.TrustStore
 	binding    rotation.Binding
@@ -22,7 +22,7 @@ type Controller struct {
 	writer     atomic.Bool
 }
 
-// Response bytes и header values копируются перед cryptographic processing.
+// Response bytes and header values are copied before cryptographic processing.
 type Response struct {
 	Status           int
 	Headers          []string
@@ -173,7 +173,7 @@ func (controller *Controller) final(carrier client.RotationCarrier, expected rot
 	return controller.timeValid(expected, carrier, clock.HighWater)
 }
 
-// VerifyResponse возвращает owned body только после final clock/revision/interval gate.
+// VerifyResponse returns the owned body only after the final clock/revision/interval gate.
 func (controller *Controller) VerifyResponse(response Response) ([]byte, error) {
 	owned, snapshot, carrier, err := controller.outer(response)
 	if err != nil {

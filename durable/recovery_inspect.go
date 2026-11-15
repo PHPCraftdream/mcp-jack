@@ -5,8 +5,8 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-// RecoverySnapshot — owned diagnostic values, не admission receipt и не разрешение reopen.
-// Hash связывает полный logical graph; это не MAC и не доказательство отсутствия rollback.
+// RecoverySnapshot holds owned diagnostic values; it is not an admission receipt or permission to reopen.
+// Hash binds the full logical graph; it is not a MAC and not proof of absence of rollback.
 type RecoverySnapshot struct {
 	Version         uint32
 	DeploymentID    string
@@ -23,8 +23,8 @@ type RecoverySnapshot struct {
 	Tombstones      []server.NonceReceipt
 }
 
-// InspectRecovery не создаёт store, не вызывает Now и не меняет metadata/history.
-// Exclusive owner lock обязателен даже для inspection; serving admission не открывается.
+// InspectRecovery does not create a store, call Now, or change metadata/history.
+// The exclusive owner lock is required even for inspection; serving admission is not opened.
 func InspectRecovery(path string, opts Options) (report RecoverySnapshot, result error) {
 	opts, err := normalizedOptions(opts)
 	if err != nil {

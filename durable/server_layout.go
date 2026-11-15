@@ -15,7 +15,7 @@ var serverIntentKey = []byte("publication")
 var serverGuardDomain = []byte("mcp-jack/server-ring/guard/v1\n")
 var serverIntentDomain = []byte("mcp-jack/server-ring/publication/v1\n")
 
-// Внутренний guard codec общий; внешний domain исключает подмену client store.
+// The inner guard codec is shared; the outer domain prevents substitution of a client store.
 func encodeServerGuard(guard trustGuard) []byte {
 	return sealPayload(append(append([]byte{}, serverGuardDomain...), encodeTrustGuard(guard)...))
 }
@@ -28,7 +28,7 @@ func decodeServerGuard(data []byte, options TrustOptions, profile [32]byte) (tru
 	return decodeTrustGuard(payload[len(serverGuardDomain):], options, profile)
 }
 
-// Intent хранит точные локальные bytes; сам по себе он не разрешает publication.
+// Intent stores the exact local bytes; by itself it does not permit publication.
 func encodeServerIntent(previous, next []byte) []byte {
 	var out bytes.Buffer
 	out.Write(serverIntentDomain)
@@ -52,7 +52,7 @@ func decodeServerIntent(data []byte) ([]byte, []byte, error) {
 	return append([]byte{}, remaining[:int(length)]...), append([]byte{}, remaining[int(length):]...), nil
 }
 
-// Общий exact intent check для serving startup и offline inspection.
+// Shared exact intent check for serving startup and offline inspection.
 func validateServerPublicationRows(encoded, intent []byte, snapshot rotation.ServerSnapshot, options TrustOptions) error {
 	if len(intent) == 0 {
 		if len(snapshot.Public.Records) != 0 || snapshot.Public.Revision != 1 {

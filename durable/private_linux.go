@@ -8,7 +8,7 @@ import (
 	"syscall"
 )
 
-// Учитываются только явно перечисленные local filesystems; это не power-loss certification.
+// Only explicitly listed local filesystems are accepted; this is not power-loss certification.
 func privateDirectory(path string) error {
 	if os.Getpagesize() != pageBytes {
 		return ErrUnsupported

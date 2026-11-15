@@ -1,5 +1,5 @@
-// Package rotation реализует явно выбранный candidate-профиль серверной ротации.
-// Статические pins и существующие signing bytes v1 не изменяются.
+// Package rotation implements the explicitly selected candidate profile of server rotation.
+// Static pins and existing v1 signing bytes are unchanged.
 package rotation
 
 import (
@@ -19,19 +19,19 @@ const (
 	MaxRecordBytes        = 8192
 )
 
-// Error содержит стабильный код ошибки candidate codec.
+// Error carries a stable error code of the candidate codec.
 type Error struct{ Code string }
 
 func (e *Error) Error() string  { return "rotation: " + e.Code }
 func invalid(code string) error { return &Error{Code: code} }
 
-// Binding задаётся независимо от сетевого ответа; строки сравниваются точно.
+// Binding is set independently of the network response; strings are compared exactly.
 type Binding struct {
 	Endpoint string
 	Audience string
 }
 
-// Record содержит только публичные данные и точные аутентифицированные bytes.
+// Record holds only public data and exact authenticated bytes.
 type Record struct {
 	Ordinal      uint64
 	PreviousHash string
@@ -63,7 +63,7 @@ func decimal(text string, max uint64) (uint64, bool) {
 	return n, err == nil && n <= max
 }
 
-// Parse проверяет intrinsic codec и обе подписи; continuity проверяет VerifyChain.
+// Parse checks the intrinsic codec and both signatures; VerifyChain checks continuity.
 func Parse(wire []byte, binding Binding, authorizers map[string][]byte) (Record, error) {
 	fail := func(code string) (Record, error) { return Record{}, invalid(code) }
 	if len(wire) == 0 || len(wire) > MaxRecordBytes {

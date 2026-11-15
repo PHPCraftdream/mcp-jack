@@ -135,7 +135,7 @@ func TestActualHTTPOutcomesKeepNonceConsumedAcrossCleanRestart(t *testing.T) {
 			if calls != 1 || owner.meta.Live != 1 || owner.meta.Intents != 0 || (opaque && provider.calls != 1) {
 				t.Fatal("post-reservation HTTP outcome undid or duplicated admission")
 			}
-			// Close дренирует настоящую request lease, включая panic/error branches.
+			// Close drains the real request lease, including panic/error branches.
 			if err := owner.Close(); err != nil {
 				t.Fatal(err)
 			}

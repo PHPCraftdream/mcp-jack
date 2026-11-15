@@ -8,24 +8,24 @@ import (
 	"github.com/PHPCraftdream/mcp-jack/rotation"
 )
 
-// RotationResponseKey поступает только из independently trusted/ACKed snapshot.
-// NotBefore — signing-time lower bound; KnownCutoff nil означает неизвестный successor.
+// RotationResponseKey comes only from an independently trusted/ACKed snapshot.
+// NotBefore — signing-time lower bound; KnownCutoff nil means an unknown successor.
 type RotationResponseKey struct {
 	PublicKey   [32]byte
 	NotBefore   int64
 	KnownCutoff *int64
 }
 
-// RotationCarrier — crypto/interval metadata, не ClockGuard readiness или trust ACK.
+// RotationCarrier is crypto/interval metadata, not ClockGuard readiness or a trust ACK.
 type RotationCarrier struct {
 	KID       string
 	Timestamp int64
 }
 
-// VerifyRotationCarrier сохраняет unknown-key → freshness → signature порядок.
-// Transport ограничивает body; функция проверяет его exact bytes, не JSON/payload.
-// Caller затем обязан выполнить durable ClockGuard до DecodeResult, финальные
-// interval/bridge/revision checks и whole-state CAS. Нет fetch, retry или mutation.
+// VerifyRotationCarrier preserves the unknown-key → freshness → signature order.
+// Transport bounds the body; the function checks its exact bytes, not JSON/payload.
+// Caller must then run the durable ClockGuard before DecodeResult, the final
+// interval/bridge/revision checks, and whole-state CAS. No fetch, retry, or mutation.
 func VerifyRotationCarrier(known map[string]RotationResponseKey, status int, headerValues []string, requestSig string, body []byte, now time.Time, window time.Duration) (RotationCarrier, error) {
 	refuse := func(code string) (RotationCarrier, error) {
 		return RotationCarrier{}, &jack.Error{HTTPStatus: 0, Code: code, Message: "rotation response verification refused"}

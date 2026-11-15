@@ -107,7 +107,7 @@ func TestReconciliationRejectsInexactReceiptAndAbsentOperationWithoutWrites(t *t
 			t.Fatalf("inexact operation was reconciled: %v", err)
 		}
 	}
-	// Canonical, но отсутствующая pair; отсутствие не разрешает reset/reopen.
+	// Canonical but missing pair; absence does not permit reset/reopen.
 	missing := receipt
 	missing.Nonce = "AAAAAAAAAAAAAAAAAAAAAA"
 	if err := ReconcileUnknown(path, opts, snapshot.Hash, missing); !errors.Is(err, ErrRecoveryRequired) {
