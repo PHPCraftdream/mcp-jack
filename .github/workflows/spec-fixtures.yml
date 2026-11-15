@@ -73,32 +73,3 @@ jobs:
             spec/fixtures/candidate/rotation-state-vectors.json
             spec/tests/candidate/CASES.md
           if-no-files-found: error
-
-  format-preparation:
-    name: prepare formatted sources
-    if: github.ref == 'refs/heads/release-id-canonical-1115'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - name: Format Go and Rust sources in CI
-        run: |
-          gofmt -w rotation
-          (cd rust && cargo fmt --all)
-      - name: Upload formatted sources for parent integration
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: formatted-sources
-          path: |
-            rotation/*.go
-            rust/src/rotation/result.rs
-            rust/tests/rotation_id.rs
-            rust/tests/rotation_property_corpus.rs
-            rust/tests/rotation.rs
-          if-no-files-found: error
