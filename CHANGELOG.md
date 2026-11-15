@@ -13,6 +13,7 @@ This changelog records repository history and planned work without implying rele
 - Rust security updates after that baseline, each owner-approved and limited to the exact manifest pin plus the matching lock entries: `hickory-proto` **0.26.2** (RUSTSEC-2026-0487 through 0491) and `hickory-net` / `hickory-resolver` **0.26.2** (RUSTSEC-2026-0509). See `docs/security-dependencies.md`; no other dependency, MSRV, product version or publication flag changed.
 - **PR #17 remains open**, candidate head `8c769b36bdb862dca9136b73ad331915d395f73b`; runtime CI is pending. Its CLI work is not merged delivery or acceptance. CLI scope is approved, but implementation/acceptance remains pending.
 - Packaging inventory, release-notes, and settings material is descriptive documentation. Its source-defined inventory is not an actual archive-member extraction receipt, and changes in this documentation/metadata candidate have not been validated by the cited foundation CI.
+- Candidate `jack.server.key` result decoding now matches the response `id` canonically in Go, Rust, and TypeScript: numeric IDs require the canonical JSON text of the expected value (`7.0`, `7e0`, `+7`, `07` fail with `rotation_result_invalid`), pinned by the shared hand-written property corpus; current-v1 verification is unchanged.
 
 ### Implemented contract and SDK history
 

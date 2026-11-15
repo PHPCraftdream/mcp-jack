@@ -69,8 +69,8 @@ func TestDecodeResultExactSchemaParityOwnershipAndScalarIDs(t *testing.T) {
 	}
 	body := resultEnvelope(t, payload, nil, json.RawMessage(`7`))
 	_, err = rotation.DecodeResult(body, json.RawMessage(`7e0`))
-	if err == nil {
-		t.Fatal("numeric ID lexeme mismatch accepted")
+	if err != nil {
+		t.Fatal("canonical response ID for non-canonical expected lexeme rejected:", err)
 	}
 }
 
