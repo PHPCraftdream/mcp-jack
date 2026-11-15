@@ -145,6 +145,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, jack.CodeInvalidRequest, "request target must be origin-form")
 		return
 	}
+	target = signedTarget(target)
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, h.limit))
 	if err != nil {
 		var tooBig *http.MaxBytesError
@@ -169,19 +170,29 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // originFormTarget reports whether the raw request target is origin-form: it
-// starts with '/', has no fragment and consists only of the bytes 0x21 to
-// 0x7E. Absolute-, authority- and asterisk-form targets, spaces, controls and
-// non-ASCII bytes would make the signed bytes ambiguous (spec 01 section 3.1).
+// starts with '/' and consists only of the bytes 0x21 to 0x7E. Absolute-,
+// authority- and asterisk-form targets, spaces, controls and non-ASCII bytes
+// would make the signed bytes ambiguous (spec 01 section 3.1).
 func originFormTarget(raw string) bool {
 	if !strings.HasPrefix(raw, "/") {
 		return false
 	}
 	for i := 0; i < len(raw); i++ {
-		if c := raw[i]; c < 0x21 || c > 0x7e || c == '#' {
+		if c := raw[i]; c < 0x21 || c > 0x7e {
 			return false
 		}
 	}
 	return true
+}
+
+// signedTarget drops the fragment: the first '#' and everything after it is
+// not part of the target (a conforming client never sends one, and an HTTP
+// stack such as the Rust one drops it before the handler sees the request).
+func signedTarget(raw string) string {
+	if i := strings.IndexByte(raw, '#'); i >= 0 {
+		return raw[:i]
+	}
+	return raw
 }
 
 // reject answers a failed request. Once authentication has succeeded the

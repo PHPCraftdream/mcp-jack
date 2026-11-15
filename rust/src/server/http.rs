@@ -746,7 +746,8 @@ enum BodyReadError {
 }
 
 /// The origin-form target exactly as received, or None for absolute-form,
-/// authority-form, asterisk-form or any target carrying a fragment.
+/// authority-form or asterisk-form. The http crate drops a fragment while
+/// parsing the request line, so it never reaches this check (spec 01 section 3.1).
 fn origin_form_target(uri: &http::Uri) -> Option<String> {
     // Absolute-form has a scheme; authority-form has an authority and no
     // path. A genuine origin-form target has neither.
@@ -757,13 +758,10 @@ fn origin_form_target(uri: &http::Uri) -> Option<String> {
     is_origin_form_target(target).then(|| target.to_owned())
 }
 
-/// Origin-form starts with '/' and consists only of the bytes 0x21 to 0x7E;
-/// '#' is never part of a signable target (spec 01 section 3.1).
+/// Origin-form starts with '/' and consists only of the bytes 0x21 to 0x7E
+/// (spec 01 section 3.1).
 fn is_origin_form_target(target: &str) -> bool {
-    target.starts_with('/')
-        && target
-            .bytes()
-            .all(|b| (0x21..=0x7e).contains(&b) && b != b'#')
+    target.starts_with('/') && target.bytes().all(|b| (0x21..=0x7e).contains(&b))
 }
 
 /// Unsigned JSON error for requests that never reached authentication
@@ -842,8 +840,6 @@ mod tests {
             "http://h/mcp",
             "mcp",
             "",
-            "/mcp#f",
-            "/mcp?q=1#f",
             "/mcp?q=é",
             "/a b",
             "/ab",

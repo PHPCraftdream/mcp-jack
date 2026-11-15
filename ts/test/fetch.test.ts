@@ -892,19 +892,17 @@ test("response cap: a throwing next is still an unsigned 500", async () => {
   assert.equal(response.headers.get("jack-auth"), null);
 });
 
-test("fetch adapter refuses a fragment target before verification", async () => {
-  const harness = newHarness(undefined, async () => new Response("nope"));
-  const header = signRequest(aliceSigner(), fixtureAud, "GET", "/mcp", new Uint8Array(0), randomNonce(), fixtureNow);
-  const response = await harness.handle(new Request("http://localhost/mcp#frag", { headers: { "jack-auth": header } }));
-  assert.equal(response.status, 400);
-  assert.equal(errorCode(new Uint8Array(await response.arrayBuffer())), "invalid_request");
-  assert.equal(response.headers.get("jack-auth"), null);
-  assert.equal(harness.seen.calls, 0);
+test("fetch adapter drops a fragment and verifies over the target before it", async () => {
+  const harness = newHarness(undefined, async () => new Response("{}", { headers: { "content-type": "application/json" } }));
+  const header = signRequest(aliceSigner(), fixtureAud, "GET", "/mcp?q=1", new Uint8Array(0), randomNonce(), fixtureNow);
+  const response = await harness.handle(new Request("http://localhost/mcp?q=1#frag", { headers: { "jack-auth": header } }));
+  assert.equal(response.status, 200);
+  assert.equal(harness.seen.calls, 1);
 });
 
 test("fetch adapter refuses non-origin-form raw targets from the symbol", async () => {
   const harness = newHarness(undefined, async () => new Response("nope"));
-  for (const raw of ["http://example.com/mcp", "*", "example.com:80", "/mcp#frag"]) {
+  for (const raw of ["http://example.com/mcp", "*", "example.com:80", "/a b"]) {
     const request = new Request("http://localhost/mcp");
     (request as JackRequest)[RAW_TARGET_SYMBOL] = raw;
     const response = await harness.handle(request);

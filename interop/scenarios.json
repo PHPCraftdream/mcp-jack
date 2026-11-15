@@ -316,14 +316,14 @@
         "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"
       },
       "steps": [
-        "Send a request target containing a fragment on the raw request line. The server must refuse it before verification with an unsigned 400 invalid_request, not a 401 bad_signature."
+        "Send /mcp#frag on the raw request line with the signature made over /mcp. The first '#' and everything after it is not part of the target, so every server drops it and verifies over /mcp (a server that signed or compared the fragment would answer 401 bad_signature)."
       ],
       "expected": {
-        "outcome": "rejected",
-        "http_status": 400,
-        "code": "invalid_request"
+        "outcome": "ok",
+        "http_status": 200,
+        "code": null
       },
-      "source": "spec/01-authentication.md:3.1 target contains no fragment"
+      "source": "spec/01-authentication.md:3.1 the fragment is not part of the target"
     },
     "app-permission-denied": {
       "identity": "root",

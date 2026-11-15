@@ -143,12 +143,20 @@ func TestMiddlewareSignsOverRawPercentEncodedTarget(t *testing.T) {
 func TestOriginFormTarget(t *testing.T) {
 	cases := map[string]bool{
 		"/": true, "/mcp?q=%C3%A9": true, "": false, "*": false,
-		"http://h/p": false, "h:1": false, "/p#f": false,
+		"http://h/p": false, "h:1": false, "/p#f": true,
 		"/mcp?q=é": false, "/a b": false, "/ab": false, "/a	b": false,
 	}
 	for raw, want := range cases {
 		if got := originFormTarget(raw); got != want {
 			t.Fatalf("originFormTarget(%q) = %v, want %v", raw, got, want)
+		}
+	}
+}
+
+func TestSignedTargetDropsTheFragment(t *testing.T) {
+	for raw, want := range map[string]string{"/p": "/p", "/p?q=1": "/p?q=1", "/p#f": "/p", "/p?q=1#f#g": "/p?q=1", "/#": "/"} {
+		if got := signedTarget(raw); got != want {
+			t.Fatalf("signedTarget(%q) = %q, want %q", raw, got, want)
 		}
 	}
 }

@@ -117,11 +117,17 @@ export function jackIdentity(req: Request): JackIdentity | undefined {
 
 /**
  * Spec 01 section 3.1: the signed target is an origin-form request target:
- * it starts with '/' (so not absolute-, authority- or asterisk-form), has no
- * fragment and consists only of the bytes 0x21 to 0x7E.
+ * it starts with '/' (so not absolute-, authority- or asterisk-form) and
+ * consists only of the bytes 0x21 to 0x7E.
  */
 export function isOriginFormTarget(target: string): boolean {
-  return target.startsWith("/") && TARGET_BYTES.test(target) && !target.includes("#");
+  return target.startsWith("/") && TARGET_BYTES.test(target);
+}
+
+/** The first '#' and everything after it is not part of the target (spec 01 section 3.1). */
+export function dropFragment(target: string): string {
+  const i = target.indexOf("#");
+  return i < 0 ? target : target.slice(0, i);
 }
 
 /** The bytes 0x21 to 0x7E: anything else must be percent-encoded by the client. */
@@ -139,8 +145,8 @@ export function splitRepeatedAuthLines(combined: string): string[] {
 
 /**
  * Candidate target from a WHATWG-parsed URL, or undefined when it cannot be
- * proved to be the received target (fragment present or not stable under
- * re-parsing).
+ * proved to be the received target (not stable under re-parsing). The URL
+ * parser has already separated a fragment from pathname and search.
  */
 function targetFromUrl(requestUrl: string): string | undefined {
   let u: URL;
@@ -150,7 +156,7 @@ function targetFromUrl(requestUrl: string): string | undefined {
     return undefined;
   }
   const target = u.pathname + u.search;
-  if (u.hash !== "" || requestUrl.includes("#") || !isOriginFormTarget(target)) return undefined;
+  if (!isOriginFormTarget(target)) return undefined;
   const again = new URL(target, "http://localhost");
   return again.pathname + again.search === target ? target : undefined;
 }
@@ -549,7 +555,7 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
       // LIMIT: the WHATWG parser has already resolved dot segments and
       // escaped spaces/non-ASCII before this adapter sees the URL, so those
       // cannot be detected here; only the node adapter (raw target on the
-      // symbol) can refuse them. A fragment is refused.
+      // symbol) can refuse them. A fragment is dropped by URL parsing.
       const fromUrl = targetFromUrl(req.url);
       if (fromUrl === undefined) return writeError(400, "invalid_request", "malformed request target");
       target = fromUrl;

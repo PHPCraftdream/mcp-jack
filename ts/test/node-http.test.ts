@@ -441,7 +441,7 @@ test("E10 repeated Set-Cookie headers preserved", { timeout: 5000 }, async () =>
 // -- Request target: origin-form, exact wire bytes (spec 01 section 3.1). --
 
 test("E10 refused targets answer unsigned 400 invalid_request", { timeout: 10000 }, async () => {
-  const refused = ["http://example.com/mcp", "*", "/mcp#frag"];
+  const refused = ["http://example.com/mcp", "*"];
   for (const target of refused) {
     const res = await rawRequest(port, "GET", target, {}, Buffer.alloc(0));
     assert.equal(res.status, 400, `status for ${JSON.stringify(target)}`);
@@ -461,6 +461,13 @@ test("E10b targets with bytes outside 0x21-0x7E or in authority form are refused
     assert.equal(res.status, 400, `status for ${JSON.stringify(target)}`);
     assert.deepEqual(jackAuthValues(res.headers), [], `unsigned for ${JSON.stringify(target)}`);
   }
+});
+
+test("E10c a fragment is dropped and the request verifies over the target before it", { timeout: 5000 }, async () => {
+  const alice = seedSignerByName("alice");
+  const header = signRequest(alice, fixtureAud, "GET", "/mcp", new Uint8Array(0), randomNonce(), fixtureNow);
+  const res = await rawRequest(port, "GET", "/mcp#frag", { "jack-auth": header }, Buffer.alloc(0));
+  assert.equal(res.status, 200);
 });
 
 test("E11 percent-encoded non-ASCII target verifies over the exact bytes", { timeout: 5000 }, async () => {
