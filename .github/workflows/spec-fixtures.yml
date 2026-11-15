@@ -73,3 +73,64 @@ jobs:
             spec/fixtures/candidate/rotation-state-vectors.json
             spec/tests/candidate/CASES.md
           if-no-files-found: error
+
+  mcp-e2e-preparation:
+    name: prepare MCP E2E fixtures
+    if: github.ref == 'refs/heads/release-mcp-e2e-1115'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.25.0'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/mcp-e2e/rust
+      - name: Generate fixture lockfiles and format sources
+        run: |
+          (cd tools/mcp-e2e/go && go mod tidy)
+          gofmt -w tools/mcp-e2e/go
+          (cd tools/mcp-e2e/ts && npm install --package-lock-only --ignore-scripts --no-audit --no-fund)
+          (cd tools/mcp-e2e/rust && cargo generate-lockfile && cargo fmt --all)
+      - name: Upload generated lockfiles and formatted sources
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-e2e-generated
+          path: |
+            tools/mcp-e2e/go/go.mod
+            tools/mcp-e2e/go/go.sum
+            tools/mcp-e2e/go/**/*.go
+            tools/mcp-e2e/ts/package-lock.json
+            tools/mcp-e2e/rust/Cargo.lock
+            tools/mcp-e2e/rust/src/**/*.rs
+          if-no-files-found: error
+      - name: Download pinned Go fixture dependencies
+        if: always()
+        working-directory: tools/mcp-e2e/go
+        run: go mod download
+      - name: Install pinned TypeScript fixtures
+        if: always()
+        working-directory: tools/mcp-e2e/ts
+        run: npm ci --no-audit --no-fund
+      - name: Build the Rust fixtures (locked)
+        if: always()
+        working-directory: tools/mcp-e2e/rust
+        run: cargo build --locked --release
+      - name: Build the shipping CLI
+        if: always()
+        run: go build -trimpath -o "$RUNNER_TEMP/jack" ./cmd/jack
+      - name: Run the official MCP SDK end-to-end matrix
+        if: always()
+        env:
+          JACK_BIN: ${{ runner.temp }}/jack
+        run: node tools/mcp-e2e/run.mjs
