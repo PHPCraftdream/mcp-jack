@@ -27,6 +27,7 @@ interface ResultCase {
   readonly head_ordinal?: number;
   readonly head_hash?: string;
   readonly complete?: boolean;
+  /** SDK ids whose decoder API cannot represent the expected id lexeme (see corpus note). */
 }
 
 /** RotationPropertyCorpus is rust/tests/rotation-property-corpus.json. */
@@ -72,18 +73,38 @@ function expectation(entry: ResultCase): {
   return { current: { kid, publicKeyB64u }, records, head: { ordinal, hash }, complete };
 }
 
-function expectedId(entry: ResultCase): string | number {
-  return entry.id_json.startsWith("\"") ? (JSON.parse(entry.id_json) as string) : Number(entry.id_json);
+/**
+ * Integer lexemes beyond 2^53 are passed as bigint so the decoder sees the exact
+ * value; everything else keeps the number path. Values of 309 digits or more stay
+ * numbers (Infinity: rejected, like the exact overflow gate of Go and Rust).
+ */
+function exactBigInt(lexeme: string): bigint | undefined {
+  const m = /^(-?)(0|[1-9][0-9]*)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$/.exec(lexeme);
+  if (m === null) return undefined;
+  const sign = m[1] ?? "";
+  const whole = m[2] ?? "0";
+  const frac = m[3] ?? "";
+  const shift = Number(m[4] ?? "0") - frac.length;
+  if (!Number.isSafeInteger(shift) || shift < 0) return undefined;
+  const digits = (whole + frac).replace(/^0+(?=[0-9])/, "");
+  if (digits.length + shift > 308) return undefined;
+  return BigInt(sign + digits + "0".repeat(shift));
+}
+
+function expectedId(entry: ResultCase): string | number | bigint {
+  if (entry.id_json.startsWith("\"")) return JSON.parse(entry.id_json) as string;
+  const exact = exactBigInt(entry.id_json);
+  return exact !== undefined && (exact > BigInt(Number.MAX_SAFE_INTEGER) || exact < -BigInt(Number.MAX_SAFE_INTEGER)) ? exact : Number(entry.id_json);
 }
 
 test("differential corpus is well-formed and sized", () => {
   assert.equal(corpus.format, "mcp-jack-rotation-property-corpus-v1");
   assert.equal(corpus.server_key_arguments.length, 50);
-  assert.equal(corpus.result_bodies.length, 45);
+  assert.equal(corpus.result_bodies.length, 54);
   assert.equal(corpus.server_key_arguments.filter((entry) => entry.accept).length, 9);
   assert.equal(corpus.server_key_arguments.filter((entry) => !entry.accept).length, 41);
-  assert.equal(corpus.result_bodies.filter((entry) => entry.accept).length, 10);
-  assert.equal(corpus.result_bodies.filter((entry) => !entry.accept).length, 35);
+  assert.equal(corpus.result_bodies.filter((entry) => entry.accept).length, 14);
+  assert.equal(corpus.result_bodies.filter((entry) => !entry.accept).length, 40);
   assert.equal(corpus.anchor_kid.length, 43);
   assert.equal(corpus.cursor_hash.length, 43);
   const record = corpus.server_key_arguments.find((entry) => entry.id === "record-cursor");

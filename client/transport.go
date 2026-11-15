@@ -207,7 +207,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	// Streaming guard BEFORE buffering: a stream cannot be verified (spec 01
 	// section 5, open question Q1).
-	if isEventStream(resp.Header.Get("Content-Type")) {
+	if isEventStreamHeader(resp.Header.Values("Content-Type")) {
 		_ = resp.Body.Close()
 		return nil, ErrStreamingUnsupported
 	}
@@ -237,16 +237,24 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-// isEventStream reports whether a Content-Type value declares the media type
-// text/event-stream: the part before the first ';', trimmed, ASCII-lowercased.
-// mime.ParseMediaType is deliberately not used: a malformed parameter list
-// must not stop the refusal of an unverifiable stream (spec 01 section 5,
-// open question Q1; same rule as the server-side check in server/middleware.go).
-func isEventStream(contentType string) bool {
-	if i := strings.IndexByte(contentType, ';'); i >= 0 {
-		contentType = contentType[:i]
+// isEventStreamHeader reports whether the Content-Type field lines declare a
+// stream: the lines are joined with commas (the combined form a fetch client
+// also sees) and any comma-separated member whose media type is
+// text/event-stream refuses the response. The media type is the text before
+// the first ';' with SP and HTAB trimmed, compared ASCII case-insensitively.
+// mime.ParseMediaType is deliberately not used: a malformed parameter list or
+// a malformed combined value must not stop the refusal of an unverifiable
+// stream (spec 01 section 5, open question Q1).
+func isEventStreamHeader(values []string) bool {
+	for _, member := range strings.Split(strings.Join(values, ","), ",") {
+		if i := strings.IndexByte(member, ';'); i >= 0 {
+			member = member[:i]
+		}
+		if asciiLower(strings.Trim(member, " \t")) == "text/event-stream" {
+			return true
+		}
 	}
-	return asciiLower(strings.TrimSpace(contentType)) == "text/event-stream"
+	return false
 }
 
 // asciiLower maps ASCII uppercase letters to lowercase, leaving all other
