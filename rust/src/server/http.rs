@@ -18,6 +18,15 @@
 //! `tokio::time::timeout` around the call). That is the caller's
 //! responsibility; this crate has no timeout option. The inner service's own
 //! allocations before it returns its response are not bounded either.
+//!
+//! When the layer is built with [`JackLayer::rotating`], every verified answer
+//! (including signed rejections) is signed by the provider-selected rotating
+//! key: the signer is chosen before the signature is computed and a fresh
+//! completion-sample final gate re-confirms eligibility, and any authorization
+//! or final-gate failure answers with the unsigned 503
+//! `rotation_state_unavailable` — no other key is ever used. The static
+//! profile is unchanged. The `jack.server.key` tool itself is dispatched
+//! through `Verifier::with_server_keys` (verify.rs), not here.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -35,6 +44,7 @@ use tower_service::Service;
 
 use crate::auth_header::{format_response_auth, ResponseAuth};
 use crate::encoding::{encode_b64url, key_id};
+use crate::server::response_keys::{ReleaseGuard, ResponseKeyRequest, ResponseKeys};
 use crate::server::verify::{Verifier, VerifyResult};
 
 /// Alias for boxed errors flowing through body polling; http-body's own alias
@@ -50,6 +60,20 @@ const DEFAULT_MAX_BODY_BYTES: usize = 1 << 20;
 /// default.
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 1 << 20;
 
+/// One response-signing profile; the Go handler refuses any mixing, the two
+/// constructors here make mixing unrepresentable (Go: HandlerConfig.ServerKey
+/// vs ResponseKeys).
+#[derive(Clone)]
+enum SigningProfile {
+    /// Static Ed25519 key; the existing current-v1 behavior.
+    Static {
+        key: Box<ed25519_dalek::SigningKey>,
+        kid: String,
+    },
+    /// Rotating authorization profile (Go: HandlerConfig.ResponseKeys).
+    Rotating { keys: Arc<dyn ResponseKeys> },
+}
+
 /// Configures [`JackLayer::new`] (Go: HandlerConfig). Infallible in Rust: the
 /// Go nil/length checks are unrepresentable (Arc, typed key).
 pub struct HandlerConfig {
@@ -57,6 +81,36 @@ pub struct HandlerConfig {
     pub verifier: Arc<Verifier>,
     /// Signs responses (spec 01 section 5); clients pin its public key.
     pub server_key: ed25519_dalek::SigningKey,
+    /// Bounds the request body; zero means 1 MiB (Go: limit <= 0). The body
+    /// must be read in full to be hashed, so the limit is a DoS guard.
+    pub max_body_bytes: usize,
+    /// Bounds the buffered inner response, independently of
+    /// `max_body_bytes`; zero means 1 MiB. Exactly this many bytes pass; one
+    /// more is answered with a signed 502 `response_too_large` and the inner
+    /// body is dropped. It bounds bytes read, not time: a body that never
+    /// yields a frame (or only empty frames) is not stopped by it. A timeout on
+    /// the inner service covers only obtaining the response; a deadline
+    /// including body consumption must wrap the whole `JackService` produced by
+    /// `JackLayer` (caller's responsibility; no timeout option here). The inner
+    /// service's own pre-return allocations are not bounded (see module docs).
+    pub max_response_bytes: usize,
+}
+
+/// Configures [`JackLayer::rotating`] (Go: HandlerConfig with ResponseKeys
+/// set and ServerKey unset; the two constructors make the mixing Go refuses
+/// unrepresentable). Infallible in Rust: the Go nil/length checks are
+/// unrepresentable (Arc, trait object).
+pub struct RotatingHandlerConfig {
+    /// Authenticates and authorizes every request.
+    pub verifier: Arc<Verifier>,
+    /// Selects and authorizes the response signer per response (Go:
+    /// HandlerConfig.ResponseKeys). The gateway must pair it with
+    /// `Verifier::with_server_keys` so `jack.server.key` is reachable; the
+    /// library cannot enforce that pairing (see Verifier::with_server_keys).
+    /// Signing performs the provider's synchronous durable-store work (no
+    /// network I/O under a state lock) exactly where the static profile
+    /// computes its signature.
+    pub response_keys: Arc<dyn ResponseKeys>,
     /// Bounds the request body; zero means 1 MiB (Go: limit <= 0). The body
     /// must be read in full to be hashed, so the limit is a DoS guard.
     pub max_body_bytes: usize,
@@ -95,8 +149,7 @@ pub struct HandlerConfig {
 /// ```
 pub struct JackLayer {
     verifier: Arc<Verifier>,
-    server_key: ed25519_dalek::SigningKey,
-    kid: String,
+    signing: SigningProfile,
     limit: usize,
     response_limit: usize,
 }
@@ -118,9 +171,36 @@ impl JackLayer {
             cfg.max_response_bytes
         };
         Self {
-            kid: key_id(cfg.server_key.verifying_key().as_bytes()),
+            signing: SigningProfile::Static {
+                kid: key_id(cfg.server_key.verifying_key().as_bytes()),
+                key: Box::new(cfg.server_key),
+            },
             verifier: cfg.verifier,
-            server_key: cfg.server_key,
+            limit,
+            response_limit,
+        }
+    }
+
+    /// Wraps an inner service with the rotating response profile (Go:
+    /// NewHandler with HandlerConfig.ResponseKeys; ServerKey must be unset —
+    /// unrepresentable here).
+    pub fn rotating(cfg: RotatingHandlerConfig) -> Self {
+        // Go: limit <= 0 means the default; 0 in usize covers that exactly.
+        let limit = if cfg.max_body_bytes == 0 {
+            DEFAULT_MAX_BODY_BYTES
+        } else {
+            cfg.max_body_bytes
+        };
+        let response_limit = if cfg.max_response_bytes == 0 {
+            DEFAULT_MAX_RESPONSE_BYTES
+        } else {
+            cfg.max_response_bytes
+        };
+        Self {
+            signing: SigningProfile::Rotating {
+                keys: cfg.response_keys,
+            },
+            verifier: cfg.verifier,
             limit,
             response_limit,
         }
@@ -133,8 +213,7 @@ impl<S> Layer<S> for JackLayer {
     fn layer(&self, inner: S) -> Self::Service {
         JackService {
             verifier: Arc::clone(&self.verifier),
-            server_key: self.server_key.clone(),
-            kid: self.kid.clone(),
+            signing: self.signing.clone(),
             limit: self.limit,
             response_limit: self.response_limit,
             inner,
@@ -147,8 +226,7 @@ impl<S> Layer<S> for JackLayer {
 #[derive(Clone)]
 pub struct JackService<S> {
     verifier: Arc<Verifier>,
-    server_key: ed25519_dalek::SigningKey,
-    kid: String,
+    signing: SigningProfile,
     limit: usize,
     response_limit: usize,
     inner: S,
@@ -198,8 +276,7 @@ where
         let ready_inner = std::mem::replace(&mut self.inner, clone);
         let mut this = JackService {
             verifier: Arc::clone(&self.verifier),
-            server_key: self.server_key.clone(),
-            kid: self.kid.clone(),
+            signing: self.signing.clone(),
             limit: self.limit,
             response_limit: self.response_limit,
             inner: ready_inner,
@@ -509,7 +586,9 @@ where
 
     /// Signs the response over its status, the request signature and the exact
     /// body bytes (spec 01 section 5) and attaches the Jack-Auth header
-    /// (Go: writeSigned). The clock always comes from the verifier config.
+    /// (Go: writeSigned). The static profile's clock always comes from the
+    /// verifier config; the rotating profile's timestamp comes from the
+    /// provider-selected authorization (write_authorized).
     fn signed_with_headers(
         &self,
         status: u16,
@@ -517,23 +596,121 @@ where
         headers: http::HeaderMap,
         body: Bytes,
     ) -> http::Response<Full<Bytes>> {
-        let now = self.verifier.now();
-        let signing = crate::signing::response_signing_string(
+        match &self.signing {
+            SigningProfile::Static { key, kid } => {
+                let now = self.verifier.now();
+                let signing = crate::signing::response_signing_string(
+                    status as i64,
+                    &res.request_sig,
+                    kid,
+                    now,
+                    &body,
+                );
+                let sig = key.sign(signing.as_bytes()).to_bytes();
+                let auth = format_response_auth(&ResponseAuth {
+                    kid: kid.clone(),
+                    ts: now,
+                    sig: encode_b64url(&sig),
+                });
+                let mut builder = http::Response::builder()
+                    .status(status)
+                    .header("Jack-Auth", auth);
+                for (name, value) in &headers {
+                    // Static status/header values: construction cannot fail.
+                    builder = builder.header(name, value);
+                }
+                builder
+                    .body(Full::new(body))
+                    .expect("static status and header values cannot fail")
+            }
+            SigningProfile::Rotating { keys } => {
+                self.write_authorized(keys, status, res, headers, body)
+            }
+        }
+    }
+
+    /// Rotating profile (Go: writeAuthorized): the signer is selected before
+    /// the signature is computed, a fresh completion sample re-confirms
+    /// eligibility at the final gate, and any failure discards the signature
+    /// and answers with the UNSIGNED 503 refusal — no other key is ever used.
+    fn write_authorized(
+        &self,
+        keys: &Arc<dyn ResponseKeys>,
+        status: u16,
+        res: &VerifyResult,
+        headers: http::HeaderMap,
+        body: Bytes,
+    ) -> http::Response<Full<Bytes>> {
+        // Go refuse(): writeError(w, 503, ...) — UNSIGNED, Content-Type only,
+        // no WWW-Authenticate, no Jack-Auth; the inner `headers` are discarded.
+        let refuse = || {
+            unsigned_rejection(
+                503,
+                "rotation_state_unavailable",
+                "response authorization unavailable",
+            )
+        };
+        // Borrowed view (Go copies the payload so the provider cannot mutate
+        // what is signed; Rust borrowing prevents mutation by construction).
+        let input = ResponseKeyRequest {
+            status,
+            tool: &res.tool,
+            request_signature: &res.request_sig,
+            body: &body,
+        };
+        let Ok(auth) = keys.authorize_response(&input) else {
+            return refuse();
+        };
+        // Runs the release on EVERY path (success, refusal, unwind), mirroring
+        // Go's `defer releaseResponseAuthorization`; it drops at function exit,
+        // AFTER the final gate ran (Go releases after writeRaw).
+        let _guard = ReleaseGuard::new(auth.release);
+        // Go: the authorizeResponse wrapper rejects Timestamp < 0 ||
+        // > maxDurableTimestamp; u64 makes negatives unrepresentable.
+        if auth.timestamp > crate::rotation::MAX_TIMESTAMP {
+            return refuse();
+        }
+        // Go: responsePublicKey — the length check is unrepresentable ([u8; 32]).
+        let public = auth.signer.public_key();
+        if crate::ed25519::validate_public_key(&public).is_err() {
+            return refuse();
+        }
+        let kid = key_id(&public);
+        // Go: responseSignature. The timestamp cast is safe after the range
+        // check above.
+        let message = crate::signing::response_signing_string(
             status as i64,
             &res.request_sig,
-            &self.kid,
-            now,
+            &kid,
+            auth.timestamp as i64,
             &body,
         );
-        let sig = self.server_key.sign(signing.as_bytes()).to_bytes();
-        let auth = format_response_auth(&ResponseAuth {
-            kid: self.kid.clone(),
-            ts: now,
+        let Ok(sig) = auth.signer.sign(message.as_bytes()) else {
+            return refuse();
+        };
+        let Ok(sig) = <[u8; 64]>::try_from(sig.as_slice()) else {
+            return refuse();
+        };
+        // The provider cannot confirm another identity or change the message:
+        // the signature must verify under the public key it pinned.
+        if !crate::ed25519::verify(&public, message.as_bytes(), &sig) {
+            return refuse();
+        }
+        // Go: finalResponseAuthorization — a fresh completion sample inside the
+        // provider re-checks eligibility; a key retired meanwhile means the
+        // computed signature is discarded and the response FAILS; no retry
+        // with another key.
+        if (auth.final_gate)().is_err() {
+            return refuse();
+        }
+        let auth_header = format_response_auth(&ResponseAuth {
+            kid,
+            ts: auth.timestamp as i64,
             sig: encode_b64url(&sig),
         });
         let mut builder = http::Response::builder()
             .status(status)
-            .header("Jack-Auth", auth);
+            .header("Jack-Auth", auth_header);
         for (name, value) in &headers {
             // Static status/header values: construction cannot fail.
             builder = builder.header(name, value);
