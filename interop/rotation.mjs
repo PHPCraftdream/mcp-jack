@@ -556,6 +556,8 @@ async function runMatrix(opts) {
       }
       // ---- s5: old-key peer response after the cutoff is refused ----
       writeFileSync(modePath, 'old-key\n');
+      // Подпись фейка берёт время из его часов: оба часа на cutoff, иначе окно свежести откажет раньше интервала ключа.
+      setClock(clkFakeSrv, A);
       setClock(clkCliFake, A);
       {
         const r = await runClientStep(client, fakeClient('call'), clientEnv, `s5 ${pairLabel}`, pairLabel);

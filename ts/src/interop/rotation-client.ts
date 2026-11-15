@@ -464,7 +464,7 @@ async function main(): Promise<void> {
       case "refresh":
         return void (await stepRefresh(signer, flags));
       case "wire":
-        return void (await stepWire(signer, flags));
+        return void emit(flags.step, await stepWire(signer, flags));
       default:
         return void emit(flags.step, stepState(signer, flags));
     }
