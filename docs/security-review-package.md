@@ -13,7 +13,7 @@ How to read it:
   Statements about third-party libraries (bbolt, serde_json, the `http` crate,
   OpenSSL, V8) and all cost figures are hypotheses, not measurements.
 - Findings are the pre-reviewer's claims. The maintainers re-read the code for
-  F-01 and F-04 and confirmed them; the others have not been re-verified.
+  F-01, F-04 and F-07 and confirmed them; the others have not been re-verified.
 - No critical or high finding was reported: no authentication bypass, response
   forgery or replay in the Go durable profile was found. The remaining risk is
   mainly availability and divergence between the SDKs.
@@ -49,7 +49,7 @@ reviewer's opinion before deciding.
 | F-07 | Low | Expired invites are never removed; at 1024 stored invites `invite.create` fails and a gateway with 1025 does not start. | Documented limitation. |
 | F-08 | Low | The announce limit (1153 keys) and the retired-key limit (1024) differ, so a long-lived deployment could eventually refuse to sign. Compaction is not implemented. | Documented limitation; not reachable in practice at 48 hours per rotation. |
 | F-09 | Low | At the reviewed commit the top-level documents said that durable nonces and rotation were not implemented, and did not state that only the Go server SDK has a durable nonce store. | Resolved by the documentation refresh: Rust and TypeScript nonce stores are stated to remain in memory. |
-| F-10 | Low | The gateway applies global rate and connection limits before authentication, so garbage traffic can deny service to everyone. | Documented in the CLI design notes and the operations guide. |
+| F-10 | Low | The gateway applies global rate and connection limits before authentication, so garbage traffic can deny service to everyone. | Documented in the CLI design notes, the threat model and the operations guide. |
 | F-11 | Low | Rust `JackLayer::new` is infallible and accepts a verifier with `jack.server.key` routing next to a static response profile, so the page is served without the final gate. | Accepted for 0.1.0: the constructor contract is documented; making it fallible is an API change. Revisit for 0.2. |
 | F-12 | Low | Go `FileState`: an unknown outcome of `rename` can leave disk and memory different; every well-formed `jack.enroll` takes a deep copy of the state under the global mutex before the invite is checked. | Accepted for 0.1.0, documented. |
 | F-13 | Info | The upstream response status is not validated; a `1xx` status is signed as is. | Fails closed at the client (`bad_signature`). |

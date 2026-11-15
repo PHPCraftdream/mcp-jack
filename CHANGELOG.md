@@ -14,6 +14,8 @@ This file records repository history. The `0.1.0 (unreleased)` section describes
 - Go CLI (`jack`): keygen/bootstrap/enroll/gateway/bridge, user and invite admin commands, nonce and server-key commands.
 - 3x3 interop matrices: request/response, rotation, and credential transfer.
 - Official MCP SDK end-to-end CI job over the bounded legacy 2025-11-25 stdio profile.
+- Go CLI hardening from the internal pre-review: the stdio bridge refuses `jack.*` tool calls locally and never signs them, and the gateway durable nonce profile rejects a `window` above 30 seconds so that unauthenticated enrollment attempts cannot fill the nonce capacity.
+- Internal, non-independent security pre-review package for an external reviewer: `docs/security-review-package.md`.
 - Bounded Go fuzz campaign (15 native targets, including the server-key-rotation parsers and the durable store codecs), coverage lanes, and packaged-consumer lanes.
 - Deterministic property/mutation tests and a shared corpus for the Rust and TypeScript rotation layers.
 
@@ -27,6 +29,8 @@ This file records repository history. The `0.1.0 (unreleased)` section describes
 - On Windows the CLI stores fail closed by design (durable private-file stores are Linux-only; SDKs are tested on Windows).
 - Audit delivery is best effort.
 - Rust and TypeScript have property/mutation tests and a shared corpus but no coverage-guided fuzzing (Go has a bounded fuzz campaign).
+- Only the Go SDK and the CLI gateway have the durable nonce store; Rust and TypeScript servers keep nonces in memory.
+- A forward clock jump latches the durable stores unsafe permanently and there is no recovery command; unauthenticated load is bounded only by the gateway's global admission limits; expired invites are never removed. See `docs/operations.md` and `docs/security-review-package.md`.
 - The release is not independently audited.
 
 ## Development history
