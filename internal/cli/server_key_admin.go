@@ -29,7 +29,7 @@ func offlineServerKeyProfile(path string) (serverKeyConfig, durable.ServerOption
 	var config serverKeyConfig
 	if decodeConfig(path, &config) != nil || config.Version != 1 || privateParent(config.StoreFile) != nil || !validServerKeyInventory(config.Signers) ||
 		config.Endpoint == "" || len(config.Endpoint) > 2048 || !utf8.ValidString(config.Endpoint) ||
-		config.Aud == "" || len(config.Aud) > 1024 || !utf8.ValidString(config.Aud) || config.Window < 1 || config.Window > 120 ||
+		config.Aud == "" || len(config.Aud) > 1024 || !utf8.ValidString(config.Aud) || config.Window < 1 || config.Window > maxDurableWindow ||
 		config.AnchorReference == "" || len(config.AnchorReference) > rotation.MaxSignerReferenceBytes || !utf8.ValidString(config.AnchorReference) {
 		return serverKeyConfig{}, durable.ServerOptions{}, errConfig
 	}

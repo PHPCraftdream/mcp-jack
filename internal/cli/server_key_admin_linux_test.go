@@ -150,6 +150,7 @@ func TestOfflineServerKeyProfileValidationBeforeStoreCreation(t *testing.T) {
 		func(c *serverKeyConfig) { c.Version = 2 },
 		func(c *serverKeyConfig) { c.Window = 0 },
 		func(c *serverKeyConfig) { c.Window = 121 },
+		func(c *serverKeyConfig) { c.Window = maxDurableWindow + 1 },
 		func(c *serverKeyConfig) { c.AnchorKID = "wrong" },
 		func(c *serverKeyConfig) { c.AnchorPublicKey += "=" },
 		func(c *serverKeyConfig) { c.AnchorReference = "" },

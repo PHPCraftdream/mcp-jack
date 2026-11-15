@@ -127,12 +127,13 @@ Admin tools are reachable only when the gateway runs with `"native_admin": true`
 
 ### Profile
 
-For rotation, the gateway config uses `server_rotation_file` in place of `server_seed_file` (exactly one signing profile). Rotation mode requires an initialized durable-nonces profile with the same immutable window; the ring and nonce stores must be distinct files and the ring file must differ from the registry state; the profile audience must equal the gateway audience.
+For rotation, the gateway config uses `server_rotation_file` in place of `server_seed_file` (exactly one signing profile). Rotation mode requires an initialized durable-nonces profile with the same immutable window, so the rotation `window` is also limited to 1 to 30 seconds and `jack server-key-init-unused` refuses a larger value (the ring window cannot be changed later); the ring and nonce stores must be distinct files and the ring file must differ from the registry state; the profile audience must equal the gateway audience.
 
 The rotation profile may include a `signers` array; entries are `{reference, kid, seed_file}`, where `seed_file` holds 32 raw seed bytes from `jack keygen server`. Distinct key IDs may share an opaque reference.
 
 ```json
 {
+  "version": 1,
   "store_file": "/var/lib/jack/rotation.store",
   "endpoint": "https://service.example/mcp",
   "aud": "mcp-jack",
