@@ -34,7 +34,10 @@ if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
 fi
 
 module="github.com/PHPCraftdream/mcp-jack"
-proxy="https://proxy.golang.org/$module/@v"
+# The proxy protocol case-encodes the module path in URLs (every upper-case
+# letter becomes "!" plus the lower-case letter); zip entries keep the real path.
+module_url="$(printf '%s' "$module" | sed 's/[A-Z]/!\l&/g')"
+proxy="https://proxy.golang.org/$module_url/@v"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
