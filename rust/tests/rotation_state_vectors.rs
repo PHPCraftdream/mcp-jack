@@ -78,6 +78,7 @@ struct ClientInput {
     #[serde(rename = "finalNow")]
     final_now: u64,
     #[serde(rename = "preCallbackNow")]
+    #[allow(dead_code)] // schema field the runner does not need
     pre_callback_now: u64,
     response: FixtureResponse,
     snapshot: FixtureSnapshot,
@@ -111,6 +112,7 @@ struct FixtureSnapshot {
     anchor: FixtureKey,
     aud: String,
     #[serde(rename = "clockGeneration")]
+    #[allow(dead_code)] // schema field the runner does not need
     clock_generation: u64,
     endpoint: String,
     fence: bool,
@@ -131,6 +133,7 @@ struct ClientExpect {
     ack_ordinal: u64,
     callbacks: u64,
     #[serde(rename = "carrierTrusted")]
+    #[allow(dead_code)] // schema field the runner does not need
     carrier_trusted: Option<bool>,
     committed: Option<bool>,
     error: Option<String>,
@@ -707,8 +710,8 @@ fn vector_first_bridge_before_cutoff() {
     initialize_trust(&sandbox.file(), &options, 173_799);
     let clock = SharedClock::at(173_799);
     let mut store = open_trust(&sandbox.file(), &options, &clock);
-    let result = drive_refresh(&mut store, &case).expect("commits before activation");
-    expect_ok(&case, result.clone());
+    let result = drive_refresh(&mut store, case).expect("commits before activation");
+    expect_ok(case, result.clone());
     assert_eq!(result.revision, 2);
     assert_eq!(result.head.ordinal, 1);
     assert!(result.complete);
@@ -732,8 +735,8 @@ fn vector_first_bridge_at_cutoff() {
     initialize_trust(&sandbox.file(), &options, 173_800);
     let clock = SharedClock::at(173_800);
     let mut store = open_trust(&sandbox.file(), &options, &clock);
-    let error = drive_refresh(&mut store, &case).expect_err("bridge expires at A");
-    expect_err(&case, &error);
+    let error = drive_refresh(&mut store, case).expect_err("bridge expires at A");
+    expect_err(case, &error);
     // committed:false, callbacks:0 => the anchor snapshot is untouched.
     let (snapshot, _) = store.snapshot().expect("snapshot");
     assert_eq!(snapshot.revision, 1);
@@ -753,8 +756,8 @@ fn vector_unknown_outer_before_invalid_payload() {
     initialize_trust(&sandbox.file(), &options, 1_000);
     let clock = SharedClock::at(1_000);
     let mut store = open_trust(&sandbox.file(), &options, &clock);
-    let error = drive_refresh(&mut store, &case).expect_err("unknown key refused");
-    expect_err(&case, &error);
+    let error = drive_refresh(&mut store, case).expect_err("unknown key refused");
+    expect_err(case, &error);
     let (snapshot, _) = store.snapshot().expect("snapshot");
     assert_eq!(snapshot.revision, 1);
     eprintln!(
@@ -772,8 +775,8 @@ fn vector_exact_duplicate_at_new_key_lower_bound() {
     seed_ord1(&sandbox.file(), &options, &vectors, 173_769);
     let clock = SharedClock::at(173_800);
     let mut store = open_trust(&sandbox.file(), &options, &clock);
-    let result = drive_refresh(&mut store, &case).expect("duplicate is a no-op success");
-    expect_ok(&case, result);
+    let result = drive_refresh(&mut store, case).expect("duplicate is a no-op success");
+    expect_ok(case, result);
     let (snapshot, _) = store.snapshot().expect("snapshot");
     assert_eq!(snapshot.revision, 2, "no trust revision increment");
     assert_eq!(snapshot.head.ordinal, 1, "head unchanged");
@@ -795,8 +798,8 @@ fn vector_new_key_lower_bound_minus_one_is_stale() {
     seed_ord1(&sandbox.file(), &options, &vectors, 173_769);
     let clock = SharedClock::at(173_769);
     let mut store = open_trust(&sandbox.file(), &options, &clock);
-    let error = drive_refresh(&mut store, &case).expect_err("outside the window");
-    expect_err(&case, &error);
+    let error = drive_refresh(&mut store, case).expect_err("outside the window");
+    expect_err(case, &error);
     let (snapshot, _) = store.snapshot().expect("snapshot");
     assert_eq!(snapshot.revision, 2, "no adoption");
     eprintln!(
@@ -814,8 +817,8 @@ fn vector_duplicate_prefix_then_extension() {
     seed_ord1(&sandbox.file(), &options, &vectors, 173_769);
     let clock = SharedClock::at(173_800);
     let mut store = open_trust(&sandbox.file(), &options, &clock);
-    let result = drive_refresh(&mut store, &case).expect("extension commits");
-    expect_ok(&case, result.clone());
+    let result = drive_refresh(&mut store, case).expect("extension commits");
+    expect_ok(case, result.clone());
     assert!(result.committed);
     assert_eq!(result.revision, 3, "one trust revision increment");
     assert_eq!(result.head.ordinal, 2, "head ordinal 2");
@@ -845,8 +848,8 @@ fn vector_late_callback_ack_retains_snapshot_but_rejects_carrier() {
     let clock = SharedClock::at(173_800);
     clock.enqueue(&[173_799; 5]);
     let mut store = open_trust(&sandbox.file(), &options, &clock);
-    let error = drive_refresh(&mut store, &case).expect_err("carrier fails the final gate");
-    expect_err(&case, &error);
+    let error = drive_refresh(&mut store, case).expect_err("carrier fails the final gate");
+    expect_err(case, &error);
     assert_eq!(clock.samples(), 6, "five pre-callback samples, one final");
     store.close().expect("close after late-carrier failure");
     // committed stays true: reopen proves the ACK was retained.
@@ -873,8 +876,8 @@ fn vector_conflicting_duplicate_prefix_is_not_adopted() {
     seed_ord1(&sandbox.file(), &options, &vectors, 173_769);
     let clock = SharedClock::at(173_800);
     let mut store = open_trust(&sandbox.file(), &options, &clock);
-    let error = drive_refresh(&mut store, &case).expect_err("conflicting duplicate");
-    expect_err(&case, &error);
+    let error = drive_refresh(&mut store, case).expect_err("conflicting duplicate");
+    expect_err(case, &error);
     let (snapshot, _) = store.snapshot().expect("snapshot");
     assert_eq!(snapshot.revision, 2, "conflicting record not adopted");
     assert_eq!(snapshot.records.len(), 1);
@@ -893,8 +896,8 @@ fn vector_gapped_prefix_cannot_be_claimed_by_head() {
     seed_ord1(&sandbox.file(), &options, &vectors, 173_799);
     let clock = SharedClock::at(173_799);
     let mut store = open_trust(&sandbox.file(), &options, &clock);
-    let error = drive_refresh(&mut store, &case).expect_err("gap refused");
-    expect_err(&case, &error);
+    let error = drive_refresh(&mut store, case).expect_err("gap refused");
+    expect_err(case, &error);
     let (snapshot, _) = store.snapshot().expect("snapshot");
     assert_eq!(snapshot.revision, 2, "no adoption");
     assert_eq!(snapshot.records.len(), 1);
@@ -913,14 +916,14 @@ fn vector_whole_response_body_cap_plus_one() {
     initialize_trust(&sandbox.file(), &options, 1_000);
     let clock = SharedClock::at(1_000);
     let mut store = open_trust(&sandbox.file(), &options, &clock);
-    let response = response_of(&case);
+    let response = response_of(case);
     assert_eq!(
         response.body.len(),
         MAX_RESULT_BODY_BYTES + 1,
         "fixture body is exactly cap+1"
     );
-    let error = drive_refresh(&mut store, &case).expect_err("over the body cap");
-    expect_err(&case, &error);
+    let error = drive_refresh(&mut store, case).expect_err("over the body cap");
+    expect_err(case, &error);
     let (snapshot, _) = store.snapshot().expect("snapshot");
     assert_eq!(snapshot.revision, 1);
     eprintln!(
@@ -944,7 +947,7 @@ fn vector_trust_callback_unknown_fences() {
     // compare_and_swap fails while the directory is read-only.
     fs::set_permissions(&sandbox.0, fs::Permissions::from_mode(0o500))
         .expect("chmod sandbox read-only");
-    let error = drive_refresh(&mut store, &case).expect_err("unknown outcome");
+    let error = drive_refresh(&mut store, case).expect_err("unknown outcome");
     let code = error.code.clone();
     fs::set_permissions(&sandbox.0, fs::Permissions::from_mode(0o700))
         .expect("restore sandbox permissions");
@@ -958,8 +961,7 @@ fn vector_trust_callback_unknown_fences() {
     // fenced:true => a reopen is refused (the bundle stays dirty on disk).
     let reopen = SharedClock::at(173_800);
     let reopen_error = RotationTrustStore::open(&sandbox.file(), options.clone(), reopen.closure())
-        .err()
-        .expect("fenced store refuses reopen")
+        .expect_err("fenced store refuses reopen")
         .code;
     assert_eq!(reopen_error, "rotation_state_unavailable");
     let (high_water, revision, unsafe_clock) = clock_doc(&sandbox.file());
@@ -991,8 +993,7 @@ fn vector_busy_writer_stops_before_trust_callback() {
     let second_clock = SharedClock::at(173_800);
     let second_error =
         RotationTrustStore::open(&sandbox.file(), options.clone(), second_clock.closure())
-            .err()
-            .expect("second writer refused")
+            .expect_err("second writer refused")
             .code;
     assert_eq!(second_error, "rotation_state_unavailable");
     let (snapshot, _) = store.snapshot().expect("snapshot");
@@ -1025,12 +1026,11 @@ fn vector_stale_whole_snapshot_stops_before_callback() {
     // the production exact whole-snapshot compare with the stale value.
     let (stale, _) = store.snapshot().expect("pre-callback snapshot");
     let extension = find_client(&vectors, "duplicate-prefix-then-extension");
-    let committed = drive_refresh(&mut store, &extension).expect("extension commits");
+    let committed = drive_refresh(&mut store, extension).expect("extension commits");
     assert!(committed.committed);
     let error = store
         .check_snapshot_clock(&stale)
-        .err()
-        .expect("stale snapshot refused");
+        .expect_err("stale snapshot refused");
     assert_eq!(error.code, "rotation_state_changed");
     // Zero adoption from the refused compare: durable state keeps the extension.
     let (snapshot, _) = store.snapshot().expect("snapshot");
@@ -1150,8 +1150,7 @@ fn vector_clock_rollback_latches() {
     clock.set(*raw_now);
     let error = store
         .advance_and_check()
-        .err()
-        .expect("rollback refuses")
+        .expect_err("rollback refuses")
         .code;
     assert_eq!(error, "rotation_clock_unsafe");
     assert_eq!(clock.samples() - baseline, 1, "exactly one clock callback");
@@ -1162,7 +1161,7 @@ fn vector_clock_rollback_latches() {
         (guard.high_water, 5, true)
     );
     // The latch persists: the next check refuses without even sampling.
-    let second = store.advance_and_check().err().expect("latched").code;
+    let second = store.advance_and_check().expect_err("latched").code;
     assert_eq!(second, "rotation_clock_unsafe");
     assert_eq!(
         clock.samples() - baseline,
@@ -1232,8 +1231,7 @@ fn vector_clock_rollback_latch_unknown_is_unavailable() {
     clock.fail();
     let error = store
         .advance_and_check()
-        .err()
-        .expect("failing sample refuses")
+        .expect_err("failing sample refuses")
         .code;
     assert_eq!(error, "rotation_clock_unavailable");
     assert_eq!(clock.samples() - baseline, 1, "exactly one clock callback");
@@ -1482,7 +1480,7 @@ fn vector_server_final_cutoff_no_resign() {
     // Emission at the exact cutoff: the signed key is strictly retired.
     ring.now.store(*emission_time, Ordering::SeqCst);
     let gate = auth.final_gate;
-    let error = gate().err().expect("cutoff refuses").code;
+    let error = gate().expect_err("cutoff refuses").code;
     assert_eq!(
         error, "rotation_state_unavailable",
         "strict cutoff, no fallback"
@@ -1523,7 +1521,7 @@ fn vector_server_final_generation_fence_no_fallback() {
     // between signing and emission; the final gate must refuse, no fallback.
     ring.now.store(*emission_time - 1, Ordering::SeqCst);
     let gate = auth.final_gate;
-    let error = gate().err().expect("fence refuses").code;
+    let error = gate().expect_err("fence refuses").code;
     assert_eq!(error, "rotation_state_unavailable");
     (auth.release)();
     eprintln!(
