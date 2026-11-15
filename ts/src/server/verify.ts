@@ -422,6 +422,20 @@ function entryActive(e: RegistryEntry, now: number): boolean {
   );
 }
 
+/**
+ * aud rule shared by the verifier and the client constructors: non-empty and
+ * free of C0 control characters and DEL (bytes < 0x20 and 0x7f on the wire;
+ * UTF-8 multibyte sequences are all >= 0x80, so a code-unit check is exact).
+ */
+function validAudience(aud: string): boolean {
+  if (aud === "") return false;
+  for (let i = 0; i < aud.length; i++) {
+    const c = aud.charCodeAt(i);
+    if (c < 0x20 || c === 0x7f) return false;
+  }
+  return true;
+}
+
 export class Verifier {
   private readonly aud: string;
   private readonly state: StateStore;
@@ -432,9 +446,9 @@ export class Verifier {
   private readonly window: number;
   private readonly now: () => number;
 
-  /** Throws when aud is "" or state/nonces/now are missing (Go NewVerifier parity). */
+  /** Throws when aud is "", contains control characters, or state/nonces/now are missing (Go NewVerifier parity). */
   constructor(cfg: VerifierConfig) {
-    if (cfg.aud === "") throw new Error("server: VerifierConfig.aud must be non-empty");
+    if (!validAudience(cfg.aud)) throw new Error("server: VerifierConfig.aud must be non-empty and contain no control characters");
     if (cfg.state === undefined) throw new Error("server: VerifierConfig.state must be set");
     if (cfg.nonces === undefined) throw new Error("server: VerifierConfig.nonces must be set");
     if (cfg.now === undefined) throw new Error("server: VerifierConfig.now must be set");
@@ -444,6 +458,11 @@ export class Verifier {
     this.audit = cfg.audit;
     this.native = cfg.native;
     this.serverKeys = cfg.serverKeys;
+    if (cfg.window !== undefined && !Number.isFinite(cfg.window)) {
+      throw new Error("server: VerifierConfig.window must be a finite number of seconds");
+    }
+    // NaN would slip the old `<= 0` default and poison the timestamp compare;
+    // non-finite windows are rejected outright, <= 0 keeps the DEFAULT_WINDOW fallback.
     this.window = cfg.window === undefined || cfg.window <= 0 ? DEFAULT_WINDOW : cfg.window;
     this.now = cfg.now;
   }
@@ -461,6 +480,16 @@ export class Verifier {
   /** Runs the pipeline of spec 01 section 4 / spec 02 section 4; stops at the first failing step. */
   verify(req: VerifyRequest): VerifyResult {
     const now = this.now();
+    // Fail closed on a broken injected clock: NaN/undefined makes every
+    // window compare false (fail-open). No nonce is recorded and nothing is
+    // dispatched; the clock is a programming error, not a caller fault.
+    if (!Number.isSafeInteger(now) || now < 0) {
+      return rejected(500, "internal_error", "internal error");
+    }
+    // Defense in depth: the constructor already rejects a non-finite window.
+    if (!Number.isFinite(this.window) || this.window <= 0) {
+      return rejected(500, "internal_error", "internal error");
+    }
 
     // Step 1: header grammar. JackError carries its own status/code; any
     // other error is a programming error reported as 500 internal_error.

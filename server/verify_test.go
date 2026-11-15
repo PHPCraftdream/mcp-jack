@@ -413,3 +413,27 @@ func TestAdminSequences(t *testing.T) {
 		})
 	}
 }
+
+// TestNewVerifierAudControlChars pins the spec 01 section 3.1 aud rules: the
+// configured audience must be non-empty and must not contain control
+// characters (bytes below 0x20 or 0x7f), while an ordinary value is accepted.
+func TestNewVerifierAudControlChars(t *testing.T) {
+	newCfg := func(aud string) Config {
+		return Config{Aud: aud, State: NewMemoryState(), Nonces: NewNonceStore()}
+	}
+	if _, err := NewVerifier(newCfg("https://svc.example.test")); err != nil {
+		t.Fatalf("NewVerifier rejected an ordinary aud: %v", err)
+	}
+	for _, aud := range []string{"a\nb", "a\rb", "a\x00b", "a\tb", "a\x7fb"} {
+		_, err := NewVerifier(newCfg(aud))
+		if err == nil {
+			t.Fatalf("NewVerifier accepted aud with control character %q", aud)
+		}
+		if !strings.Contains(err.Error(), "control characters") {
+			t.Fatalf("NewVerifier error for aud %q = %v, want a control-character rejection", aud, err)
+		}
+	}
+	if _, err := NewVerifier(newCfg("")); err == nil {
+		t.Fatal("NewVerifier accepted an empty aud")
+	}
+}

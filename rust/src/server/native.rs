@@ -377,11 +377,6 @@ impl Native {
             return Err(key_exists());
         }
         let args = parse_args(&c.arguments)?;
-        // The audit target is the requested name as soon as it is readable,
-        // even when another argument is rejected later.
-        if let Some(requested) = str_arg(&args, "name") {
-            c.target = requested;
-        }
         let Some(code) = str_arg(&args, "code") else {
             return Err(invalid_params());
         };
@@ -1394,6 +1389,52 @@ mod tests {
         let err = native.call(&mut call).unwrap_err();
         assert_eq!(err.code, codes::INVALID_PARAMS);
         assert_eq!(call.target, alice.kid);
+    }
+
+    #[test]
+    fn enroll_audit_target_follows_name_validation() {
+        // An invalid name must leave the audit target empty: Go and TypeScript
+        // assign the target only after ValidName passes (review L-7).
+        let state = Arc::new(MemoryState::new());
+        let entry = test_key("enroll-aud", "enroll-aud");
+        let native = deterministic_native();
+        let mut call = make_call(
+            TOOL_ENROLL,
+            raw_args(r#"{"code":"AAA","name":"bad name!","public_key":"x"}"#),
+            None,
+            &entry.kid,
+            Arc::clone(&state) as Arc<dyn StateStore>,
+        );
+        let err = native.call(&mut call).unwrap_err();
+        assert_eq!(err.code, codes::INVALID_PARAMS);
+        assert!(
+            call.target.is_empty(),
+            "invalid name must not become the audit target, got {:?}",
+            call.target
+        );
+
+        // A valid enrollment carries the requested name as the target.
+        let code = bootstrap_admin(
+            state.as_ref(),
+            NOW,
+            600,
+            NativeOptions {
+                random_bytes: Some(Arc::new(|n| Ok(vec![0xA5; n]))),
+            },
+        )
+        .unwrap();
+        let mut call = make_call(
+            TOOL_ENROLL,
+            raw_args(&format!(
+                r#"{{"code":"{code}","name":"first","public_key":"{}"}}"#,
+                entry.public_key
+            )),
+            None,
+            &entry.kid,
+            Arc::clone(&state) as Arc<dyn StateStore>,
+        );
+        native.call(&mut call).unwrap();
+        assert_eq!(call.target, "first");
     }
 
     #[test]

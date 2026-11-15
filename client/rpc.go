@@ -81,6 +81,17 @@ type Client struct {
 	nextID int64
 }
 
+// audHasControl reports whether aud contains a byte below 0x20 or the byte
+// 0x7f (spec 01 section 3.1 aud rules).
+func audHasControl(aud string) bool {
+	for i := 0; i < len(aud); i++ {
+		if aud[i] < 0x20 || aud[i] == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
 // NewClient validates cfg and returns a Client.
 func NewClient(cfg Config) (*Client, error) {
 	if err := checkDestination(cfg.BaseURL); err != nil {
@@ -92,6 +103,9 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 	if cfg.Aud == "" {
 		return nil, fmt.Errorf("jack client: aud must be non-empty")
+	}
+	if audHasControl(cfg.Aud) {
+		return nil, fmt.Errorf("jack client: aud must not contain control characters")
 	}
 	if cfg.Signer == nil {
 		return nil, fmt.Errorf("jack client: signer must be non-nil")

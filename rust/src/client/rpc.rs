@@ -131,6 +131,11 @@ impl Client {
                 "jack client: aud must be non-empty".to_string(),
             ));
         }
+        if crate::client::auth::has_control(&cfg.aud) {
+            return Err(ClientError::Client(
+                "jack client: aud must not contain control characters".to_string(),
+            ));
+        }
         // Go's nil-signer and server-key-length checks are unrepresentable:
         // Arc<dyn Signer> is non-null and [u8; 32] fixes the length.
         // Local validation never becomes an HTTP response: the validator's
@@ -447,6 +452,21 @@ mod tests {
         );
         let err = Client::new(mk(BASE_URL, "", svc_key())).expect_err("empty aud");
         assert_eq!(err.to_string(), "jack client: aud must be non-empty");
+
+        // The signing string is LF-joined lines including the audience, so an
+        // aud with control characters would make it ambiguous (Go:
+        // audHasControl in NewClient).
+        for bad in ["a\nb", "a\rb", "a\0b", "a\tb", "a\u{7f}b"] {
+            let err = Client::new(mk(BASE_URL, bad, svc_key()))
+                .expect_err("control-character aud must be rejected");
+            assert_eq!(
+                err.to_string(),
+                "jack client: aud must not contain control characters",
+                "aud {bad:?}"
+            );
+        }
+        // An ordinary value is still accepted (covered by the valid build
+        // below and the existing happy-path tests).
 
         // The identity encoding fails spec 03 section 2; the validator's 400
         // admission status must be zeroed on the client side.

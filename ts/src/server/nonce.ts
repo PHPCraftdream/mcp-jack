@@ -16,6 +16,15 @@ export class NonceStore {
    * injected `now`.
    */
   checkAndRecord(kid: string, nonce: string, now: number, retainUntil: number): boolean {
+    // Fail closed on a broken caller clock: NaN/Infinity would make the
+    // liveness compare false (every replay recorded fresh) and the purge gate
+    // meaningless. A non-integer now never records and never answers fresh.
+    if (!Number.isSafeInteger(now) || now < 0) {
+      throw new Error("nonce: now must be a non-negative safe integer");
+    }
+    if (!Number.isSafeInteger(retainUntil) || retainUntil < 0) {
+      throw new Error("nonce: retainUntil must be a non-negative safe integer");
+    }
     // JS is single-threaded and this method is synchronous, so Go's mutex has
     // no TS counterpart.
     // A full scan on every request would be quadratic in the number of live
