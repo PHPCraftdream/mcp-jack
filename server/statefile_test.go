@@ -706,7 +706,7 @@ func TestFileStateRejectsCaseVariantMembers(t *testing.T) {
 		{"Public_Key", strings.Replace(validEntry, `"public_key":`, `"Public_Key":`, 1)},
 		{"Name", strings.Replace(validEntry, `"name":`, `"Name":`, 1)},
 		{"Admin", strings.Replace(validEntry, `"admin":false`, `"Admin":true`, 1)},
-		{"ADMIN exploit", strings.Replace(validEntry, `"admin":false`, `"admin":false,"ADMIN":true`, 1)},
+		{"ADMIN", strings.Replace(validEntry, `"admin":false`, `"admin":false,"ADMIN":true`, 1)},
 		{"Not_Before", strings.Replace(validEntry, `"not_before":`, `"Not_Before":`, 1)},
 		{"Not_After", strings.Replace(validEntry, `"not_after":`, `"Not_After":`, 1)},
 	}
