@@ -19,8 +19,8 @@ import { fileURLToPath } from "node:url";
 // resolution with a replace directive pointing at the snapshot
 // (`replace github.com/PHPCraftdream/mcp-jack => ../module`), never at the
 // repo checkout.
-// Корневой replacement не требует checksum, но внешние зависимости требуют
-// точных reviewed go.mod/go.sum. Оба файла входят в staged snapshot.
+// The root replacement needs no checksum, but external dependencies require
+// exact reviewed go.mod/go.sum. Both files are part of the staged snapshot.
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
@@ -130,7 +130,7 @@ const diskRootGo = (await readdir(repoRoot))
 for (const name of diskRootGo) {
   if (!members.includes(name)) fail(`root-level Go file on disk is missing from the staged snapshot: ${name}`);
 }
-// Ничего за пределами явного module scope не попадает в snapshot.
+// Nothing outside the explicit module scope enters the snapshot.
 for (const rel of members) {
   if (!scope.test(rel)) fail(`staged module snapshot included an out-of-scope file: ${rel}`);
 }

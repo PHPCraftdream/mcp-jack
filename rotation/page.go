@@ -2,7 +2,7 @@ package rotation
 
 import jack "github.com/PHPCraftdream/mcp-jack"
 
-// PageFraming — metadata, не автоматическое продвижение ACKed cursor.
+// PageFraming is metadata, not an automatic advance of the ACKed cursor.
 type PageFraming struct {
 	ExtensionStart int
 	Terminal       ResultCursor
@@ -21,9 +21,9 @@ func validCursor(cursor ResultCursor) bool {
 	return err == nil
 }
 
-// Caller уже проверил outer/ClockGuard/schema и intrinsic record proofs.
-// Здесь только page/cursor framing; authorizer/P/reuse/current/bridge и CAS —
-// отдельные controller/chain gates. Нет ACK, persistence, retry или fetch.
+// The caller has already verified outer/ClockGuard/schema and intrinsic record proofs.
+// This covers only page/cursor framing; authorizer/P/reuse/current/bridge and CAS are
+// separate controller/chain gates. No ACK, persistence, retry or fetch.
 func ValidatePageFraming(result DecodedResult, cursor ResultCursor, records []Record, acknowledgedHashes map[uint64]string) (PageFraming, error) {
 	fail := func(code string) (PageFraming, error) { return PageFraming{}, invalid(code) }
 	if !validCursor(cursor) || !validCursor(result.Head) {

@@ -33,7 +33,7 @@ type metadata struct {
 	Unsafe     bool
 }
 
-// Checksum обнаруживает случайное повреждение, не malicious-host tampering или backup rollback.
+// Checksum detects accidental corruption, not malicious-host tampering or backup rollback.
 func sealPayload(payload []byte) []byte {
 	sum := sha256.Sum256(payload)
 	return append(payload, sum[:]...)

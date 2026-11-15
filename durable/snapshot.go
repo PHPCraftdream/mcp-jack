@@ -2,7 +2,7 @@ package durable
 
 import bolt "go.etcd.io/bbolt"
 
-// Serving требует ready; recovery inspection всё равно проверяет полный graph.
+// Serving requires ready; recovery inspection still checks the full graph.
 func readStoreSnapshot(tx *bolt.Tx, opts Options, requireReady bool, snapshot *metadata) error {
 	var m metadata
 	var found int

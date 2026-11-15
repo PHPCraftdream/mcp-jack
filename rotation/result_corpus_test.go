@@ -12,8 +12,8 @@ import (
 	"github.com/PHPCraftdream/mcp-jack/rotation"
 )
 
-// Один result-body кейс общего дифференциального corpus
-// rust/tests/rotation-property-corpus.json (его же читает TS-тест).
+// One result-body case of the shared differential corpus
+// rust/tests/rotation-property-corpus.json (the TS test reads it too).
 type corpusResultCase struct {
 	ID          string   `json:"id"`
 	IDJSON      string   `json:"id_json"`

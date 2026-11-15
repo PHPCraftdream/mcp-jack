@@ -8,7 +8,7 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-// RawClock — только sample для outer checks, не durable time authority.
+// RawClock is only a sample for outer checks, not a durable time authority.
 func (store *ServerStore) RawClock() (int64, error) {
 	done, err := store.begin()
 	if err != nil {
@@ -22,12 +22,12 @@ func (store *ServerStore) RawClock() (int64, error) {
 	return now, nil
 }
 
-// AdvanceAndCheck — единственная операция, меняющая authoritative H/revision/unsafe.
+// AdvanceAndCheck is the only operation that changes authoritative H/revision/unsafe.
 func (store *ServerStore) AdvanceAndCheck() (rotation.ClockTuple, error) {
 	return store.advanceServerClock(nil)
 }
 
-// CheckSnapshotClock проверяет exact ring вместе со свежим server ClockGuard.
+// CheckSnapshotClock checks the exact ring together with a fresh server ClockGuard.
 func (store *ServerStore) CheckSnapshotClock(expected rotation.ServerSnapshot) (rotation.ClockTuple, error) {
 	encoded, err := rotation.EncodeServerSnapshot(expected, store.options.Binding, store.options.Window, store.options.Checkpoint)
 	if err != nil {
@@ -100,7 +100,7 @@ func (store *ServerStore) advanceServerClock(expected []byte) (rotation.ClockTup
 	return result, nil
 }
 
-// Snapshot читает committed state; не выполняет fresh clock operation или ACK.
+// Snapshot reads committed state; it does not perform a fresh clock operation or ACK.
 func (store *ServerStore) Snapshot() (rotation.ServerSnapshot, rotation.ClockTuple, error) {
 	done, err := store.begin()
 	if err != nil {
@@ -127,7 +127,7 @@ func (store *ServerStore) Snapshot() (rotation.ServerSnapshot, rotation.ClockTup
 	return snapshot, guard.Clock, nil
 }
 
-// CompareAndSwap атомарно пишет один fixed-P переход и exact intent; guard не меняется.
+// CompareAndSwap atomically writes one fixed-P transition and the exact intent; the guard is unchanged.
 func (store *ServerStore) CompareAndSwap(expected, desired rotation.ServerSnapshot, clock rotation.ClockTuple) error {
 	previous, err := rotation.EncodeServerSnapshot(expected, store.options.Binding, store.options.Window, store.options.Checkpoint)
 	if err != nil {

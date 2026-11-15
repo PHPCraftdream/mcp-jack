@@ -15,7 +15,7 @@ func admissionError(status int, code string) *jack.Error {
 
 func unavailable() *jack.Error { return admissionError(503, "durability_unavailable") }
 
-// Только callback rejection — definite abort. Commit error остаётся unknown.
+// Only callback rejection is a definite abort. A commit error remains unknown.
 func (s *Store) update(apply func(*bolt.Tx, *metadata) error) *jack.Error {
 	next := s.meta
 	var callbackErr error
@@ -94,8 +94,8 @@ func replayLookup(tx *bolt.Tx, m metadata, key [48]byte, now int64) error {
 	return nil
 }
 
-// Индекс собирается до удаления: Cursor.Next после Delete может пропустить запись.
-// Exact pair входит в тот же общий лимит128, а не удаляется сверх него.
+// The index is built before deletion: Cursor.Next after Delete may skip a record.
+// The exact pair shares the 128-key batch cap and is never deleted beyond it.
 func purgeExpired(tx *bolt.Tx, m *metadata, now int64, exact [48]byte) error {
 	if now < m.HighWater {
 		return ErrInvalidStore

@@ -9,9 +9,9 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-// ReconcileUnknown — явная OOB операция над закрытым dirty store.
-// Exact snapshot/receipt переводятся в terminal tombstone без dispatch/retry/reopen.
-// Отсутствие записи не является доказательством abort и не снимает startup fence.
+// ReconcileUnknown is an explicit OOB operation on a closed dirty store.
+// The exact snapshot/receipt is moved to a terminal tombstone without dispatch/retry/reopen.
+// A missing record is not proof of abort and does not clear the startup fence.
 func ReconcileUnknown(path string, opts Options, expectedHash string, receipt server.NonceReceipt) error {
 	return reconcileUnknown(path, opts, expectedHash, receipt, nil)
 }
