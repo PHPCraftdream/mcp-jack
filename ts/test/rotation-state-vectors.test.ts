@@ -119,12 +119,15 @@ assert.equal(vectors.client_cases.length, 14, "client case count pinned to the g
 assert.equal(vectors.event_cases.length, 8, "event case count pinned to the generated fixture");
 
 // Guard: every client_local_errors entry except rotation_record_invalid is the
-// expectation of at least one vector; rotation_record_invalid appears only in
+// expectation of at least one client or event vector; rotation_record_invalid appears only in
 // the table (no generated case drives it) and is reported as a named gap.
-const expectedCodes = new Set(vectors.client_cases.map((entry) => entry.expect.error));
+const expectedCodes = new Set<unknown>([
+  ...vectors.client_cases.map((entry) => entry.expect.error),
+  ...vectors.event_cases.map((entry) => entry.expect["error"]),
+]);
 for (const code of vectors.client_local_errors) {
   if (code === "rotation_record_invalid") continue;
-  assert.ok(expectedCodes.has(code), `table code ${code} is exercised by a client case`);
+  assert.ok(expectedCodes.has(code), `table code ${code} is exercised by a vector`);
 }
 assert.ok(!expectedCodes.has("rotation_record_invalid"), "no generated case expects rotation_record_invalid");
 assert.deepEqual(Object.values(vectors.server_errors).sort(), [400, 409, 503], "server error table is server-side, not client-drivable");
