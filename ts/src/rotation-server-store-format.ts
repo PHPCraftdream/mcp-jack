@@ -7,12 +7,12 @@ import type { RotationClockTuple } from "./rotation-trust.js";
 
 const SERVER_DOMAIN = "mcp-jack/server-ring/private-file/v1";
 
-/** Независимый OOB profile плюс opaque handle подписанта anchor key; handle не key authority. */
+/** Independent OOB profile plus the opaque signer handle anchor key; the handle is not key authority. */
 export interface RotationServerStoreOptions extends RotationStoreOptions {
   readonly anchorReference: string;
 }
 
-/** Anchor ring: один checkpoint key с его opaque reference, revision 1, clock ещё не sampled. */
+/** Anchor ring: one checkpoint key with its opaque reference, revision 1, clock not yet sampled. */
 export function anchorServerSnapshot(options: RotationServerStoreOptions): RotationServerSnapshot {
   const trust = anchorSnapshot(options);
   return validateRotationServerSnapshot({ formatVersion: 1, trust,
@@ -35,7 +35,7 @@ export function unpackServer(bytes: Uint8Array, options: RotationStoreOptions, p
   { readonly bundle: StoreBundle; readonly clock: RotationClockTuple; readonly snapshot: RotationServerSnapshot } {
   const { bundle, clock } = unpackBundle(bytes, options, profile, SERVER_DOMAIN);
   const snapshot = decodeRotationServerSnapshot(Buffer.from(bundle.snapshotBytes, "utf8"), options.binding, options.window, options.checkpoint);
-  // Copied clock внутри snapshot не опережает authoritative guard.
+  // The copied clock inside the snapshot does not run ahead of the authoritative guard.
   if (snapshot.trust.clock.highWater > clock.highWater || snapshot.trust.clock.revision > clock.revision) invalidStore();
   return { bundle, clock, snapshot };
 }

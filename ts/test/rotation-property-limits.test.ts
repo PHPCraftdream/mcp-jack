@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { client, encodeBase64URL, keyId, rotation } from "../src/index.js";
 import { corpus, denies, serverFrom, trustFrom, validateServer, WINDOW } from "./rotation-server-fixtures.js";
 
-// Детерминированный PRNG: фиксированный seed воспроизводит каждый refusal.
+// Deterministic PRNG: a fixed seed reproduces every refusal.
 const SEED = 0x5eed00a4;
 
 class SplitMix32 {

@@ -30,7 +30,7 @@ function disk(path: string): { owner: number; dirty: boolean; clock: string; sna
   return JSON.parse(outer.payload) as { owner: number; dirty: boolean; clock: string; snapshot: string; domain: string };
 }
 
-/** Следующая fixed-P публикация: P равно текущему clock.highWater, record — независимо подписанный fixture. */
+/** Next fixed-P publication: P equals the current clock.highWater, the record is an independently signed fixture. */
 function extension(previous: Snapshot, record: rotation.RotationRecord, clock: rotation.RotationClockTuple): Snapshot {
   const trust = previous.trust;
   const keys = trust.keys.map((key, index) => index === trust.keys.length - 1 ? { ...key, knownCutoff: record.activatesAt } : key);

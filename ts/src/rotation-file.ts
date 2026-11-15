@@ -70,7 +70,7 @@ function bounded(bytes: Uint8Array): boolean {
   return bytes instanceof Uint8Array && bytes.length > 0 && bytes.length <= ROTATION_MAX_TRUST_SNAPSHOT_BYTES;
 }
 
-/** Внутренний cooperating-owner file profile; не ClockGuard, trust ACK или recovery. */
+/** Internal cooperating-owner file profile; not ClockGuard, trust ACK, or recovery. */
 export class RotationFileOwner {
   private fenced = false;
   private closed = false;
@@ -86,14 +86,14 @@ export class RotationFileOwner {
     return new RotationFileOwner(path, marker);
   }
 
-  /** Только explicit unused creation; existing/uncertain artifacts не удаляются. */
+  /** Explicit unused creation only; existing/uncertain artifacts are not removed. */
   static initializeUnused(path: string, bytes: Uint8Array): void {
     const owner = this.createUnusedOwner(path, bytes);
     try { owner.close(); }
     catch { owner.fence(); refuse("rotation_state_unknown"); }
   }
 
-  /** Higher store удерживает marker через dirty initialization и clock setup. */
+  /** Higher store holds the marker through dirty initialization and clock setup. */
   static createUnusedOwner(path: string, bytes: Uint8Array): RotationFileOwner {
     let owner: RotationFileOwner | undefined;
     let created = false;
@@ -108,13 +108,13 @@ export class RotationFileOwner {
     } catch {
       if (owner !== undefined) {
         if (created) owner.fence();
-        try { owner.close(); } catch { /* Unknown artifact остаётся fenced. */ }
+        try { owner.close(); } catch { /* Unknown artifact stays fenced. */ }
       }
       refuse(created ? "rotation_state_unknown" : "rotation_state_unavailable");
     }
   }
 
-  /** Noncreating open; stale markers не проверяются по PID и не ломаются автоматически. */
+  /** Noncreating open; stale markers are not PID-checked and do not break automatically. */
   static open(path: string): RotationFileOwner {
     let owner: RotationFileOwner | undefined;
     try {
@@ -123,7 +123,7 @@ export class RotationFileOwner {
       return owner;
     } catch {
       if (owner !== undefined) {
-        try { owner.close(); } catch { /* Удаляется только подтверждённый собственный marker. */ }
+        try { owner.close(); } catch { /* Only a confirmed own marker is removed. */ }
       }
       return refuse();
     }
@@ -146,7 +146,7 @@ export class RotationFileOwner {
     catch { return refuse(); }
   }
 
-  /** Exact byte CAS для serialized owner; crypto/handler code не вызывается внутри. */
+  /** Exact byte CAS for the serialized owner; crypto/handler code is not called inside. */
   replace(expected: Uint8Array, desired: Uint8Array): void {
     this.ensure();
     if (!bounded(expected) || !bounded(desired)) refuse();
@@ -168,7 +168,7 @@ export class RotationFileOwner {
 
   fence(): void { this.fenced = true; }
 
-  /** Higher store обязан сначала drain/settle и подтвердить clean logical state. */
+  /** Higher store must first drain/settle and confirm a clean logical state. */
   close(): void {
     if (this.closed) return;
     this.ensure();

@@ -9,7 +9,7 @@ export interface RotationCursor {
   readonly hash: string;
 }
 
-/** Только framing metadata; terminal не заменяет ACKed cursor автоматически. */
+/** Framing metadata only; terminal does not replace the ACKed cursor automatically. */
 export interface RotationPageFraming {
   readonly extensionStart: number;
   readonly terminal: RotationCursor;
@@ -33,10 +33,10 @@ function validCursor(cursor: RotationCursor): boolean {
 }
 
 /**
- * Caller уже проверил outer/ClockGuard/result schema и intrinsic record proofs.
- * Здесь только contiguous page/cursor/known-position/head framing (§3 candidate).
- * Проверки authorizer adjacency, P order, reuse, current binding и first bridge
- * остаются controller/chain gates; нет ACK, persistence, hidden retry или fetch.
+ * The caller already verified outer/ClockGuard/result schema and intrinsic record proofs.
+ * Here only contiguous page/cursor/known-position/head framing (§3 candidate).
+ * Checks of authorizer adjacency, P order, reuse, current binding, and the first bridge
+ * remain controller/chain gates; no ACK, persistence, hidden retry, or fetch.
  */
 export function validateRotationPageFraming(
   result: DecodedRotationResult,

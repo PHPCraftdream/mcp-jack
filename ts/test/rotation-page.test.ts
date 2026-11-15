@@ -44,7 +44,7 @@ test("page framing: exact extension, duplicate-prefix extension and retained suf
   assert.deepEqual(incomplete.terminal, c1);
   assert.deepEqual(incomplete.head, c2);
   assert.equal(incomplete.complete, false);
-  // Duplicate-only — no-op, не продвижение cursor к объявленному head.
+  // Duplicate-only — no-op, not cursor advancement to the declared head.
   const noop = rotation.validateRotationPageFraming(page([r1], c2, false), c1, [r1], known);
   assert.deepEqual(noop.terminal, c1);
   assert.equal(noop.extensionStart, 1);

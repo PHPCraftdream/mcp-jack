@@ -13,7 +13,7 @@ const payload = JSON.stringify({
   head: { ordinal: 0, hash: "-" },
   complete: true,
 });
-// id подставляется сырым lexeme: JSON.stringify нормализовал бы форму числа.
+// id is substituted as the raw lexeme: JSON.stringify would normalize the number's form.
 function envelope(idLexeme: string): string {
   return `{"jsonrpc":"2.0","id":${idLexeme},"result":{"content":[{"type":"text","text":${JSON.stringify(payload)}}],"structuredContent":${payload},"isError":false}}`;
 }
@@ -27,7 +27,7 @@ function rejected(wire: string, id: string | number | bigint = 7): void {
 
 test("rotation result id: numeric response id must be the canonical JSON text of the expected value", () => {
   assert.equal(rotation.decodeRotationResult(raw(envelope("7")), 7).complete, true);
-  // Пробел вокруг lexeme вне lexeme: значение и текст не меняются.
+  // Whitespace around the lexeme is outside the lexeme: value and text unchanged.
   assert.equal(rotation.decodeRotationResult(raw(envelope(' 7 ')), 7).complete, true);
   for (const lexeme of ["7.0", "7e0", "7E0", "+7", "07", "-0", "7."]) rejected(envelope(lexeme));
   rejected(envelope('"7"'));
@@ -42,16 +42,16 @@ test("rotation result id: a bigint expectedId matches only the exact decimal tex
   assert.equal(rotation.decodeRotationResult(raw(envelope("9007199254740993")), 9007199254740993n).complete, true);
   rejected(envelope("9007199254740992"), 9007199254740993n);
   for (const lexeme of ["9007199254740993.0", "9.007199254740993e15", "9007199254740993e0"]) rejected(envelope(lexeme), 9007199254740993n);
-  // 1e999: Number -> Infinity, invalid с обеих сторон.
+  // 1e999: Number -> Infinity, invalid on both sides.
   rejected(envelope("1"), Number("1e999"));
   rejected(envelope("1e999"), Number("1e999"));
 });
 
 test("rotation result id: canonical response matches non-canonical expected numeric value", () => {
-  // expectedId — само число 7; ответ обязан нести канонический текст "7".
+  // expectedId is the number 7 itself; the response must carry the canonical text "7".
   assert.equal(rotation.decodeRotationResult(raw(envelope("7")), 7).head.ordinal, 0);
   rejected(envelope("7e0"));
-  // -0: значение равно 0, канонический текст JSON.stringify(-0) — "0".
+  // -0: the value is 0, the canonical text of JSON.stringify(-0) is "0".
   assert.equal(rotation.decodeRotationResult(raw(envelope("0")), -0).complete, true);
   rejected(envelope("-0"), -0);
 });

@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Общий tokenizer: native last-wins неизменен, candidate имеет отдельный strict entry.
+// Shared tokenizer: native last-wins unchanged, candidate has a separate strict entry.
 // ---------------------------------------------------------------------------
 
 /** Any JSON value. */
@@ -203,12 +203,12 @@ function parseRawJson(text: string, candidate: boolean): { readonly value: JsonV
   return { value: root.value, source: root };
 }
 
-/** Native policy неизменна: последняя запись duplicate member побеждает. */
+/** Native policy unchanged: the last duplicate member entry wins. */
 export function parseJsonRaw(text: string): { readonly value: JsonValue; readonly source: RawJsonNode } {
   return parseRawJson(text, false);
 }
 
-/** Внутренний candidate decoder: duplicate/scalar/depth guards, без trust promotion. */
+/** Internal candidate decoder: duplicate/scalar/depth guards, without trust promotion. */
 export function parseCandidateJsonRaw(text: string): RawJsonNode {
   return parseRawJson(text, true).source;
 }

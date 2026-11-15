@@ -12,13 +12,13 @@ export const ROTATION_MAX_SIGNER_REFERENCE_BYTES = 1024;
 
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
-/** Opaque server-local handle подписанта; не private-key encoding и не key authority. */
+/** Opaque server-local signer handle; not a private-key encoding and not key authority. */
 export interface RotationSignerReference {
   readonly kid: string;
   readonly reference: string;
 }
 
-/** Хранится только в protected server store; никогда не входит в delivery payload. */
+/** Stored only in the protected server store; never included in the delivery payload. */
 export interface RotationServerSnapshot {
   readonly formatVersion: number;
   readonly trust: RotationTrustSnapshot;
@@ -31,14 +31,14 @@ function refuse(): never {
 
 function ownReference(entry: RotationSignerReference, kid: string): RotationSignerReference {
   const own = { kid: entry.kid, reference: entry.reference };
-  // Lone surrogate не переживает UTF-8 round trip: это аналог invalid UTF-8.
+  // A lone surrogate does not survive a UTF-8 round trip: equivalent to invalid UTF-8.
   if (own.kid !== kid || typeof own.reference !== "string" || own.reference.length === 0 ||
     Buffer.byteLength(own.reference, "utf8") > ROTATION_MAX_SIGNER_REFERENCE_BYTES ||
     Buffer.from(own.reference, "utf8").toString("utf8") !== own.reference) refuse();
   return Object.freeze(own);
 }
 
-/** Проверяет whole trust и ровно одну opaque reference на каждый retained key; возвращает owned frozen value. */
+/** Validates whole trust and exactly one opaque reference per retained key; returns owned frozen values. */
 export function validateRotationServerSnapshot(
   input: RotationServerSnapshot,
   expectedBinding: RotationBinding,
@@ -61,7 +61,7 @@ export function validateRotationServerSnapshot(
   }
 }
 
-/** Проверяет один fixed-P переход; это не durable authorization и не persistence. */
+/** Validates one fixed-P transition; not a durable authorization and not persistence. */
 export function validateRotationServerPublication(
   expected: RotationServerSnapshot,
   desired: RotationServerSnapshot,
@@ -83,7 +83,7 @@ export function validateRotationServerPublication(
         return other === undefined || other.kid !== entry.kid || other.reference !== entry.reference;
       })) refuse();
     const last = after.keys[after.keys.length - 1];
-    // P уже зафиксирован в clock.highWater; A = P + 48h выводится только из него.
+    // P is already pinned in clock.highWater; A = P + 48h is derived only from it.
     if (last === undefined || last.notBefore - ROTATION_GRACE_SECONDS !== after.clock.highWater) refuse();
     return next;
   } catch {
@@ -91,7 +91,7 @@ export function validateRotationServerPublication(
   }
 }
 
-/** Private local format: object order не значим, caller не передаёт его клиентам. */
+/** Private local format: object order is not significant, the caller does not expose it to clients. */
 export function encodeRotationServerSnapshot(
   input: RotationServerSnapshot,
   expectedBinding: RotationBinding,
@@ -110,7 +110,7 @@ export function encodeRotationServerSnapshot(
   }
 }
 
-/** Strict parse сохраняет fences/unsafe; успешный decode не является serving readiness. */
+/** Strict parse preserves fences/unsafe; a successful decode is not serving readiness. */
 export function decodeRotationServerSnapshot(
   bytes: Uint8Array,
   expectedBinding: RotationBinding,
@@ -126,7 +126,7 @@ export function decodeRotationServerSnapshot(
       const entry = nodeObject(item, ["kid", "reference"]);
       return { kid: nodeText(nodeField(entry, "kid")), reference: nodeText(nodeField(entry, "reference")) };
     });
-    // Source slice вложенного объекта разбирается тем же strict trust decoder, без повторной схемы.
+    // The nested object's source slice is parsed by the same strict trust decoder, without a repeated schema.
     const trust = decodeRotationTrustSnapshot(Buffer.from(nodeField(root, "public").text, "utf8"), expectedBinding, window, expectedCheckpoint);
     return validateRotationServerSnapshot({ formatVersion: nodeNumber(nodeField(root, "format_version")), trust, signerReferences },
       expectedBinding, window, expectedCheckpoint);

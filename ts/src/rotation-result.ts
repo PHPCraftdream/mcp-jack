@@ -7,7 +7,7 @@ import { RotationError, ROTATION_MAX_ORDINAL } from "./rotation-record.js";
 export const ROTATION_MAX_BODY_BYTES = 256 * 1024;
 export const ROTATION_MAX_PAGE_RECORDS = 16;
 
-/** Только decoded данные; это не ACKed trust snapshot и не доказательство carrier trust. */
+/** Decoded data only; not an ACKed trust snapshot and not proof of carrier trust. */
 export interface DecodedRotationResult {
   readonly current: { readonly kid: string; readonly publicKeyB64u: string };
   readonly records: readonly string[];
@@ -87,10 +87,10 @@ function same(left: RawJsonNode, right: RawJsonNode): boolean {
 }
 
 /**
- * Вызывать только ПОСЛЕ outer authentication, known-key interval и ClockGuard gates.
- * Проверяет только schema/parity/limits; не records/proofs/cursor/gaps/current binding,
- * не carrier trust, persistence, ACK, fetch или refresh. Signed errors обрабатывает caller.
- * Numeric request ID сопоставляется с exact JSON.stringify lexeme SDK request.
+ * Call only AFTER outer authentication, known-key interval, and ClockGuard gates.
+ * Checks schema/parity/limits only; not records/proofs/cursor/gaps/current binding,
+ * not carrier trust, persistence, ACK, fetch, or refresh. The caller handles signed errors.
+ * Numeric request ID is matched against the exact JSON.stringify lexeme of the SDK request.
  */
 export function decodeRotationResult(body: Uint8Array, expectedId: string | number | bigint): DecodedRotationResult {
   try {

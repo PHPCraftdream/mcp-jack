@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { client, encodeBase64URL, keyId, rotation } from "../src/index.js";
 import { corpus, root } from "./rotation-server-fixtures.js";
 
-// Детерминированный PRNG: фиксированный seed воспроизводит каждый refusal.
+// Deterministic PRNG: a fixed seed reproduces every refusal.
 const SEED = 0x5eed00a2;
 
 class SplitMix32 {
@@ -78,7 +78,7 @@ test("generated pages frame one contiguous extension from the exact cursor", () 
       assert.equal(partialFraming.extensionStart, 0, `seed=${SEED} k=${k} subject=partial-extensionStart`);
       assert.deepEqual(partialFraming.terminal, { ordinal: partialTail.ordinal, hash: partialTail.hash }, `seed=${SEED} k=${k} subject=partial-terminal`);
     } else {
-      // Неполная страница обязана обещать head СТРОГО дальше terminal — иначе rotation_gap.
+      // An incomplete page must promise a head STRICTLY beyond the terminal — otherwise rotation_gap.
       throwsCode(() => rotation.validateRotationPageFraming(resultLiteral(partialWires, false, head), cursor, partial, new Map()), "rotation_gap",
         `k=${k} subject=partial-saturated`);
     }

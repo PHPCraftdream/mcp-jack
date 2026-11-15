@@ -5,7 +5,7 @@ import type { RotationBinding, RotationRecord } from "./rotation-record.js";
 
 export const ROTATION_MAX_RETAINED_KEYS = 1024 + 128 + 1;
 
-/** Checkpoint только из независимо доверенного или ранее подтверждённого snapshot. */
+/** Checkpoint only from an independently trusted or previously confirmed snapshot. */
 export interface RotationCheckpoint {
   readonly ordinal: number;
   readonly hash: string;
@@ -31,7 +31,7 @@ function timestamp(value: number): boolean {
   return Number.isSafeInteger(value) && value >= 0 && value <= ROTATION_MAX_TIMESTAMP;
 }
 
-/** Contiguous extension; не выполняет ACK, persistence, pagination или hidden refresh. */
+/** Contiguous extension; performs no ACK, persistence, pagination, or hidden refresh. */
 export function verifyRotationChain(
   wires: readonly Uint8Array[],
   binding: RotationBinding,
@@ -67,7 +67,7 @@ export function verifyRotationChain(
   return Object.freeze(records);
 }
 
-/** Входные records уже должны быть проверены; при равных activation побеждает ordinal. */
+/** Input records must already be verified; on equal activation the ordinal wins. */
 export function selectedRotationOrdinal(records: readonly RotationRecord[], now: number): number {
   if (!timestamp(now)) reject("timestamp");
   let selected = 0;
@@ -77,7 +77,7 @@ export function selectedRotationOrdinal(records: readonly RotationRecord[], now:
   return selected;
 }
 
-/** Lower bound по ts и строгий известный cutoff по ts И finalNow. */
+/** Lower bound by ts and strict known cutoff by both ts and finalNow. */
 export function rotationAssignmentValid(records: readonly RotationRecord[], ordinal: number, ts: number, finalNow: number): boolean {
   if (!Number.isSafeInteger(ordinal) || ordinal < 0 || ordinal > ROTATION_MAX_ORDINAL || !timestamp(ts) || !timestamp(finalNow)) return false;
   let found = ordinal === 0;

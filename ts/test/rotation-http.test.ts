@@ -35,7 +35,7 @@ async function setup(context: TestContext, peer: Peer, timeoutMs = 10000): Promi
   let environment: Environment | undefined;
   let failure: unknown;
   const server = createServer((request, response) => {
-    response.on("error", () => { /* Ожидаемый client abort не становится unhandled error. */ });
+    response.on("error", () => { /* The expected client abort does not become an unhandled error. */ });
     void (async () => {
       const state = environment;
       assert.ok(state);
@@ -71,7 +71,7 @@ async function setup(context: TestContext, peer: Peer, timeoutMs = 10000): Promi
   context.after(async () => {
     server.closeAllConnections();
     await new Promise<void>((resolve) => { server.close(() => resolve()); });
-    try { environment?.store.close(); } catch { /* Только test-owned artifacts. */ }
+    try { environment?.store.close(); } catch { /* Test-owned artifacts only. */ }
     rmSync(root, { recursive: true, force: true });
     assert.equal(failure, undefined);
   });

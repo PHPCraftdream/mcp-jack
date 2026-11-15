@@ -12,7 +12,7 @@ function recordFailure(error: unknown): never {
   throw new RotationError(error instanceof RotationError && gaps.includes(error.code) ? "rotation_gap" : "rotation_record_invalid");
 }
 
-/** Reference: Go client/rotation/refresh.go; только pre-authority validation, не ACK. */
+/** Reference: Go client/rotation/refresh.go; pre-authority validation only, not an ACK. */
 export function prepareRefreshExtension(
   snapshot: RotationTrustSnapshot,
   page: DecodedRotationResult,
@@ -48,7 +48,7 @@ export function prepareRefreshExtension(
   return Object.freeze({ framing, extension: Object.freeze(extension) });
 }
 
-/** Только bounded value construction после captured guard; validation/CAS выполняет store. */
+/** Bounded value construction only, after the captured guard; the store performs validation/CAS. */
 export function extendedRefreshSnapshot(
   snapshot: RotationTrustSnapshot,
   extension: readonly RotationRecord[],
