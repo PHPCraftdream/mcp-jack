@@ -960,9 +960,11 @@ fn vector_trust_callback_unknown_fences() {
     drop(store);
     // fenced:true => a reopen is refused (the bundle stays dirty on disk).
     let reopen = SharedClock::at(173_800);
-    let reopen_error = RotationTrustStore::open(&sandbox.file(), options.clone(), reopen.closure())
-        .expect_err("fenced store refuses reopen")
-        .code;
+    let reopen_error =
+        match RotationTrustStore::open(&sandbox.file(), options.clone(), reopen.closure()) {
+            Err(error) => error.code,
+            Ok(_) => panic!("fenced store refuses reopen"),
+        };
     assert_eq!(reopen_error, "rotation_state_unavailable");
     let (high_water, revision, unsafe_clock) = clock_doc(&sandbox.file());
     assert_eq!(
@@ -992,9 +994,10 @@ fn vector_busy_writer_stops_before_trust_callback() {
     // FileOwner, so a second concurrent writer is refused before any callback.
     let second_clock = SharedClock::at(173_800);
     let second_error =
-        RotationTrustStore::open(&sandbox.file(), options.clone(), second_clock.closure())
-            .expect_err("second writer refused")
-            .code;
+        match RotationTrustStore::open(&sandbox.file(), options.clone(), second_clock.closure()) {
+            Err(error) => error.code,
+            Ok(_) => panic!("second writer refused"),
+        };
     assert_eq!(second_error, "rotation_state_unavailable");
     let (snapshot, _) = store.snapshot().expect("snapshot");
     assert_eq!(
