@@ -9,7 +9,7 @@ use std::cmp::Ordering;
 pub const MAX_RESULT_BODY_BYTES: usize = 256 * 1024;
 pub const MAX_PAGE_RECORDS: usize = 16;
 
-/// Owned публичные данные, не carrier authentication или ACKed trust.
+/// Owned public data, not carrier authentication or ACKed trust.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodedResult {
     pub current_kid: String,
@@ -20,7 +20,7 @@ pub struct DecodedResult {
     pub complete: bool,
 }
 
-// Map-only schema как в TS rotation-result.ts; не serde positional structs.
+// Map-only schema as in TS rotation-result.ts; not serde positional structs.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Envelope {
@@ -83,9 +83,9 @@ fn id_matches(actual: &RawValue, expected: &RawValue) -> bool {
             _ => false,
         };
     }
-    // Числовой id: ответ обязан быть byte-for-byte каноническим JSON текстом
-    // значения expected id: кратчайший десятичный вид без экспоненты, точная
-    // арифметика без float; -0 канонизируется в "0".
+    // Numeric id: the response must be the byte-for-byte canonical JSON text
+    // of the expected id value: shortest decimal form without exponent, exact
+    // arithmetic without float; -0 is canonicalized to "0".
     canonical_id(expected).is_some_and(|canonical| actual == canonical)
 }
 
@@ -98,7 +98,7 @@ fn canonical_id(text: &str) -> Option<String> {
 }
 
 // JSON number grammar: -?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?;
-// разбивает лексему на знак, цифры int+frac и E = exp - len(frac).
+// splits the lexeme into sign, int+frac digits and E = exp - len(frac).
 fn parse_number_lexeme(text: &str) -> Option<(bool, String, i64)> {
     let (negative, rest) = match text.strip_prefix('-') {
         Some(rest) => (true, rest),
@@ -137,15 +137,15 @@ fn parse_number_lexeme(text: &str) -> Option<(bool, String, i64)> {
         if digits_text.is_empty() || !digits_text.bytes().all(|byte| byte.is_ascii_digit()) {
             return None;
         }
-        // Гигантская экспонента всё равно отсекается overflow-гейтом: reject на parse корректен.
+        // A giant exponent is cut off by the overflow gate anyway: rejecting at parse is correct.
         let parsed: i64 = digits_text.parse().ok()?;
         exponent += sign * parsed;
     }
     Some((negative, digits, exponent))
 }
 
-// Десятичные цифры 2^exponent (старшие первыми): повторное удвоение с переносом,
-// без float и без big-int crate.
+// Decimal digits of 2^exponent (most significant first): repeated doubling with carry,
+// no float and no big-int crate.
 fn power_of_two_decimal(exponent: u32) -> Vec<u8> {
     let mut digits: Vec<u8> = vec![1];
     for _ in 0..exponent {
@@ -164,12 +164,12 @@ fn power_of_two_decimal(exponent: u32) -> Vec<u8> {
     digits
 }
 
-// Точный гейт |value| < 2^1024: сравнение строк цифр value = D·10^E против
-// 2^1024. Сначала сравнение длин, чтобы не строить гигантские повторения нулей.
+// Exact gate |value| < 2^1024: compares the digit string of value = D·10^E against
+// 2^1024. Length comparison first, to avoid building giant runs of zeros.
 fn within_float_range(digits: &str, exponent: i64) -> bool {
-    // Вне диапазона f64 гейт можно закрыть сразу: 10^309 > 2^1024;
-    // E < -MAX_RESULT_BODY_BYTES ⇒ канонический текст длиннее лимита тела
-    // и не может совпасть byte-for-byte с лексемой в принятом ответе.
+    // Outside the f64 range the gate can be closed immediately: 10^309 > 2^1024;
+    // E < -MAX_RESULT_BODY_BYTES ⇒ the canonical text is longer than the body limit
+    // and cannot match byte-for-byte the lexeme in the accepted response.
     if exponent > 308 {
         return false;
     }
@@ -189,8 +189,8 @@ fn within_float_range(digits: &str, exponent: i64) -> bool {
     match left_len.cmp(&right_len) {
         Ordering::Less => true,
         Ordering::Greater => false,
-        // Равные длины => повторения нулей ограничены: E >= 0 — не более
-        // 308 нулей; E < 0 — защитой по памяти плюс длиной входных цифр.
+        // Equal lengths => runs of zeros are bounded: E >= 0 — at most
+        // 308 zeros; E < 0 — bounded by the memory guard plus the input digit length.
         Ordering::Equal => {
             let left = if exponent >= 0 {
                 format!("{stripped}{}", "0".repeat(exponent as usize))
@@ -206,8 +206,8 @@ fn within_float_range(digits: &str, exponent: i64) -> bool {
     }
 }
 
-// Кратчайший десятичный вид без экспоненты; ведущие/хвостовые нули убираются,
-// -0 → "0", минус только у ненулевого значения.
+// Shortest decimal form without exponent; leading/trailing zeros are removed,
+// -0 → "0", minus sign only on a nonzero value.
 fn canonical_decimal(negative: bool, digits: &str, exponent: i64) -> String {
     let digits = digits.trim_start_matches('0');
     if digits.is_empty() {
@@ -284,9 +284,9 @@ fn payload(text: &str) -> Result<DecodedResult, RotationError> {
     })
 }
 
-/// Только schema/parity/limits. Caller сначала выполняет outer authentication,
-/// known interval и ClockGuard; затем отдельно proofs/cursor/current binding/bridge/CAS.
-/// Нет ACK, persistence, fetch или refresh; signed errors обрабатывает caller.
+/// Only schema/parity/limits. Caller first performs outer authentication,
+/// known interval and ClockGuard; then separately proofs/cursor/current binding/bridge/CAS.
+/// No ACK, persistence, fetch or refresh; signed errors are handled by the caller.
 pub fn decode_result(body: &[u8], expected_id: &[u8]) -> Result<DecodedResult, RotationError> {
     if body.is_empty() || body.len() > MAX_RESULT_BODY_BYTES {
         return Err(invalid("rotation_result_invalid"));
@@ -306,14 +306,14 @@ pub fn decode_result(body: &[u8], expected_id: &[u8]) -> Result<DecodedResult, R
     {
         return Err(invalid("rotation_result_invalid"));
     }
-    // Length1 проверена выше; content и payload types запрещают duplicate/extra fields.
+    // Length1 checked above; content and payload types reject duplicate/extra fields.
     let item = &result.content[0].0;
     if item.kind != "text" {
         return Err(invalid("rotation_result_invalid"));
     }
     let structured = payload(result.structured.get())?;
     let mirror = payload(&item.text)?;
-    // Единственное numeric payload поле — canonical head ordinal: его lexeme уникален.
+    // The only numeric payload field is the canonical head ordinal: its lexeme is unique.
     if structured != mirror {
         return Err(invalid("rotation_result_invalid"));
     }

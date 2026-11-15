@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-/// Удерживает dirty serving epoch до физического завершения response write; drop освобождает.
+/// Holds the dirty serving epoch until the physical completion of the response write; drop releases it.
 #[must_use = "a dropped lease no longer holds the dirty serving epoch"]
 pub struct ServingLease {
     counter: Arc<AtomicUsize>,
@@ -25,10 +25,10 @@ impl Drop for ServingLease {
     }
 }
 
-/// Private Linux server ring store: exclusive owner, независимый monotone ClockGuard, exact
-/// whole-ring CAS одной fixed-P публикации. Callback и синхронный I/O должны завершаться bounded.
-/// Не выбирает signer, не авторизует ответы и не восстанавливает dirty/unknown state; Drop
-/// сохраняет dirty epoch/marker, только explicit close подтверждает clean state.
+/// Private Linux server ring store: exclusive owner, an independent monotone ClockGuard, exact
+/// whole-ring CAS of one fixed-P publication. Callback and synchronous I/O must complete in bounded time.
+/// Does not select a signer, does not authorize responses, and does not recover dirty/unknown state; Drop
+/// keeps the dirty epoch/marker, only explicit close confirms a clean state.
 pub struct RotationServerStore<C: FnMut() -> Result<u64, RotationError>> {
     file: FileOwner,
     options: RotationStoreOptions,
@@ -44,7 +44,7 @@ pub struct RotationServerStore<C: FnMut() -> Result<u64, RotationError>> {
 }
 
 impl<C: FnMut() -> Result<u64, RotationError>> RotationServerStore<C> {
-    /// Explicit unused creation, не recovery или перезапись существующего состояния.
+    /// Explicit unused creation, not recovery or overwriting existing state.
     pub fn initialize_unused(
         path: &Path,
         options: RotationServerStoreOptions,
@@ -67,7 +67,7 @@ impl<C: FnMut() -> Result<u64, RotationError>> RotationServerStore<C> {
         );
         let first = bundle.pack()?;
         let mut file = FileOwner::create_unused(path, &first)?;
-        // Dirty state и marker подтверждены до первого callback.
+        // Dirty state and marker confirmed before the first callback.
         let result = (|| {
             let sampled = now().map_err(|_| invalid("rotation_state_unknown"))?;
             if sampled > MAX_TIMESTAMP {
@@ -88,7 +88,7 @@ impl<C: FnMut() -> Result<u64, RotationError>> RotationServerStore<C> {
         Ok(())
     }
 
-    /// Noncreating startup; dirty/unsafe/uncertain artifacts не исправляются автоматически.
+    /// Noncreating startup; dirty/unsafe/uncertain artifacts are not repaired automatically.
     pub fn open(
         path: &Path,
         options: RotationServerStoreOptions,
@@ -161,7 +161,7 @@ impl<C: FnMut() -> Result<u64, RotationError>> RotationServerStore<C> {
         Ok(state)
     }
 
-    /// Preliminary sample, не durable ClockGuard authority.
+    /// Preliminary sample, not durable ClockGuard authority.
     pub fn raw_clock(&mut self) -> Result<u64, RotationError> {
         self.begin("rotation_clock_unavailable")?;
         let result = (self.now)();
@@ -175,7 +175,7 @@ impl<C: FnMut() -> Result<u64, RotationError>> RotationServerStore<C> {
         }
     }
 
-    /// Committed read без нового time sample.
+    /// Committed read without a new time sample.
     pub fn snapshot(&mut self) -> Result<(ServerSnapshot, ClockTuple), RotationError> {
         self.begin("rotation_state_unavailable")?;
         let result = (|| {
@@ -190,12 +190,12 @@ impl<C: FnMut() -> Result<u64, RotationError>> RotationServerStore<C> {
         result
     }
 
-    /// Единственная операция, меняющая authoritative H/revision/unsafe.
+    /// The only operation that changes authoritative H/revision/unsafe.
     pub fn advance_and_check(&mut self) -> Result<ClockTuple, RotationError> {
         self.advance(None)
     }
 
-    /// Exact ring плюс свежий server ClockGuard.
+    /// Exact ring plus a fresh server ClockGuard.
     pub fn check_snapshot_clock(
         &mut self,
         expected: &ServerSnapshot,
@@ -246,7 +246,7 @@ impl<C: FnMut() -> Result<u64, RotationError>> RotationServerStore<C> {
         }
     }
 
-    /// Exact ring/current-guard CAS одной fixed-P публикации; logical clock bytes не меняются.
+    /// Exact ring/current-guard CAS of one fixed-P publication; logical clock bytes are not changed.
     pub fn compare_and_swap(
         &mut self,
         expected: &ServerSnapshot,
@@ -289,7 +289,7 @@ impl<C: FnMut() -> Result<u64, RotationError>> RotationServerStore<C> {
         }
     }
 
-    /// Новые операции и final gates после closing отказывают; lease держит dirty epoch.
+    /// New operations and final gates refuse after closing; the lease holds the dirty epoch.
     pub fn acquire_serving_lease(&mut self) -> Result<ServingLease, RotationError> {
         if self.closed || self.closing || self.fenced {
             return Err(invalid("rotation_state_unavailable"));
@@ -305,8 +305,8 @@ impl<C: FnMut() -> Result<u64, RotationError>> RotationServerStore<C> {
         self.file.fence();
     }
 
-    /// Пока есть serving leases, close() отказывает без fence: caller освобождает leases и
-    /// повторяет вызов. Caller обязан отдельно завершить network/final gates; Drop не заменяет close.
+    /// While serving leases exist, close() refuses without fencing: the caller releases the leases and
+    /// repeats the call. The caller must separately finish network/final gates; Drop does not replace close.
     pub fn close(&mut self) -> Result<(), RotationError> {
         if self.closed {
             return Ok(());

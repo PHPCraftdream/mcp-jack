@@ -1,4 +1,4 @@
-//! Candidate rotation primitives; static credentials и runtime trust не меняются.
+//! Candidate rotation primitives; static credentials and runtime trust are not changed.
 
 mod chain;
 #[cfg(target_os = "linux")]
@@ -85,7 +85,7 @@ pub struct Binding<'a> {
     pub aud: &'a str,
 }
 
-/// Owned публичные данные; входные wire/key buffers не сохраняются по ссылке.
+/// Owned public data; the input wire/key buffers are not retained by reference.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Record {
     pub ordinal: u64,

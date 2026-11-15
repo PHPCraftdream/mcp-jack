@@ -46,7 +46,7 @@ fn next_signer() -> InMemorySigner {
 }
 
 fn client_signer() -> InMemorySigner {
-    // Публичный fixture seed, mirrors Go fixtureSigner(61).
+    // Public fixture seed, mirrors Go fixtureSigner(61).
     InMemorySigner::from_seed(&[61; 32]).expect("32-byte seed")
 }
 

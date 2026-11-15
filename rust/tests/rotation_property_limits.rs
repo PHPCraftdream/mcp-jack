@@ -1,7 +1,7 @@
-// Детерминированные boundary-тесты pending/retired/retained лимитов trust
-// snapshot. Цепочка из 1153 подписанных записей генерируется один раз;
-// ожидаемое время выполнения всего теста — порядка 1-2 минут в debug-сборке
-// (подписи и проверки Ed25519 доминируют), в release — секунды.
+// Deterministic boundary tests of the pending/retired/retained limits of the trust
+// snapshot. The chain of 1153 signed records is generated once;
+// the expected runtime of the whole test is around 1-2 minutes in a debug build
+// (Ed25519 signing and verification dominate), seconds in release.
 mod common;
 
 use mcp_jack::client::{InMemorySigner, Signer};
@@ -41,7 +41,7 @@ fn binding(corpus: &Corpus) -> Binding<'_> {
     }
 }
 
-// Детерминированный PRNG: фиксированный seed воспроизводит каждый refusal.
+// Deterministic PRNG: a fixed seed reproduces every refusal.
 fn splitmix64_value(input: u64) -> u64 {
     let mut value = input.wrapping_add(0x9E37_79B9_7F4A_7C15);
     value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -49,7 +49,7 @@ fn splitmix64_value(input: u64) -> u64 {
     value ^ (value >> 31)
 }
 
-// Больше 255 различных индексов: seed выводится из PRNG, а не из одного байта.
+// More than 255 distinct indices: the seed is derived from the PRNG, not from a single byte.
 fn signer_seed(index: u64) -> [u8; 32] {
     let mut seed = [0_u8; 32];
     for lane in 0..4_u64 {
@@ -97,7 +97,7 @@ fn generated_chain(
     (root, records)
 }
 
-/// Первый key — checkpoint; каждый record добавляет следующий (P = published_at последнего).
+/// The first key is the checkpoint; each record adds the next one (P = published_at of the last).
 fn trust_from(corpus: &Corpus, root: &Checkpoint, records: &[Record]) -> TrustSnapshot {
     let owned = OwnedBinding {
         endpoint: corpus.binding.endpoint.clone(),
@@ -161,8 +161,8 @@ fn limits_hold_exactly_at_pending_retired_and_retained_boundaries() {
     let (root, records) = generated_chain(&corpus, 1153, |index| 1000 + index);
     assert_eq!(records.len(), 1153, "seed {SEED:#x} generated chain length");
 
-    // Pending-граница: high_water 1000 ниже каждой активации (173800 + i),
-    // поэтому pending считают ровно 128 ключей при 128 записях.
+    // Pending boundary: high_water 1000 is below every activation (173800 + i),
+    // so exactly 128 keys count as pending with 128 records.
     let mut pending_edge = trust_from(&corpus, &root, records.get(..128).expect("128 prefix"));
     pending_edge.clock.high_water = 1000;
     let label = format!("seed {SEED:#x} 128 pending keys accepted");
@@ -175,9 +175,9 @@ fn limits_hold_exactly_at_pending_retired_and_retained_boundaries() {
         .expect_err(&label);
     assert_eq!(error.code, "rotation_state_unknown", "{label} exact code");
 
-    // Retired + retained граница: 1152 записи при high_water = 1000 + 1024
-    // + GRACE_SECONDS дают ровно 1024 retired и ровно 128 pending, а keys.len()
-    // == MAX_RETAINED_KEYS — accepted-side retained-лимит.
+    // Retired + retained boundary: 1152 records with high_water = 1000 + 1024
+    // + GRACE_SECONDS give exactly 1024 retired and exactly 128 pending, while keys.len()
+    // == MAX_RETAINED_KEYS — the accepted-side retained limit.
     let mut retired_edge = trust_from(&corpus, &root, records.get(..1152).expect("1152 prefix"));
     retired_edge.clock.high_water = 1000 + 1024 + rotation::GRACE_SECONDS;
     let label = format!("seed {SEED:#x} boundary snapshot accepted");
@@ -191,7 +191,7 @@ fn limits_hold_exactly_at_pending_retired_and_retained_boundaries() {
     );
     let mut pending = 0_usize;
     let mut retired = 0_usize;
-    // Подсчёт в точности как в validate_trust_snapshot; snapshot не PartialEq.
+    // Counting exactly as in validate_trust_snapshot; snapshot is not PartialEq.
     for key in &validated.keys {
         if key.not_before > validated.clock.high_water {
             pending += 1;
@@ -211,8 +211,8 @@ fn limits_hold_exactly_at_pending_retired_and_retained_boundaries() {
         "seed {SEED:#x} retired {retired} at the boundary"
     );
 
-    // Retained + 1: shape-проверка records.len() >= MAX_RETAINED_KEYS срабатывает
-    // до любого парсинга и подписей — все 1153 wire при этом настоящие.
+    // Retained + 1: the shape check records.len() >= MAX_RETAINED_KEYS fires
+    // before any parsing and signatures — all 1153 wire entries are genuine.
     let shape_input = trust_from(&corpus, &root, &records);
     let label = format!("seed {SEED:#x} retained plus one refused");
     let error = rotation::validate_trust_snapshot(&shape_input, binding(&corpus), WINDOW, &root)

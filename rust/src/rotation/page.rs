@@ -8,7 +8,7 @@ pub struct ResultCursor {
     pub hash: String,
 }
 
-/// Owned framing metadata, не автоматическое продвижение ACKed cursor.
+/// Owned framing metadata, not automatic advancement of the ACKed cursor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageFraming {
     pub extension_start: usize,
@@ -27,9 +27,9 @@ fn valid_cursor(cursor: &ResultCursor) -> bool {
     decode_b64url_fixed(&cursor.hash, 32).is_ok()
 }
 
-/// Caller уже проверил outer/ClockGuard/schema и intrinsic record proofs.
-/// Только cursor/prefix/link/head framing; authorizer/P/reuse/current/bridge/CAS —
-/// отдельные controller/chain gates. Нет ACK, persistence, retry или fetch.
+/// The caller has already verified outer/ClockGuard/schema and intrinsic record proofs.
+/// Only cursor/prefix/link/head framing; authorizer/P/reuse/current/bridge/CAS are
+/// separate controller/chain gates. No ACK, persistence, retry, or fetch.
 pub fn validate_page_framing(
     result: &DecodedResult,
     cursor: &ResultCursor,

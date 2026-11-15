@@ -1,6 +1,6 @@
-// Строгий id-контракт decode_result: числовой ответ id обязан быть каноническим
-// JSON текстом значения ожидаемого id, как JSON.stringify в TS. Те же формы
-// покрывает дифференциальный corpus; эти тесты фиксируют поведение у decoder.
+// Strict id contract for decode_result: the numeric id answer must be the canonical
+// JSON text of the expected id value, as JSON.stringify in TS. The same shapes
+// are covered by the differential corpus; these tests pin the decoder's behavior.
 use mcp_jack::rotation;
 
 const ANCHOR_KID: &str = "YEb2j3Ks5XXZPu7oUyVoxSIBhIuRINlokvOy8KgcpNY";
@@ -53,8 +53,8 @@ fn numeric_response_id_must_be_the_canonical_json_text_of_the_expected_value() {
 #[test]
 fn exact_decimal_above_safe_integer_and_overflow_gate() {
     let payload = payload();
-    // Точная канонизация: 9007199254740993 не представим в float64 точно,
-    // но канонический текст совпадает byte-for-byte.
+    // Exact canonization: 9007199254740993 is not exactly representable in float64,
+    // but the canonical text matches byte-for-byte.
     let body = envelope("9007199254740993", &payload);
     assert!(rotation::decode_result(&body, b"9007199254740993").is_ok());
     for lexeme in [
@@ -68,7 +68,7 @@ fn exact_decimal_above_safe_integer_and_overflow_gate() {
             "lexeme={lexeme}"
         );
     }
-    // 1e999 за гейтом |value| < 2^1024: Number() в TS даёт Infinity — reject.
+    // 1e999 beyond the |value| < 2^1024 gate: Number() in TS yields Infinity — reject.
     assert_eq!(
         rejected_code(&envelope("1", &payload), b"1e999"),
         "rotation_result_invalid"
@@ -77,21 +77,21 @@ fn exact_decimal_above_safe_integer_and_overflow_gate() {
         rejected_code(&envelope("1e999", &payload), b"1"),
         "rotation_result_invalid"
     );
-    // -0 канонизируется в "0": ожидание -0 принимает ответ 0.
+    // -0 canonizes to "0": expecting -0 accepts the answer 0.
     assert!(rotation::decode_result(&envelope("0", &payload), b"-0").is_ok());
 }
 
 #[test]
 fn canonical_response_matches_non_canonical_expected_numeric_lexeme() {
     let payload = payload();
-    // 7e0 обозначает то же число 7: канонический ответ обязан декодироваться.
+    // 7e0 denotes the same number 7: the canonical answer must decode.
     assert!(rotation::decode_result(&envelope("7", &payload), b"7e0").is_ok());
-    // Один и тот же non-canonical lexeme с обеих сторон отклоняется.
+    // The same non-canonical lexeme on both sides is rejected.
     assert_eq!(
         rejected_code(&envelope("7e0", &payload), b"7e0"),
         "rotation_result_invalid"
     );
-    // -0 канонизируется в "0".
+    // -0 canonizes to "0".
     assert!(rotation::decode_result(&envelope("0", &payload), b"-0").is_ok());
     assert_eq!(
         rejected_code(&envelope("-0", &payload), b"-0"),

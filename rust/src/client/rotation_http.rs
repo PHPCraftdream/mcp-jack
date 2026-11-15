@@ -19,14 +19,14 @@ use std::time::Duration;
 
 /// Request-side sanity bound (Go: exchange refuses len(body) > 1<<20).
 const MAX_REQUEST_BODY_BYTES: usize = 1024 * 1024;
-/// Конструктор принимает только deadline 1..=30 секунд (Go: NewHTTP).
+/// The constructor accepts only a deadline of 1..=30 seconds (Go: NewHTTP).
 const MAX_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn refuse(code: &'static str) -> RotationError {
     RotationError { code }
 }
 
-/// RotationError -> sanitized JackError, как controller store_error.
+/// RotationError -> sanitized JackError, like the controller store_error.
 fn gate(error: RotationError) -> JackError {
     JackError::new(0, error.code, "rotation response refused")
 }
@@ -35,8 +35,8 @@ fn signed_time(value: u64) -> Result<i64, RotationError> {
     i64::try_from(value).map_err(|_| refuse("rotation_clock_unavailable"))
 }
 
-/// Pre-send bounded state check (Go: capacityValid); controller повторяет её
-/// после ответа на fresh guard.
+/// Pre-send bounded state check (Go: capacityValid); the controller repeats it
+/// after the response on a fresh guard.
 fn capacity_valid(snapshot: &TrustSnapshot, now: u64) -> bool {
     if snapshot.revision == 0
         || snapshot.revision > MAX_ORDINAL
@@ -74,14 +74,14 @@ fn refresh_body(after_ordinal: u64, after_hash: &str) -> Vec<u8> {
     .into_bytes()
 }
 
-/// Caller-pinned profile (те же независимые значения, что у RotationStoreOptions),
-/// signer и bounded deadline. Store остаётся caller-owned: каждый вызов берёт
-/// `&mut store` и не держит borrow между вызовами.
+/// Caller-pinned profile (the same independent values as RotationStoreOptions),
+/// signer, and bounded deadline. The store stays caller-owned: each call takes
+/// `&mut store` and holds no borrow between calls.
 pub struct RotationHttpClient {
     binding: OwnedBinding,
     window: u64,
     checkpoint: Checkpoint,
-    /// Origin-form target, байт-в-байт как настроено (path?query, без fragment).
+    /// Origin-form target, byte-for-byte as configured (path?query, no fragment).
     target: String,
     signer: Arc<dyn Signer>,
     transport: HttpTransport,
@@ -246,9 +246,9 @@ impl RotationHttpClient {
         Ok((response, snapshot.head))
     }
 
-    /// Ровно один signed `jack.server.key` POST для текущего ACKed cursor и
-    /// controller accept_refresh. Без retry/pagination/reset; ответ никогда
-    /// не расширяет trust сам. Ошибка не откатывает уже подтверждённый ACK.
+    /// Exactly one signed `jack.server.key` POST for the current ACKed cursor and
+    /// the controller accept_refresh. No retry/pagination/reset; the response never
+    /// extends trust by itself. An error does not roll back an already-confirmed ACK.
     pub fn refresh<C: FnMut() -> Result<u64, RotationError>>(
         &self,
         store: &mut RotationTrustStore<C>,
@@ -258,9 +258,9 @@ impl RotationHttpClient {
         controller.accept_refresh(response, b"1", &cursor)
     }
 
-    /// Только wire-половина: один POST и сырой RotationResponse (status,
-    /// значения Jack-Auth, request signature, body) плюс запрошенный cursor —
-    /// для caller-owned controller обработки.
+    /// Only the wire half: one POST and the raw RotationResponse (status,
+    /// Jack-Auth header values, request signature, body) plus the requested cursor —
+    /// for caller-owned controller handling.
     pub fn refresh_response<C: FnMut() -> Result<u64, RotationError>>(
         &self,
         store: &mut RotationTrustStore<C>,

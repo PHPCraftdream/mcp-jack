@@ -3,7 +3,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 use std::marker::PhantomData;
 
-// Обычный serde struct допускает sequence; candidate objects обязаны быть maps.
+// A normal serde struct allows a sequence; candidate objects must be maps.
 #[derive(Serialize)]
 #[serde(transparent)]
 pub(super) struct Object<T>(pub(super) T);

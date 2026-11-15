@@ -7,7 +7,7 @@ use crate::encoding::{body_hash, decode_b64url_fixed};
 use serde::{de, Deserialize, Deserializer};
 use serde_json::value::RawValue;
 
-// Literal `-0` — JSON-целое ноль (Go reference parity); остальные формы canonical Unsigned.
+// Literal `-0` — JSON integer zero (Go reference parity); other forms use canonical Unsigned.
 struct CursorOrdinal(u64);
 
 impl<'de> Deserialize<'de> for CursorOrdinal {
@@ -22,7 +22,7 @@ impl<'de> Deserialize<'de> for CursorOrdinal {
     }
 }
 
-// Map-only schema: serde отвергает duplicate/unknown/missing члены и positional sequence.
+// Map-only schema: serde rejects duplicate/unknown/missing members and positional sequences.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Arguments {
@@ -30,8 +30,8 @@ struct Arguments {
     after_hash: String,
 }
 
-/// Candidate-strict `params.arguments` для `jack.server.key`: ровно after_ordinal и after_hash.
-/// Результат — только cursor запроса, не checkpoint authority. Любой отказ — invalid_params.
+/// Candidate-strict `params.arguments` for `jack.server.key`: exactly after_ordinal and after_hash.
+/// The result is only the request cursor, not checkpoint authority. Any refusal is invalid_params.
 pub fn decode_server_key_arguments(text: &[u8]) -> Result<ResultCursor, RotationError> {
     let refuse = || invalid("invalid_params");
     let Object(wire): Object<Arguments> = serde_json::from_slice(text).map_err(|_| refuse())?;
@@ -49,10 +49,10 @@ pub fn decode_server_key_arguments(text: &[u8]) -> Result<ResultCursor, Rotation
     })
 }
 
-/// Строит страницу из уже validated snapshot и выбранного response-signer; повторных чтений нет.
-/// Caller обязан выполнить authoritative clock check и signer-eligibility до вызова и final
-/// guard после него. Cursor вне ring или с неверным hash — rotation_checkpoint_unavailable;
-/// signer вне ring — rotation_state_unavailable.
+/// Builds the page from an already validated snapshot and a chosen response-signer; no repeated reads.
+/// The caller must perform the authoritative clock check and signer-eligibility before the call and the final
+/// guard after it. A cursor outside the ring or with a wrong hash is rotation_checkpoint_unavailable;
+/// a signer outside the ring is rotation_state_unavailable.
 pub fn server_key_page(
     snapshot: &ServerSnapshot,
     cursor: &ResultCursor,

@@ -22,7 +22,7 @@ fn record_error(error: RotationError) -> RotationError {
     })
 }
 
-/// Pre-authority validation; framing/decoded values не являются trust ACK.
+/// Pre-authority validation; framing/decoded values are not a trust ACK.
 pub(super) fn prepare(
     snapshot: &TrustSnapshot,
     page: &DecodedResult,
@@ -102,7 +102,7 @@ pub(super) fn prepare(
     Ok((framing, extension))
 }
 
-/// Bounded desired value; store выполняет whole-state validation и exact CAS.
+/// Bounded desired value; the store performs whole-state validation and an exact CAS.
 pub(super) fn extended(
     snapshot: &TrustSnapshot,
     extension: Vec<Record>,
