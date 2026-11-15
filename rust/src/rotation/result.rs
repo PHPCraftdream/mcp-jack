@@ -82,12 +82,21 @@ fn id_matches(actual: &RawValue, expected: &RawValue) -> bool {
             _ => false,
         };
     }
-    let numeric = |text: &str| {
-        text.as_bytes()
-            .first()
-            .is_some_and(|byte| byte.is_ascii_digit() || *byte == b'-')
-    };
-    numeric(actual) && numeric(expected) && actual == expected
+    // Числовой id: ответ обязан быть byte-for-byte каноническим JSON текстом
+    // значения expected id, как JSON.stringify в TS: кратчайший десятичный вид
+    // без экспоненты; -0 канонизируется в "0".
+    canonical_id(expected).is_some_and(|canonical| actual == canonical)
+}
+
+fn canonical_id(text: &str) -> Option<String> {
+    let value: f64 = text.parse().ok()?;
+    if !value.is_finite() {
+        return None;
+    }
+    if value == 0.0 {
+        return Some("0".to_string());
+    }
+    Some(value.to_string())
 }
 
 fn payload(text: &str) -> Result<DecodedResult, RotationError> {

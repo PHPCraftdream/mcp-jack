@@ -2,6 +2,8 @@ package rotation
 
 import (
 	"encoding/json"
+	"errors"
+	"math"
 	"reflect"
 	"strconv"
 
@@ -92,6 +94,38 @@ func structuredResult(value any) (DecodedResult, error) {
 	return result, nil
 }
 
+// canonicalNumber возвращает канонический JSON текст числового id, как
+// JSON.stringify в TS: кратчайший десятичный вид без экспоненты; -0 → "0".
+func canonicalNumber(number json.Number) (string, bool) {
+	value, err := strconv.ParseFloat(number.String(), 64)
+	if err != nil && !errors.Is(err, strconv.ErrRange) {
+		return "", false
+	}
+	if math.IsInf(value, 0) || math.IsNaN(value) {
+		return "", false
+	}
+	if value == 0 {
+		return "0", true
+	}
+	return strconv.FormatFloat(value, 'f', -1, 64), true
+}
+
+// idMatches сравнивает id ответа с ожидаемым: строки — по декодированному
+// значению, числа — byte-for-byte с каноническим текстом значения expected.
+func idMatches(actual, expected any) bool {
+	switch expectedValue := expected.(type) {
+	case string:
+		actualValue, ok := actual.(string)
+		return ok && actualValue == expectedValue
+	case json.Number:
+		text, ok := canonicalNumber(expectedValue)
+		number, numberOK := actual.(json.Number)
+		return ok && numberOK && number.String() == text
+	default:
+		return false
+	}
+}
+
 // DecodeResult вызывать только после outer authentication, known interval и ClockGuard.
 // Проверяет success schema/parity/limits, не proofs/cursor/gaps/current binding;
 // не выполняет ACK, persistence, fetch или refresh. Signed errors обрабатывает caller.
@@ -104,17 +138,12 @@ func DecodeResult(body []byte, expectedID json.RawMessage) (DecodedResult, error
 	if err != nil {
 		return fail()
 	}
-	switch expected.(type) {
-	case string, json.Number:
-	default:
-		return fail()
-	}
 	value, err := strictJSON(body)
 	if err != nil {
 		return fail()
 	}
 	root, ok := fields(value, "jsonrpc", "id", "result")
-	if !ok || root["jsonrpc"] != "2.0" || !reflect.DeepEqual(root["id"], expected) {
+	if !ok || root["jsonrpc"] != "2.0" || !idMatches(root["id"], expected) {
 		return fail()
 	}
 	result, ok := fields(root["result"], "content", "structuredContent", "isError")

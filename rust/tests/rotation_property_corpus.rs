@@ -97,7 +97,7 @@ fn differential_corpus_is_well_formed_and_sized() {
     let corpus = corpus();
     assert_eq!(corpus.format, "mcp-jack-rotation-property-corpus-v1");
     assert_eq!(corpus.server_key_arguments.len(), 50);
-    assert_eq!(corpus.result_bodies.len(), 33);
+    assert_eq!(corpus.result_bodies.len(), 45);
     assert_eq!(
         corpus
             .server_key_arguments
@@ -120,7 +120,7 @@ fn differential_corpus_is_well_formed_and_sized() {
             .iter()
             .filter(|case| case.accept)
             .count(),
-        8
+        10
     );
     assert_eq!(
         corpus
@@ -128,7 +128,7 @@ fn differential_corpus_is_well_formed_and_sized() {
             .iter()
             .filter(|case| !case.accept)
             .count(),
-        25
+        35
     );
     assert_eq!(corpus.anchor_kid.len(), 43);
     assert_eq!(corpus.cursor_hash.len(), 43);

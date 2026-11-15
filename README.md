@@ -2,13 +2,30 @@
 
 [![ci](https://github.com/PHPCraftdream/mcp-jack/actions/workflows/ci.yml/badge.svg)](https://github.com/PHPCraftdream/mcp-jack/actions/workflows/ci.yml)
 
-mcp-jack wraps ordinary MCP over HTTP with signed, replay-protected messages, key management, protocol auditing, and SDKs for Go, Rust, and TypeScript. The reduced contract and SDK migration are represented by baseline `b13b972`; the integrated candidate `444c69b` passed the checks recorded in readiness. Shared interop matrix acceptance, packaged-consumer evidence, and coverage/fuzz evidence were verified in GitHub CI on `444c69b` (see readiness evidence). No release has been made and nothing has been audited.
+mcp-jack is feature-complete for v0.1.0, which is unreleased. Nothing is published: no Go module tag, no npm package, no crates.io crate, no git tag, no GitHub Release. The code has not been independently audited. This README describes the repository as it is.
+
+Toolchain floors: Go 1.25.0 (`go.mod`), Rust 1.88 (MSRV, `rust/Cargo.toml`), Node >= 20 (TypeScript; CI runs Node 20 and 22).
+
+## What is in the box
+
+| Component | Location | Notes |
+|---|---|---|
+| Protocol | repository root | Ed25519-signed requests and responses, replay protection with an optional durable nonce store, user management, strict-boolean admin flag, verified caller identity hand-off, audit hooks |
+| Go SDK | root, `client/`, `server/`, `userkey/`, `spec/`, `durable/`, `rotation/` | reference implementation, client and server SDKs |
+| Go CLI | `cmd/jack`, `internal/cli/` | single binary `jack`: keygen, bootstrap, enroll, gateway, bridge, user/invite, nonce and server-key commands |
+| Rust SDK | `rust/` | `mcp-jack` crate; client and server SDKs, client HTTP transport, rotation trust store and single-page refresh HTTP client (Linux) |
+| TypeScript SDK | `ts/` | client, Fetch and Node server adapters, rotation trust store, bounded rotation HTTP client |
+| Spec and fixtures | `spec/` | contract documents and conformance fixtures |
+| Interop harnesses | `interop/` | 3x3 request/response matrix, 3x3 rotation matrix, credential-transfer matrix |
+| MCP end-to-end | `tools/mcp-e2e/` | CI job against official MCP SDK clients and servers |
+
+The repository-root Go package `jack` contains shared protocol primitives only; it is not the client or server SDK. `client/` owns signing/verification transport, connection profiles, and typed native-tool calls. `server/` owns verification, middleware, identity hand-off, nonce/state stores, native tools, and audit sinks. `userkey/` provides role-specific key and transfer utilities independently of the client package. `spec/` supplies fixture loaders and conformance data. `durable/` holds the bbolt-backed durable nonce and ring stores (Linux-only private-file backend). `rotation/` holds the rotation record/chain/page codec and the client rotation controller. This separation is intentional.
 
 ## Contract
 
 Authenticated ordinary MCP requests pass through unchanged. The application authorizes them using the immutable verified caller identity `{kid, name, admin}` supplied by the server SDK; request headers and bodies cannot supply that identity. The strict-boolean `admin` flag (false by default) gates reserved `jack.admin.*` tools only. Protocol operations are audited. User `kind`, scopes, and the policy engine are removed; legacy registry/state records containing `kind` or `scopes` are rejected without migration or rewrite.
 
-An authenticated session channel is a future v0.2 direction, not an implemented feature. Server-key rotation is separate future work requiring an exact design. See [the scope review](docs/design/scope-review-2026-11-08.md).
+User-key rotation, server response-key rotation (`spec/candidate/server-key-rotation.md`), and the optional durable nonce profile are implemented. An authenticated session channel is future v0.2 direction.
 
 ## Why
 
@@ -22,37 +39,134 @@ Example: the embedded MCP server of `process-compose` (Apache-2.0) protects its 
 
 Operations such as restart or a configuration change need more than "whoever reached the port".
 
-## Design principles (hypotheses under review)
+## Installation
 
-1. **Transport wrapper, not a new tool model.** Ordinary MCP messages travel over HTTP unchanged.
-2. **No bearer tokens.** Each request is signed with Ed25519 and bound to the target server, a time window, and a fresh nonce; responses also carry Ed25519 signatures. TLS provides confidentiality.
-3. **Application-owned authorization.** The application authorizes requests using the immutable verified caller identity `{kid, name, admin}` supplied by the server SDK; the wrapper does not add scopes or a policy engine.
-4. **User key management proves possession.** Native user and invite tools support administrator management. Enrollment proves possession of the corresponding private key; key lifecycle is distinct from application authorization.
-5. **Private keys stay out of config files.** Prefer OS keystores, signer agents, or hardware signers; SDKs expose a signer interface.
-6. **Audit protocol operations accurately.** Record the verified caller and operation observed, distinguishing protocol activity from application-level effects.
-7. **Logs are untrusted input.** Treat log content as data, not instructions to an agent.
+Nothing below is published yet. Each component is versioned `0.1.0 (unreleased)`.
 
-## Implementations
+- **Go module** `github.com/PHPCraftdream/mcp-jack` — not in the Go module proxy. Use it as a source/replace dependency or vendor the checkout.
+- **Rust crate** `mcp-jack` — `publish = false`, not on crates.io. Depend on it by path or git.
+- **TypeScript package** `mcp-jack` — `private: true`, not on npm. Install from a checkout or tarball.
+- **CLI** `jack` — not distributed. Build from source with `go build ./cmd/jack`.
 
-| Language | Location | Main components |
-|---|---|---|
-| Go | repository root | `client/`, `server/`, `userkey/`, `spec/` |
-| Rust | [rust/](rust/README.md) | `mcp-jack` crate; client and server SDKs; optional client HTTP transport |
-| TypeScript | [ts/](ts/README.md) | `mcp-jack` package; client, Fetch and `node:http` server adapters |
+## Quickstart: Go CLI
 
-The repository-root Go package `jack` contains shared protocol primitives only; it is not the client or server SDK. `client/` owns signing/verification transport, connection profiles, and typed native-tool calls. `server/` owns verification, middleware, identity hand-off, nonce/state stores, native tools, and audit sinks. `userkey/` provides role-specific key and transfer utilities independently of the client package. `spec/` supplies fixture loaders and conformance data. This separation is intentional.
+Full flow requires Linux: state stores use Linux-only private files and fail closed on Windows. Files must be owner-owned with mode 0600 inside mode 0700 directories. The upstream application must listen only on the configured Unix socket.
 
-## Checks and integration status
+```sh
+# Provision the directories first; the CLI never creates them.
+# 1. Generate the server response-signing key and the admin user key.
+jack keygen server --secret /etc/jack/server.seed --public /etc/jack/server.public.json
+jack keygen user   --secret /etc/jack/admin-user.seed --public /etc/jack/admin-user.public.json
 
-The workflow definitions specify Go vet/tests and race tests; Rust formatting, clippy, tests, feature-isolation and MSRV checks; TypeScript typecheck/tests on supported Node and OS lanes; and fixture freshness checks. These are standing checks, not results claimed for `b13b972`.
+# 2. Bootstrap: create the state file and the first admin invite.
+jack bootstrap --state /var/lib/jack/state.json --invite-file /etc/jack/invite.first
 
-Package-isolation consumers install the actual npm tarball (`private: true`), Rust `.crate` (`publish = false`), and a Go module snapshot separately. The pinned baseline is TypeScript 5.9, Go 1.22, Rust 1.85, and Node 20/22. These are baseline pins, not new measurements or green results; no versions are changed here.
+# 3. Run the gateway in front of the upstream app's Unix socket.
+jack gateway --config /etc/jack/gateway.json
 
-The interop and credential-transfer harnesses, packaged consumers, coverage reports, and bounded Go fuzz campaign have workflow definitions in this repository. Matrix acceptance, packaged-consumer checks, coverage, and fuzz evidence for this baseline were verified in GitHub CI on `444c69b` (see readiness evidence). The current interop scenario source of truth is [`interop/scenarios.json`](interop/scenarios.json). Historical readiness measurements are explicitly tied to their earlier commit in [docs/readiness.md](docs/readiness.md).
+# 4. Enroll the admin user against the running gateway (talks to the endpoint in client.json).
+jack enroll --config /etc/jack/client.json --invite-file /etc/jack/invite.first --name root
 
-## Specification and future work
+# 5. Bridge: the local stdio entry an MCP client spawns.
+jack bridge --config /etc/jack/bridge.json
+```
 
-The contract and shared fixtures live in [spec/](spec/README.md). Q1's authenticated session channel is future v0.2 design work. Q3 server-key rotation requires a separate exact design. Service discovery remains open.
+Client config used by `jack enroll` and `jack bridge` (`bridge.json` points at the gateway instead of the upstream). `server_public_key` and `server_kid` are provisioned out of band from the keygen public file (`/etc/jack/server.public.json`):
+
+```json
+{
+  "version": 1,
+  "endpoint": "http://127.0.0.1:8080/mcp",
+  "aud": "jack-gateway",
+  "server_public_key": "<base64url server public key>",
+  "server_kid": "<server key id>",
+  "key_file": "/etc/jack/admin-user.seed",
+  "key_format": "raw-seed",
+  "call_timeout_ms": 10000
+}
+```
+
+Gateway config (`/etc/jack/gateway.json`; the optional `durable_nonces` profile selects the durable nonce store — omit it for the volatile in-memory store):
+
+```json
+{
+  "version": 1,
+  "aud": "jack-gateway",
+  "server_seed_file": "/etc/jack/server.seed",
+  "state_file": "/var/lib/jack/state.json",
+  "listen": "127.0.0.1:8080",
+  "upstream_socket": "/var/lib/jack/upstream.sock",
+  "upstream_url": "http://upstream/mcp",
+  "call_timeout_ms": 10000,
+  "max_concurrent": 8,
+  "durable_nonces": {
+    "path": "/var/lib/jack/nonces.bolt",
+    "deployment_id": "<deployment id>",
+    "window": 30
+  }
+}
+```
+
+Exact schemas and all flags: [docs/design/cli.md](docs/design/cli.md). Operator guide, including recovery after an abnormal stop: [docs/operations.md](docs/operations.md).
+
+## Quickstart: SDK client
+
+```go
+signer, err := userkey.GenerateClientKey()
+// ...
+c, err := client.NewClient(client.Config{
+    BaseURL:   "http://127.0.0.1:8080/mcp",
+    Aud:       "jack-gateway",
+    Signer:    signer,
+    ServerKey: serverPubKey, // serverPubKey is the independently pinned 32-byte server public key.
+})
+// ...
+var out struct{ OK bool `json:"ok"` }
+// ctx is the caller's context.
+err = c.CallTool(ctx, "ping", map[string]any{}, &out)
+```
+
+Rust client: see [rust/README.md](rust/README.md). TypeScript client: see [ts/README.md](ts/README.md).
+
+## Server-key rotation
+
+The server can rotate its response-signing key without re-pinning clients. One `jack server-key-announce` publishes exactly one next key with a single fixed publication time P; the successor activates at A = P + 172800 s (48 h). Both keys verify during the overlap; verification cuts over strictly when the successor activates. Clients refresh explicitly by fetching a single page; ordinary traffic never triggers a refresh, and there is no hidden retry or reset. The gateway enables it via the `server_rotation_file` profile and serves the native tool `jack.server.key` (domain `mcp-jack/server-key-rotation/min1`). Runbook: [docs/operations.md](docs/operations.md). Design: [spec/candidate/server-key-rotation.md](spec/candidate/server-key-rotation.md).
+
+## Limitations
+
+| # | Limitation |
+|---|---|
+| 1 | No operator recovery command after an abnormal stop (kill, OOM, power loss): nonce and ring stores stay dirty/unknown and every entry point refuses to serve (fail closed). Recovery is a manual operator procedure ([docs/operations.md](docs/operations.md)). |
+| 2 | One owner of the nonce/ring state per deployment; no cluster or HA mode. |
+| 3 | Upstream servers that answer with SSE are unsupported: the gateway closes the stream and answers a signed 501 (the official TypeScript MCP server 2.4.0 answers initialize with text/event-stream even in JSON response mode). |
+| 4 | Bounded MCP profile: legacy Streamable HTTP 2025-11-25 entered through stdio, one JSON-RPC object per POST, no sessions, no GET stream. |
+| 5 | Signatures do not cover arbitrary headers and provide no confidentiality; TLS is the transport's job. |
+| 6 | On Windows the CLI stores fail closed by design; SDKs are tested on Windows in CI, the durable private-file stores are Linux-only. |
+| 7 | Audit delivery is best effort. |
+| 8 | Rust and TypeScript are covered by deterministic property/mutation tests and a shared corpus, not coverage-guided fuzzing (Go has a bounded fuzz campaign). |
+| 9 | The release is not independently audited. |
+
+See also [docs/operations.md](docs/operations.md) and [docs/threat-model.md](docs/threat-model.md).
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [docs/operations.md](docs/operations.md) | operator guide, recovery runbook, rotation runbook |
+| [docs/threat-model.md](docs/threat-model.md) | threat model |
+| [SECURITY.md](SECURITY.md) | security policy |
+| [CHANGELOG.md](CHANGELOG.md) | repository history and unreleased changes |
+| [docs/versioning.md](docs/versioning.md) | versioning policy |
+| [spec/README.md](spec/README.md) | contract specification and fixtures |
+| [docs/design/](docs/design/) | historical design documents |
+| [interop/README.md](interop/README.md) | interop harnesses and matrices |
+| [tools/mcp-e2e/README.md](tools/mcp-e2e/README.md) | official MCP SDK end-to-end job |
+| [ts/README.md](ts/README.md) | TypeScript SDK |
+| [rust/README.md](rust/README.md) | Rust SDK |
+
+## Checks
+
+Standing CI lanes: go (ubuntu+windows), go race, Go CLI binary process qualification, Go CLI native Darwin process qualification, Go CLI portable artifact qualification, fixture freshness, rust (ubuntu+windows), rust 1.88 check, ts (ubuntu+windows at node 20/22), 3x3 interop matrix, 3x3 rotation interop matrix, 3x3 credential-transfer matrix, official MCP SDK end-to-end job, consumer ts/rust/go, coverage (go/rust/ts), bounded Go fuzz campaign, licences, six vulnerability scans, and spec fixtures. These are configured checks, not claimed results.
 
 ## Licence
 
