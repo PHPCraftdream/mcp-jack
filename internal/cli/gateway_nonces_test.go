@@ -28,6 +28,7 @@ func TestGatewayNonceProfileIsExplicitAndValidated(t *testing.T) {
 		"oversized-deployment": func(c *gatewayDurableConfig) { c.DeploymentID = string(make([]byte, 1025)) },
 		"zero-window":          func(c *gatewayDurableConfig) { c.Window = 0 },
 		"oversized-window":     func(c *gatewayDurableConfig) { c.Window = 121 },
+		"window-above-cap":     func(c *gatewayDurableConfig) { c.Window = 31 },
 	} {
 		t.Run(name, func(t *testing.T) {
 			invalid := valid

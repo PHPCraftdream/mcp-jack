@@ -8,6 +8,10 @@ import (
 	"github.com/PHPCraftdream/mcp-jack/server"
 )
 
+// Durable window ограничен так, чтобы rate*(2*window+1) не заполнил capacity
+// nonce до очистки; связь проверяет TestGatewayAdmissionBudget.
+const maxDurableWindow = 30
+
 // Профиль выбирается явно; gateway никогда не создаёт и не сбрасывает store.
 type gatewayDurableConfig struct {
 	Path         string `json:"path"`
@@ -19,7 +23,7 @@ func (c *gatewayDurableConfig) validate(maxConcurrent int) error {
 	if c == nil {
 		return nil
 	}
-	if !filepath.IsAbs(c.Path) || filepath.Clean(c.Path) != c.Path || !utf8.ValidString(c.DeploymentID) || len(c.DeploymentID) == 0 || len(c.DeploymentID) > 1024 || c.Window < 1 || c.Window > 120 || maxConcurrent < 1 || maxConcurrent > 32 {
+	if !filepath.IsAbs(c.Path) || filepath.Clean(c.Path) != c.Path || !utf8.ValidString(c.DeploymentID) || len(c.DeploymentID) == 0 || len(c.DeploymentID) > 1024 || c.Window < 1 || c.Window > maxDurableWindow || maxConcurrent < 1 || maxConcurrent > 32 {
 		return errConfig
 	}
 	return nil
