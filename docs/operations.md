@@ -210,13 +210,14 @@ Consequences for clients: a new ring needs a checkpoint clients already trust or
 
 - **Time source.** The nonce store, the server key ring and every client trust store keep a high-water mark of the clock. If the clock jumps forward and then returns, the store latches unsafe permanently and every entry point refuses to serve; 0.1.0 has no command to clear it, so the only remedy is fresh state as in the crash recovery runbook, and clients must be re-pinned. Use a trusted, stable time source; never step the clock by hand, and watch for VM pauses and migrations.
 - **Unauthenticated load.** The gateway admits at most 64 calls per Unix second and 4096 nonce entries, and these limits apply before authentication. A self-signed `jack.enroll` from an unknown key reserves a nonce until `ts + window`. Put a rate-limited front or a firewall before the gateway and keep the durable `window` at 30 seconds or less.
-- **Rotation ring.** Each signed response re-verifies the key ring, so keep it short. Rotations are at least 48 hours apart; retired-key compaction is not implemented, and a ring of more than 1024 retired keys is refused.
+- **Rotation ring.** Each signed response re-verifies the key ring, so keep it short. There is no spacing rule between announcements: up to 128 keys can be pending and every retired key counts towards the limit of 1024 retired keys, after which the gateway refuses to sign and clients refuse the ring; compaction is not implemented. Announce rarely, and treat the 48 hours as the overlap of one announcement, not as a limit on how often you may announce.
 - **Invites.** The gateway stores at most 1024 invites. Expired invites are removed in the same atomic state edit that creates, enrolls with or revokes an invite (and in first-admin bootstrap), so only live invites count towards the limit; an expired invite is reported as unknown. Unused invites that have not yet expired still count, so do not create invites in bulk.
 - **Rust and TypeScript servers.** Only the Go SDK and the CLI gateway have the durable nonce store. Rust and TypeScript servers keep nonces in memory.
 
 ## Monitoring and audit
 
-- Audit delivery is best effort: the SDK audit sink is optional and `Record` errors are ignored.
+- Audit delivery is best effort: the SDK audit sink is optional and `Record` errors are ignored. The `jack gateway` does not configure a sink yet, so admin and enrollment calls through the gateway leave no audit record; capture the gateway's access at your reverse proxy until that is added (tracked, see [independent-review.md](independent-review.md)).
+- Plan a second administrator key: if the only administrator key expires there is no in-band recovery, and a crash can leave a stale `<state>.owner` marker that blocks the gateway until it is removed by hand (see the crash recovery runbook).
 - Stderr diagnostics are fixed secret-free strings; no command prints a seed, invite code, or supplied path/URL.
 - Bridge stdout carries only verified protocol frames.
 
