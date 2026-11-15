@@ -1660,9 +1660,16 @@ mod tests {
         call.now = NOW + 1;
         native.call(&mut call).unwrap();
         let invites = state.view().invites;
-        assert_eq!(invites.len(), 2, "the live seed and the new invite must stay");
+        assert_eq!(
+            invites.len(),
+            2,
+            "the live seed and the new invite must stay"
+        );
         let ids: Vec<&str> = invites.iter().map(|i| i.invite_id.as_str()).collect();
-        assert!(!ids.contains(&"expired"), "the expired invite must be purged");
+        assert!(
+            !ids.contains(&"expired"),
+            "the expired invite must be purged"
+        );
         assert!(ids.contains(&"live"), "a live invite is never purged");
     }
 

@@ -218,7 +218,7 @@ func TestInviteCreatePurgesExpiredInvites(t *testing.T) {
 	if err := st.Update(func(e *StateEdit) error {
 		e.PutKey(admin)
 		e.PutInvite(InviteRecord{InviteID: "expired", CreatedBy: admin.Kid, CreatedAt: testNow - 100, ExpiresAt: testNow - 1})
-		e.PutInvite(InviteRecord{InviteID: "live", CreatedBy: admin.Kid, CreatedAt: testNow, ExpiresAt: testNow + 100})
+		e.PutInvite(InviteRecord{InviteID: "live", CreatedBy: admin.Kid, CreatedAt: testNow, ExpiresAt: testNow + 7200})
 		return nil
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
