@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 const ANCHOR: &str = "opaque-provider/anchor";
 
-// Именованная мутация: метка, in-place изменение desired snapshot и ожидаемый код отказа.
+// Named mutation: a label, an in-place change to the desired snapshot, and the expected refusal code.
 type Refusal = (&'static str, fn(&mut ServerSnapshot), &'static str);
 
 fn server_options() -> RotationServerStoreOptions {
@@ -33,7 +33,7 @@ fn initialize(path: &Path) {
     RotationServerStore::initialize_unused(path, server_options(), || Ok(100)).unwrap();
 }
 
-/// Следующая fixed-P публикация поверх текущего ring: P = 100 = clock.high_water.
+/// The next fixed-P publication on top of the current ring: P = 100 = clock.high_water.
 fn published(previous: &ServerSnapshot, clock: &ClockTuple) -> ServerSnapshot {
     let public = next(&previous.public, clock);
     let key = public.keys.last().expect("new key");

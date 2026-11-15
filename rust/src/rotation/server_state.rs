@@ -5,14 +5,14 @@ use super::{
 
 pub const MAX_SIGNER_REFERENCE_BYTES: usize = 1024;
 
-/// Opaque server-local handle подписанта; не private-key encoding и не key authority.
+/// Opaque server-local signer handle; not a private-key encoding and not key authority.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignerReference {
     pub kid: String,
     pub reference: String,
 }
 
-/// Хранится только в protected server store; никогда не входит в delivery payload.
+/// Stored only in the protected server store; never enters the delivery payload.
 #[derive(Debug, Clone)]
 pub struct ServerSnapshot {
     pub format_version: u32,
@@ -20,7 +20,7 @@ pub struct ServerSnapshot {
     pub signer_references: Vec<SignerReference>,
 }
 
-/// Whole trust плюс ровно одна opaque reference на каждый retained key; owned copy.
+/// Whole trust plus exactly one opaque reference per retained key; owned copy.
 pub fn validate_server_snapshot(
     input: &ServerSnapshot,
     binding: Binding<'_>,
@@ -51,7 +51,7 @@ pub fn validate_server_snapshot(
     })
 }
 
-/// Проверяет один fixed-P переход; это не durable authorization и не persistence.
+/// Validates one fixed-P transition; this is not durable authorization and not persistence.
 pub fn validate_server_publication(
     expected: &ServerSnapshot,
     desired: &ServerSnapshot,
@@ -76,7 +76,7 @@ pub fn validate_server_publication(
     {
         return Err(refuse());
     }
-    // P уже зафиксирован в clock.high_water; A = P + 48h выводится только из него.
+    // P is already fixed in clock.high_water; A = P + 48h is derived only from it.
     let last = after.keys.last().ok_or_else(refuse)?;
     if last.not_before.checked_sub(GRACE_SECONDS) != Some(after.clock.high_water) {
         return Err(refuse());

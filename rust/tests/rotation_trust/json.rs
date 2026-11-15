@@ -4,7 +4,7 @@ use mcp_jack::rotation::{self, TrustSnapshot};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-// Независимая DTO shape из Go rotation/trust_json.go, не output encoder-а.
+// Independent DTO shape from Go rotation/trust_json.go, not the output encoder.
 fn document(value: &TrustSnapshot) -> Value {
     json!({
         "format_version": value.format_version,
@@ -140,7 +140,7 @@ fn local_codec_requires_all_known_fields_and_only_objects_at_each_boundary() {
         *null.pointer_mut(path).expect("object") = Value::Null;
         refuse(&null, &corpus);
     }
-    // Positive control: обычный serde struct действительно допускает array.
+    // Positive control: an ordinary serde struct does accept an array.
     #[derive(Deserialize)]
     struct Ordinary {
         value: u64,
@@ -158,7 +158,7 @@ fn local_codec_requires_all_known_fields_and_only_objects_at_each_boundary() {
         .as_object_mut()
         .expect("map")
         .insert("known_cutoff".to_owned(), Value::Null);
-    // Null синтаксически допустим, но здесь противоречит verified chain interval.
+    // Null is syntactically allowed, but here it contradicts the verified chain interval.
     refuse(&nullable, &corpus);
     assert!(reference
         .pointer("/keys")

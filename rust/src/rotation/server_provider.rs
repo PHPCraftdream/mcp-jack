@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-// Лимиты TS/Go reference (Go hardcoded 128/1024): аномальное число pending/retained handles отказывает.
+// TS/Go reference limits (Go hardcoded 128/1024): an anomalous number of pending/retained handles refuses.
 const MAX_PENDING: usize = 128;
 pub(crate) const MAX_RETIRED: usize = 1024;
 // Every key but the newest eventually retires and serving (select_pinned) refuses more than
@@ -28,8 +28,8 @@ fn unavailable() -> RotationError {
     invalid("rotation_state_unavailable")
 }
 
-/// Reset флага публикации на любом выходе, включая `?`; Go: `defer publication.Store(false)`.
-/// Привязка к `&AtomicBool`, чтобы guard не владел флагом и жил ровно до конца announce.
+/// Resets the publication flag on any exit, including `?`; Go: `defer publication.Store(false)`.
+/// Bound to `&AtomicBool` so the guard does not own the flag and lives exactly until announce ends.
 struct PublicationReset<'a>(&'a AtomicBool);
 
 impl Drop for PublicationReset<'_> {
@@ -38,13 +38,13 @@ impl Drop for PublicationReset<'_> {
     }
 }
 
-/// Заранее настроенный handle подписанта: reference не заменяет проверку публичного ключа.
+/// Pre-configured signer handle: the reference does not replace public key verification.
 pub struct RotationServerKey {
     pub reference: String,
     pub signer: Arc<dyn Signer>,
 }
 
-/// Pinned identity подписанта: публичный ключ скопирован один раз и не меняется вместе с callback.
+/// Pinned signer identity: the public key is copied once and does not change together with the callback.
 #[derive(Clone)]
 pub struct PinnedRotationSigner {
     public: [u8; 32],
@@ -63,21 +63,21 @@ impl ResponseSigner for PinnedRotationSigner {
     }
 
     fn sign(&self, message: &[u8]) -> Result<Vec<u8>, RotationError> {
-        // Raw signature bytes: length/verify остаются HTTP-слою (Go responseSignature).
+        // Raw signature bytes: length/verify stay at the HTTP layer (Go responseSignature).
         self.signer.sign(message).map_err(|_| unavailable())
     }
 }
 
-/// Только после exact durable ACK; это не HTTP delivery.
+/// Only after exact durable ACK; this is not HTTP delivery.
 pub struct RotationPublication {
     pub record: Record,
     pub revision: u64,
 }
 
-/// Связывает concrete server store с заранее настроенным inventory подписантов: выбор подписанта,
-/// явная публикация одного next key и авторизация response signing. Inventory задаётся только
-/// out-of-band; custody и lifecycle signer handles принадлежат caller. Signer callbacks должны
-/// быть bounded и не reentrant; store lock никогда не держится во время callbacks.
+/// Binds a concrete server store with a pre-configured signer inventory: signer selection,
+/// explicit publication of a single next key, and response-signing authorization. The inventory is given
+/// only out-of-band; custody and lifecycle of signer handles belong to the caller. Signer callbacks must
+/// be bounded and non-reentrant; the store lock is never held during callbacks.
 pub struct RotationServerProvider<C: FnMut() -> Result<u64, RotationError> + Send + 'static> {
     store: Arc<Mutex<RotationServerStore<C>>>,
     keys: HashMap<(String, String), PinnedRotationSigner>,
@@ -85,9 +85,9 @@ pub struct RotationServerProvider<C: FnMut() -> Result<u64, RotationError> + Sen
     announce_ring_keys: usize,
 }
 
-/// Копирует public identity ОДИН раз; kid считается от копии, поэтому поздние изменения
-/// callback не могут подменить pinned identity. Rust String всегда валидный UTF-8, поэтому
-/// utf8-проверки TS pin()/Go pinKey здесь не нужны.
+/// Copies the public identity ONCE; the kid is derived from the copy, so later callback
+/// changes cannot substitute the pinned identity. A Rust String is always valid UTF-8, so
+/// the utf8 checks of TS pin()/Go pinKey are not needed here.
 fn pin(key: &RotationServerKey) -> Result<PinnedRotationSigner, RotationError> {
     let reference = key.reference.as_str();
     let public = key.signer.public_key();
@@ -103,10 +103,10 @@ fn pin(key: &RotationServerKey) -> Result<PinnedRotationSigner, RotationError> {
     })
 }
 
-/// Pure выбор pinned подписанта без store и lock: требует все pending handles и текущий signer,
-/// retired handles необязательны. Greatest eligible ordinal выигрывает неявно (позже index —
-/// больше ordinal); fallback отсутствует. Snapshot уже полностью проверен; после fresh clock
-/// sample остаётся только interval arithmetic.
+/// Pure selection of a pinned signer without store or lock: requires all pending handles and the current
+/// signer; retired handles are optional. The greatest eligible ordinal wins implicitly (later index —
+/// larger ordinal); there is no fallback. The snapshot is already fully validated; after a fresh clock
+/// sample only interval arithmetic remains.
 fn select_pinned(
     keys: &HashMap<(String, String), PinnedRotationSigner>,
     snapshot: &ServerSnapshot,
@@ -133,11 +133,11 @@ fn select_pinned(
         if pending > MAX_PENDING || retired > MAX_RETIRED {
             return Err(unavailable());
         }
-        // Retired handles необязательны: они выпадают до lookup reference.
+        // Retired handles are optional: they are skipped before the reference lookup.
         if !eligible && !is_pending {
             continue;
         }
-        // Validated snapshots гарантируют равные длины; defensive refuse на расхождение.
+        // Validated snapshots guarantee equal lengths; defensive refuse on a mismatch.
         let reference = snapshot
             .signer_references
             .get(index)
@@ -145,7 +145,7 @@ fn select_pinned(
         let signer = keys
             .get(&(reference.reference.clone(), key.kid.clone()))
             .ok_or_else(unavailable)?;
-        // Identity theft guard: pinned public обязан совпадать с committed key.
+        // Identity theft guard: the pinned public key must match the committed key.
         if signer.public != key.public_key {
             return Err(unavailable());
         }
@@ -166,7 +166,7 @@ fn snapshot_signer_kid(snapshot: &ServerSnapshot, public: &[u8; 32]) -> String {
         .unwrap_or_default()
 }
 
-/// Go matchesNativeResponse: страница обязана точно продолжать committed ring, иначе отказ.
+/// Go matchesNativeResponse: the page must exactly continue the committed ring, otherwise refusal.
 fn matches_page(
     page: &DecodedResult,
     snapshot: &ServerSnapshot,
@@ -182,7 +182,7 @@ fn matches_page(
     if page.records.is_empty() {
         return page.complete;
     }
-    // Первый совпавший start фиксируется как в Go; последующие не пробуются.
+    // The first matching start is fixed as in Go; later ones are not tried.
     let Some(start) = snapshot
         .public
         .records
@@ -200,16 +200,16 @@ fn matches_page(
     snapshot.public.records[start..end] == page.records[..]
 }
 
-// Map-only schema: plain derive терпит unknown members как Go partial unmarshal;
-// missing id ломает parse — тот же исход, что nil-id путь Go.
+// Map-only schema: plain derive tolerates unknown members like Go partial unmarshal;
+// a missing id breaks parsing — the same outcome as Go's nil-id path.
 #[derive(Deserialize)]
 struct EnvelopeId {
     id: Box<RawValue>,
 }
 
 impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> RotationServerProvider<C> {
-    /// Не создаёт state и не разрешает publication; отказывает, если ring не готов к serving.
-    /// Input inventory копируется: последующие caller mutations не меняют pinned identity.
+    /// Does not create state and does not authorize publication; refuses if the ring is not ready for serving.
+    /// The input inventory is copied: later caller mutations do not change the pinned identity.
     pub fn new(
         store: Arc<Mutex<RotationServerStore<C>>>,
         keys: Vec<RotationServerKey>,
@@ -221,7 +221,7 @@ impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> RotationServerPr
             HashMap::with_capacity(keys.len());
         for key in keys {
             let signer = pin(&key)?;
-            // Rust-эквивалент TS identity(reference, kid): составной ключ вместо JSON-строки.
+            // Rust equivalent of TS identity(reference, kid): a composite key instead of a JSON string.
             let identity = (key.reference.clone(), key_id(&signer.public));
             if pinned.contains_key(&identity) {
                 return Err(unavailable());
@@ -244,7 +244,7 @@ impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> RotationServerPr
         self.announce_ring_keys = bound;
     }
 
-    /// Readiness: committed ring, свежий ClockGuard и все pending/current handles доступны.
+    /// Readiness: committed ring, fresh ClockGuard, and all pending/current handles available.
     pub fn ready(&self) -> Result<(), RotationError> {
         let mut store = self.lock_store();
         let _lease = store.acquire_serving_lease().map_err(|_| unavailable())?;
@@ -254,8 +254,8 @@ impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> RotationServerPr
         Ok(())
     }
 
-    /// Требует handles всех pending keys и текущего signer; retired handles необязательны.
-    /// Никакого fallback: greatest eligible ordinal или отказ. Чистая функция без store access.
+    /// Requires handles of all pending keys and the current signer; retired handles are optional.
+    /// No fallback: greatest eligible ordinal or refusal. Pure function without store access.
     pub fn select_signer(
         &self,
         snapshot: &ServerSnapshot,
@@ -264,14 +264,14 @@ impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> RotationServerPr
         select_pinned(&self.keys, snapshot, clock)
     }
 
-    /// Одна explicit authorization для заранее настроенного next handle. P фиксируется одним
-    /// fresh sample; отказ, конфликт или unknown не повторяются автоматически.
+    /// One explicit authorization for a pre-configured next handle. P is fixed by a single
+    /// fresh sample; refusal, conflict, or unknown is not retried automatically.
     pub fn announce(
         &self,
         reference: &str,
         kid: &str,
     ) -> Result<RotationPublication, RotationError> {
-        // Reentrancy gate: вложенная публикация из signer callback отказывает сразу.
+        // Reentrancy gate: nested publication from a signer callback refuses immediately.
         if self
             .publishing
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -280,7 +280,7 @@ impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> RotationServerPr
             return Err(unavailable());
         }
         let _reset = PublicationReset(&self.publishing);
-        // Unknown inventory entry отказывает до store и до первого clock sample.
+        // Unknown inventory entry refuses before the store and before the first clock sample.
         let next = self
             .keys
             .get(&(reference.to_owned(), kid.to_owned()))
@@ -312,7 +312,7 @@ impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> RotationServerPr
         if old.public != last.public_key {
             return Err(unavailable());
         }
-        // Совпадающий checkpoint берётся как есть; иначе previous выводится из последнего key.
+        // A matching checkpoint is taken as is; otherwise previous is derived from the last key.
         let previous = if last.ordinal == snapshot.public.checkpoint.ordinal {
             snapshot.public.checkpoint.clone()
         } else {
@@ -321,7 +321,7 @@ impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> RotationServerPr
                 hash: snapshot.public.head.hash.clone(),
                 kid: last.kid.clone(),
                 public_key: last.public_key,
-                // Go вычитает явно; validation делает вычитание точным — checked против corrupt store.
+                // Go subtracts explicitly; validation makes the subtraction exact — checked against a corrupt store.
                 published_at: last
                     .not_before
                     .checked_sub(GRACE_SECONDS)
@@ -329,7 +329,7 @@ impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> RotationServerPr
             }
         };
         let clock = store.check_snapshot_clock(&snapshot)?;
-        // Signer callbacks идут БЕЗ store lock: hook может сам двигать committed clock.
+        // Signer callbacks run WITHOUT the store lock: the hook may itself advance the committed clock.
         drop(store);
         if clock.high_water > MAX_TIMESTAMP - GRACE_SECONDS {
             return Err(unavailable());
@@ -345,8 +345,8 @@ impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> RotationServerPr
         {
             return Err(unavailable());
         }
-        // Любая ошибка CreateRecord мапится в unavailable; Go createPublication делает recover.
-        // Паники callback сознательно не ловятся (crate-wide policy, в отличие от Go recover).
+        // Any CreateRecord error is mapped to unavailable; Go createPublication does recover.
+        // Callback panics are deliberately not caught (crate-wide policy, unlike Go recover).
         let record = create_record(
             Binding {
                 endpoint: &snapshot.public.binding.endpoint,
@@ -375,7 +375,7 @@ impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> RotationServerPr
             ordinal: record.ordinal,
             hash: record.hash.clone(),
         };
-        // MAX check выше гарантирует точность инкремента.
+        // The MAX check above guarantees increment precision.
         public.revision += 1;
         public.clock = clock.clone();
         signer_references.push(SignerReference {
@@ -388,7 +388,7 @@ impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> RotationServerPr
             signer_references,
         };
         let mut store = self.lock_store();
-        // Raw store error: rotation_state_changed обязан пройти дословно и не fence'ит owner.
+        // Raw store error: rotation_state_changed must pass through verbatim and does not fence the owner.
         store.compare_and_swap(&snapshot, &desired, &clock)?;
         Ok(RotationPublication {
             record,
@@ -396,14 +396,14 @@ impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> RotationServerPr
         })
     }
 
-    /// Poisoned lock не паникует: fail closed через собственное состояние store.
+    /// A poisoned lock does not panic: fail closed via the store's own state.
     fn lock_store(&self) -> MutexGuard<'_, RotationServerStore<C>> {
         self.store
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Полный envelope parse до signing-time clock; page нет для не-key authority ответов.
+    /// Full envelope parse before the signing-time clock; no page for non-key-authority responses.
     fn response_page(
         &self,
         input: &ResponseKeyRequest,
@@ -424,9 +424,9 @@ impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> RotationServerPr
 impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> ResponseKeys
     for RotationServerProvider<C>
 {
-    /// Не доверяет body/tool при выборе identity и не делает fallback. Final однократен
-    /// (Box<dyn FnOnce> потребляется вызовом — Go finalized CAS не нужен); Release обязателен
-    /// после physical write, также при любой ошибке.
+    /// Does not trust body/tool when selecting the identity and does not fall back. Final is one-shot
+    /// (Box<dyn FnOnce> is consumed by the call — Go's finalized CAS is not needed); Release is required
+    /// after the physical write, also on any error.
     fn authorize_response(
         &self,
         input: &ResponseKeyRequest,
@@ -434,7 +434,7 @@ impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> ResponseKeys
         let page = self.response_page(input)?;
         let mut store = self.lock_store();
         let lease = store.acquire_serving_lease().map_err(|_| unavailable())?;
-        // В отличие от announce, здесь ошибки store санитизируются в unavailable (Go parity).
+        // Unlike announce, store errors here are sanitized into unavailable (Go parity).
         let (snapshot, _) = store.snapshot().map_err(|_| unavailable())?;
         let clock = store
             .check_snapshot_clock(&snapshot)
@@ -451,7 +451,7 @@ impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> ResponseKeys
         let released = Arc::new(AtomicBool::new(false));
         let release_flag = Arc::clone(&released);
         let release: Release = Box::new(move || {
-            // CAS повторяет Go: release логически однократен; lease в box падает и при drop без вызова.
+            // CAS mirrors Go: release is logically one-shot; the lease in the box also fails on drop without a call.
             if release_flag
                 .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
                 .is_ok()
@@ -462,7 +462,7 @@ impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> ResponseKeys
         let signer_public = signer.public;
         let high_water = clock.high_water;
         let window = snapshot.public.window;
-        // select_signer читает только pinned inventory: копия эквивалентна Go capture provider.
+        // select_signer reads only the pinned inventory: a copy is equivalent to Go's captured provider.
         let keys = self.keys.clone();
         let gate_store = Arc::clone(&self.store);
         let gate_released = Arc::clone(&released);
@@ -476,7 +476,7 @@ impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> ResponseKeys
             let fresh = store
                 .check_snapshot_clock(&snapshot)
                 .map_err(|_| unavailable())?;
-            // Свежесть окна строго вверх и не дальше window; вычитание защищено первой веткой.
+            // Window freshness is strictly upward and no further than window; the subtraction is guarded by the first branch.
             if fresh.high_water < high_water || fresh.high_water - high_water > window {
                 return Err(unavailable());
             }

@@ -61,7 +61,7 @@ hickory-resolver = { version = "=0.26.3", default-features = false, features = [
 hickory-net = { version = "=0.26.3", default-features = false, features = ["tokio"], optional = true }
 hickory-proto = { version = "=0.26.3", default-features = false, optional = true }
 
-# Одобренный filesystem facade для Linux.
+# Approved filesystem facade for Linux.
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix = { version = "=1.1.6", default-features = false, features = ["std", "fs", "process"] }
 
@@ -74,9 +74,9 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", 
 tower = { version = "0.5", features = ["util"] }
 time = { version = "=0.3.47", default-features = false, features = ["std", "parsing"] }
 
-# Ed25519/SHA-2 в debug медленнее release в десятки раз, а property-тесты подписывают и
-# проверяют цепочки до 1153 записей. Оптимизируются только крипто-зависимости dev/test-профиля;
-# release-сборка и потребители crate не затрагиваются.
+# Ed25519/SHA-2 are tens of times slower in debug than in release, and the property
+# tests sign and verify chains of up to 1153 records. Only the crypto dependencies of
+# the dev/test profile are optimised; release builds and consumers of the crate are not affected.
 [profile.dev.package."curve25519-dalek@4.1.3"]
 opt-level = 3
 

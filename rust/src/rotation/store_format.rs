@@ -137,11 +137,11 @@ pub(super) struct Bundle {
     pub snapshot: String,
 }
 
-/// Domain разделяет client/server private files: один не открывается как другой.
+/// Domain separates client/server private files: one is not opened as the other.
 pub(super) const CLIENT_DOMAIN: &str = "mcp-jack/client-trust/private-file/v1";
 
 impl Bundle {
-    /// Client trust profile; clock/snapshot берутся из anchor.
+    /// Client trust profile; clock/snapshot are taken from the anchor.
     pub(super) fn new(
         store_id: String,
         profile: String,
@@ -177,7 +177,7 @@ impl Bundle {
         }
     }
 
-    /// Checksum обнаруживает случайную порчу; это не MAC или backup rollback oracle.
+    /// The checksum detects accidental corruption; this is not a MAC or a backup rollback oracle.
     pub(super) fn pack(&self) -> Result<Vec<u8>, RotationError> {
         let payload = serde_json::to_string(self).map_err(|_| refuse())?;
         let checksum = body_hash(payload.as_bytes());
@@ -189,7 +189,7 @@ impl Bundle {
     }
 }
 
-/// Envelope без snapshot decode: caller проверяет snapshot своего типа против clock.
+/// Envelope without snapshot decode: the caller validates the snapshot of its type against the clock.
 pub(super) struct Sealed {
     pub bytes: Vec<u8>,
     pub bundle: Bundle,

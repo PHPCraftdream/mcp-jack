@@ -1,5 +1,5 @@
-// Детерминированные property-тесты server-слоя (snapshot codec, publication,
-// страницы ключей, private store): фиксированный seed воспроизводит refusal.
+// Deterministic property tests of the server layer (snapshot codec, publication,
+// key pages, private store): a fixed seed reproduces every refusal.
 mod common;
 
 use mcp_jack::client::{InMemorySigner, Signer};
@@ -71,7 +71,7 @@ fn overlapping(corpus: &Corpus) -> Vec<Record> {
         .expect("independent valid chain")
 }
 
-// Детерминированный PRNG: фиксированный seed воспроизводит каждый refusal.
+// Deterministic PRNG: a fixed seed reproduces every refusal.
 struct SplitMix64(u64);
 
 impl SplitMix64 {
@@ -99,7 +99,7 @@ fn splitmix64_value(input: u64) -> u64 {
     value ^ (value >> 31)
 }
 
-// Больше 255 различных индексов: seed выводится из PRNG, а не из одного байта.
+// More than 255 distinct indices: the seed is derived from the PRNG, not from a single byte.
 fn signer_seed(index: u64) -> [u8; 32] {
     let mut seed = [0_u8; 32];
     for lane in 0..4_u64 {
@@ -166,8 +166,8 @@ fn flip_first_char(text: &str) -> String {
     flipped
 }
 
-// Opaque-строка заданной БАЙТОВОЙ длины 1..=1024: строчные буквы и редкие 'é'
-// (2 байта UTF-8), чтобы byte-length оставалась в пределах лимита.
+// Opaque string of a given BYTE length 1..=1024: lowercase letters and occasional 'é'
+// (2 UTF-8 bytes), so the byte-length stays within the limit.
 fn opaque_reference(prng: &mut SplitMix64) -> String {
     let target = usize::try_from(prng.below(1024) + 1).expect("reference length");
     let mut reference = String::new();
@@ -184,7 +184,7 @@ fn opaque_reference(prng: &mut SplitMix64) -> String {
     reference
 }
 
-/// Первый key — checkpoint; каждый record добавляет следующий (P = published_at последнего).
+/// The first key is the checkpoint; each record adds the next one (P = published_at of the last).
 fn trust_from(corpus: &Corpus, root: &Checkpoint, records: &[Record]) -> TrustSnapshot {
     let owned = OwnedBinding {
         endpoint: corpus.binding.endpoint.clone(),
@@ -242,8 +242,8 @@ fn trust_from(corpus: &Corpus, root: &Checkpoint, records: &[Record]) -> TrustSn
     }
 }
 
-/// Каждому key соответствует opaque provider handle, не private-key material.
-// Имя мутации и её in-place применение к snapshot.
+/// Each key maps to an opaque provider handle, not private-key material.
+// Mutation name and its in-place application to the snapshot.
 type Mutation = (&'static str, fn(&mut ServerSnapshot));
 
 fn server_from(public: TrustSnapshot) -> ServerSnapshot {
@@ -291,8 +291,8 @@ fn unavailable(result: Result<impl std::fmt::Debug, RotationError>, label: &str)
     assert_eq!(error.code, "rotation_state_unavailable", "{label}");
 }
 
-// Обязательные поля обязаны остаться неизменными; свободные поля (fenced,
-// revision, clock.high_water/revision/unsafe, reference text) могут отличаться.
+// Required fields must remain unchanged; free fields (fenced,
+// revision, clock.high_water/revision/unsafe, reference text) may differ.
 fn assert_only_free_fields_changed(
     original: &ServerSnapshot,
     decoded: &ServerSnapshot,
@@ -429,8 +429,8 @@ fn generated_server_snapshots_round_trip_and_freeze() {
         );
     }
 
-    // Граница: первая reference ровно MAX_SIGNER_REFERENCE_BYTES принимается,
-    // на байт длиннее — отказ и validate, и encode.
+    // Boundary: the first reference of exactly MAX_SIGNER_REFERENCE_BYTES is accepted;
+    // one byte longer is refused by both validate and encode.
     let (root, records) = generated_chain(&corpus, 2, |index| 1000 + index);
     let mut boundary = server_from(trust_from(&corpus, &root, &records));
     let reference = boundary
@@ -599,14 +599,14 @@ fn publication_accepts_exactly_one_fixed_p_record_and_refuses_every_single_field
             unavailable(publish(&base, &desired), &label);
         }
 
-        // У states[1] только одна запись; swap последних двух проверяется на паре 1 -> 2.
+        // states[1] has only one record; the swap of the last two is checked on the pair 1 -> 2.
         let mut swapped = second.clone();
         let length = swapped.public.records.len();
         swapped.public.records.swap(length - 2, length - 1);
         let label = format!("seed {SEED:#x} {shape} records swap last two");
         unavailable(publish(&first, &swapped), &label);
 
-        // Замена последней записи на wire ДРУГОЙ сгенерированной цепочки.
+        // Replacing the last record with a wire from a DIFFERENT generated chain.
         let (_, foreign) = generated_chain(&corpus, 4, |index| 2000 + index);
         let mut replaced = first.clone();
         let foreign_wire = foreign.first().expect("foreign record").wire.clone();
@@ -614,7 +614,7 @@ fn publication_accepts_exactly_one_fixed_p_record_and_refuses_every_single_field
         let label = format!("seed {SEED:#x} {shape} records replace last");
         unavailable(publish(&base, &replaced), &label);
 
-        // Bump только revision, без новой записи — со стороны base.
+        // Bumping only the revision, without a new record — from the base side.
         let mut bumped = base.clone();
         bumped.public.revision += 1;
         let label = format!("seed {SEED:#x} {shape} revision only bump");
@@ -752,8 +752,8 @@ fn server_key_pages_serve_generated_rings_exactly_and_refuse_wrong_cursors() {
     assert!(second_page.complete, "seed {SEED:#x} second page complete");
 }
 
-// Тест хранилища только под linux: RotationServerStore доступен только там.
-// Все импорты — внутри модуля, чтобы windows-сборка не видела неиспользуемых use.
+// Store tests are Linux-only: RotationServerStore is available only there.
+// All imports are inside the module so the windows build sees no unused use.
 #[cfg(target_os = "linux")]
 mod linux_store {
     use super::{anchor, corpus, SplitMix64, SEED};
@@ -770,8 +770,8 @@ mod linux_store {
         }
     }
 
-    // Файл хранилища обязан иметь режим 0600 и жить в каталоге 0700:
-    // private_file::directory проверяет и то, и другое перед чтением.
+    // The store file must have mode 0600 and live in a 0700 directory:
+    // private_file::directory checks both before reading.
     fn write_file(path: &Path, bytes: &[u8]) {
         use std::io::Write;
         let mut file = fs::OpenOptions::new()
@@ -812,7 +812,7 @@ mod linux_store {
         RotationServerStore::initialize_unused(&path, options.clone(), || Ok(1000)).expect(&label);
         let original = fs::read(&path).expect("store file bytes");
 
-        // Позитивный контроль: оригинальные байты открываются и дают revision 1.
+        // Positive control: the original bytes open and give revision 1.
         let control = sandbox.0.join("control");
         write_file(&control, &original);
         let label = format!("seed {SEED:#x} control open");

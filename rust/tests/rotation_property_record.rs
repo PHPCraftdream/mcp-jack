@@ -1,6 +1,6 @@
-// Детерминированные property-тесты слоя record (parse_record/create_record):
-// фиксированный seed воспроизводит каждый refusal, а сообщения об ошибках
-// печатают seed, индекс записи и мутированное поле.
+// Deterministic property tests of the record layer (parse_record/create_record):
+// a fixed seed reproduces every refusal, and error messages
+// print the seed, record index, and mutated field.
 mod common;
 
 use mcp_jack::client::{InMemorySigner, Signer};
@@ -48,7 +48,7 @@ fn assert_code(result: Result<impl std::fmt::Debug, RotationError>, code: &str, 
     assert_eq!(error.code, code, "{label}");
 }
 
-// Детерминированный PRNG: фиксированный seed воспроизводит каждый refusal.
+// Deterministic PRNG: a fixed seed reproduces every refusal.
 struct SplitMix64(u64);
 
 impl SplitMix64 {
@@ -76,7 +76,7 @@ fn splitmix64_value(input: u64) -> u64 {
     value ^ (value >> 31)
 }
 
-// Больше 255 различных индексов: seed выводится из PRNG, а не из одного байта.
+// More than 255 distinct indices: the seed is derived from the PRNG, not from a single byte.
 fn signer_seed(index: u64) -> [u8; 32] {
     let mut seed = [0_u8; 32];
     for lane in 0..4_u64 {
@@ -124,7 +124,7 @@ fn generated_chain(
     (root, records)
 }
 
-// Каждый old_kid принадлежит signer(index - 1) этой же цепочки.
+// Every old_kid belongs to signer(index - 1) of the same chain.
 fn chain_authorizers(records: &[Record]) -> BTreeMap<String, [u8; 32]> {
     let mut authorizers = BTreeMap::new();
     for (offset, record) in records.iter().enumerate() {
@@ -142,10 +142,10 @@ fn prng_bytes(prng: &mut SplitMix64) -> [u8; 32] {
     bytes
 }
 
-// Случайные байты почти всегда декодируются в валидную точку, поэтому выбор
-// детерминирован между двумя заведомо невалидными encodings: неканоничный
-// y >= p и точка-тождество. Оба гарантированно отклоняются validate_public_key
-// (см. rust/src/ed25519.rs) и дают "new_key".
+// Random bytes almost always decode to a valid point, so the choice
+// is deterministic between two deliberately invalid encodings: a non-canonical
+// y >= p and the identity point. Both are guaranteed to be rejected by validate_public_key
+// (see rust/src/ed25519.rs) and yield "new_key".
 fn forced_invalid_key(prng: &mut SplitMix64) -> [u8; 32] {
     let mut bytes = [0xff_u8; 32];
     if prng.below(2) == 0 {
@@ -160,7 +160,7 @@ fn generated_records_round_trip_with_exact_fields() {
     let corpus = corpus();
     let mut prng = SplitMix64::new(SEED);
     for length in [1_u64, 2, 4] {
-        // Времена публикации строго монотонны, как требует create_record.
+        // Publication times are strictly monotonic, as create_record requires.
         let mut previous_time = 0_u64;
         let (root, records) = generated_chain(&corpus, length, |index| {
             previous_time = (previous_time + 1).max(1000 + prng.below(50) + index);
@@ -229,7 +229,7 @@ fn every_single_byte_mutation_of_a_generated_record_is_rejected() {
         rotation::parse_record(other.wire.as_bytes(), binding(&corpus), &authorizers2)
             .expect(&baseline_label);
 
-    // Полный sweep по одной записи: каждый одиночный байт-переворот отклонён.
+    // Full sweep over one record: every single byte flip is rejected.
     let mut exercised = 0_usize;
     for (byte_index, byte) in full.wire.as_bytes().iter().enumerate() {
         let mut mutated = full.wire.as_bytes().to_vec();
@@ -251,7 +251,7 @@ fn every_single_byte_mutation_of_a_generated_record_is_rejected() {
         "seed {SEED:#x} full sweep byte coverage"
     );
 
-    // Плюс 16 PRNG-индексов с ^= 0x80 на обеих записях.
+    // Plus 16 PRNG indices with ^= 0x80 on both records.
     for sample in 0..16_u64 {
         let byte_index = prng.below(u64::try_from(full.wire.len()).expect("wire length"));
         let index = usize::try_from(byte_index).expect("byte index");
@@ -353,8 +353,8 @@ fn line_targeted_mutations_fail_with_exact_codes() {
         );
     }
 
-    // Первый символ proof меняют на другой валидный base64url-символ:
-    // декодирование проходит, подпись ломается.
+    // The first character of the proof is replaced with another valid base64url character:
+    // decoding succeeds, the signature breaks.
     for (line_index, expected) in [(10_usize, "new_proof"), (11, "old_authorization")] {
         let proof = lines.get(line_index).expect("proof line").clone();
         let first = proof.chars().next().expect("proof first character");
@@ -402,7 +402,7 @@ struct HandParts<'a> {
     published_at: u64,
 }
 
-// Зеркало sign.rs: байты сообщений next-proof и authorize совпадают в точности.
+// Mirror of sign.rs: the next-proof and authorize message bytes match exactly.
 fn hand_signed_wire(corpus: &Corpus, parts: HandParts<'_>) -> String {
     let body = [
         rotation::DOMAIN.to_owned(),
@@ -446,7 +446,7 @@ fn chain_with_tail(
     rotation::verify_chain(&wires, binding(corpus), root, &BTreeMap::new())
 }
 
-// Имя, ожидаемый код и перестановка wire-ов цепочки.
+// Name, expected code, and permutation of the chain's wires.
 type Reordering = (
     &'static str,
     &'static str,
@@ -610,7 +610,7 @@ fn chain_order_duplication_gaps_and_signer_references_are_rejected() {
         &label,
     );
 
-    // Емкость retained-map: ровно MAX_RETAINED_KEYS с checkpoint kid внутри.
+    // Retained-map capacity: exactly MAX_RETAINED_KEYS with the checkpoint kid inside.
     let mut generated_keys: BTreeMap<String, [u8; 32]> = BTreeMap::new();
     let mut dropped_kid = String::new();
     for offset in 0..1153_u64 {

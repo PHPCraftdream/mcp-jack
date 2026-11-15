@@ -1,5 +1,5 @@
-// Детерминированные property-тесты фрейминга страницы (validate_page_framing)
-// и лимитов тела результата: фиксированный seed воспроизводит каждый refusal.
+// Deterministic property tests of page framing (validate_page_framing)
+// and result body limits: a fixed seed reproduces every refusal.
 mod common;
 
 use mcp_jack::client::{InMemorySigner, Signer};
@@ -50,7 +50,7 @@ fn assert_code(result: Result<impl std::fmt::Debug, RotationError>, code: &str, 
     assert_eq!(error.code, code, "{label}");
 }
 
-// Детерминированный PRNG: фиксированный seed воспроизводит каждый refusal.
+// Deterministic PRNG: a fixed seed reproduces every refusal.
 struct SplitMix64(u64);
 
 impl SplitMix64 {
@@ -78,7 +78,7 @@ fn splitmix64_value(input: u64) -> u64 {
     value ^ (value >> 31)
 }
 
-// Больше 255 различных индексов: seed выводится из PRNG, а не из одного байта.
+// More than 255 distinct indices: the seed is derived from the PRNG, not from a single byte.
 fn signer_seed(index: u64) -> [u8; 32] {
     let mut seed = [0_u8; 32];
     for lane in 0..4_u64 {
@@ -154,8 +154,8 @@ fn flip_first_char(text: &str) -> String {
     flipped
 }
 
-// Канонический тело-шаблон ответа jack.server.key; text и structuredContent
-// несут один и тот же payload, как требует зеркальная проверка decode_result.
+// Canonical body template of the jack.server.key response; text and structuredContent
+// carry the same payload, as required by the mirrored decode_result check.
 fn result_body(kid: &str, public_key: &str, filler: &str) -> String {
     let payload = format!(
         r#"{{"current":{{"kid":"{kid}","public_key":"{public_key}"}},"records":["{filler}"],"head":{{"ordinal":0,"hash":"-"}},"complete":true}}"#
@@ -195,7 +195,7 @@ fn generated_pages_frame_one_contiguous_extension_from_the_exact_cursor() {
                 records.get(index - 1).expect("cursor record").hash.clone()
             },
         };
-        // Полная страница принимается для каждого k, включая пустую при k = 6
+        // The full page is accepted for every k, including the empty one at k = 6
         // (terminal == cursor == tail).
         let label = format!("seed {SEED:#x} cursor {k} full page");
         let page_wires = wires.get(index..).expect("full page wires");
@@ -217,9 +217,9 @@ fn generated_pages_frame_one_contiguous_extension_from_the_exact_cursor() {
             },
             "{label} framing"
         );
-        // Частичная страница из двух записей принимается, пока её terminal
-        // строго меньше head; страницы, дошедшие до head без complete (k = 4, 5)
-        // или пустые (k = 6), отказывают с rotation_gap.
+        // A partial page of two records is accepted as long as its terminal
+        // is strictly below head; pages reaching head without complete (k = 4, 5)
+        // or empty (k = 6) are refused with rotation_gap.
         if k <= 3 {
             let label = format!("seed {SEED:#x} cursor {k} partial page");
             let partial = records.get(index..index + 2).expect("partial records");
@@ -259,7 +259,7 @@ fn generated_pages_frame_one_contiguous_extension_from_the_exact_cursor() {
         }
     }
 
-    // Acknowledged-префикс: записи 1 и 2 уже известны, расширение с индекса 2.
+    // Acknowledged prefix: records 1 and 2 are already known, extension starts at index 2.
     let cursor = ResultCursor {
         ordinal: 2,
         hash: records.get(1).expect("second record").hash.clone(),
@@ -432,9 +432,9 @@ fn every_framing_mutation_is_rejected_with_its_exact_code() {
         "seed 0x5eed00b2 case 10 cursor-only page",
     );
 
-    // Отклонение от literal-спецификации: cursor 2 со страницей [r3, r4] —
-    // каноническое продолжение, оно ПРИНИМАЕТСЯ; настоящий gap — старт записи
-    // за cursor + 1, поэтому cursor = 1 и страница начинается с r3.
+    // Deviation from the literal spec: cursor 2 with the page [r3, r4] is
+    // the canonical continuation and IS accepted; a genuine gap is starting a record
+    // beyond cursor + 1, hence cursor = 1 with the page starting at r3.
     let mut case = base_case(&root, &records);
     case.cursor.ordinal = 1;
     case.cursor.hash = case.records.first().expect("first record").hash.clone();
@@ -563,9 +563,9 @@ fn page_and_body_limits_hold_exactly() {
     rotation::validate_page_framing(&incomplete, &cursor0, partial, &BTreeMap::new())
         .expect(&label);
 
-    // Тело ровно MAX_RESULT_BODY_BYTES: текущий ключ — реальный fixture anchor.
-    // Payload входит в тело ДВАЖДЫ (text и structuredContent), поэтому filler
-    // получает половину разницы, а нечётный остаток добирается пробелом вне payload.
+    // Body exactly MAX_RESULT_BODY_BYTES: the current key is a real fixture anchor.
+    // The payload appears in the body TWICE (text and structuredContent), so the filler
+    // gets half the difference, and an odd remainder is made up with a space outside the payload.
     let anchor = &corpus.keys["anchor"];
     let anchor_public = decode_b64url_fixed(&anchor.public_key, 32).expect("fixture anchor key");
     let empty = result_body(&anchor.kid, &anchor.public_key, "");
@@ -573,7 +573,7 @@ fn page_and_body_limits_hold_exactly() {
     let filler = filler_text(&mut prng, deficit / 2);
     let mut exact = result_body(&anchor.kid, &anchor.public_key, &filler);
     if deficit % 2 == 1 {
-        // Нечётная разница: один пробел вне payload добирает ровно до лимита.
+        // Odd difference: one space outside the payload brings it exactly to the limit.
         exact = exact.replacen(r#""2.0", "id""#, r#""2.0",  "id""#, 1);
     }
     assert_eq!(

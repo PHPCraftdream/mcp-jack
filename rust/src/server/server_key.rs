@@ -77,7 +77,7 @@ impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> NativeTools for 
             .map_err(|_| refusal(400, codes::INVALID_PARAMS))?;
         // Poisoned lock fails closed instead of panicking (crate-wide policy).
         let mut store = self.store.lock().unwrap_or_else(PoisonError::into_inner);
-        // Lease живёт до конца call (Go: defer release()); drop освобождает dirty epoch.
+        // Lease lives until the end of the call (Go: defer release()); drop releases the dirty epoch.
         let _lease = store
             .acquire_serving_lease()
             .map_err(|_| state_unavailable())?;
@@ -85,7 +85,7 @@ impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> NativeTools for 
         if c.aud != snapshot.public.binding.aud {
             return Err(state_unavailable());
         }
-        // Все proof/hash операции завершены до authoritative sample (Go: тот же комментарий).
+        // All proof/hash operations are finished before the authoritative sample (Go: same comment).
         validate_cursor(&snapshot, &cursor)?;
         let clock = store
             .check_snapshot_clock(&snapshot)
@@ -94,8 +94,8 @@ impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> NativeTools for 
             .provider
             .select_signer(&snapshot, &clock)
             .map_err(|_| state_unavailable())?;
-        // Повторно валидирует cursor внутри; после `validate_cursor` его
-        // checkpoint-ветка недостижима, так что любая ошибка здесь — fault state.
+        // Re-validates the cursor internally; after `validate_cursor` its
+        // checkpoint branch is unreachable, so any error here is a fault state.
         let page = server_key_page(&snapshot, &cursor, &signer.public_key())
             .map_err(|_| state_unavailable())?;
         let structured = json!({
@@ -125,20 +125,20 @@ fn validate_cursor(snapshot: &ServerSnapshot, cursor: &ResultCursor) -> Result<(
     if cursor.ordinal < trust.checkpoint.ordinal || cursor.ordinal > trust.head.ordinal {
         return Err(checkpoint_unavailable());
     }
-    // Вычитание защищено предыдущей веткой: ordinal >= checkpoint.ordinal.
+    // The subtraction is guarded by the previous branch: ordinal >= checkpoint.ordinal.
     let offset = cursor.ordinal - trust.checkpoint.ordinal;
-    // Сравнение в u64: usize -> u64 расширяется без потерь, обратный cast усекал бы.
+    // Comparison in u64: usize -> u64 widens losslessly; the reverse cast would truncate.
     if offset > trust.records.len() as u64 {
         return Err(checkpoint_unavailable());
     }
     let expected = match offset.checked_sub(1) {
-        // offset == 0: курсор якорится на сам checkpoint.
+        // offset == 0: the cursor anchors to the checkpoint itself.
         None => trust.checkpoint.hash.clone(),
         Some(index) => match usize::try_from(index)
             .ok()
             .and_then(|index| trust.records.get(index))
         {
-            // Недостижимо при действующем offset-ограничении; отказ вместо panic.
+            // Unreachable under the effective offset limit; refusal instead of panic.
             Some(wire) => body_hash(wire.as_bytes()),
             None => return Err(checkpoint_unavailable()),
         },

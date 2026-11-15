@@ -6,7 +6,7 @@ use crate::rotation::MAX_TIMESTAMP;
 use crate::signing::verify_response;
 use std::collections::BTreeMap;
 
-/// Только independently trusted/ACKed snapshot, не response payload.
+/// Only the independently trusted/ACKed snapshot, not the response payload.
 #[derive(Debug, Clone)]
 pub struct RotationResponseKey {
     pub public_key: [u8; 32],
@@ -14,17 +14,17 @@ pub struct RotationResponseKey {
     pub known_cutoff: Option<i64>,
 }
 
-/// Crypto/interval metadata, не ClockGuard readiness или trust ACK.
+/// Crypto/interval metadata, not ClockGuard readiness or a trust ACK.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RotationCarrier {
     pub kid: String,
     pub timestamp: i64,
 }
 
-/// Unknown kid → freshness → signature → interval; exact body не парсится.
-/// Transport ограничивает/удерживает bytes. Caller затем выполняет durable
-/// ClockGuard до decode и final interval/bridge/revision/full-state CAS.
-/// Нет key discovery, credential mutation, retry или fetch.
+/// Unknown kid → freshness → signature → interval; the exact body is not parsed.
+/// Transport bounds/retains the bytes. The caller then performs the durable
+/// ClockGuard before decode and the final interval/bridge/revision/full-state CAS.
+/// No key discovery, credential mutation, retry, or fetch.
 pub fn verify_rotation_carrier(
     known: &BTreeMap<String, RotationResponseKey>,
     status: i64,

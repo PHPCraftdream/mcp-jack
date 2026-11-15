@@ -1,5 +1,5 @@
-// Дифференциальный corpus rust/tests/rotation-property-corpus.json; TS-twin —
-// ts/test/rotation-property-corpus.test.ts. Обе реализации обязаны совпадать.
+// Differential corpus rust/tests/rotation-property-corpus.json; the TS twin is
+// ts/test/rotation-property-corpus.test.ts. Both implementations must match.
 use mcp_jack::encoding::decode_b64url_fixed;
 use mcp_jack::rotation::{self, DecodedResult, ResultCursor};
 use serde::Deserialize;
@@ -29,7 +29,7 @@ struct ResultCase {
     complete: Option<bool>,
 }
 
-// note/anchor_public_key/other_kid/cursor_hash_trailing_bits сознательно не читаются.
+// note/anchor_public_key/other_kid/cursor_hash_trailing_bits are deliberately not read.
 #[allow(dead_code)]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
