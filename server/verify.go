@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -106,7 +107,9 @@ type Config struct {
 	// Window is the timestamp window in seconds; zero means DefaultWindow.
 	Window int64
 	// Now returns the current Unix time in seconds; nil means the wall clock.
-	// Tests inject a fixed clock.
+	// Tests inject a fixed clock. The Verifier never lets its request time go
+	// backwards: a sample below the highest one seen is raised to it.
+	// Response timestamps use the raw sample.
 	Now func() int64
 }
 
@@ -122,8 +125,25 @@ func audHasControl(aud string) bool {
 }
 
 // Verifier authenticates and authorizes requests (spec 01 section 4, spec 02
-// section 4).
-type Verifier struct{ cfg Config }
+// section 4). Freshness and the volatile nonce store use a request time that
+// is monotonic within the process, so a wall-clock step back cannot revive a
+// purged nonce.
+type Verifier struct {
+	cfg Config
+	mu  sync.Mutex
+	// high is the highest clock sample seen.
+	high int64
+}
+
+// effectiveNow returns max(sample, highest sample seen) and records it.
+func (v *Verifier) effectiveNow(sample int64) int64 {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if sample > v.high {
+		v.high = sample
+	}
+	return v.high
+}
 
 // NewVerifier validates cfg and returns a Verifier.
 func NewVerifier(cfg Config) (*Verifier, error) {
@@ -225,6 +245,7 @@ func entryActive(e RegistryEntry, now int64) bool {
 // than its code.
 func (v *Verifier) Verify(req Request) Result {
 	now := v.cfg.Now()
+	effective := v.effectiveNow(now)
 
 	auth, err := jack.ParseRequestAuth(req.AuthValues)
 	if err != nil {
@@ -251,10 +272,10 @@ func (v *Verifier) Verify(req Request) Result {
 	}
 
 	var distance uint64
-	if now < auth.TS {
-		distance = uint64(auth.TS) - uint64(now)
+	if effective < auth.TS {
+		distance = uint64(auth.TS) - uint64(effective)
 	} else {
-		distance = uint64(now) - uint64(auth.TS)
+		distance = uint64(effective) - uint64(auth.TS)
 	}
 	if distance > uint64(v.cfg.Window) {
 		return rejection(401, jack.CodeTimestampOutOfWindow, "timestamp is outside the acceptance window")
@@ -292,7 +313,7 @@ func (v *Verifier) Verify(req Request) Result {
 
 	// The nonce is recorded only after the signature verified, so
 	// requests that fail verification cannot fill the cache (spec 01 section 4).
-	if v.cfg.Nonces.CheckAndRecord(auth.Kid, auth.Nonce, now, auth.TS+v.cfg.Window) {
+	if v.cfg.Nonces.CheckAndRecord(auth.Kid, auth.Nonce, effective, auth.TS+v.cfg.Window) {
 		return rejection(401, jack.CodeReplayedNonce, "nonce was already used")
 	}
 

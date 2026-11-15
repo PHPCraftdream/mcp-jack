@@ -1,12 +1,28 @@
 /** node:http adapter serving a Fetch-standard handler. */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { AUTH_VALUES_SYMBOL, RAW_BODY_SYMBOL, RAW_TARGET_SYMBOL } from "./fetch.js";
+import { AUTH_VALUES_SYMBOL, RAW_BODY_SYMBOL, RAW_TARGET_SYMBOL, isOriginFormTarget } from "./fetch.js";
 import type { JackRequest } from "./fetch.js";
 
 /** Go defaultMaxBodyBytes (mirrors fetch.ts). */
 const DEFAULT_MAX_BODY_BYTES = 1 << 20;
 
 const noop = (): void => {};
+
+const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true });
+
+/**
+ * Node's req.url is the latin1 decoding of the wire bytes, but the verifier
+ * UTF-8 encodes its target string. Re-decoding the wire bytes as UTF-8 makes
+ * that encoding reproduce the received bytes exactly; bytes that are not
+ * valid UTF-8 cannot be carried losslessly and yield undefined (refused).
+ */
+export function wireTarget(latin1Url: string): string | undefined {
+  try {
+    return STRICT_UTF8.decode(Buffer.from(latin1Url, "latin1"));
+  } catch {
+    return undefined;
+  }
+}
 
 type ReadResult =
   | { kind: "body"; body: Buffer }
@@ -119,7 +135,14 @@ export function serveNode(
     }
     const body = read.body;
 
-    const rawTarget = typeof req.url === "string" && req.url !== "" ? req.url : "/";
+    const wireUrl = typeof req.url === "string" && req.url !== "" ? req.url : "/";
+    // Spec 01 section 3.1: only an origin-form target is signed; refuse the
+    // rest (absolute-, authority-, asterisk-form, fragments) before verification.
+    const rawTarget = wireTarget(wireUrl);
+    if (rawTarget === undefined || !isOriginFormTarget(rawTarget)) {
+      writeError(res, 400, "invalid_request", "malformed request target");
+      return;
+    }
     // The URL object only satisfies the Request constructor; the RAW target
     // travels to the fetch handler on RAW_TARGET_SYMBOL because `new URL`
     // RESOLVES `..`/`.` dot segments and would otherwise change the bytes

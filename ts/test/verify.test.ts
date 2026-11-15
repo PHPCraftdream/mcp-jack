@@ -870,3 +870,72 @@ test("verifier constructor rejects aud control characters; ordinary aud accepted
   }
   assert.doesNotThrow(() => new Verifier(base()), "ordinary aud accepted");
 });
+
+// ---------------------------------------------------------------------------
+// Monotonic request clock (high-water mark).
+// ---------------------------------------------------------------------------
+
+/** Harness whose injected clock is steered by the test through the returned setter. */
+function steppedHarness(): { verifier: Verifier; setClock: (t: number) => void } {
+  const base = harness();
+  let clock = NOW;
+  const verifier = new Verifier({ aud: base.aud, state: base.state, nonces: base.nonces, now: () => clock });
+  return { verifier, setClock: (t) => void (clock = t) };
+}
+
+test("clock step forward then back: the replay is refused and old timestamps are out of window", () => {
+  const { verifier, setClock } = steppedHarness();
+  const alice = materialFor(ALICE);
+  const jump = NOW + 1000;
+
+  setClock(jump);
+  const first = signed(alice, { ts: jump, nonce: NONCE });
+  assert.equal(verifier.verify(first.req).accepted, true, "request at the stepped-forward time");
+
+  setClock(NOW);
+  const replay = verifier.verify(first.req);
+  assert.equal(replay.accepted, false, "replay after the step back");
+  assert.equal(replay.code, Code.REPLAYED_NONCE);
+
+  const old = verifier.verify(signed(alice, { ts: NOW }).req);
+  assert.equal(old.accepted, false, "ts=T judged against the high-water mark");
+  assert.equal(old.code, Code.TIMESTAMP_OUT_OF_WINDOW);
+});
+
+test("clock high-water mark: a request ahead of the raw clock is judged against the mark", () => {
+  const { verifier, setClock } = steppedHarness();
+  const alice = materialFor(ALICE);
+  const jump = NOW + 1000;
+
+  // Without a prior step the same request is out of window.
+  const early = verifier.verify(signed(alice, { ts: jump }).req);
+  assert.equal(early.code, Code.TIMESTAMP_OUT_OF_WINDOW, "no high-water mark yet");
+
+  setClock(jump);
+  assert.equal(verifier.verify(signed(alice, { ts: jump }).req).accepted, true, "forward movement");
+  setClock(NOW);
+  assert.equal(verifier.verify(signed(alice, { ts: jump }).req).accepted, true, "ts=T+1000 at raw T");
+  setClock(jump + 5);
+  assert.equal(verifier.verify(signed(alice, { ts: jump + 5 }).req).accepted, true, "moving on");
+});
+
+test("invalid clock sample stays fail-closed and does not corrupt the high-water mark", () => {
+  const { verifier, setClock } = steppedHarness();
+  const alice = materialFor(ALICE);
+  const jump = NOW + 1000;
+
+  setClock(jump);
+  assert.equal(verifier.verify(signed(alice, { ts: jump }).req).accepted, true);
+
+  setClock(Number.NaN);
+  const broken = verifier.verify(signed(alice, { ts: jump }).req);
+  assert.equal(broken.accepted, false);
+  assert.equal(broken.httpStatus, 500);
+  assert.equal(broken.code, "internal_error");
+
+  // A NaN mark would make every window compare false; the mark must still be jump.
+  setClock(NOW);
+  const old = verifier.verify(signed(alice, { ts: NOW }).req);
+  assert.equal(old.code, Code.TIMESTAMP_OUT_OF_WINDOW);
+  assert.equal(verifier.verify(signed(alice, { ts: jump }).req).accepted, true);
+});

@@ -187,7 +187,7 @@ The focused TypeScript raw-path integration controls are in `ts/test/interop-cli
 
 ## 6. Scenarios
 
-[`scenarios.json`](scenarios.json) is the current scenario source of truth (33 ordered scenario IDs). Expected objects are recursively matched subsets; arrays are exact; `$kid` resolves from `spec/fixtures/keys.json`, and `$base64url` resolves the exact UTF-8 string bytes. The table below reports the current expected outcome/status/code; identity forwarding, application decisions, and administrative controls are distinct:
+[`scenarios.json`](scenarios.json) is the current scenario source of truth (38 ordered scenario IDs). Expected objects are recursively matched subsets; arrays are exact; `$kid` resolves from `spec/fixtures/keys.json`, and `$base64url` resolves the exact UTF-8 string bytes. The table below reports the current expected outcome/status/code; identity forwarding, application decisions, and administrative controls are distinct:
 
 | Current scenario IDs | Expected result |
 |---|---|
@@ -198,6 +198,9 @@ The focused TypeScript raw-path integration controls are in `ts/test/interop-cli
 | `identity-forward` | `app.identity` returns Alice's verified identity, exact POST `/mcp`, and exact noncanonical body bytes as base64url; forged identity arguments do not override it |
 | `identity-get` | `GET /identity?x=%2F` returns Alice identity, empty body, method and target |
 | `identity-dot-target` | `GET /a/../identity?x=%2F` returns Alice identity, empty body, method and exact raw target |
+| `target-percent-utf8-post`, `target-percent-utf8-get` | raw-request cases (below): `/mcp?q=%C3%A9` and `/identity?q=%C3%A9` are signed by each client and accepted by each server: `ok`, HTTP 200 |
+| `target-raw-utf8` | raw-request case: `/mcp?q=` followed by the raw UTF-8 bytes C3 A9 is signed as sent and accepted: `ok`, HTTP 200 |
+| `target-absolute-form`, `target-fragment` | raw-request cases: `http://svc.example.test/mcp` and `/mcp#frag` are refused before verification: `rejected`, HTTP 400 `invalid_request` (unsigned; the response signature is not checked) |
 | `app-permission-allowed` | `ok`, HTTP 200; app result contains text `ok` |
 | `app-permission-denied` | `rejected`, HTTP 403 `application_permission_denied` (signed) |
 | `admin-required` | `rejected`, HTTP 403 `admin_required` (signed) |
@@ -221,6 +224,8 @@ The focused TypeScript raw-path integration controls are in `ts/test/interop-cli
 | `legacy-stored-kind`, `legacy-stored-scopes` | startup rejection `state_corrupt`; offending field named and state bytes remain unchanged |
 
 Current coverage includes non-admin and admin identity reports; ordinary MCP forwarding with forged identity arguments and noncanonical body whitespace; authenticated GET identity handoff; app-allowed and app-denied ordinary tool calls; native admin gate; typed `admin=false` plus raw omitted/null/string/number invalid controls; authentication, freshness and replay controls; and enrollment/rotation/revocation/last-admin lifecycle. Do not restore retired scenarios such as policy-based `denied-tool`, `unmapped-tool`, or old `agent-admin` as current cases.
+
+**Raw-request scenarios.** A scenario with a `raw_request` object (`method`, `target`, optional `body` string, optional `sign_target`) is not run through the client's scenario handlers. For each client language the harness invokes the client in `sign-only` mode with the current time, a fresh nonce and the request method, `sign_target` (default: `target`) and body, then writes the request itself over a TCP socket to the pair's shared server: the request line carries `target` verbatim as UTF-8 bytes, so no HTTP library normalises it. The result is the HTTP status and, for non-200 responses, the `error.code` found in the body; `expected.outcome`/`http_status`/`code` are compared (`expected.data` is not used). The refusal scenarios sign the benign target `/mcp` through `sign_target`, so a server that verified before checking the target form would answer 401 `bad_signature` and fail the case. The harness does not verify response signatures for these cases.
 
 State-changing `fresh` cases use a pristine state file. A scenario with `registry_overrides` also gets a dedicated server (the current `key-not-yet-valid` override sets Erin's `not_before` to now + 3600 seconds). Other live scenarios share the pair's server. `replay` signs once, sends the exact same request bytes/header twice, and reports the second response. `clock-skew` signs 120 seconds in the past against the default 30-second server window. `tampered-body` changes the final `}` byte to `|` after signing. `bad-server-key` pins Mallory's key to force a client-side verification error.
 

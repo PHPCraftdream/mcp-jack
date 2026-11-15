@@ -8,6 +8,11 @@
     "identity-forward",
     "identity-get",
     "identity-dot-target",
+    "target-percent-utf8-post",
+    "target-percent-utf8-get",
+    "target-raw-utf8",
+    "target-absolute-form",
+    "target-fragment",
     "app-permission-denied",
     "app-permission-allowed",
     "admin-required",
@@ -218,6 +223,107 @@
         }
       },
       "source": "spec/02-authorization.md:verified application identity and exact request forwarding"
+    },
+    "target-percent-utf8-post": {
+      "identity": "alice",
+      "fresh": false,
+      "server_public_key": "server",
+      "args": {},
+      "raw_request": {
+        "method": "POST",
+        "target": "/mcp?q=%C3%A9",
+        "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"
+      },
+      "steps": [
+        "The client signing tool signs a percent-encoded non-ASCII query target; the harness sends it over a raw request line. The server must verify it over the target bytes as received, without percent-decoding."
+      ],
+      "expected": {
+        "outcome": "ok",
+        "http_status": 200,
+        "code": null
+      },
+      "source": "spec/01-authentication.md:3.1 target as received, before any decoding"
+    },
+    "target-percent-utf8-get": {
+      "identity": "alice",
+      "fresh": false,
+      "server_public_key": "server",
+      "args": {},
+      "raw_request": {
+        "method": "GET",
+        "target": "/identity?q=%C3%A9"
+      },
+      "steps": [
+        "Same as target-percent-utf8-post for an authenticated GET with an empty body and the identity handler path."
+      ],
+      "expected": {
+        "outcome": "ok",
+        "http_status": 200,
+        "code": null
+      },
+      "source": "spec/01-authentication.md:3.1 target as received, before any decoding"
+    },
+    "target-raw-utf8": {
+      "identity": "alice",
+      "fresh": false,
+      "server_public_key": "server",
+      "args": {},
+      "raw_request": {
+        "method": "POST",
+        "target": "/mcp?q=é",
+        "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"
+      },
+      "steps": [
+        "The request line carries the raw UTF-8 bytes C3 A9 in the query (not percent-encoded). The signing tool signs the UTF-8 target string and the harness writes the same bytes on the wire; non-ASCII bytes are signed as sent."
+      ],
+      "expected": {
+        "outcome": "ok",
+        "http_status": 200,
+        "code": null
+      },
+      "source": "spec/01-authentication.md:3.1 non-ASCII bytes signed as sent"
+    },
+    "target-absolute-form": {
+      "identity": "alice",
+      "fresh": false,
+      "server_public_key": "server",
+      "args": {},
+      "raw_request": {
+        "method": "POST",
+        "target": "http://svc.example.test/mcp",
+        "sign_target": "/mcp",
+        "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"
+      },
+      "steps": [
+        "Send an absolute-form request target on the raw request line. The server must refuse it before verification with an unsigned 400 invalid_request, not a 401 bad_signature."
+      ],
+      "expected": {
+        "outcome": "rejected",
+        "http_status": 400,
+        "code": "invalid_request"
+      },
+      "source": "spec/01-authentication.md:3.1 only origin-form targets are accepted"
+    },
+    "target-fragment": {
+      "identity": "alice",
+      "fresh": false,
+      "server_public_key": "server",
+      "args": {},
+      "raw_request": {
+        "method": "POST",
+        "target": "/mcp#frag",
+        "sign_target": "/mcp",
+        "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"
+      },
+      "steps": [
+        "Send a request target containing a fragment on the raw request line. The server must refuse it before verification with an unsigned 400 invalid_request, not a 401 bad_signature."
+      ],
+      "expected": {
+        "outcome": "rejected",
+        "http_status": 400,
+        "code": "invalid_request"
+      },
+      "source": "spec/01-authentication.md:3.1 target contains no fragment"
     },
     "app-permission-denied": {
       "identity": "root",

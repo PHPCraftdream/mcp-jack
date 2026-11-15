@@ -137,6 +137,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "only GET and POST are defined")
 		return
 	}
+	target := r.RequestURI
+	if target == "" {
+		target = r.URL.RequestURI()
+	}
+	if !originFormTarget(target) {
+		writeError(w, http.StatusBadRequest, jack.CodeInvalidRequest, "request target must be origin-form")
+		return
+	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, h.limit))
 	if err != nil {
 		var tooBig *http.MaxBytesError
@@ -148,10 +156,6 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	target := r.RequestURI
-	if target == "" {
-		target = r.URL.RequestURI()
-	}
 	res := h.v.Verify(Request{Method: r.Method, Target: target, AuthValues: r.Header.Values("Jack-Auth"), Body: body})
 	defer res.Done()
 	switch {
@@ -162,6 +166,13 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		h.forward(w, r, body, res)
 	}
+}
+
+// originFormTarget reports whether the raw request target is origin-form: it
+// starts with '/' and has no fragment. Absolute-, authority- and asterisk-form
+// targets would make the signed bytes ambiguous (spec 01 section 3.1).
+func originFormTarget(raw string) bool {
+	return strings.HasPrefix(raw, "/") && !strings.Contains(raw, "#")
 }
 
 // reject answers a failed request. Once authentication has succeeded the
