@@ -98,13 +98,13 @@ type Config struct {
 	State StateStore
 	// Nonces records seen (kid, nonce) pairs.
 	Nonces *NonceStore
-	// DurableNonces выбирается явно вместо volatile Nonces.
+	// DurableNonces is selected explicitly instead of the volatile Nonces.
 	DurableNonces DurableNonceStore
 	// Audit receives audit events for protocol-native admin calls; optional.
 	Audit AuditSink
-	// Native — current-v1 tools; nil запрещает их, ServerKeys выбирается отдельно.
+	// Native serves current-v1 tools; nil forbids them, ServerKeys is selected separately.
 	Native NativeTools
-	// ServerKeys включает только candidate jack.server.key; default native allowlist неизменен.
+	// ServerKeys serves only the candidate jack.server.key; the default native allowlist is unchanged.
 	ServerKeys NativeTools
 	// Window is the timestamp window in seconds; zero means DefaultWindow.
 	Window int64

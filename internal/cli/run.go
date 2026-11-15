@@ -33,16 +33,16 @@ jack invite-create --config FILE --invite-file FILE --admin true|false [--ttl-se
 jack invite-list --config FILE
 jack invite-revoke --config FILE --invite-id ID
 
-nonce-init-unused: только deployment, никогда не принимавший запросы.
-Не использовать для восстановления утраченной истории nonce или миграции volatile state.
-nonce-inspect не снимает dirty/unsafe и не разрешает запуск сервера.
-nonce-reconcile-terminal переводит только exact receipt в no-redelivery tombstone; dirty/unsafe остаются.
-server-key-init-unused: только binding, никогда не использовавший server rotation store; не recovery/reset.
-server-key-status работает offline без signer seeds, не снимает dirty/unsafe и не разрешает serving.
-server-key-announce требует остановленного владельца store; stdout содержит только public record после ACK.
-Ошибка после publication не откатывает commit: не повторять автоматически, проверить status/evidence.
-invite-create сохраняет code только в новом private file; stdout содержит лишь invite_id/expires_at.
-При ошибке invite-create reservation file сохраняется: не удаляйте его для автоматического повтора.
+nonce-init-unused: only for a deployment that has never accepted requests.
+Do not use it to recover lost nonce history or to migrate volatile state.
+nonce-inspect does not clear dirty/unsafe and does not permit the server to start.
+nonce-reconcile-terminal only turns an exact receipt into a no-redelivery tombstone; dirty/unsafe stay.
+server-key-init-unused: only for a binding that never used a server rotation store; not a recovery or reset.
+server-key-status works offline without signer seeds, does not clear dirty/unsafe and does not permit serving.
+server-key-announce needs the store owner stopped; stdout contains only the public record after the ACK.
+An error after publication does not roll the commit back: do not retry automatically, check status and evidence.
+invite-create stores the code only in a new private file; stdout contains only invite_id and expires_at.
+After an invite-create error the reservation file is kept: do not delete it to retry automatically.
 `
 
 var errConfig = errors.New("invalid configuration or private storage")

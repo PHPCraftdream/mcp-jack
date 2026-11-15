@@ -7,7 +7,7 @@ import (
 	jack "github.com/PHPCraftdream/mcp-jack"
 )
 
-// ResponseKeyRequest — owned copy; payload не является источником key authority.
+// ResponseKeyRequest is an owned copy; the payload is not the source of key authority.
 type ResponseKeyRequest struct {
 	Status           int
 	Tool             string
@@ -15,8 +15,8 @@ type ResponseKeyRequest struct {
 	Body             []byte
 }
 
-// ResponseKeyAuthorization закрепляет identity/time и lease до завершения write.
-// Provider обязан ограничивать callbacks и не терять lease при panic/error.
+// ResponseKeyAuthorization pins identity/time and the lease until the write completes.
+// The provider must bound its callbacks and must not lose the lease on panic/error.
 type ResponseKeyAuthorization struct {
 	Signer    ResponseSigner
 	Timestamp int64
@@ -24,7 +24,7 @@ type ResponseKeyAuthorization struct {
 	Release   func()
 }
 
-// ResponseKeyProvider выбирается явно; persistence/clock/ring invariants принадлежат provider.
+// ResponseKeyProvider is selected explicitly; persistence/clock/ring invariants belong to the provider.
 type ResponseKeyProvider interface {
 	AuthorizeResponse(ResponseKeyRequest) (ResponseKeyAuthorization, error)
 }

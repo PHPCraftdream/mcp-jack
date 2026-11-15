@@ -253,7 +253,7 @@ func testGatewayBinaryDurableRestart(t *testing.T, rotationMode bool) {
 			t.Fatal(err)
 		}
 	}
-	// Архивируется только собственный registry lock; durable fences не меняются.
+	// Only the own registry lock is archived; durable fences are unchanged.
 	ownerPath := statePath + ".owner"
 	owner, err := readPrivate(ownerPath, 64)
 	if err != nil || string(owner) != "jack owner\n" {

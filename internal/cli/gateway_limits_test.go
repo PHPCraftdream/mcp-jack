@@ -2,9 +2,9 @@ package cli
 
 import "testing"
 
-// Одна заявка занимает слот nonce до ts+window, а ts может быть до window
-// секунд в будущем: занятость rate*(2*window+1) обязана оставаться строго
-// ниже capacity. Тест падает при дрейфе любой из трёх констант.
+// One request holds a nonce slot until ts+window, and ts may be up to window
+// seconds in the future: occupancy rate*(2*window+1) must stay strictly below
+// capacity. The test fails if any of the three constants drifts.
 func TestGatewayAdmissionBudget(t *testing.T) {
 	occupancy := gatewayAdmissionRate * (2*maxDurableWindow + 1)
 	if occupancy >= gatewayNonceCapacity {

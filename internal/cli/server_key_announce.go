@@ -18,7 +18,7 @@ type serverKeyPublication struct {
 	Record        string `json:"record"`
 }
 
-// Offline exclusive owner; stdout/Close failure не откатывает committed publication.
+// Offline exclusive owner; stdout/Close failure does not roll back the committed publication.
 func serverKeyAnnounce(configPath, reference, kid string, output io.Writer) error {
 	if output == nil {
 		return errConfig

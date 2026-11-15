@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 )
 
-// Пустой reservation остаётся и при неизвестном результате remote call.
+// The empty reservation remains even when the remote call result is unknown.
 func reserveInviteOutput(path string) (*os.File, error) {
 	if privateParent(path) != nil {
 		return nil, errConfig

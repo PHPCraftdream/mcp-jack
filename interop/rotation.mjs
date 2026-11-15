@@ -35,9 +35,10 @@ function fail(msg, code = 2) {
   process.exit(code);
 }
 
-// Эфемерный порт, выданный allocPort(), к моменту bind может быть занят чужим процессом
-// (исходящие соединения берут порты из того же диапазона). Это гонка окружения, а не отказ
-// продукта: повторяется только стартовая подготовка пары, проверки продукта не повторяются.
+// An ephemeral port handed out by allocPort() may be taken by another process
+// by the time we bind (outbound connections draw from the same range). This is
+// an environment race, not a product failure: only the pair's startup prep is
+// retried, product checks are not retried.
 class StartupPortRace extends Error {}
 
 function startupFail(message) {
@@ -389,7 +390,7 @@ async function runMatrix(opts) {
     const clkCliFake = join(tmp, 'clk-cli-fake');
     const modePath = join(tmp, 'mode');
     for (const p of [clkSrvPri, clkSrvFresh, clkFakeSrv, clkCliMain, clkCliFake]) setClock(p, T);
-    // Registry с ключами fixture: без неё сервер не знает вызывающего (unknown_key).
+    // Registry with the fixture's keys: without it the server doesn't know the caller (unknown_key).
     writeFileSync(join(tmp, 'state.json'), JSON.stringify({ version: 1, keys: registry.keys, invites: [] }, null, 2) + String.fromCharCode(10));
 
     const serverArgs = (port, store, clock) => ([
@@ -584,7 +585,7 @@ async function runMatrix(opts) {
       }
       // ---- s5: old-key peer response after the cutoff is refused ----
       writeFileSync(modePath, 'old-key\n');
-      // Подпись фейка берёт время из его часов: оба часа на cutoff, иначе окно свежести откажет раньше интервала ключа.
+      // The fake's signature takes time from its own clock: both clocks set to the cutoff, otherwise the freshness window fails before the key interval.
       setClock(clkFakeSrv, A);
       setClock(clkCliFake, A);
       {
