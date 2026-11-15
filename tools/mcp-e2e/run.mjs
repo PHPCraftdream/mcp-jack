@@ -350,6 +350,8 @@ function startProxy(proxyPort, gwPort, tamper) {
           res.end('mcp-e2e proxy: upstream request failed');
         } catch { /* client already gone */ }
       });
+      // Без end() запрос к шлюзу никогда не завершается: тело не отправлено.
+      upstream.end(Buffer.concat(chunks));
     });
   });
   return new Promise((resolve, reject) => {
