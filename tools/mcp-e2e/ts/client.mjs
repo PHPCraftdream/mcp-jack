@@ -20,7 +20,7 @@ const client = new Client(
   { versionNegotiation: { mode: 'legacy' }, supportedProtocolVersions: ['2025-11-25'] },
 );
 
-// Stderr моста копится с самого начала, чтобы ошибка соединения была видна в логе.
+// Bridge stderr is accumulated from the very start so a connection error is visible in the log.
 let bridgeStderr = '';
 const stderrStream = transport.stderr ?? null;
 if (stderrStream) {

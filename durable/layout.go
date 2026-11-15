@@ -6,7 +6,7 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-// Проверяется весь ограниченный граф, без исправления, expiry или удаления history.
+// The entire bounded graph is checked, without repair, expiry, or deletion of history.
 func validateRows(tx *bolt.Tx, m metadata) error {
 	expiry := tx.Bucket([]byte("expiry"))
 	operations := tx.Bucket([]byte("operation"))

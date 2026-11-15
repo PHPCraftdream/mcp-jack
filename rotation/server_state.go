@@ -7,13 +7,13 @@ import (
 
 const MaxSignerReferenceBytes = 1024
 
-// SignerReference — opaque server-local handle, не private-key encoding.
+// SignerReference is an opaque server-local handle, not a private-key encoding.
 type SignerReference struct {
 	KID       string `json:"kid"`
 	Reference string `json:"reference"`
 }
 
-// ServerSnapshot хранится только в protected server store, не в delivery payload.
+// ServerSnapshot is stored only in a protected server store, not in a delivery payload.
 type ServerSnapshot struct {
 	FormatVersion    uint32
 	Public           TrustSnapshot
@@ -37,7 +37,7 @@ func ValidateServerSnapshot(input ServerSnapshot, binding Binding, window int64,
 	return ServerSnapshot{FormatVersion: 1, Public: public, SignerReferences: append([]SignerReference{}, input.SignerReferences...)}, nil
 }
 
-// ValidateServerPublication проверяет один fixed-P переход, не durable authorization.
+// ValidateServerPublication checks one fixed-P transition, not durable authorization.
 func ValidateServerPublication(expected, desired ServerSnapshot, binding Binding, window int64, checkpoint Checkpoint) (ServerSnapshot, error) {
 	refuse := func() (ServerSnapshot, error) { return ServerSnapshot{}, invalid("rotation_state_unavailable") }
 	previous, err := ValidateServerSnapshot(expected, binding, window, checkpoint)
@@ -76,7 +76,7 @@ type serverSnapshotDocument struct {
 	SignerReferences []SignerReference `json:"signer_refs"`
 }
 
-// EncodeServerSnapshot — private local format; caller не передаёт его клиентам.
+// EncodeServerSnapshot is a private local format; the caller does not pass it to clients.
 func EncodeServerSnapshot(input ServerSnapshot, binding Binding, window int64, checkpoint Checkpoint) ([]byte, error) {
 	snapshot, err := ValidateServerSnapshot(input, binding, window, checkpoint)
 	if err != nil {
@@ -93,7 +93,7 @@ func EncodeServerSnapshot(input ServerSnapshot, binding Binding, window int64, c
 	return encoded, nil
 }
 
-// DecodeServerSnapshot сохраняет fences; strict parse не является serving readiness.
+// DecodeServerSnapshot preserves fences; a strict parse is not serving readiness.
 func DecodeServerSnapshot(data []byte, binding Binding, window int64, checkpoint Checkpoint) (ServerSnapshot, error) {
 	refuse := func() (ServerSnapshot, error) { return ServerSnapshot{}, invalid("rotation_state_unavailable") }
 	if len(data) == 0 || len(data) > MaxTrustSnapshotBytes {

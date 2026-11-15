@@ -9,7 +9,7 @@ import (
 	"github.com/PHPCraftdream/mcp-jack/rotation"
 )
 
-// RefreshResult отделяет declared page head от локального ACKed terminal.
+// RefreshResult separates the declared page head from the local ACKed terminal.
 type RefreshResult struct {
 	Head      rotation.ResultCursor
 	Terminal  rotation.ResultCursor
@@ -88,8 +88,8 @@ func desiredSnapshot(snapshot rotation.TrustSnapshot, extension []rotation.Recor
 	return desired
 }
 
-// AcceptRefresh обрабатывает только явно запрошенный jack.server.key success page.
-// Нет fetch/retry/pagination. Committed ACK не откатывается при late final failure.
+// AcceptRefresh handles only an explicitly requested jack.server.key success page.
+// No fetch/retry/pagination. A committed ACK is not rolled back on a late final failure.
 func (controller *Controller) AcceptRefresh(response Response, expectedID json.RawMessage, cursor rotation.ResultCursor) (RefreshResult, error) {
 	return controller.acceptRefresh(response, expectedID, cursor, nil)
 }

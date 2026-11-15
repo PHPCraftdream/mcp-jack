@@ -32,8 +32,8 @@ func (lease *reservationLease) Release() {
 	}
 }
 
-// Reserve вызывается только после authentication, под coordinated registry gate.
-// DB callbacks не вызывают clock/validator/handler/signer; final commit не повторяется.
+// Reserve is called only after authentication, under the coordinated registry gate.
+// DB callbacks do not call clock/validator/handler/signer; the final commit is not retried.
 func (s *Store) Reserve(request server.NonceAdmission) (server.NonceReceipt, server.NonceLease, *jack.Error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

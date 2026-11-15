@@ -69,7 +69,7 @@ func TestServerKeyArgumentsRejectAmbiguityBeforeObjectDecoding(t *testing.T) {
 			t.Fatalf("invalid arguments accepted: %q: %v", wire, err)
 		}
 	}
-	// Независимый control: last-wins decoder действительно принял бы опасный duplicate.
+	// Independent control: a last-wins decoder would indeed accept the dangerous duplicate.
 	ambiguous := []byte(`{"after_ordinal":7,"after_ordinal":0,"after_hash":"-"}`)
 	var decoded map[string]any
 	if err := json.Unmarshal(ambiguous, &decoded); err != nil || decoded["after_ordinal"] != float64(0) {

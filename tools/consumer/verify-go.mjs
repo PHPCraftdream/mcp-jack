@@ -18,9 +18,9 @@ import { fileURLToPath } from "node:url";
 // which targets the STAGED SNAPSHOT directory (stage/module) produced by
 // package-go.mjs — never the repo checkout. This is the documented resolution
 // of the staged module artifact.
-// Только корневой модуль заменён staged snapshot. Внешние зависимости
-// проверяются публичным checksum database; go.mod/go.sum копируются побайтово.
-// GOPATH/GOMODCACHE/GOCACHE изолированы, GOTOOLCHAIN=local фиксирует Go 1.25.
+// Only the root module is replaced by the staged snapshot. External dependencies
+// are verified against the public checksum database; go.mod/go.sum are copied byte-for-byte.
+// GOPATH/GOMODCACHE/GOCACHE are isolated; GOTOOLCHAIN=local pins Go 1.25.
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");

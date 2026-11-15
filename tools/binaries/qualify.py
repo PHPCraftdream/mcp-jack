@@ -76,7 +76,7 @@ def qualify(source, output, expected_sha, feature_sha):
     if len(host) != 2:
         raise ValueError("unknown compiler host")
     compiler = run(["go", "version"], source).stdout.decode().strip()
-    # Fresh output: ошибка не заменяет прошлый artifact.
+    # Fresh output: an error does not replace the previous artifact.
     output.mkdir(parents=False, exist_ok=False)
     entries = []
     with tempfile.TemporaryDirectory(prefix="jack-binary-qualification-") as temporary:

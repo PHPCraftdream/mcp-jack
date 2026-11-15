@@ -12,13 +12,13 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-// ServerOptions — независимый OOB binding и protected anchor handle.
+// ServerOptions holds an independent OOB binding and a protected anchor handle.
 type ServerOptions struct {
 	TrustOptions
 	AnchorReference string
 }
 
-// ServerStore не владеет nonce/client domain и не разрешает serving без provider.
+// ServerStore does not own the nonce/client domain and does not permit serving without a provider.
 type ServerStore struct {
 	mu        sync.Mutex
 	db        *bolt.DB
@@ -51,7 +51,7 @@ func normalizedServerOptions(options ServerOptions) (ServerOptions, []byte, [32]
 	return options, encoded, sha256.Sum256(encoded), nil
 }
 
-// InitializeServerUnused не заменяет существующий store и не является recovery.
+// InitializeServerUnused does not replace an existing store and is not recovery.
 func InitializeServerUnused(path string, options ServerOptions) (result error) {
 	options, encoded, profile, err := normalizedServerOptions(options)
 	if err != nil {
@@ -133,7 +133,7 @@ func (store *ServerStore) validateRows(tx *bolt.Tx) (rotation.ServerSnapshot, tr
 	return snapshot, guard, nil
 }
 
-// OpenServer не очищает dirty/unknown; signer readiness проверяется отдельно provider.
+// OpenServer does not clear dirty/unknown; signer readiness is checked separately by the provider.
 func OpenServer(path string, options ServerOptions) (*ServerStore, error) {
 	options, _, profile, err := normalizedServerOptions(options)
 	if err != nil {
@@ -198,7 +198,7 @@ func (store *ServerStore) ownedGuard(tx *bolt.Tx) (trustGuard, error) {
 func (store *ServerStore) failed() error { store.fenced.Store(true); return ErrUnavailable }
 func (store *ServerStore) Fence()        { store.fenced.Store(true) }
 
-// AcquireServingLease удерживает dirty epoch до физического завершения response write.
+// AcquireServingLease holds the dirty epoch until the response write physically completes.
 func (store *ServerStore) AcquireServingLease() (func(), error) {
 	done, err := store.begin()
 	if err != nil {
@@ -208,7 +208,7 @@ func (store *ServerStore) AcquireServingLease() (func(), error) {
 	return func() { once.Do(done) }, nil
 }
 
-// Close дожидается store operations и serving leases; новые final gates отказывают.
+// Close waits for store operations and serving leases; new final gates are refused.
 func (store *ServerStore) Close() error {
 	store.closeOnce.Do(func() {
 		store.mu.Lock()

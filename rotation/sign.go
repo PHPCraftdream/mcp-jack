@@ -8,15 +8,15 @@ import (
 	jack "github.com/PHPCraftdream/mcp-jack"
 )
 
-// Signer предоставляет Ed25519-подпись без экспорта private material.
+// Signer provides an Ed25519 signature without exporting private material.
 type Signer interface {
 	PublicKey() []byte
 	Sign([]byte) ([]byte, error)
 }
 
-// CreateRecord создаёт statement, но не публикует его и не меняет доверие.
-// Previous должен быть независимо доверенным checkpoint или ACKed хвостом.
-// Полный retained-key reuse check и durable ACK выполняет publication owner.
+// CreateRecord creates a statement but does not publish it or change trust.
+// Previous must be an independently trusted checkpoint or an ACKed tail.
+// The publication owner performs the full retained-key reuse check and durable ACK.
 func CreateRecord(binding Binding, previous Checkpoint, oldSigner, nextSigner Signer, publishedAt int64) (Record, error) {
 	if !validBinding(binding) {
 		return Record{}, invalid("binding_size")

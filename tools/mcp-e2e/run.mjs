@@ -274,7 +274,7 @@ function rawRequest(options, timeoutMs) {
 // the upstream content-length header stays valid for the client.
 function startProxy(proxyPort, gwPort, tamper) {
   const captures = [];
-  // Диагностика: запросы фиксируются при получении, до ответа upstream.
+  // Diagnostics: requests are recorded on receipt, before the upstream responds.
   const received = [];
   const server = httpCreateServer((req, res) => {
     received.push(`${req.method} ${req.url}`);
@@ -350,7 +350,7 @@ function startProxy(proxyPort, gwPort, tamper) {
           res.end('mcp-e2e proxy: upstream request failed');
         } catch { /* client already gone */ }
       });
-      // Без end() запрос к шлюзу никогда не завершается: тело не отправлено.
+      // Without end() the request to the gateway never completes: the body is not sent.
       upstream.end(Buffer.concat(chunks));
     });
   });
@@ -685,7 +685,7 @@ function resolveArtifacts(workDir, needed) {
 
 class CellFail extends Error {}
 
-// Задокументированное ограничение, а не провал: ячейка помечается SKIP с причиной.
+// A documented limitation, not a failure: the cell is marked SKIP with a reason.
 class KnownLimit extends Error {}
 
 function makeChecks() {
@@ -968,7 +968,7 @@ async function runCellFlow(ctx) {
     chk.fatal(false, 'official client fixture spawned', 'child process started', `spawn error: ${run.message}`);
   }
   const code = run.code;
-  // Диагностика: хвосты stdout/stderr SDK-клиента всегда видны в логе CI.
+  // Diagnostics: the SDK client's stdout/stderr tails are always visible in the CI log.
   chk.note(`client stderr tail: ${JSON.stringify(run.stderr.slice(-1500))}`);
   chk.note(`client stdout tail: ${JSON.stringify(run.stdout.slice(-600))}`);
   chk.note(`proxy received (${proxy.received.length}): ${JSON.stringify(proxy.received.slice(0, 8))}`);
@@ -980,8 +980,8 @@ async function runCellFlow(ctx) {
   // Snapshot before the purity probe adds its own 4 requests to the proxy.
   const sdkSnapCount = proxy.captures.length;
 
-  // Известное ограничение: TS server 2.4.0 отвечает на initialize потоком SSE даже в JSON-режиме,
-  // а шлюз по дизайну отказывает на SSE подписанным 501 streaming_unsupported (v0.1: без стримов).
+  // Known limitation: TS server 2.4.0 answers initialize with an SSE stream even in JSON mode,
+  // and the gateway by design rejects SSE with a signed 501 streaming_unsupported (v0.1: no streams).
   const first501 = proxy.captures[0];
   if (server === 'ts' && !tamper && first501 && first501.status === 501 && /streaming_unsupported/.test(first501.response_body ?? '')) {
     throw new KnownLimit('official TS server 2.4.0 answered initialize with text/event-stream (200) despite responseMode json; the gateway refuses SSE by design with a signed 501 streaming_unsupported');

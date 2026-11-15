@@ -16,7 +16,7 @@ struct Sandbox(PathBuf);
 
 impl Drop for Sandbox {
     fn drop(&mut self) {
-        // Только свежий test-owned каталог, без чужих артефактов.
+        // Only a fresh test-owned directory, no foreign artifacts.
         fs::remove_dir_all(&self.0).expect("remove consumer store sandbox");
     }
 }
@@ -152,7 +152,7 @@ pub(super) fn verify(signer: &dyn Signer) -> Result<(), String> {
             hash: "-".into(),
         };
         let request = r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"jack.server.key","arguments":{"after_ordinal":0,"after_hash":"-"}}}"#;
-        // Fixed fixture: подставляются только canonical base64url public values.
+        // Fixed fixture: only canonical base64url public values are substituted.
         let page = format!(
             concat!(
                 r#"{{"current":{{"kid":"{}","public_key":"{}"}},"#,
