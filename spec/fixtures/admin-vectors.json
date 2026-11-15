@@ -10004,7 +10004,7 @@
             "expires_at": 1767228600
           },
           {
-            "invite_id": "qm-7Bwl2GuRv2hT8KBe39jE-tqUbzw1JLU2YX8oA_8A",
+            "invite_id": "QLxPyLkP8RG31QrH91XPwfXoTrjkxK3mHDJRqWs3j1w",
             "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
             "created_at": 1767225500,
             "expires_at": 1767228600,
@@ -10021,15 +10021,15 @@
             "headers": [
               [
                 "Jack-Auth",
-                "v1 kid=imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg,ts=1767225600,nonce=9dOaP6SpNRInnH4QtG20YA,sig=rX7MVGYX3kHi7Tpfla9lU72c28EdOnTs-8f8wfSIvvGaTPnbKUFlgabgJ25JuFNle6IbtVKeDNSMvk8-fGCJAw"
+                "v1 kid=imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg,ts=1767225600,nonce=9dOaP6SpNRInnH4QtG20YA,sig=YfbB_Z81LfxdPIYjftIlRjSOpsAiguqHSxYUpYDUQjxXrZ8U-RUzI4L_wHRshARlWCuqPXI8K9Iy2fihEc2gDg"
               ],
               [
                 "Content-Type",
                 "application/json"
               ]
             ],
-            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suZW5yb2xsIiwiYXJndW1lbnRzIjp7ImNvZGUiOiJxdV8wdmlvQ1B6WG5zcU9Wak5xMUpkQlhWOHNqa3V2d0J5emVJX3pRT3BBIiwibmFtZSI6Im5ld2JpZSIsInB1YmxpY19rZXkiOiI3MUpNQ05zMTh0N0U1SXlzRk1aRUtzbmxyOUN3MGthaENfaDVGa0RXcmRRIn19fQ",
-            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.enroll\",\"arguments\":{\"code\":\"qu_0vioCPzXnsqOVjNq1JdBXV8sjkuvwByzeI_zQOpA\",\"name\":\"newbie\",\"public_key\":\"71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ\"}}}"
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suZW5yb2xsIiwiYXJndW1lbnRzIjp7ImNvZGUiOiJpTzhhcEpqSU9aZ1Vob2k2Q1RnS1dib2xPaC1BSVZGUW1oWEtfSWRMZ0dJIiwibmFtZSI6Im5ld2JpZSIsInB1YmxpY19rZXkiOiI3MUpNQ05zMTh0N0U1SXlzRk1aRUtzbmxyOUN3MGthaENfaDVGa0RXcmRRIn19fQ",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.enroll\",\"arguments\":{\"code\":\"iO8apJjIOZgUhoi6CTgKWbolOh-AIVFQmhXK_IdLgGI\",\"name\":\"newbie\",\"public_key\":\"71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ\"}}}"
           },
           "expect": {
             "result": "accept",
@@ -10085,7 +10085,7 @@
               "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg",
               "1767225600",
               "9dOaP6SpNRInnH4QtG20YA",
-              "fX0anWWR8UdIckI1hHHDnRkG3KF4P9qYKBEBknlk0O0"
+              "Ni5iVHAY50CrK-8JklXAydksIO2tUPmN4ZWSm9-ID-4"
             ]
           }
         }
