@@ -17,7 +17,7 @@ minimize=$4
 outdir=$5
 
 case "$pkg" in
-  .|server|client|userkey) ;;
+  .|server|client|userkey|rotation|durable) ;;
   *) echo "::error title=go-fuzz-discovery::unsupported package: ${pkg}" >&2; exit 2 ;;
 esac
 if [[ ! "$name" =~ ^Fuzz[A-Za-z0-9_]+$ ]]; then
