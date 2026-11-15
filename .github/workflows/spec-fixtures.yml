@@ -73,3 +73,30 @@ jobs:
             spec/fixtures/candidate/rotation-state-vectors.json
             spec/tests/candidate/CASES.md
           if-no-files-found: error
+
+  rust-lock-preparation:
+    name: prepare Rust lock for the hickory update
+    if: github.ref == 'refs/heads/release-hickory-0263-1115'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Resolve the three exact hickory pins in the lock
+        run: |
+          cargo update -p hickory-proto --precise 0.26.3
+          cargo update -p hickory-net --precise 0.26.3
+          cargo update -p hickory-resolver --precise 0.26.3
+      - name: Upload the resolved lock for parent integration
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-hickory-lock
+          path: rust/Cargo.lock
+          if-no-files-found: error
+      - name: Tests with the resolved lock
+        if: always()
+        timeout-minutes: 15
+        run: cargo test --locked --all-features --no-fail-fast
