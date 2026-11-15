@@ -436,13 +436,11 @@ let result = client.refresh(&mut store)?;
 The deadline is the configured transport timeout: an asynchronous round-trip budget, not exact
 wall-clock return. DNS, hosts, and roots are snapshotted at construction, and the loopback
 http/loopback-only URL policy applies as documented earlier in this README. Nothing here is a
-verified-runtime claim. Product rotating transport and candidate server integration remain
-separate unfinished work.
+verified-runtime claim. Server-side integration is described under "Candidate Linux server rotation provider" below.
 
 ### Candidate server ring state and `jack.server.key` page service
 
-This layer is pure and cross-platform. It has no persistence, serving lease,
-clock, signer selection or HTTP wiring yet, so it is not a running candidate server.
+This layer is pure and cross-platform; the stateful Linux store and the serving provider are described in the next two sections.
 
 `validate_server_snapshot`, `validate_server_publication`,
 `encode_server_snapshot` and `decode_server_snapshot` model the protected server
@@ -488,8 +486,7 @@ captured values; it never rewrites the ClockGuard, and an uncertain outcome fenc
 the owner and reports `rotation_state_unknown` without retry. `acquire_serving_lease`
 returns a `ServingLease` that holds the dirty epoch until dropped; `close` refuses
 new operations at once but only completes after every lease is dropped. Drop never
-cleans the store. There is no signer selection, response authorization or HTTP
-wiring yet, and no recovery of dirty/fenced/unsafe state.
+cleans the store. Signer selection and response authorization are provided by the rotation provider (next section); there is no recovery of dirty/fenced/unsafe state.
 
 ### Candidate Linux server rotation provider, `jack.server.key` tool and rotating response signing
 

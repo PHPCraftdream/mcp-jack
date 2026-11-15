@@ -43,7 +43,7 @@ fail clearly while they are missing; never hand-write lockfile contents.
 The `mcp-compat-e2e` job in `.github/workflows/ci.yml` runs on `ubuntu-latest`
 only (jack's private-file storage is Unix-only; `docs/design/cli.md` says Windows fails closed). Steps:
 
-- Install Go 1.25.0 (the fixture toolchain; the root module floor stays 1.22), Node 22, and stable Rust, with `Swatinem/rust-cache` scoped to `tools/mcp-e2e/rust`.
+- Install Go 1.25.0 (the fixture toolchain; the root module floor is 1.25.0), Node 22, and stable Rust, with `Swatinem/rust-cache` scoped to `tools/mcp-e2e/rust`.
 - Fail clearly if any fixture lockfile (`go/go.sum`, `ts/package-lock.json`, `rust/Cargo.lock`) is missing.
 - Frozen installs: `go mod download` in `go/`, `npm ci` in `ts/`; then `cargo build --locked --release` in `rust/`.
 - Build the shipping CLI (`CGO_ENABLED=0`, `go build -trimpath -o "$RUNNER_TEMP/jack" ./cmd/jack`, mirroring `go-cli-process`).

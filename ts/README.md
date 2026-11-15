@@ -140,7 +140,7 @@ owner marker or silently replace trust. A snapshot's copied clock tuple remains 
 CAS dependency, not a fresh time source. Raw file ownership, protected-bundle
 serialization and refresh-state helpers remain internal. This low-level controller
 does not send HTTP requests. The separate explicit client below adds transport;
-candidate server integration remains unfinished.
+the server wiring is described under "Candidate server wiring" below.
 
 ### Explicit candidate HTTP client
 
