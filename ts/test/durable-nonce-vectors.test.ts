@@ -62,6 +62,7 @@ interface VectorEvent {
   readonly intentOutcome: string;
   readonly finalOutcome: string;
   readonly dispatch: boolean;
+  readonly authorization?: string;
   readonly reservationFound?: boolean;
 }
 
@@ -416,6 +417,11 @@ test("shared nonce vectors: verdict table drives every case", { skip: !linux }, 
       }
       const step = driveEvent(harness, event, fault);
       committedTotal += step.committed ? 1 : 0;
+      // The caller-level authorization refusal after a confirmed commit (a native tool answering 403).
+      if (event.authorization === "refused" && step.committed) {
+        actual.push({ ...step.outcome, status: 403, code: "authorization_refused" });
+        continue;
+      }
       actual.push(step.outcome);
     }
 
