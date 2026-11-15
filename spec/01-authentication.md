@@ -14,7 +14,7 @@ Confidentiality and server-certificate validation are delegated to TLS. Implemen
 
 - Signature algorithm: Ed25519 (pure EdDSA, RFC 8032). There is no algorithm negotiation.
 - A public key is its 32-byte raw encoding. A key is only acceptable if it is a canonical encoding of a point in the prime-order subgroup that is not the identity ([03-user-management.md](03-user-management.md) section 2). Registries MUST reject other keys at load time.
-- Signature verification MUST be strict: a signature whose scalar S is not below the group order L is invalid, even if the verification equation holds. This rules out malleated signatures and makes all implementations agree.
+- Signature verification MUST be strict: a signature whose scalar S is not below the group order L is invalid, even if the verification equation holds; a signature whose R is the canonical encoding of a small-order point (one of the eight points of order dividing 8) is invalid as well. This rules out malleated signatures and makes all implementations agree.
 - `kid` (key id) = `base64url(SHA-256(public_key_bytes))`.
 - `base64url` is RFC 4648 section 5, **unpadded and canonical**: a decoder MUST reject padding, characters outside `A-Za-z0-9_-`, and encodings whose unused trailing bits are not zero (the decode-then-encode round trip must reproduce the input).
 - Sizes: `kid` 32 bytes (43 chars), `nonce` 16 bytes (22 chars), `sig` 64 bytes (86 chars).

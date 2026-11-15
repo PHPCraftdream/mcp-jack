@@ -21,6 +21,25 @@ const D2 = mod(2n * D);
 const SQRT_M1 = pow(2n, (P - 1n) / 4n); // 2^((p-1)/4) mod p
 const P_PLUS_3_DIV_8 = (P + 3n) / 8n; // exponent for the square-root candidate
 
+// Canonical 32-byte encodings of the eight points of order dividing 8 (the
+// 8-torsion subgroup): the identity, the two y = 0 order-4 points, the
+// order-2 point, and the four order-8 points. A signature whose R is one of
+// these is invalid even if the verification equation holds (spec 01 section
+// 2); Rust rejects the same set via dalek verify_strict. Non-canonical R
+// encodings need no entry: node:crypto compares the recomputed R bytes with
+// the signature's R bytes, so only a canonical R encoding can satisfy the
+// equation.
+const SMALL_ORDER_R: ReadonlySet<string> = new Set([
+  "0100000000000000000000000000000000000000000000000000000000000000",
+  "0000000000000000000000000000000000000000000000000000000000000000",
+  "0000000000000000000000000000000000000000000000000000000000000080",
+  "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+  "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+  "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+  "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+  "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+]);
+
 /** Reduce a into [0, P). */
 function mod(a: bigint): bigint {
   return ((a % P) + P) % P;
@@ -123,10 +142,15 @@ function isIdentity(q: Point): boolean {
   return q.X === 0n && mod(q.Y - q.Z) === 0n;
 }
 
-/** Verify: sig is a valid Ed25519 signature of message under publicKey, with the strict rule that the scalar S (little-endian sig[32:64]) is below the group order L (spec 01 section 2); a signature with S >= L is invalid even if the verification equation holds. */
+/** Verify: sig is a valid Ed25519 signature of message under publicKey, with the strict rules of spec 01 section 2: the scalar S (little-endian sig[32:64]) is below the group order L and R (sig[0:32]) is not a small-order point; a signature violating either is invalid even if the verification equation holds. */
 export function verify(publicKey: Uint8Array, message: Uint8Array, sig: Uint8Array): boolean {
   if (publicKey.length !== 32 || sig.length !== 64) {
     return false; // wrong lengths: false, never throw
+  }
+  // Strict R check (spec 01 section 2): a signature whose R encodes a
+  // small-order point is invalid even if the verification equation holds.
+  if (SMALL_ORDER_R.has(Buffer.from(sig.subarray(0, 32)).toString("hex"))) {
+    return false;
   }
   // Strict S check BEFORE node:crypto: crypto historically does not enforce S < L.
   let s = 0n;
