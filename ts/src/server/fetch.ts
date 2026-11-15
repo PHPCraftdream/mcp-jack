@@ -9,6 +9,7 @@ import type { RotationResponseAuthorization, RotationResponseKeyRequest } from "
 import { responseSigningString } from "../signing.js";
 import type { Verifier, VerifyResult } from "./verify.js";
 import type { JackIdentity } from "./verify.js";
+import { markResponseFinish, takeResultFinish } from "./durable-admission.js";
 
 // Go NewHandler returns errors; the Fetch-standard API has no error return in
 // its factory shape, so configuration problems THROW a plain Error instead.
@@ -570,12 +571,25 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
       rawAuth !== undefined ? rawAuth : combined === null ? [] : splitRepeatedAuthLines(combined);
 
     const res = config.verifier.verify({ method, target, authValues, body });
-    if (!res.accepted) {
-      return reject(res);
+    // Durable admission finishes AFTER the response is produced (Go Result.Done
+    // in the middleware): the release is idempotent and runs even when the
+    // response construction fails. Without the durable option there is no
+    // finish handle and nothing changes. The handle also travels on the
+    // Response so the node adapter can finish it again after the write.
+    const finish = takeResultFinish(res);
+    let out!: Response;
+    try {
+      out = !res.accepted ? reject(res) : res.native ? native(res) : await forward(req, body, res);
+    } catch (error) {
+      // Release even on response failure; idempotent with the node adapter.
+      finish?.();
+      throw error;
     }
-    if (res.native) {
-      return native(res);
-    }
-    return forward(req, body, res);
+    // The handle travels on the Response for the node adapter, then runs here,
+    // before the response is returned (Go Result.Done after the middleware
+    // produced the answer).
+    markResponseFinish(out, finish);
+    finish?.();
+    return out;
   };
 }
