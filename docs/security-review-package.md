@@ -44,7 +44,7 @@ reviewer's opinion before deciding.
 | F-02 | Medium | Each signed response in the rotation profile re-verifies the whole server-key chain several times and performs at least two fsyncs; cost grows linearly with the ring length. Estimated, not measured. | Accepted for 0.1.0, documented. Rotations are at least 48 hours apart, so the ring stays short; keep it short. Open: verify once at open and after each CAS; add a benchmark gate. |
 | F-03 | Medium | A single forward clock jump raises the store high-water mark `H`; when the clock returns, the nonce store, the server ring and every client trust store latch `unsafe` for good. There is no recovery command in 0.1. | Documented limitation with operator and client procedure in `docs/operations.md`. Open: requirements on the time source, a plausibility threshold before advancing `H`. |
 | F-04 | Medium, conditional | The bridge signed and forwarded `tools/call` for `jack.*` tools from the stdio side. With `native_admin` enabled and an administrator key in the bridge, a prompt-injected agent could create administrators. | Fixed: the bridge refuses `jack.*` tool calls locally and never signs them. |
-| F-05 | Low | The same signed body gets different verdicts in Go, Rust and TypeScript (lone surrogates, nesting depth, GET with a body). See section 3. | Open for the reviewer; to be fixed in the shared corpus and specification. |
+| F-05 | Low | The same signed body gets different verdicts in Go, Rust and TypeScript (lone surrogates, nesting depth, GET with a body). See section 3. | Fixed for the rows that changed a verdict (1, 2, 3, 5, 9): all three SDKs now agree and the shared corpus proves it. The remaining rows (target forms, response bytes, signer panic, lease timing) were investigated and are open for the reviewer; see section 3. |
 | F-06 | Low | Ed25519: Rust uses strict verification and rejects a signature whose `R` is a small-order point; Go and TypeScript accepted it. A malicious server-key holder could publish a rotation record that Go and TypeScript clients accept and Rust clients reject. | Fixed: Go and TypeScript reject a signature whose `R` is one of the eight small-order encodings and the specification states the rule; regression tests build the crafted signatures at test time. Open: a shared fixture vector (the reference verifier must reject small-order `R` first). A small-order public key at direct `Verify` time is still accepted by Go and TypeScript and rejected by Rust; all three reject such keys at admission. |
 | F-07 | Low | Expired invites are never removed; at 1024 stored invites `invite.create` fails and a gateway with 1025 does not start. | Fixed: expired invites are removed in the same atomic state edit that creates, enrolls with or revokes an invite, in all three SDKs; the gateway cap is evaluated after the purge. |
 | F-08 | Low | The announce limit (1153 keys) and the retired-key limit (1024) differ, so a long-lived deployment could eventually refuse to sign. Compaction is not implemented. | Documented limitation; not reachable in practice at 48 hours per rotation. |
@@ -60,26 +60,29 @@ reviewer's opinion before deciding.
 
 ## 3. Divergence between Go, Rust and TypeScript on the same input
 
-Gathered by the pre-review; rows marked "hypothesis" depend on library behaviour
-that was not verified. Rows 1, 2, 3 and 5 are the ones that change a verdict.
+Gathered by the pre-review and then re-verified against the source (the Rust
+entries for rows 1 and 2 were wrong in the original table). The Go, Rust and
+TypeScript cells show the behaviour at the reviewed commit; the last column shows
+the state now. Rows 1, 2, 3, 5 and 9 changed a verdict and are aligned and
+covered by the shared corpus; the others are investigated, not changed.
 
-| # | Input | Go | Rust | TypeScript |
-|---|---|---|---|---|
-| 1 | Lone surrogate `\ud800` in `method`, `params.name` or a member name | replaced by U+FFFD, accepted | `400 invalid_request` (hypothesis) | accepted as is |
-| 2 | JSON nesting depth | rejected above 10000 | raw members unlimited, parsed arguments 128 (hypothesis) | recursive parser, stack limit, error caught as `400` |
-| 3 | Signature with a small-order `R` | rejected | rejected | rejected |
-| 4 | Absolute-form request target | full URI is signed | path and query only | raw `req.url` |
-| 5 | GET with a body | body is hashed | body is hashed | Node adapter drops the body |
-| 6 | `#fragment` in the target | kept in the signing string | dropped by `http::Uri` (hypothesis) | kept |
-| 7 | Non-ASCII bytes in the target | bytes as is | bytes as is | latin1 re-encoded to UTF-8, `bad_signature` |
-| 8 | Fetch adapter without Node | | | WHATWG path normalisation |
-| 9 | Header `v2 <obs-text>` | `unsupported_version` | `malformed_auth` | `unsupported_version` |
-| 10 | Bytes of native responses | HTML-escaped, compact `id` | as is | as is |
-| 11 | Durable nonce store | yes | no | no |
-| 12 | `jack.server.key` with a static signer | constructor refuses | allowed | constructor refuses |
-| 13 | Store format and exclusion | bbolt and flock | JSON bundle and `.owner` marker | JSON bundle and `.owner` marker, path based checks |
-| 14 | Serving lease released | after the physical write | before the physical write | before the physical write |
-| 15 | Panic in the signer callback | recovered, `503` | not recovered | try/catch, `503` |
+| # | Input | Go | Rust | TypeScript | Now |
+|---|---|---|---|---|---|
+| 1 | Lone surrogate `�` in method, params.name or a member name | replaced by U+FFFD, accepted | rejected only in materialized strings, accepted inside raw-captured values | accepted as is | `400 invalid_request` in all three (spec 02) |
+| 2 | JSON nesting depth | rejected above 10000 | raw capture unlimited, materialized values 128 | unbounded tokenizer | more than 128 levels is `400 invalid_request` in all three (spec 02) |
+| 3 | Signature with a small-order `R` | accepted | rejected | accepted | rejected in all three; vectors in the shared corpus |
+| 4 | Absolute-form request target | full URI is signed | path and query only | raw `req.url` | unchanged; unreachable for a client that signs origin-form; a spec sentence is proposed |
+| 5 | GET with a body | body is hashed | body is hashed | Node adapter drops the body | all three hash the exact bytes sent |
+| 6 | `#fragment` in the target | kept in the signing string | dropped by `http::Uri` | kept | unchanged; a client must not send a fragment; a spec sentence is proposed |
+| 7 | Non-ASCII bytes in the target | bytes as is | bytes as is | latin1 re-encoded to UTF-8, `bad_signature` | unchanged; the one remaining row where a verdict can differ for bytes the specification allows (open) |
+| 8 | Fetch adapter without Node | | | WHATWG path normalisation | unchanged |
+| 9 | Header `v2 <obs-text>` | `unsupported_version` | `malformed_auth` | `unsupported_version` | `unsupported_version` in all three (single header value; more than one is `malformed_auth` first) |
+| 10 | Bytes of native responses | HTML-escaped, compact `id` | as is | as is | unchanged; each response is signed over its own bytes, so no verdict differs |
+| 11 | Durable nonce store | yes | no | no | unchanged |
+| 12 | `jack.server.key` with a static signer | constructor refuses | allowed | constructor refuses | unchanged |
+| 13 | Store format and exclusion | bbolt and flock | JSON bundle and `.owner` marker | JSON bundle and `.owner` marker, path based checks | unchanged |
+| 14 | Serving lease released | after the physical write | before the physical write | before the physical write | unchanged; affects the latency of `close()` only |
+| 15 | Panic in the signer callback | recovered, `503` | not recovered | try/catch, `503` | unchanged; not reachable from client input |
 
 ## 4. Questions for the external reviewer
 
@@ -90,8 +93,11 @@ that was not verified. Rows 1, 2, 3 and 5 are the ones that change a verdict.
    records, and is there a reason to re-verify the chain on every response?
 3. What must the operator and the client do after the `unsafe` latch, and how is
    the time source protected?
-4. Must the three SDKs return one verdict for lone surrogates, nesting depth and
-   GET with a body? Which behaviour is normative?
+4. The SDKs now agree on lone surrogates (400), nesting depth (128 levels) and a
+   GET with a body (hashed as sent). Are these the right normative rules? Should
+   the specification also say that an absolute-form target or a fragment is
+   rejected before verification, and that target bytes are taken before any
+   character decoding (row 7)?
 5. Is rejecting a small-order `R` the right normative rule? A shared vector is still to be added to the corpus.
 6. Do read-then-rename under an `.owner` marker (Rust, TypeScript) give the same
    guarantee as a bbolt compare-and-swap when the process stops between rename
