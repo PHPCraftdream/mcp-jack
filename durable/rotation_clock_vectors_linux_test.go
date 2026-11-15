@@ -144,6 +144,9 @@ func newClockVectorStore(t *testing.T, binding rotation.Binding, clock *scripted
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	options := TrustOptions{Binding: binding, Window: 30, Checkpoint: rotation.Checkpoint{Hash: "-"}, Now: clock.Now}
 	path := filepath.Join(directory, "trust.db")
 	if err := InitializeTrustUnused(path, options); err != nil {

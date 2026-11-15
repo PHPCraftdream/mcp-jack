@@ -97,6 +97,15 @@ func TestRotationStateEmissionVectors(t *testing.T) {
 		"server-final-cutoff-no-resign":          true,
 	}
 
+	// Event families driven by other packages (see rotation/rotation_state_vectors_test.go).
+	otherPackageEvents := map[string]string{
+		"same-second-greatest-ordinal-wins":           "rotation",
+		"clock-rollback-latches":                      "durable",
+		"clock-equal-is-noop":                         "durable",
+		"clock-rollback-latch-unknown-is-unavailable": "durable",
+		"clock-advance-persists-revision":             "durable",
+	}
+
 	seen := make(map[string]int, len(fixture.EventCases))
 	for _, event := range fixture.EventCases {
 		seen[event.ID]++
@@ -108,8 +117,11 @@ func TestRotationStateEmissionVectors(t *testing.T) {
 				exclusion := emissionVectorExclusions[event.ID]
 				t.Skipf("excluded: %s | spec: %s", exclusion.reason, exclusion.spec)
 			})
+		case otherPackageEvents[event.ID] != "":
+			// Driven and reverse-guarded by the named package runner.
+			continue
 		default:
-			t.Fatalf("event_case %q has no emission plan or exclusion", event.ID)
+			t.Fatalf("event_case %q has no emission plan, exclusion or owning package", event.ID)
 		}
 	}
 	for id := range plans {
