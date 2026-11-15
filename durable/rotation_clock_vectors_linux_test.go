@@ -16,12 +16,15 @@ package durable
 // server/rotation/.
 
 import (
+	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
+	jack "github.com/PHPCraftdream/mcp-jack"
 	"github.com/PHPCraftdream/mcp-jack/rotation"
 	bolt "go.etcd.io/bbolt"
 )
@@ -101,6 +104,12 @@ var clockVectorDeviations = map[string][]string{
 	},
 }
 
+// clockVectorAnchorKID is the deterministic anchor identity of the vector guard.
+func clockVectorAnchorKID() string {
+	sum := sha256.Sum256([]byte("mcp-jack test key: candidate-server-anchor"))
+	return jack.KeyID(ed25519.NewKeyFromSeed(sum[:]).Public().(ed25519.PublicKey))
+}
+
 func loadClockVectorFixture(t *testing.T) clockVectorFixture {
 	t.Helper()
 	data, err := os.ReadFile(clockVectorFixturePath)
@@ -147,7 +156,7 @@ func newClockVectorStore(t *testing.T, binding rotation.Binding, clock *scripted
 	if err := os.Chmod(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	options := TrustOptions{Binding: binding, Window: 30, Checkpoint: rotation.Checkpoint{Hash: "-"}, Now: clock.Now}
+	options := TrustOptions{Binding: binding, Window: 30, Checkpoint: rotation.Checkpoint{Hash: "-", KID: clockVectorAnchorKID()}, Now: clock.Now}
 	path := filepath.Join(directory, "trust.db")
 	if err := InitializeTrustUnused(path, options); err != nil {
 		t.Fatalf("InitializeTrustUnused: %v", err)
