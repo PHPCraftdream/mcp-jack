@@ -128,10 +128,6 @@ struct VectorExpect {
     #[serde(default)]
     statuses: Option<Vec<(u16, String)>>,
     #[serde(default)]
-    callbacks: Option<serde_json::Value>,
-    #[serde(default)]
-    writes: Option<serde_json::Value>,
-    #[serde(default)]
     dispatches: Option<serde_json::Value>,
     #[serde(default)]
     confirmed_commits: Option<i64>,
@@ -755,7 +751,7 @@ fn drop(harness: Harness) {
 /// non-authenticated event tampers the target after signing so signature
 /// verification must fail pre-admission.
 fn build_request(
-    harness: &Harness,
+    _harness: &Harness,
     event: &VectorEvent,
     target: &str,
     refuse_authorization: bool,

@@ -57,15 +57,18 @@ impl Drop for Sandbox {
     }
 }
 
-/// Scripted clock: replays the samples in order, then repeats the last one.
+/// Scripted clock: returns the samples in order, then repeats the last one.
+/// The sample semantics must match the store's real cadence (Go: Reserve):
+/// one sample on open, then entry, intent, and final per reserve.
 fn clock(samples: &[i64]) -> impl FnMut() -> i64 {
     let queue = Rc::new(RefCell::new(samples.to_vec()));
     move || {
         let mut queue = queue.borrow_mut();
+        let sample = queue[0];
         if queue.len() > 1 {
             queue.remove(0);
         }
-        queue[0]
+        sample
     }
 }
 
@@ -299,7 +302,10 @@ fn different_kid_same_nonce_is_not_a_replay() {
 #[test]
 fn expiry_equality_is_live_reuse_needs_h_advance() {
     let sandbox = Sandbox::new();
-    let store = initialized(&sandbox, &[100, 130, 131]);
+    // Open 100; the first commit samples 100,100,100; the replay at ts=130
+    // takes one entry sample (no H advance for a live duplicate); the second
+    // commit samples 131,131,131.
+    let store = initialized(&sandbox, &[100, 100, 100, 100, 130, 131]);
     let (kid, nonce) = pair(1);
     drop(store.reserve(&admission(&kid, &nonce, 100)).unwrap());
     // now == retainUntil stays live; H does not advance for a pure replay.
@@ -401,8 +407,9 @@ fn high_water_latch_refuses_to_lower() {
 #[test]
 fn sample_below_high_water_latches_clock_unsafe_and_persists() {
     let sandbox = Sandbox::new();
-    // Samples: three at 200 for the first commit, then 150 on the next entry.
-    let store = initialized(&sandbox, &[200, 200, 200, 150]);
+    // Samples: open 200, three 200s for the first commit, then 150 on the
+    // next entry sample.
+    let store = initialized(&sandbox, &[200, 200, 200, 200, 150]);
     let (kid, nonce) = pair(1);
     drop(store.reserve(&admission(&kid, &nonce, 200)).unwrap());
     // Entry sample 150 is below H=200: latch first, then clock_unsafe.
@@ -429,8 +436,10 @@ fn sample_below_high_water_latches_clock_unsafe_and_persists() {
 fn out_of_domain_clock_sample_latches_unsafe() {
     let sandbox = Sandbox::new();
     DurableNonceStore::initialize_unused(&sandbox.file(), &options(), clock(&[100])).unwrap();
-    // Entry sample 100 is fine; the intent sample -1 is out of domain.
-    let store = DurableNonceStore::open(&sandbox.file(), &options(), clock(&[100, -1])).unwrap();
+    // Open sample 100 and entry sample 100 are in domain; the intent sample
+    // -1 is out of domain.
+    let store =
+        DurableNonceStore::open(&sandbox.file(), &options(), clock(&[100, 100, -1])).unwrap();
     let (kid, nonce) = pair(1);
     let error = store.reserve(&admission(&kid, &nonce, 100)).unwrap_err();
     assert_eq!(error.status, 503);
