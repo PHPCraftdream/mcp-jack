@@ -35,6 +35,16 @@ function fail(msg, code = 2) {
   process.exit(code);
 }
 
+// Эфемерный порт, выданный allocPort(), к моменту bind может быть занят чужим процессом
+// (исходящие соединения берут порты из того же диапазона). Это гонка окружения, а не отказ
+// продукта: повторяется только стартовая подготовка пары, проверки продукта не повторяются.
+class StartupPortRace extends Error {}
+
+function startupFail(message) {
+  if (/EADDRINUSE|address already in use/i.test(message)) throw new StartupPortRace(message);
+  fail(message);
+}
+
 function parseArgs(argv) {
   const out = { targets: join(SCRIPT_DIR, 'targets.json'), servers: null, clients: null, list: false, selfTest: false };
   for (let i = 0; i < argv.length; i++) {
@@ -311,7 +321,7 @@ async function runMatrix(opts) {
     try {
       line = await child._nextLine(10000, `${role} ${label}`);
     } catch (e) {
-      fail(`${role} failed to become ready for ${label}: ${e.message}`);
+      startupFail(`${role} failed to become ready for ${label}: ${e.message}`);
     }
     let ready;
     try { ready = JSON.parse(line); } catch {
@@ -340,8 +350,26 @@ async function runMatrix(opts) {
 
   return { failures, matrixCells, pairSummaries, processesSpawned };
 
-  // ---- one (client, server) cell: the full 14-check rotation sequence ----
+  // ---- one (client, server) cell with a bounded retry of the startup port race only ----
   async function runPair(client, server, pairLabel) {
+    const attempts = 3;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await runPairOnce(client, server, pairLabel);
+      } catch (e) {
+        if (!(e instanceof StartupPortRace) || attempt >= attempts) {
+          if (e instanceof StartupPortRace) fail(e.message);
+          throw e;
+        }
+        process.stdout.write(`pair ${pairLabel}: startup port race (${e.message.split('\n')[0]}); retrying with fresh ports (attempt ${attempt + 1}/${attempts})\n`);
+        for (const c of allChildren) killTree(c);
+        allChildren.clear();
+      }
+    }
+  }
+
+  // ---- one (client, server) cell: the full 14-check rotation sequence ----
+  async function runPairOnce(client, server, pairLabel) {
     const tmp = mkdtempSync(join(tmpdir(), 'mcp-jack-rotation-'));
     tmpRoots.push(tmp);
     const T = Math.floor(Date.now() / 1000) + 120;
@@ -422,7 +450,7 @@ async function runMatrix(opts) {
         fail(`fake rotation peer failed to bind ${portC} (${pairLabel}): ${line}`);
       }
     } catch (e) {
-      fail(`fake rotation peer failed for ${pairLabel}: ${e.message}`);
+      startupFail(`fake rotation peer failed for ${pairLabel}: ${e.message}`);
     }
 
     // The fake peer's mode file starts at "page" (it serves no traffic before
