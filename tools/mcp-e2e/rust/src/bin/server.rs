@@ -10,9 +10,9 @@ use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
 };
 use rmcp::{
-    ErrorData as McpError, RoleServer, ServerHandler, handler::server::router::tool::ToolRouter,
-    handler::server::wrapper::Parameters, model::*, service::RequestContext, tool, tool_handler,
-    tool_router,
+    handler::server::router::tool::ToolRouter, handler::server::wrapper::Parameters, model::*,
+    service::RequestContext, tool, tool_handler, tool_router, ErrorData as McpError, RoleServer,
+    ServerHandler,
 };
 
 /// Arguments for the `echo` tool.
@@ -91,7 +91,11 @@ fn log_parts(context: &RequestContext<RoleServer>) {
         "content_type": content_type,
         "mcp_protocol_version": mcp_protocol_version,
     });
-    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
         let _ = writeln!(file, "{record}");
     }
 }
@@ -113,7 +117,9 @@ async fn shutdown_signal() {
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
-    let socket_path = std::env::args().nth(1).ok_or("usage: mcp-e2e-rust-server SOCKET_PATH")?;
+    let socket_path = std::env::args()
+        .nth(1)
+        .ok_or("usage: mcp-e2e-rust-server SOCKET_PATH")?;
     let service = StreamableHttpService::new(
         || Ok(EchoServer::new()),
         LocalSessionManager::default().into(),

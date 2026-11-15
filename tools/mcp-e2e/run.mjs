@@ -837,7 +837,7 @@ function assertHops(chk, g4, captures, marker) {
 // asserted. Transport errors are recorded; only asserted probes FAIL.
 async function getProbes(chk, g4, sockPath, gwPort, serverLang) {
   const up = await rawRequest(
-    { socketPath: sockPath, path: '/mcp', method: 'GET', headers: { accept: 'text/event-stream', 'mcp-protocol-version': PROTO } },
+    { socketPath: sockPath, path: '/mcp', method: 'GET', headers: { host: 'upstream', accept: 'text/event-stream', 'mcp-protocol-version': PROTO } },
     GET_TIMEOUT_MS,
   );
   g4.upstream_status = up.error ? '-' : String(up.status);

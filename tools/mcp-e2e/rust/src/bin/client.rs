@@ -3,9 +3,9 @@
 //! over stdio, negotiates protocol 2025-11-25, lists tools, calls `echo`
 //! with a marker and prints exactly one JSON result line on stdout.
 
-use rmcp::service::{ClientLifecycleMode, serve_client_with_lifecycle};
-use rmcp::transport::TokioChildProcess;
 use rmcp::model::{CallToolRequestParams, ClientConfig, JsonObject, ProtocolVersion};
+use rmcp::service::{serve_client_with_lifecycle, ClientLifecycleMode};
+use rmcp::transport::TokioChildProcess;
 
 const USAGE: &str = "usage: mcp-e2e-rust-client JACK_BIN CONFIG_PATH MARKER";
 
@@ -41,8 +41,8 @@ async fn main() -> Result<(), String> {
         .call_tool(params)
         .await
         .map_err(|error| format!("tools/call: {error}"))?;
-    let body = serde_json::to_string(&result)
-        .map_err(|error| format!("serialize result: {error}"))?;
+    let body =
+        serde_json::to_string(&result).map_err(|error| format!("serialize result: {error}"))?;
     if result.is_error.unwrap_or(false) {
         return Err(format!("tools/call: isError: {body}"));
     }
