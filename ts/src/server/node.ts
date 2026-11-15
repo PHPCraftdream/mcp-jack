@@ -1,6 +1,6 @@
 /** node:http adapter serving a Fetch-standard handler. */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { AUTH_VALUES_SYMBOL, RAW_BODY_SYMBOL, RAW_TARGET_SYMBOL } from "./fetch.js";
+import { AUTH_VALUES_SYMBOL, RAW_BODY_SYMBOL, RAW_TARGET_SYMBOL, dropFragment, isOriginFormTarget } from "./fetch.js";
 import type { JackRequest } from "./fetch.js";
 
 /** Go defaultMaxBodyBytes (mirrors fetch.ts). */
@@ -119,7 +119,16 @@ export function serveNode(
     }
     const body = read.body;
 
-    const rawTarget = typeof req.url === "string" && req.url !== "" ? req.url : "/";
+    const wireUrl = typeof req.url === "string" && req.url !== "" ? req.url : "/";
+    // Spec 01 section 3.1: only an origin-form target of the bytes 0x21 to 0x7E
+    // is signed; refuse the rest (absolute-, authority-, asterisk-form, raw
+    // non-ASCII bytes) before verification. node:http's own parser already
+    // answers a bare 400 to some of them. A fragment is dropped.
+    if (!isOriginFormTarget(wireUrl)) {
+      writeError(res, 400, "invalid_request", "malformed request target");
+      return;
+    }
+    const rawTarget = dropFragment(wireUrl);
     // The URL object only satisfies the Request constructor; the RAW target
     // travels to the fetch handler on RAW_TARGET_SYMBOL because `new URL`
     // RESOLVES `..`/`.` dot segments and would otherwise change the bytes

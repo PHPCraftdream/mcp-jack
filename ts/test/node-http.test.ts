@@ -437,3 +437,44 @@ test("E10 repeated Set-Cookie headers preserved", { timeout: 5000 }, async () =>
   assert.equal(resp.status, 200);
   assert.deepEqual(resp.headers.getSetCookie(), ["a=1", "b=2"]);
 });
+
+// -- Request target: origin-form, exact wire bytes (spec 01 section 3.1). --
+
+test("E10 refused targets answer unsigned 400 invalid_request", { timeout: 10000 }, async () => {
+  const refused = ["http://example.com/mcp", "*"];
+  for (const target of refused) {
+    const res = await rawRequest(port, "GET", target, {}, Buffer.alloc(0));
+    assert.equal(res.status, 400, `status for ${JSON.stringify(target)}`);
+    const parsed = JSON.parse(res.body.toString("utf-8")) as { error: { code: string } };
+    assert.equal(parsed.error.code, "invalid_request", `code for ${JSON.stringify(target)}`);
+    assert.deepEqual(jackAuthValues(res.headers), [], `unsigned for ${JSON.stringify(target)}`);
+  }
+});
+
+test("E10b targets with bytes outside 0x21-0x7E or in authority form are refused with an unsigned 400", { timeout: 10000 }, async () => {
+  // node:http's own parser may answer these with a bare 400 before the adapter
+  // runs, so only the status and the absence of a signature are asserted.
+  // The two non-ASCII targets are the latin1 byte E9 and the UTF-8 bytes C3 A9 of "\u00e9".
+  const refused = ["example.com:80", "/mcp?q=\u00e9", "/mcp?q=\u00c3\u00a9", "/a\u007fb"];
+  for (const target of refused) {
+    const res = await rawRequest(port, "GET", target, {}, Buffer.alloc(0));
+    assert.equal(res.status, 400, `status for ${JSON.stringify(target)}`);
+    assert.deepEqual(jackAuthValues(res.headers), [], `unsigned for ${JSON.stringify(target)}`);
+  }
+});
+
+test("E10c a fragment is dropped and the request verifies over the target before it", { timeout: 5000 }, async () => {
+  const alice = seedSignerByName("alice");
+  const header = signRequest(alice, fixtureAud, "GET", "/mcp", new Uint8Array(0), randomNonce(), fixtureNow);
+  const res = await rawRequest(port, "GET", "/mcp#frag", { "jack-auth": header }, Buffer.alloc(0));
+  assert.equal(res.status, 200);
+});
+
+test("E11 percent-encoded non-ASCII target verifies over the exact bytes", { timeout: 5000 }, async () => {
+  const alice = seedSignerByName("alice");
+  const target = "/mcp?q=%C3%A9";
+  const header = signRequest(alice, fixtureAud, "GET", target, new Uint8Array(0), randomNonce(), fixtureNow);
+  const res = await rawRequest(port, "GET", target, { "jack-auth": header }, Buffer.alloc(0));
+  assert.equal(res.status, 200);
+});
+

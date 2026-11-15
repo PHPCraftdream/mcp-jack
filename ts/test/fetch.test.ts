@@ -14,8 +14,8 @@ import type { RegistryEntry as StateRegistryEntry } from "../src/server/state.js
 import { MemoryState } from "../src/server/state.js";
 import { Verifier } from "../src/server/verify.js";
 import type { VerifyResult } from "../src/server/verify.js";
-import { jackFetchHandler, jackIdentity } from "../src/server/fetch.js";
-import type { HandlerConfig } from "../src/server/fetch.js";
+import { jackFetchHandler, jackIdentity, RAW_TARGET_SYMBOL } from "../src/server/fetch.js";
+import type { HandlerConfig, JackRequest } from "../src/server/fetch.js";
 import type { JackIdentity } from "../src/server/verify.js";
 import { loadKeys, loadRegistry, type RegistryEntry as FixtureRegistryEntry } from "./fixtures.js";
 import { fixtureAud, fixtureNow, seedSignerByName } from "./client-harness.js";
@@ -890,4 +890,45 @@ test("response cap: a throwing next is still an unsigned 500", async () => {
   const response = await harness.handle(request);
   assert.equal(response.status, 500);
   assert.equal(response.headers.get("jack-auth"), null);
+});
+
+test("fetch adapter drops a fragment and verifies over the target before it", async () => {
+  const harness = newHarness(undefined, async () => new Response("{}", { headers: { "content-type": "application/json" } }));
+  const header = signRequest(aliceSigner(), fixtureAud, "GET", "/mcp?q=1", new Uint8Array(0), randomNonce(), fixtureNow);
+  const response = await harness.handle(new Request("http://localhost/mcp?q=1#frag", { headers: { "jack-auth": header } }));
+  assert.equal(response.status, 200);
+  assert.equal(harness.seen.calls, 1);
+});
+
+test("fetch adapter refuses non-origin-form raw targets from the symbol", async () => {
+  const harness = newHarness(undefined, async () => new Response("nope"));
+  for (const raw of ["http://example.com/mcp", "*", "example.com:80", "/a b"]) {
+    const request = new Request("http://localhost/mcp");
+    (request as JackRequest)[RAW_TARGET_SYMBOL] = raw;
+    const response = await harness.handle(request);
+    assert.equal(response.status, 400, raw);
+    assert.equal(errorCode(new Uint8Array(await response.arrayBuffer())), "invalid_request", raw);
+  }
+  assert.equal(harness.seen.calls, 0);
+});
+
+test("fetch adapter accepts a percent-encoded non-ASCII target", async () => {
+  const harness = newHarness(undefined, async () => new Response("{}", { headers: { "content-type": "application/json" } }));
+  const { request } = signedRequest(aliceSigner(), "GET", "/mcp?q=%C3%A9", new Uint8Array(0));
+  const response = await harness.handle(request);
+  assert.equal(response.status, 200);
+});
+
+test("fetch adapter answers malformed_auth for two Jack-Auth lines", async () => {
+  const harness = newHarness(undefined, async () => new Response("nope"));
+  const first = signRequest(aliceSigner(), fixtureAud, "GET", "/mcp", new Uint8Array(0), randomNonce(), fixtureNow);
+  const second = signRequest(aliceSigner(), fixtureAud, "GET", "/mcp", new Uint8Array(0), randomNonce(), fixtureNow);
+  const headers = new Headers();
+  headers.append("jack-auth", first);
+  headers.append("jack-auth", second);
+  const response = await harness.handle(new Request("http://localhost/mcp", { headers }));
+  assert.equal(response.status, 401);
+  assert.equal(errorCode(new Uint8Array(await response.arrayBuffer())), "malformed_auth");
+  assert.equal(response.headers.get("jack-auth"), null);
+  assert.equal(harness.seen.calls, 0);
 });

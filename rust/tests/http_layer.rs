@@ -830,6 +830,62 @@ async fn request_target_not_normalized() {
     assert_eq!(h.inner.seen_targets(), vec![target.to_string()]);
 }
 
+/// Non-origin-form targets are refused 400 invalid_request, unsigned, before
+/// verification: the request carries a valid signature over "/mcp", so any
+/// verifier involvement would answer 200 or 401 instead.
+#[tokio::test]
+async fn non_origin_form_targets_refused_before_verification() {
+    let h = new_harness(0, InnerResponse::ok_json(INNER_OK_BODY));
+    let alice = harness::signer_by_name("alice");
+    let signed = signed_request(&alice, "GET", "/mcp", b"");
+    for target in ["http://svc.example.test/mcp", "*", "svc.example.test:443"] {
+        let got = inspect(
+            send(&h.service, build_request(&signed, "GET", target, b""))
+                .await
+                .expect("no inner error"),
+        )
+        .await;
+        assert_eq!(got.status, 400, "target {target:?}");
+        assert_eq!(
+            error_code(&got.body),
+            "invalid_request",
+            "target {target:?}"
+        );
+        assert!(got.jack_auth.is_empty(), "unsigned: {target:?}");
+        assert!(got.www_authenticate.is_none(), "not a 401: {target:?}");
+    }
+    assert_eq!(h.inner.calls(), 0);
+    assert!(h.sink.events().is_empty());
+
+    // The same signature is still good for the origin-form target: the nonce
+    // was never consumed by the refusals.
+    let got = inspect(
+        send(&h.service, build_request(&signed, "GET", "/mcp", b""))
+            .await
+            .expect("no inner error"),
+    )
+    .await;
+    assert_eq!(got.status, 200);
+}
+
+/// A non-ASCII percent-encoded target is signed and verified over the exact
+/// received bytes (no decoding).
+#[tokio::test]
+async fn percent_encoded_non_ascii_target_verified_exactly() {
+    let h = new_harness(0, InnerResponse::ok_json(INNER_OK_BODY));
+    let alice = harness::signer_by_name("alice");
+    let target = "/mcp?q=%C3%A9";
+    let signed = signed_request(&alice, "GET", target, b"");
+    let got = inspect(
+        send(&h.service, build_request(&signed, "GET", target, b""))
+            .await
+            .expect("no inner error"),
+    )
+    .await;
+    assert_eq!(got.status, 200);
+    assert_eq!(h.inner.seen_targets(), vec![target.to_string()]);
+}
+
 // ---------------------------------------------------------------------------
 // Identity hand-off (spec 02 section 3): every forwarded accept carries a
 // VerifiedIdentity extension built by the layer from the verifier result;
