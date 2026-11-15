@@ -13,7 +13,7 @@ This file records repository history. The `0.1.0 (unreleased)` section describes
 - Go CLI (`jack`): keygen/bootstrap/enroll/gateway/bridge, user and invite admin commands, nonce and server-key commands.
 - 3x3 interop matrices: request/response, rotation, and credential transfer.
 - Official MCP SDK end-to-end CI job over the bounded legacy 2025-11-25 stdio profile.
-- Bounded Go fuzz campaign, coverage lanes, and packaged-consumer lanes.
+- Bounded Go fuzz campaign (15 native targets, including the server-key-rotation parsers and the durable store codecs), coverage lanes, and packaged-consumer lanes.
 - Deterministic property/mutation tests and a shared corpus for the Rust and TypeScript rotation layers.
 
 ### Known limitations
