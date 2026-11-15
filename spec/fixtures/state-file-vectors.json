@@ -421,6 +421,53 @@
       },
       "expect": "invalid",
       "reason": "key_ttl_seconds"
+    },
+    {
+      "id": "statefile-invalid-invite-created-at-int64-overflow",
+      "document": {
+        "version": 1,
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice"
+          }
+        ],
+        "invites": [
+          {
+            "invite_id": "5XYnrK9In0_bcwDgfuAmTeLB5sB1RF9PvYmeac5lDfI",
+            "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "created_at": 9223372036854776000,
+            "expires_at": 200
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "created_at"
+    },
+    {
+      "id": "statefile-invalid-invite-ttl-int64-overflow",
+      "document": {
+        "version": 1,
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice"
+          }
+        ],
+        "invites": [
+          {
+            "invite_id": "5XYnrK9In0_bcwDgfuAmTeLB5sB1RF9PvYmeac5lDfI",
+            "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "created_at": 100,
+            "expires_at": 200,
+            "key_ttl_seconds": 9223372036854776000
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "key_ttl_seconds"
     }
   ]
 }

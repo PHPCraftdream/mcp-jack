@@ -870,6 +870,97 @@
       ]
     },
     {
+      "id": "enroll-unknown-kid-unread-member",
+      "description": "an unread arguments member with an out-of-range number does not block the unknown-kid enrollment exception",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "registry": [
+          {
+            "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+            "name": "root",
+            "admin": true
+          }
+        ],
+        "invites": [
+          {
+            "invite_id": "IX2S2pb1XvdRuMuE1FKY9MOXLmEUEH6PHGa7K510BtQ",
+            "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+            "created_at": 1767225500,
+            "expires_at": 1767228600
+          }
+        ],
+        "nonce_cache": []
+      },
+      "steps": [
+        {
+          "request": {
+            "method": "POST",
+            "target": "/mcp",
+            "headers": [
+              [
+                "Jack-Auth",
+                "v1 kid=imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg,ts=1767225600,nonce=cXLtnFSayXM51o7WaBzM6Q,sig=I77KgbDdDez1h215wU0eXafr1nW00IrdMTQV7VIX_zRmreI-Nj8TCcud8fAy-8JbZuRLj9e6dG3hidunyXl8Dw"
+              ],
+              [
+                "Content-Type",
+                "application/json"
+              ]
+            ],
+            "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InRvb2xzL2NhbGwiLCJwYXJhbXMiOnsibmFtZSI6ImphY2suZW5yb2xsIiwiYXJndW1lbnRzIjp7ImNvZGUiOiJMMW05dEl4QV9zekN3RE1hMGQtZ2JVd05DOEh0Z3BseHpfdXE0eGtxQUJNIiwibmFtZSI6Im5ld2JpZSIsInB1YmxpY19rZXkiOiI3MUpNQ05zMTh0N0U1SXlzRk1aRUtzbmxyOUN3MGthaENfaDVGa0RXcmRRIiwieCI6MWU5OTl9fX0",
+            "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"jack.enroll\",\"arguments\":{\"code\":\"L1m9tIxA_szCwDMa0d-gbUwNC8Htgplxz_uq4xkqABM\",\"name\":\"newbie\",\"public_key\":\"71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ\",\"x\":1e999}}}"
+          },
+          "expect": {
+            "result": "reject",
+            "http_status": 403,
+            "code": "invalid_invite",
+            "nonce_recorded": true,
+            "audit": {
+              "tool": "jack.enroll",
+              "outcome": "failure",
+              "code": "invalid_invite",
+              "actor_kid": "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg"
+            },
+            "after": {
+              "users": [
+                {
+                  "kid": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "public_key": "TTHxMOfOhfhW_IjZBbREyBODHAf_5JxmTVz-fMM86hA",
+                  "name": "root",
+                  "admin": true,
+                  "not_before": null,
+                  "not_after": null
+                }
+              ],
+              "invites": [
+                {
+                  "invite_id": "IX2S2pb1XvdRuMuE1FKY9MOXLmEUEH6PHGa7K510BtQ",
+                  "admin": false,
+                  "created_by": "Bq2mPv2QXThnqiiKKqcr1krOElB6ifxGPyCCdfOC2VU",
+                  "created_at": 1767225500,
+                  "expires_at": 1767228600
+                }
+              ]
+            }
+          },
+          "debug": {
+            "signing_string_lines": [
+              "mcp-jack/v1/request",
+              "POST",
+              "/mcp",
+              "https://svc.example.test",
+              "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg",
+              "1767225600",
+              "cXLtnFSayXM51o7WaBzM6Q",
+              "cLvU-gENAlKZLP1KcQgriyVW-AOFqhhmjtP0Oz2Uh7o"
+            ]
+          }
+        }
+      ]
+    },
+    {
       "id": "enroll-malformed-code",
       "description": "a code that is not canonical base64url is invalid, not a parameter error",
       "state": {

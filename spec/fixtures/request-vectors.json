@@ -3200,6 +3200,49 @@
       }
     },
     {
+      "id": "request-bom-prefix",
+      "description": "a UTF-8 BOM before the JSON body is invalid_request",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "aud": "https://svc.example.test",
+        "nonce_cache": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs,ts=1767225600,nonce=jKJr6eyMgzQtohHQTnpqAQ,sig=1DmVn7CCgmGoA8X22tpb1oooGEPaxpKpE4yE9ohpig-jPECPbrULdb7q9R70cA29-lgEnQyHYlDLQWtVxPaQCw"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_b64u": "77u_eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsIm1ldGhvZCI6InBpbmcifQ"
+      },
+      "expect": {
+        "result": "reject",
+        "http_status": 400,
+        "code": "invalid_request",
+        "nonce_recorded": true
+      },
+      "debug": {
+        "signing_string_lines": [
+          "mcp-jack/v1/request",
+          "POST",
+          "/mcp",
+          "https://svc.example.test",
+          "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+          "1767225600",
+          "jKJr6eyMgzQtohHQTnpqAQ",
+          "1R4ad6yc0kg5xia9v_c7G4dFxJ1lnq545RAFGMwh7Jk"
+        ]
+      }
+    },
+    {
       "id": "request-batch",
       "description": "JSON-RPC batch is rejected",
       "state": {
