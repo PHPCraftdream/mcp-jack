@@ -11,11 +11,12 @@
 
 use std::cell::RefCell;
 
-use super::durable_format::{DurableStoreError, MAX_TIMESTAMP};
+use super::durable_format::{counter_to_usize, DurableStoreError, MAX_TIMESTAMP};
 use super::durable_store::{
     DurableAdmission, DurableAdmissionError, DurableLease, DurableNonceStore,
 };
-use super::verify::{Clock, RequestAuth, VerifyResult};
+use super::verify::{Clock, VerifyResult};
+use crate::auth_header::RequestAuth;
 
 /// Concrete store type accepted by the verifier: the store's injected clock
 /// is boxed so the verifier needs no generic parameter.
@@ -99,7 +100,7 @@ thread_local! {
 pub(crate) fn with_snapshot_window<T>(window: SnapshotWindow, f: impl FnOnce() -> T) -> T {
     let previous = SNAPSHOT.with(|slot| slot.replace(window));
     let result = f();
-    SNAPSHOT.with(|slot| slot.set(previous));
+    SNAPSHOT.with(|slot| slot.replace(previous));
     result
 }
 
@@ -316,9 +317,9 @@ pub fn nonce_store_info<C: FnMut() -> i64>(store: &DurableNonceStore<C>) -> Nonc
         generation: metadata.generation,
         owner: metadata.owner,
         window: metadata.window,
-        live: usize::from(metadata.live),
-        intents: usize::from(metadata.intents),
-        tombstones: usize::from(metadata.tombstones),
+        live: counter_to_usize(metadata.live),
+        intents: counter_to_usize(metadata.intents),
+        tombstones: counter_to_usize(metadata.tombstones),
         dirty: metadata.dirty,
         unsafe_latched: metadata.unsafe_latched,
     }

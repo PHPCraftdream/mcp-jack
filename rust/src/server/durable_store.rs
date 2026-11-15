@@ -7,14 +7,15 @@
 //! reports `durability_unavailable`; nothing is retried or repaired.
 
 use super::durable_format::{
-    decode_state, encode_state, expiry_key, intent_id, validate_record, DurableReceipt,
-    DurableRecord, DurableState, DurableStoreError, RecordKind, FORMAT_VERSION, MAX_COMBINED_ROWS,
-    MAX_DEPLOYMENT_BYTES, MAX_FILE_BYTES, MAX_PURGE_REMOVALS, MAX_TIMESTAMP, MAX_TOMBSTONES,
+    counter_to_usize, decode_state, encode_state, expiry_key, intent_id, validate_record,
+    DurableReceipt, DurableRecord, DurableState, DurableStoreError, RecordKind, FORMAT_VERSION,
+    MAX_COMBINED_ROWS, MAX_DEPLOYMENT_BYTES, MAX_FILE_BYTES, MAX_PURGE_REMOVALS, MAX_TIMESTAMP,
+    MAX_TOMBSTONES,
 };
 use crate::encoding::{body_hash, decode_b64url_fixed, encode_b64url};
 use rustix::fs::{self, AtFlags, Mode, OFlags};
 use sha2::{Digest, Sha256};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
@@ -89,6 +90,15 @@ impl DurableLease {
 impl Drop for DurableLease {
     fn drop(&mut self) {
         self.shared.leases.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+impl std::fmt::Debug for DurableLease {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DurableLease")
+            .field("valid", &self.valid())
+            .field("leases", &self.shared.leases.load(Ordering::SeqCst))
+            .finish_non_exhaustive()
     }
 }
 
@@ -531,9 +541,9 @@ impl<C: FnMut() -> i64> Session<C> {
         self.update(|state| {
             replay_lookup_state(state, key, intent_now)?;
             purge_expired(state, intent_now, key)?;
-            if usize::from(state.metadata.live) + usize::from(state.metadata.intents)
+            if counter_to_usize(state.metadata.live) + counter_to_usize(state.metadata.intents)
                 >= MAX_COMBINED_ROWS
-                || usize::from(state.metadata.tombstones) >= MAX_TOMBSTONES
+                || counter_to_usize(state.metadata.tombstones) >= MAX_TOMBSTONES
             {
                 return Err(admission_error(503, "capacity_exhausted"));
             }
@@ -563,7 +573,8 @@ impl<C: FnMut() -> i64> Session<C> {
             {
                 return Err(unavailable());
             }
-            if state.metadata.intents == 0 || usize::from(state.metadata.live) >= MAX_COMBINED_ROWS
+            if state.metadata.intents == 0
+                || counter_to_usize(state.metadata.live) >= MAX_COMBINED_ROWS
             {
                 return Err(unavailable());
             }
@@ -659,15 +670,16 @@ fn purge_expired(
         let mut key = [0; 48];
         key.copy_from_slice(&index[8..]);
         let row = state.live.get(&key).ok_or_else(unavailable)?;
-        if expiry_key(row.retain_until, &key) != index
-            || row.retain_until >= now
-            || state.operations.get(&row.operation_id) != Some(&key)
-        {
+        if expiry_key(row.retain_until, &key) != index || row.retain_until >= now {
+            return Err(unavailable());
+        }
+        let operation_id = row.operation_id;
+        if state.operations.get(&operation_id) != Some(&key) {
             return Err(unavailable());
         }
         state.live.remove(&key);
         state.expiry.remove(&index);
-        state.operations.remove(&row.operation_id);
+        state.operations.remove(&operation_id);
         state.metadata.live = state.metadata.live.checked_sub(1).ok_or_else(unavailable)?;
     }
     Ok(())
@@ -825,7 +837,7 @@ impl<C: FnMut() -> i64> DurableNonceStore<C> {
         if session.shared.fenced.load(Ordering::SeqCst) {
             result = Err(DurableStoreError::RecoveryRequired);
         } else if session.state.metadata.intents != 0
-            || usize::from(session.state.metadata.tombstones) >= MAX_TOMBSTONES
+            || counter_to_usize(session.state.metadata.tombstones) >= MAX_TOMBSTONES
             || session.state.metadata.unsafe_latched
         {
             session.fence();

@@ -7,8 +7,8 @@
 //! and never clears the startup fence.
 
 use super::durable_format::{
-    decode_state, encode_state, expiry_key, DurableReceipt, DurableState, DurableStoreError,
-    RecordKind, MAX_TOMBSTONES,
+    counter_to_usize, decode_state, encode_state, expiry_key, DurableReceipt, DurableState,
+    DurableStoreError, RecordKind, MAX_TOMBSTONES,
 };
 use super::durable_store::{
     normalized_options, read_state_bytes, snapshot_hash, write_state_bytes, DurableStoreOptions,
@@ -149,7 +149,7 @@ fn move_row_to_tombstone(
     if stored != Some(receipt) {
         return Err(DurableStoreError::RecoveryRequired);
     }
-    if usize::from(state.metadata.tombstones) >= MAX_TOMBSTONES {
+    if counter_to_usize(state.metadata.tombstones) >= MAX_TOMBSTONES {
         return Err(DurableStoreError::RecoveryRequired);
     }
     state.tombstones.insert(*key, receipt.clone());

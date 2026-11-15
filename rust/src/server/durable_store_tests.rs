@@ -13,6 +13,7 @@ use crate::server::durable_recovery::{inspect_recovery, reconcile_unknown};
 use crate::server::durable_store::{DurableAdmission, DurableNonceStore, DurableStoreOptions};
 use std::cell::RefCell;
 use std::fs;
+use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -134,10 +135,13 @@ fn record_of(
 }
 
 fn admission<'a>(kid: &'a str, nonce: &'a str, ts: i64) -> DurableAdmission<'a> {
+    // The signature must outlive the helper; leak it (test-only, bounded by
+    // the number of admissions constructed in this file).
+    let signature: &'static str = Box::leak(b64(9, 64).into_boxed_str());
     DurableAdmission {
         kid,
         nonce,
-        signature: &b64(9, 64),
+        signature,
         signing_bytes: b"mcp-jack/v1/request\nfixed-signing-bytes",
         timestamp: ts,
         window: WINDOW,
@@ -177,8 +181,8 @@ fn seeded_live(
 }
 
 fn initialized(sandbox: &Sandbox, samples: &[i64]) -> DurableNonceStore<impl FnMut() -> i64> {
-    DurableNonceStore::initialize_unused(sandbox.file(), &options(), clock(&[100])).unwrap();
-    DurableNonceStore::open(sandbox.file(), &options(), clock(samples)).unwrap()
+    DurableNonceStore::initialize_unused(&sandbox.file(), &options(), clock(&[100])).unwrap();
+    DurableNonceStore::open(&sandbox.file(), &options(), clock(samples)).unwrap()
 }
 
 fn decoded(sandbox: &Sandbox) -> crate::server::durable_format::DurableState {
@@ -231,10 +235,10 @@ fn wrong_deployment_or_window_is_refused() {
     store.close().unwrap();
     let mut wrong = options();
     wrong.deployment_id = "other-deployment".into();
-    assert!(DurableNonceStore::open(sandbox.file(), &wrong, clock(&[100])).is_err());
+    assert!(DurableNonceStore::open(&sandbox.file(), &wrong, clock(&[100])).is_err());
     let mut wrong = options();
     wrong.window = 60;
-    assert!(DurableNonceStore::open(sandbox.file(), &wrong, clock(&[100])).is_err());
+    assert!(DurableNonceStore::open(&sandbox.file(), &wrong, clock(&[100])).is_err());
 }
 
 // ----------------------------------------------------------- reserve basics
@@ -387,7 +391,7 @@ fn out_of_domain_timestamp_is_client_error_not_clock_unsafe() {
 
 #[test]
 fn high_water_latch_refuses_to_lower() {
-    let mut high_water = HighWater(200);
+    let mut high_water = HighWater::new(200);
     assert!(high_water.raise(250));
     assert_eq!(high_water.get(), 250);
     assert!(!high_water.raise(150));
@@ -425,9 +429,9 @@ fn sample_below_high_water_latches_clock_unsafe_and_persists() {
 #[test]
 fn out_of_domain_clock_sample_latches_unsafe() {
     let sandbox = Sandbox::new();
-    DurableNonceStore::initialize_unused(sandbox.file(), &options(), clock(&[100])).unwrap();
+    DurableNonceStore::initialize_unused(&sandbox.file(), &options(), clock(&[100])).unwrap();
     // Entry sample 100 is fine; the intent sample -1 is out of domain.
-    let store = DurableNonceStore::open(sandbox.file(), &options(), clock(&[100, -1])).unwrap();
+    let store = DurableNonceStore::open(&sandbox.file(), &options(), clock(&[100, -1])).unwrap();
     let (kid, nonce) = pair(1);
     let error = store.reserve(&admission(&kid, &nonce, 100)).unwrap_err();
     assert_eq!(error.status, 503);
@@ -541,7 +545,7 @@ fn clean_store_refuses_reconcile() {
         generation: 1,
         owner: 1,
         window: WINDOW,
-        high_water: HighWater(100),
+        high_water: HighWater::new(100),
         live: 0,
         intents: 0,
         tombstones: 0,
@@ -730,7 +734,8 @@ fn strict_loader_rejects_trailing_bytes_and_corruption() {
         "trailing bytes must be rejected"
     );
     let mut flipped = bytes.clone();
-    flipped[flipped.len() / 2] ^= 0xff;
+    let middle = flipped.len() / 2;
+    flipped[middle] ^= 0xff;
     assert!(
         decode_state(&flipped).is_err(),
         "checksum corruption must be rejected"

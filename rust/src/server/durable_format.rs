@@ -43,6 +43,12 @@ pub enum DurableStoreError {
 pub(crate) struct HighWater(i64);
 
 impl HighWater {
+    /// Builds a latch value; negative inputs saturate to zero so every
+    /// persisted high-water stays a valid timestamp-like value.
+    pub(crate) fn new(value: i64) -> Self {
+        Self(value.max(0))
+    }
+
     pub(crate) fn get(self) -> i64 {
         self.0
     }
@@ -56,6 +62,11 @@ impl HighWater {
             false
         }
     }
+}
+
+/// Converts a validated u32 counter; saturates instead of panicking.
+pub(crate) fn counter_to_usize(value: u32) -> usize {
+    usize::try_from(value).unwrap_or(usize::MAX)
 }
 
 /// Exact committed receipt (spec section 1 tuple). `format_version` and the
@@ -397,8 +408,8 @@ pub(crate) fn decode_metadata(data: &[u8]) -> Result<DurableMetadata, DurableSto
     if flags > 3 {
         return Err(DurableStoreError::InvalidStore);
     }
-    if usize::from(live) + usize::from(intents) > MAX_COMBINED_ROWS
-        || usize::from(tombstones) > MAX_TOMBSTONES
+    if counter_to_usize(live) + counter_to_usize(intents) > MAX_COMBINED_ROWS
+        || counter_to_usize(tombstones) > MAX_TOMBSTONES
     {
         return Err(DurableStoreError::InvalidStore);
     }
@@ -627,7 +638,7 @@ pub(crate) fn decode_state(bytes: &[u8]) -> Result<DurableState, DurableStoreErr
         ),
     ] {
         let count = reader.u32()?;
-        if usize::from(count) != usize::from(counter) {
+        if counter_to_usize(count) != counter_to_usize(counter) {
             return Err(DurableStoreError::InvalidStore);
         }
         for _ in 0..count {

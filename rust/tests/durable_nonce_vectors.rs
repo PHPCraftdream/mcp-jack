@@ -10,6 +10,7 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::fs;
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 

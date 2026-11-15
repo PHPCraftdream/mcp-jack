@@ -5,6 +5,7 @@
 #![cfg(target_os = "linux")]
 
 use std::fs;
+use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
