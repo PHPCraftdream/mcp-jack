@@ -13,7 +13,8 @@ func interruptiblePipe(original *os.File, input bool) (*os.File, error) {
 		return nil, errConfig
 	}
 	info, err := original.Stat()
-	if err != nil || info.Mode()&os.ModeNamedPipe == 0 {
+	// Pipe/FIFO или UNIX socket: Node child_process отдаёт stdio дочернему процессу socketpair-ом.
+	if err != nil || info.Mode()&(os.ModeNamedPipe|os.ModeSocket) == 0 {
 		return nil, errConfig
 	}
 	raw, err := original.SyscallConn()
