@@ -66,6 +66,7 @@ interface VectorEvent {
 }
 
 interface VectorState {
+  readonly window: number;
   readonly highWater: number;
   readonly intents: readonly JsonValue[];
   readonly live: readonly VectorRow[];
@@ -232,11 +233,11 @@ interface Fault {
   final?: "commit" | "abort" | undefined;
 }
 
-function makeHarness(path: string, fault: Fault): Harness {
+function makeHarness(path: string, fault: Fault, window: number): Harness {
   const values: number[] = [];
   let last = 0;
   const config = {
-    deploymentId: DEPLOYMENT, window: WINDOW,
+    deploymentId: DEPLOYMENT, window,
     now: () => (values.length > 0 ? (last = values.shift() as number) : last),
     injectTransactionFailure: (phase: "intent" | "final") => fault[phase],
   };
@@ -337,7 +338,7 @@ function buildDocument(state: VectorState): { document: DurableDocument; highWat
   const base: DurableMetadata = {
     deployment: DEPLOYMENT,
     storeId: encodeBase64URL(digest("candidate-vector/store").subarray(0, 16)),
-    generation: 1, owner: 1, window: WINDOW, highWater: state.highWater,
+    generation: 1, owner: 1, window: state.window, highWater: state.highWater,
     live: 0, intents: 0, tombstones: 0, dirty: false, unsafe: false,
   };
   const liveTimestamps = state.live.map((row) => row.ts);
@@ -386,7 +387,8 @@ test("shared nonce vectors: verdict table drives every case", { skip: !linux }, 
     const path = join(root, vector.id.replace(/[^a-zA-Z0-9-]/g, "-"));
     const events = vector.sequence ?? [vector.event as VectorEvent];
     const fault: Fault = {};
-    const harness = makeHarness(path, fault);
+    // The store window is the seeded state window: the window vectors send a different request window.
+    const harness = makeHarness(path, fault, vector.state?.window ?? WINDOW);
     let seededHighWater: number;
     if (vector.state === undefined) {
       // Sequence vectors have no seeded state: an empty initialized store.
