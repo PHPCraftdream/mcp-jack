@@ -17,10 +17,10 @@
 #   9. corpus scans, copy, and GOCACHE lookup failures remain separately diagnosed;
 #  10. duplicate discovery and discovery-log inspection failures fail closed;
 #  11. empty discovery output is rejected; campaign runs all real targets after failure;
-|#  12. a pure engine deadline race (nothing under the FAIL marker but the
-|#      bare timeout text) keeps the target green behind a ::warning;
-|#  13. deadline text plus a written reproducer or a panic, or without a
-|#      FAIL marker, still fails exactly as before.
+#  12. a pure engine deadline race (nothing under the FAIL marker but the
+#      bare timeout text) keeps the target green behind a ::warning;
+#  13. deadline text plus a written reproducer or a panic, or without a
+#      FAIL marker, still fails exactly as before.
 # Scratch lives under tools/fuzz/.selftest-<random> inside the worktree and
 # is removed on exit (trap).
 #
