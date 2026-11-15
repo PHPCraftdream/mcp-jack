@@ -2,10 +2,10 @@ package rotation
 
 import (
 	"encoding/json"
-	"errors"
-	"math"
+	"math/big"
 	"reflect"
 	"strconv"
+	"strings"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
 )
@@ -94,20 +94,128 @@ func structuredResult(value any) (DecodedResult, error) {
 	return result, nil
 }
 
-// canonicalNumber возвращает канонический JSON текст числового id, как
-// JSON.stringify в TS: кратчайший десятичный вид без экспоненты; -0 → "0".
+// canonicalNumber возвращает канонический JSON текст числового id: точная
+// десятичная канонизация без float. Отклоняет |value| >= 2^1024 — точку,
+// где Number() в TS даёт Infinity.
 func canonicalNumber(number json.Number) (string, bool) {
-	value, err := strconv.ParseFloat(number.String(), 64)
-	if err != nil && !errors.Is(err, strconv.ErrRange) {
+	negative, digits, exponent, ok := parseNumberLexeme(number.String())
+	if !ok || !withinFloatRange(digits, exponent) {
 		return "", false
 	}
-	if math.IsInf(value, 0) || math.IsNaN(value) {
-		return "", false
+	return canonicalDecimal(negative, digits, exponent), true
+}
+
+// parseNumberLexeme проверяет JSON number grammar
+// -?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)? и разбивает лексему:
+// знак, конкатенация цифр int+frac, E = exp - len(frac).
+func parseNumberLexeme(text string) (bool, string, int, bool) {
+	rest := text
+	negative := false
+	if len(rest) > 0 && rest[0] == '-' {
+		negative, rest = true, rest[1:]
 	}
-	if value == 0 {
-		return "0", true
+	mantissa, expText := rest, ""
+	if index := strings.IndexAny(rest, "eE"); index >= 0 {
+		mantissa, expText = rest[:index], rest[index+1:]
 	}
-	return strconv.FormatFloat(value, 'f', -1, 64), true
+	intPart, fracPart := mantissa, ""
+	if index := strings.IndexByte(mantissa, '.'); index >= 0 {
+		intPart, fracPart = mantissa[:index], mantissa[index+1:]
+	}
+	if !allDigits(intPart) || (len(intPart) > 1 && intPart[0] == '0') {
+		return false, "", 0, false
+	}
+	if index := strings.IndexByte(mantissa, '.'); index >= 0 && !allDigits(fracPart) {
+		return false, "", 0, false
+	}
+	exponent := -len(fracPart)
+	if expText != "" {
+		sign := 1
+		if expText[0] == '+' || expText[0] == '-' {
+			if expText[0] == '-' {
+				sign = -1
+			}
+			expText = expText[1:]
+		}
+		if !allDigits(expText) {
+			return false, "", 0, false
+		}
+		parsed, err := strconv.Atoi(expText)
+		if err != nil {
+			return false, "", 0, false
+		}
+		exponent += sign * parsed
+	}
+	return negative, intPart + fracPart, exponent, true
+}
+
+func allDigits(text string) bool {
+	if text == "" {
+		return false
+	}
+	for index := 0; index < len(text); index++ {
+		if text[index] < '0' || text[index] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// withinFloatRange — точный гейт |value| < 2^1024 через math/big:
+// E >= 0 сравнивает D·10^E с 2^1024, E < 0 — D с 2^1024·10^(-E).
+// Вне диапазона f64 гейт можно закрыть сразу: 10^309 > 2^1024;
+// E < -MaxResultBodyBytes ⇒ канонический текст длиннее лимита тела
+// и не может совпасть byte-for-byte с лексемой в принятом ответе.
+func withinFloatRange(digits string, exponent int) bool {
+	if exponent > 308 {
+		return false
+	}
+	if -exponent > MaxResultBodyBytes {
+		return false
+	}
+	value, ok := new(big.Int).SetString(digits, 10)
+	if !ok {
+		return false
+	}
+	limit := new(big.Int).Lsh(big.NewInt(1), 1024)
+	if exponent >= 0 {
+		value.Mul(value, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(exponent)), nil))
+	} else {
+		limit.Mul(limit, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-exponent)), nil))
+	}
+	return value.Cmp(limit) < 0
+}
+
+// canonicalDecimal — кратчайший десятичный вид без экспоненты;
+// ведущие/хвостовые нули убираются, -0 → "0", минус только у ненулевого.
+func canonicalDecimal(negative bool, digits string, exponent int) string {
+	digits = strings.TrimLeft(digits, "0")
+	if digits == "" {
+		return "0"
+	}
+	var text string
+	if exponent >= 0 {
+		text = digits + strings.Repeat("0", exponent)
+	} else {
+		split := -exponent
+		integer := "0"
+		fraction := digits
+		if len(digits) > split {
+			integer, fraction = digits[:len(digits)-split], digits[len(digits)-split:]
+		} else {
+			fraction = strings.Repeat("0", split-len(digits)) + digits
+		}
+		fraction = strings.TrimRight(fraction, "0")
+		if fraction == "" {
+			text = integer
+		} else {
+			text = integer + "." + fraction
+		}
+	}
+	if negative {
+		text = "-" + text
+	}
+	return text
 }
 
 // idMatches сравнивает id ответа с ожидаемым: строки — по декодированному

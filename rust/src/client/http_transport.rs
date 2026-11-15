@@ -582,13 +582,15 @@ async fn perform(
         TransportError::Transport(format!("jack client: http transport: HTTP request: {e}"))
     })?;
     let status = response.status().as_u16();
-    if response
-        .headers()
-        .get_all(http::header::CONTENT_TYPE)
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .any(|v| crate::client::transport::media_type(v) == "text/event-stream")
-    {
+    // Every Content-Type field line takes part (see is_event_stream); a
+    // non-UTF-8 value cannot spell text/event-stream and is skipped.
+    if crate::client::transport::is_event_stream(
+        response
+            .headers()
+            .get_all(http::header::CONTENT_TYPE)
+            .iter()
+            .filter_map(|v| v.to_str().ok()),
+    ) {
         return Err(TransportError::Streaming);
     }
     let mut headers = Vec::new();
