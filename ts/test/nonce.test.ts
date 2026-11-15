@@ -74,3 +74,19 @@ test("lazy purge on checkAndRecord", () => {
   assert.equal(store.checkAndRecord("kidNew2", "nonceNew2", 60, 120), false);
   assert.equal(store.len(), 2);
 });
+
+test("a non-integer or negative now is refused without recording", () => {
+  for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5]) {
+    const store = new NonceStore();
+    assert.throws(() => store.checkAndRecord("kidA", "n", bad, 130), /now must be a non-negative safe integer/);
+    assert.equal(store.len(), 0, `now=${bad}: nothing recorded`);
+    // A healthy now still works on the same store afterwards.
+    assert.equal(store.checkAndRecord("kidA", "n", 100, 130), false);
+  }
+});
+
+test("a non-integer retainUntil is refused without recording", () => {
+  const store = new NonceStore();
+  assert.throws(() => store.checkAndRecord("kidA", "n", 100, Number.NaN));
+  assert.equal(store.len(), 0);
+});

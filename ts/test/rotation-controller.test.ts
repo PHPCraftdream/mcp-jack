@@ -394,3 +394,40 @@ test("refresh controller: real pre/post-rename unknown CAS keeps one-attempt gat
     assert.equal(retained.length, outcome === "before" ? 1 : 0);
   }
 });
+
+test("refresh controller: late final failure after commit reports BOTH the committed outcome and the error", { skip: !linux }, (context) => {
+  const environment = setup(context);
+  const first = firstRecord(environment);
+  const { controller, store, clock } = environment;
+  clock.now = first.activatesAt - 1;
+  const page = signedPage(environment, [first]);
+  const cursor = store.snapshot().snapshot.head;
+  const before = first.activatesAt - 1;
+  // Four authoritative samples: the last one (first.activatesAt) makes the
+  // POST-commit final gate fail with rotation_key_interval.
+  const sequence = [before, before, before, first.activatesAt];
+  clock.hook = () => { const value = sequence.shift(); assert.notEqual(value, undefined); return value as number; };
+  let caught: unknown;
+  try {
+    controller.acceptRefresh(page, "refresh", cursor);
+  } catch (error) {
+    caught = error;
+  }
+  assert.equal(sequence.length, 0);
+  delete clock.hook;
+  assert.ok(caught instanceof JackError, "still a JackError (httpStatus 0 handling keeps working)");
+  assert.ok(caught instanceof rotation.RotationRefreshCommittedError, "carries the committed outcome");
+  const committedError = caught as rotation.RotationRefreshCommittedError;
+  assert.equal(committedError.httpStatus, 0);
+  assert.equal(committedError.code, "rotation_key_interval");
+  // Without the fix this is a plain JackError: the caller cannot observe that
+  // trust already advanced (revision 2, head ordinal 1).
+  assert.ok(committedError.result !== undefined, "committed result is attached to the error");
+  assert.equal(committedError.result?.committed, true);
+  assert.equal(committedError.result?.revision, 2);
+  // The store really did commit.
+  const state = store.snapshot();
+  assert.equal(state.snapshot.revision, 2);
+  assert.equal(state.snapshot.head.ordinal, 1);
+  assert.deepEqual(state.snapshot.records, [first.wire]);
+});

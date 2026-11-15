@@ -55,7 +55,7 @@ mcp-jack/v1/request
 |---|---|
 | `method` | HTTP method exactly as sent (e.g. `POST`). |
 | `target` | The origin-form request target as sent on the wire: path plus `?query` if present, no fragment, byte-for-byte (no normalisation, no re-encoding). It MUST NOT contain control characters. |
-| `aud` | The audience identifier configured on the server and in the client (for example `https://svc.example.test`). The server compares against its own configuration, never against the `Host` header, so the check survives reverse proxies. |
+| `aud` | The audience identifier configured on the server and in the client (for example `https://svc.example.test`). The server compares against its own configuration, never against the `Host` header, so the check survives reverse proxies. `aud` MUST NOT contain control characters (bytes below 0x20 or 0x7f). |
 | `kid`, `ts`, `nonce` | The header values as sent. |
 | `body-hash` | `base64url(SHA-256(body_bytes))` over the exact request body bytes. An empty body is hashed as an empty byte string, so the field is never empty (it is the encoding of the SHA-256 of zero bytes). |
 

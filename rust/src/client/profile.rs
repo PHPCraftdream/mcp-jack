@@ -54,6 +54,11 @@ fn validate_profile(p: &Profile) -> Result<(), ClientError> {
             "jack client: profile aud must be non-empty".to_string(),
         ));
     }
+    if crate::client::auth::has_control(&p.aud) {
+        return Err(ClientError::Client(
+            "jack client: profile aud must not contain control characters".to_string(),
+        ));
+    }
     let server_key =
         crate::encoding::decode_b64url_fixed(&p.server_public_key, 32).map_err(|e| {
             // BadBase64Url's Display is "jack: invalid base64url", matching
@@ -232,6 +237,29 @@ mod tests {
                 "{name}: LoadProfile accepted invalid document {d}"
             );
         }
+    }
+
+    #[test]
+    fn load_profile_rejects_control_characters_in_aud() {
+        // The signing string is LF-joined lines including the audience, so an
+        // aud with control characters would make it ambiguous (Go:
+        // audHasControl in validateProfile).
+        let (p, _) = valid_profile();
+        for bad in ["a\nb", "a\rb", "a\0b", "a\tb", "a\u{7f}b"] {
+            let bad_profile = Profile {
+                aud: bad.to_owned(),
+                ..p.clone()
+            };
+            let err = load_profile(&doc(&bad_profile))
+                .expect_err("control-character aud must be rejected");
+            assert_eq!(
+                err.to_string(),
+                "jack client: profile aud must not contain control characters",
+                "aud {bad:?}"
+            );
+        }
+        // An ordinary value is still accepted.
+        load_profile(&doc(&p)).expect("ordinary aud must be accepted");
     }
 
     #[test]

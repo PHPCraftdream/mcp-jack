@@ -797,3 +797,76 @@ test("verifier config", () => {
   assert.equal(verifier0.verify(req30).accepted, true, "window 0: 30 accepted (DEFAULT_WINDOW)");
   assert.equal(verifier0.verify(req31).code, Code.TIMESTAMP_OUT_OF_WINDOW, "window 0: 31 rejected (DEFAULT_WINDOW)");
 });
+
+// ---------------------------------------------------------------------------
+// 17. Fail-closed on a broken injected clock (review L-2) and aud validation.
+// ---------------------------------------------------------------------------
+
+/** A verifier over a fresh seeded registry with an arbitrary clock. */
+function clockHarness(now: () => number, native?: NativeTools): { verifier: Verifier; nonces: NonceStore } {
+  const state = new MemoryState();
+  state.update((edit) => {
+    for (const f of loadRegistry().keys) {
+      const entry: { -readonly [K in keyof RegistryEntry]: RegistryEntry[K] } = {
+        kid: f.kid,
+        publicKey: f.publicKey,
+        name: f.name,
+      };
+      if (f.admin !== undefined) entry.admin = f.admin;
+      if (f.notBefore !== undefined) entry.notBefore = f.notBefore;
+      if (f.notAfter !== undefined) entry.notAfter = f.notAfter;
+      edit.putKey(entry);
+    }
+  });
+  const nonces = new NonceStore();
+  const verifier = new Verifier({
+    aud: loadRegistry().aud,
+    state,
+    nonces,
+    now,
+    ...(native !== undefined ? { native } : {}),
+  });
+  return { verifier, nonces };
+}
+
+test("a broken injected clock fails closed with 500 and records no nonce", () => {
+  const alice = materialFor(ALICE);
+  for (const bad of [Number.NaN, undefined as unknown as number, -1, Number.POSITIVE_INFINITY]) {
+    const native = new RecordingNative();
+    const { verifier, nonces } = clockHarness(() => bad, native);
+    // A request that is otherwise perfectly valid: signed for ts=NOW.
+    const { req } = signed(alice, { body: encoder.encode(PING) });
+    const res = verifier.verify(req);
+    assert.equal(res.accepted, false, `${bad}: accepted`);
+    assert.equal(res.httpStatus, 500, `${bad}: status`);
+    assert.equal(res.code, "internal_error", `${bad}: code`);
+    assert.equal(res.nonceRecorded, false, `${bad}: nonceRecorded`);
+    assert.equal(res.requestSig, "", `${bad}: requestSig`);
+    assert.equal(nonces.len(), 0, `${bad}: no nonce recorded`);
+    assert.equal(native.calls.length, 0, `${bad}: nothing dispatched`);
+  }
+});
+
+test("verifier constructor rejects a non-finite window", () => {
+  const base = (): VerifierConfig => ({
+    aud: loadRegistry().aud,
+    state: new MemoryState(),
+    nonces: new NonceStore(),
+    now: () => NOW,
+  });
+  assert.throws(() => new Verifier({ ...base(), window: Number.NaN }), /window must be a finite number/);
+  assert.throws(() => new Verifier({ ...base(), window: Number.POSITIVE_INFINITY }), /window must be a finite number/);
+});
+
+test("verifier constructor rejects aud control characters; ordinary aud accepted", () => {
+  const base = (): VerifierConfig => ({
+    aud: loadRegistry().aud,
+    state: new MemoryState(),
+    nonces: new NonceStore(),
+    now: () => NOW,
+  });
+  for (const bad of ["a\nb", "a\rb", "a\u0000b", "a\tb", "a\u007fb"]) {
+    assert.throws(() => new Verifier({ ...base(), aud: bad }), /aud must be non-empty and contain no control characters/);
+  }
+  assert.doesNotThrow(() => new Verifier(base()), "ordinary aud accepted");
+});
