@@ -43,7 +43,7 @@ jobs:
         run: cat coverage/go-summary.txt
       - name: Upload Go coverage artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-go
           path: |
@@ -89,7 +89,7 @@ jobs:
         run: cat ../coverage/rust/summary.txt
       - name: Upload Rust coverage artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-rust
           path: |
@@ -130,7 +130,7 @@ jobs:
         run: cat coverage/summary.txt
       - name: Upload TS coverage artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-ts
           path: |

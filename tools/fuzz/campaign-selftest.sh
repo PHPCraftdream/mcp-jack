@@ -16,7 +16,11 @@
 #   8. fuzz tool failures without target failure markers are distinct;
 #   9. corpus scans, copy, and GOCACHE lookup failures remain separately diagnosed;
 #  10. duplicate discovery and discovery-log inspection failures fail closed;
-#  11. empty discovery output is rejected; campaign runs all real targets after failure.
+#  11. empty discovery output is rejected; campaign runs all real targets after failure;
+#  12. a pure engine deadline race (nothing under the FAIL marker but the
+#      bare timeout text) keeps the target green behind a ::warning;
+#  13. deadline text plus a written reproducer or a panic, or without a
+#      FAIL marker, still fails exactly as before.
 # Scratch lives under tools/fuzz/.selftest-<random> inside the worktree and
 # is removed on exit (trap).
 #
@@ -75,7 +79,35 @@ fi
 if [ "$1" = "test" ] || [ "$1" = "fuzz" ]; then
   echo "stub fuzz run"
   : > "$SELFTEST_RUN_MARKER"
-  if [ "$go_status" -eq 1 ]; then
+  if [ -n "${SELFTEST_LOG_KIND:-}" ]; then
+    case "$SELFTEST_LOG_KIND" in
+      deadline)
+        echo "--- FAIL: ${fuzz_target:-FuzzX} (30.07s)"
+        echo "    context deadline exceeded"
+        echo "FAIL"
+        echo "exit status 1"
+        ;;
+      deadline_reproducer)
+        echo "Failing input written to testdata/fuzz/${fuzz_target:-FuzzX}/abc"
+        echo "--- FAIL: ${fuzz_target:-FuzzX} (30.07s)"
+        echo "    context deadline exceeded"
+        echo "FAIL"
+        echo "exit status 1"
+        ;;
+      deadline_panic)
+        echo "--- FAIL: ${fuzz_target:-FuzzX} (30.07s)"
+        echo "    panic: stub target panic"
+        echo "    context deadline exceeded"
+        echo "FAIL"
+        echo "exit status 1"
+        ;;
+      deadline_no_marker)
+        echo "context deadline exceeded"
+        echo "FAIL"
+        echo "exit status 1"
+        ;;
+    esac
+  elif [ "$go_status" -eq 1 ]; then
     echo "--- FAIL: ${fuzz_target:-FuzzX} (0.00s)"
   elif [ "$go_status" -ne 0 ]; then
     echo "stub go test tool failure"
@@ -170,7 +202,7 @@ case_out="$work/case.out"
 case_err="$work/case.err"
 # Deliberately global: read by the caller after run_case returns, never
 # captured via command substitution (that would lose the subshell status).
-run_case() { # status, plant, pkg, discovered name, discovery status, fail-copy, fail-execution-tee, fail-find, duplicate-discovery, fail-GOCACHE, fail-discovery-tee, fail-discovery-check
+run_case() { # status, plant, pkg, discovered name, discovery status, fail-copy, fail-execution-tee, fail-find, duplicate-discovery, fail-GOCACHE, fail-discovery-tee, fail-discovery-check, campaign-log-kind
   (
     cd "$pkgroot" || exit 99
     export PATH="$stub_dir:$PATH"
@@ -193,6 +225,7 @@ run_case() { # status, plant, pkg, discovered name, discovery status, fail-copy,
     export SELFTEST_FAIL_FIND="${8:-0}"
     export SELFTEST_DUPLICATE_DISCOVERY="${9:-0}"
     export SELFTEST_FAIL_GOCACHE="${10:-0}"
+    if [ -n "${13:-}" ]; then export SELFTEST_LOG_KIND="${13}"; else unset SELFTEST_LOG_KIND; fi
     bash "$here/run-target.sh" "$3" FuzzX 1s 1s "$out"
   ) >"$case_out" 2>"$case_err"
   case_status=$?
@@ -318,7 +351,45 @@ expect_status "scenario 14: empty discovery fails closed" "$case_status" 1
 expect_annotation "scenario 14: empty result is a missing exact target" "exact target server/FuzzX was not discovered exactly once"
 [ ! -e "$work/run-marker" ] || fail "scenario 14: fuzz command ran after empty discovery"
 
-# Scenario 15: a failed target does not abort the bounded campaign; all six
+# Scenario 15: a pure engine deadline race (only the bare timeout text under
+# the FAIL marker, no reproducer/panic/hang evidence) keeps the gate green.
+rm -f "$out/server-FuzzX.log"
+rm -rf "$out/server-FuzzX-reproducers"
+run_case "1" "" "server" "FuzzX" "0" "0" "0" "0" "0" "0" "0" "0" "deadline"
+expect_status "scenario 15: engine deadline race does not fail the target" "$case_status" 0
+expect_annotation "scenario 15: deadline-race warning present" "go-fuzz-engine-deadline"
+expect_no_annotation "scenario 15: no target-failure annotation" "reported a target failure"
+expect_no_annotation "scenario 15: no tool-failure annotation" "execution failed without a target failure marker"
+expect_no_annotation "scenario 15: no error annotation at all" "::error"
+[ -s "$out/server-FuzzX.log" ] || fail "scenario 15: execution log missing"
+[ ! -e "$out/server-FuzzX-reproducers" ] || fail "scenario 15: evidence collected despite no finding"
+
+# Scenario 16: the same deadline log plus a written reproducer is a genuine
+# finding: target failure with evidence collected from both corpora.
+rm -rf "$out/server-FuzzX-reproducers"
+run_case "1" "1" "server" "FuzzX" "0" "0" "0" "0" "0" "0" "0" "0" "deadline_reproducer"
+expect_status "scenario 16: deadline with a written reproducer fails" "$case_status" 1
+expect_annotation "scenario 16: target-failure annotation present" "reported a target failure (log:"
+expect_no_annotation "scenario 16: no deadline-race warning" "go-fuzz-engine-deadline"
+[ -f "$out/server-FuzzX-reproducers/gocache/input" ] || fail "scenario 16: gocache evidence missing"
+[ -f "$out/server-FuzzX-reproducers/testdata/failing" ] || fail "scenario 16: testdata evidence missing"
+
+# Scenario 17: deadline text plus a panic under the marker is a genuine
+# finding, not a deadline race.
+run_case "1" "" "server" "FuzzX" "0" "0" "0" "0" "0" "0" "0" "0" "deadline_panic"
+expect_status "scenario 17: deadline with a panic fails" "$case_status" 1
+expect_annotation "scenario 17: target-failure annotation present" "reported a target failure (log:"
+expect_no_annotation "scenario 17: no deadline-race warning" "go-fuzz-engine-deadline"
+
+# Scenario 18: deadline text without any FAIL marker stays a distinct tool
+# failure; the warning must never fire on it.
+run_case "1" "" "server" "FuzzX" "0" "0" "0" "0" "0" "0" "0" "0" "deadline_no_marker"
+expect_status "scenario 18: deadline text without a marker fails as a tool failure" "$case_status" 1
+expect_annotation "scenario 18: tool-failure annotation present" "execution failed without a target failure marker"
+expect_no_annotation "scenario 18: no deadline-race warning" "go-fuzz-engine-deadline"
+expect_no_annotation "scenario 18: not a target failure" "reported a target failure"
+
+# Scenario 19: a failed target does not abort the bounded campaign; all six
 # current real targets are invoked and the aggregate campaign status is nonzero.
 campaign_runs="$work/campaign-runs.log"
 rm -f "$campaign_runs"
@@ -334,12 +405,12 @@ rm -f "$campaign_runs"
   bash "$here/go-campaign.sh" 1s 1s "$work/campaign-out"
 ) >"$case_out" 2>"$case_err"
 case_status=$?
-expect_status "scenario 15: campaign preserves failure status" "$case_status" 1
+expect_status "scenario 19: campaign preserves failure status" "$case_status" 1
 campaign_count=$(awk 'END { print NR + 0 }' "$campaign_runs")
-expect_status "scenario 15: all six targets run despite a failure" "$campaign_count" 6
+expect_status "scenario 19: all six targets run despite a failure" "$campaign_count" 6
 for target in FuzzParseRequestAuth FuzzParseResponseAuth FuzzClassifyBody FuzzLoadProfile FuzzImportEnvelopes FuzzValidateCredential; do
   if ! awk -v target="$target" '$1 == target { found = 1 } END { exit !found }' "$campaign_runs"; then
-    fail "scenario 15: campaign omitted $target"
+    fail "scenario 19: campaign omitted $target"
   fi
 done
 
