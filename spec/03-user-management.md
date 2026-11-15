@@ -130,7 +130,7 @@ An agent that reads untrusted content (logs, web pages, documents) can be steere
 | 400 | `invalid_params` | Missing, mistyped or out-of-range tool arguments. |
 | 400 | `key_rejected` | Public key fails section 2. |
 | 400 | `invalid_proof` | `jack.key.rotate` proof does not verify. |
-| 403 | `invalid_invite` | The invite is unknown, expired, used or revoked. |
+| 403 | `invalid_invite` | The invite is unknown, expired, used or revoked. For an unregistered key this is only the race between the read-only live-invite check and the atomic consumption: without a live invite the answer is the unsigned `401 unknown_key` (section 3.2). |
 | 403 | `admin_required` | The caller is not an administrator. |
 | 404 | `unknown_target` | `kid` or `invite_id` is not registered. |
 | 409 | `name_taken` | The name is already used. |

@@ -217,7 +217,7 @@ The focused TypeScript raw-path integration controls are in `ts/test/interop-cli
 | `invalid-request` | `rejected`, HTTP 400 `invalid_request` (signed) |
 | `unknown-native-tool` | `rejected`, HTTP 403 `operation_denied` (signed) |
 | `enroll` | `ok`, HTTP 200; newly enrolled identity has `admin:false` |
-| `enroll-used-invite` | `rejected`, HTTP 403 `invalid_invite` (signed) |
+| `enroll-used-invite` | `rejected`, HTTP 401 `unknown_key` (unsigned: a used invite is no longer live) |
 | `rotate` | `ok`, HTTP 200; new key retains Alice name and `admin:false` |
 | `admin-create` | `ok`, HTTP 200; newbie2 key is reported as Dave with `admin:false` |
 | `revoke-key` | `rejected`, HTTP 401 `unknown_key` after revocation |
@@ -233,7 +233,7 @@ State-changing `fresh` cases use a pristine state file. A scenario with `registr
 Multi-step mechanics are normative through the scenario steps and expected result:
 
 - `enroll`: root creates a default (non-admin) invite; the new identity enrolls with its own key; that identity calls `jack.whoami`.
-- `enroll-used-invite`: create one default invite, enroll `newbie`, then attempt to enroll `newbie2` with the same code; the final step must be `invalid_invite`.
+- `enroll-used-invite`: create one default invite, enroll `newbie`, then attempt to enroll `newbie2` with the same code; the final step must be an unsigned `401 unknown_key`.
 - `rotate`: Alice proves possession of the new key; the old Alice key must then be rejected as `unknown_key`; the new key reports Alice's name and non-admin status.
 - `admin-create`: root creates a default invite and creates `dave` with `admin` omitted; `newbie` enrolls; the primary fixture key reports the registered name `dave`.
 - `revoke-key`: root revokes Bob, then Bob's next request is `unknown_key`.
