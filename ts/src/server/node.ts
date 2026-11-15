@@ -2,6 +2,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { AUTH_VALUES_SYMBOL, RAW_BODY_SYMBOL, RAW_TARGET_SYMBOL, dropFragment, isOriginFormTarget } from "./fetch.js";
 import type { JackRequest } from "./fetch.js";
+import { finishResponseAdmission } from "./durable-admission.js";
 
 /** Go defaultMaxBodyBytes (mirrors fetch.ts). */
 const DEFAULT_MAX_BODY_BYTES = 1 << 20;
@@ -208,5 +209,10 @@ export function serveNode(
     } catch {
       // The socket may have died between the guard and the write.
     }
+    // Durable admission finishes AFTER the response is written (Go defer
+    // res.Done() in the middleware). Idempotent: the fetch handler that
+    // produced this Response already released the lease; a Response without a
+    // durable association (default path) is a no-op.
+    finishResponseAdmission(resp);
   }
 }
