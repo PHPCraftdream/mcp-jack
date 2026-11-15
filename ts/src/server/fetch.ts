@@ -86,9 +86,12 @@ const PKCS8_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
  */
 export const RAW_TARGET_SYMBOL = Symbol("mcp-jack.raw-target");
 export const AUTH_VALUES_SYMBOL = Symbol("mcp-jack.auth-values");
+export const RAW_BODY_SYMBOL = Symbol("mcp-jack.raw-body");
 export interface JackRequest extends Request {
   [RAW_TARGET_SYMBOL]?: string;
   [AUTH_VALUES_SYMBOL]?: readonly string[];
+  /** Exact request body bytes when the Request constructor could not carry them (undici refuses a GET/HEAD body); consumed by jackFetchHandler before reading the stream. */
+  [RAW_BODY_SYMBOL]?: Uint8Array;
 }
 
 /**
@@ -447,8 +450,14 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
 
     // The body must be read IN FULL to be hashed whole. The reader lock is
     // released on every exit path; best-effort cancel on the over-limit path.
+    // A GET body cannot travel in the Request (undici refuses one), so the
+    // node adapter hands the exact bytes over on the symbol (spec 01
+    // section 3.1: the hash covers the bytes exactly as sent, every method).
+    const rawBody = (req as JackRequest)[RAW_BODY_SYMBOL];
     let body: Uint8Array;
-    if (req.body === null) {
+    if (rawBody !== undefined) {
+      body = rawBody;
+    } else if (req.body === null) {
       body = new Uint8Array(0);
     } else {
       const reader = req.body.getReader();

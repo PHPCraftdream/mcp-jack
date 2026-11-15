@@ -1,6 +1,6 @@
 /** node:http adapter serving a Fetch-standard handler. */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { AUTH_VALUES_SYMBOL, RAW_TARGET_SYMBOL } from "./fetch.js";
+import { AUTH_VALUES_SYMBOL, RAW_BODY_SYMBOL, RAW_TARGET_SYMBOL } from "./fetch.js";
 import type { JackRequest } from "./fetch.js";
 
 /** Go defaultMaxBodyBytes (mirrors fetch.ts). */
@@ -162,6 +162,12 @@ export function serveNode(
     });
     (fetchReq as JackRequest)[RAW_TARGET_SYMBOL] = rawTarget;
     (fetchReq as JackRequest)[AUTH_VALUES_SYMBOL] = jackAuthValues;
+    // undici refuses a GET/HEAD body, but the signature covers the bytes
+    // exactly as sent (spec 01 section 3.1): the raw bytes travel to the
+    // handler on the symbol, like the raw target and the Jack-Auth values.
+    if ((method === "GET" || method === "HEAD") && body.length > 0) {
+      (fetchReq as JackRequest)[RAW_BODY_SYMBOL] = body;
+    }
 
     let resp: Response;
     try {

@@ -612,6 +612,102 @@ fn raw_as_string(value: &RawValue) -> Option<String> {
         .and_then(|v| v.as_str().map(|s| s.to_owned()))
 }
 
+/// The maximum nesting depth of arrays and objects the body may reach
+/// (spec 02 section 4 step 2).
+const MAX_BODY_DEPTH: usize = 128;
+
+/// Reports whether the body text is unacceptable before parsing (spec 02
+/// section 4 step 2): a \uXXXX string escape that does not form a Unicode
+/// scalar value (a lone or unpaired surrogate), or nesting deeper than
+/// MAX_BODY_DEPTH levels of arrays and objects. One byte pass, constant extra
+/// space, no recursion, so the verdict never depends on the JSON library's
+/// own limits (RawValue capture scanning bypasses serde_json's recursion
+/// limit and a lone surrogate would otherwise only fail where serde_json
+/// materializes a value).
+fn unacceptable_body(body: &[u8]) -> bool {
+    let mut in_string = false;
+    let mut depth: usize = 0;
+    let mut i = 0;
+    while i < body.len() {
+        let c = body[i];
+        if !in_string {
+            match c {
+                b'"' => in_string = true,
+                b'{' | b'[' => {
+                    depth += 1;
+                    if depth > MAX_BODY_DEPTH {
+                        return true;
+                    }
+                }
+                b'}' | b']' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            b'"' => {
+                in_string = false;
+                i += 1;
+            }
+            b'\\' => {
+                if i + 1 >= body.len() {
+                    return true;
+                }
+                if body[i + 1] != b'u' {
+                    i += 2; // two-byte escape; an escaped backslash keeps the string going
+                    continue;
+                }
+                if i + 6 > body.len() {
+                    return true;
+                }
+                let Some(v) = hex4(&body[i + 2..i + 6]) else {
+                    i += 2; // not a \uXXXX escape: invalid JSON, the parser rejects it
+                    continue;
+                };
+                if (0xDC00..=0xDFFF).contains(&v) {
+                    return true; // lone low surrogate
+                }
+                if !(0xD800..=0xDBFF).contains(&v) {
+                    i += 6; // ordinary \uXXXX escape
+                    continue;
+                }
+                // A high surrogate must be followed immediately by \uDC00..\uDFFF.
+                let paired = i + 12 <= body.len()
+                    && body[i + 6] == b'\\'
+                    && body[i + 7] == b'u'
+                    && hex4(&body[i + 8..i + 12])
+                        .is_some_and(|low| (0xDC00..=0xDFFF).contains(&low));
+                if paired {
+                    i += 12;
+                } else {
+                    return true;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    false
+}
+
+/// Parses exactly four ASCII hex digits, or None.
+fn hex4(b: &[u8]) -> Option<u32> {
+    if b.len() != 4 {
+        return None;
+    }
+    let mut v: u32 = 0;
+    for &c in b {
+        let d = match c {
+            b'0'..=b'9' => u32::from(c - b'0'),
+            b'a'..=b'f' => u32::from(c - b'a') + 10,
+            b'A'..=b'F' => u32::from(c - b'A') + 10,
+            _ => return None,
+        };
+        v = v << 4 | d;
+    }
+    Some(v)
+}
+
 /// Implements the body rules of spec 02 section 4: the body must be a single
 /// UTF-8 JSON-RPC 2.0 OBJECT. UTF-8 is validated before any parse. Member
 /// decisions, each tied to the spec text:
@@ -633,6 +729,9 @@ fn raw_as_string(value: &RawValue) -> Option<String> {
 ///   integer arguments on their JSON text (spec 03 section 3).
 fn classify_body(body: &[u8]) -> Option<RpcMessage> {
     let text = std::str::from_utf8(body).ok()?;
+    if unacceptable_body(body) {
+        return None;
+    }
     let members: RawMembers = serde_json::from_str(text).ok()?;
     if members
         .get("jsonrpc")
@@ -1371,6 +1470,43 @@ mod tests {
         )
         .expect("duplicate params.name keeps the last value");
         assert_eq!(dup.tool.as_deref(), Some("svc.reload"));
+    }
+
+    // spec 02 section 4 step 2: lone surrogate escapes and over-deep nesting
+    // are rejected before parsing; valid pairs and escaped backslashes are not.
+    #[test]
+    fn body_text_rules() {
+        let none = |body: &str| assert!(classify_body(body.as_bytes()).is_none(), "body: {body}");
+        let kind_of = |body: &str| classify_body(body.as_bytes()).map(|m| m.kind);
+
+        none(r#"{"jsonrpc":"2.0","id":1,"method":"pi\ud800ng"}"#);
+        none(r#"{"jsonrpc":"2.0","id":1,"m\ud800":1,"method":"ping"}"#);
+        none(r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"stat\udc00us"}}"#);
+        none(r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"\ud83d\ude00\ud800"}}"#);
+        assert_eq!(
+            kind_of(r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"\ud83d\ude00"}}"#),
+            Some(MessageKind::Request)
+        );
+        assert_eq!(
+            kind_of(r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"a\\ud800b"}}"#),
+            Some(MessageKind::Request)
+        );
+        let deep = |levels: usize| {
+            format!(
+                r#"{{"jsonrpc":"2.0","id":1,"method":"ping","params":{{"x":{}{}}}}}"#,
+                "[".repeat(levels),
+                "]".repeat(levels)
+            )
+        };
+        assert_eq!(kind_of(deep(126).as_str()), Some(MessageKind::Request));
+        none(deep(127).as_str());
+        // Brackets inside string values never count toward depth.
+        let in_string = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"ping","params":{{"x":"{}{}"}}}}"#,
+            "[[".repeat(200),
+            "]]".repeat(200)
+        );
+        assert_eq!(kind_of(in_string.as_str()), Some(MessageKind::Request));
     }
 
     // spec 02 section 4: "the body MUST be a single UTF-8 JSON-RPC 2.0 object"

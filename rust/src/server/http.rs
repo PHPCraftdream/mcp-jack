@@ -349,8 +349,21 @@ where
 
         // A non-UTF-8 header value cannot reach the verifier (Request.auth_values
         // holds Strings), so it gets the same rejection a grammar violation gets.
+        // The scheme is examined first, on the raw bytes (spec 01 section 3):
+        // a v2 scheme is unsupported_version even when the rest of the value
+        // is obs-text that to_str below would reject.
+        // Only a single header value qualifies: more than one is malformed_auth
+        // first (spec 01 section 4 step 2), exactly as in the Go and TS parsers.
         let mut auth_values = Vec::new();
+        let single = parts.headers.get_all("Jack-Auth").iter().count() == 1;
         for value in parts.headers.get_all("Jack-Auth") {
+            if single && crate::auth_header::scheme_is_unsupported_version(value.as_bytes()) {
+                let mut res =
+                    unsigned_rejection(401, "unsupported_version", "unsupported Jack-Auth version");
+                res.headers_mut()
+                    .insert("WWW-Authenticate", HeaderValue::from_static("Jack-Auth"));
+                return Ok(res);
+            }
             match value.to_str() {
                 Ok(v) => auth_values.push(v.to_owned()),
                 Err(_) => {

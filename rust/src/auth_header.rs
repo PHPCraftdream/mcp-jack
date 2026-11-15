@@ -152,14 +152,29 @@ fn parse_auth_values(
     Ok((params, ts))
 }
 
+/// Reports whether the scheme bytes are exactly "v" plus one or more ASCII
+/// digits (spec 01 section 3: such a scheme is unsupported_version, any other
+/// malformed scheme is malformed_auth).
+fn is_version_scheme_bytes(scheme: &[u8]) -> bool {
+    scheme.len() >= 2 && scheme[0] == b'v' && scheme[1..].iter().all(u8::is_ascii_digit)
+}
+
 /// Reports whether s is exactly "v" plus one or more ASCII digits (spec 01
 /// section 3: such a scheme is unsupported_version, any other is malformed_auth).
 fn is_version_scheme(s: &str) -> bool {
-    let b = s.as_bytes();
-    if b.len() < 2 || b[0] != b'v' {
-        return false;
-    }
-    b[1..].iter().all(u8::is_ascii_digit)
+    is_version_scheme_bytes(s.as_bytes())
+}
+
+/// The scheme of the RAW header value (bytes, before any UTF-8 conversion):
+/// "v" + digits other than "v1" is unsupported_version (spec 01 section 3:
+/// the scheme is examined first, even when the rest of the value is obs-text
+/// that a later to_str would reject).
+pub fn scheme_is_unsupported_version(value: &[u8]) -> bool {
+    let scheme = match value.iter().position(|&b| b == b' ') {
+        Some(i) => &value[..i],
+        None => value,
+    };
+    scheme != b"v1".as_slice() && is_version_scheme_bytes(scheme)
 }
 
 /// Reports whether s matches ^[a-z]+$ (parameter names, spec 01 section 3).
