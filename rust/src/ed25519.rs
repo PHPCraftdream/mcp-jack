@@ -171,6 +171,67 @@ mod tests {
         assert!(!verify(&pub_bytes, msg, &malleated));
     }
 
+    /// Pins the Rust reference behaviour for spec 01 section 2: a signature
+    /// whose R is a small-order point is invalid. Go and TypeScript now
+    /// reject the same crafted bytes; this test documents that the input is
+    /// otherwise valid — plain dalek verification accepts it, and only
+    /// verify_strict's small-order R rule rejects it.
+    #[test]
+    fn rejects_crafted_small_order_r() {
+        use ed25519_dalek::Verifier;
+        use sha2::{Digest, Sha512};
+
+        let seed: [u8; 32] = hex_bytes(RFC_SEED_HEX).try_into().expect("32 bytes");
+        let public: [u8; 32] = hex_bytes(RFC_PUBLIC_HEX).try_into().expect("32 bytes");
+        let message = b"mcp-jack strict small-order R";
+
+        // a = clamp(SHA-512(seed)[0..32]) as a scalar (RFC 8032 section 5.1.5).
+        let mut seed_hash = Sha512::new();
+        seed_hash.update(seed);
+        let a_digest = seed_hash.finalize();
+        let mut a_le = [0u8; 32];
+        a_le.copy_from_slice(&a_digest[..32]);
+        a_le[0] &= 248;
+        a_le[31] &= 63;
+        a_le[31] |= 64;
+        let mut a_wide = [0u8; 64];
+        a_wide[..32].copy_from_slice(&a_le);
+        let a = Scalar::from_bytes_mod_order_wide(&a_wide);
+
+        // Craft: R = identity encoding, k = SHA-512(R || A || M) mod L,
+        // S = k*a mod L; then [S]B = R + [k]A holds and the equation check
+        // cannot reject — only the small-order R rule can.
+        let mut k_hash = Sha512::new();
+        k_hash.update(IDENTITY_ENCODING);
+        k_hash.update(public);
+        k_hash.update(message);
+        let mut h64 = [0u8; 64];
+        h64.copy_from_slice(&k_hash.finalize());
+        let k = Scalar::from_bytes_mod_order_wide(&h64);
+        let s = k * a;
+
+        let mut crafted = [0u8; 64];
+        crafted[..32].copy_from_slice(&IDENTITY_ENCODING);
+        crafted[32..].copy_from_slice(&s.to_bytes());
+
+        // Plain dalek verification accepts the same bytes: the input is
+        // exactly the class strict verification must reject.
+        let vk = VerifyingKey::from_bytes(&public).expect("valid public key");
+        assert!(
+            vk.verify(message, &Signature::from_bytes(&crafted)).is_ok(),
+            "plain dalek verification rejected the crafted signature; recipe is stale"
+        );
+        assert!(
+            !verify(&public, message, &crafted),
+            "verify accepted a signature whose R is a small-order point"
+        );
+
+        // An ordinary signature over the same message still verifies.
+        let signing = SigningKey::from_bytes(&seed);
+        let ordinary = signing.sign(message).to_bytes();
+        assert!(verify(&public, message, &ordinary));
+    }
+
     #[test]
     fn rejects_wrong_lengths() {
         let seed: [u8; 32] = hex_bytes(RFC_SEED_HEX).try_into().expect("32 bytes");
