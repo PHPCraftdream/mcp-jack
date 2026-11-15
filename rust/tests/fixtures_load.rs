@@ -25,8 +25,8 @@ fn registry_load() {
 #[test]
 fn request_vectors_load() {
     let v = load_request_vectors().expect("load request-vectors.json");
-    // Current materialized request-vectors.json: exactly 85 cases, unique ids.
-    assert_eq!(v.cases.len(), 85);
+    // Current materialized request-vectors.json: exactly 93 cases, unique ids.
+    assert_eq!(v.cases.len(), 93);
     let ids: HashSet<_> = v.cases.iter().map(|c| c.id.as_str()).collect();
     assert_eq!(ids.len(), v.cases.len());
 }
@@ -56,8 +56,8 @@ fn key_vectors_load() {
 #[test]
 fn response_vectors_load() {
     let v = load_response_vectors().expect("load response-vectors.json");
-    // Current materialized response-vectors.json: exactly 14 cases, unique ids.
-    assert_eq!(v.cases.len(), 14);
+    // Current materialized response-vectors.json: exactly 15 cases, unique ids.
+    assert_eq!(v.cases.len(), 15);
     let ids: HashSet<_> = v.cases.iter().map(|c| c.id.as_str()).collect();
     assert_eq!(ids.len(), v.cases.len());
 }
