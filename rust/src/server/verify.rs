@@ -1,5 +1,6 @@
 //! Request verifier: authentication + authorization (Go: server/verify.go).
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use serde_json::value::RawValue;
@@ -10,6 +11,7 @@ use crate::error::{codes, JackError};
 use crate::server::audit::{AuditEvent, AuditSink, AUDIT_FAILURE, AUDIT_SUCCESS};
 use crate::server::identity::VerifiedIdentity;
 use crate::server::nonce::NonceStore;
+use crate::server::native::invite_id_of;
 use crate::server::state::{RegistryEntry, StateStore};
 use crate::signing::{request_signing_string, DEFAULT_WINDOW_SECONDS};
 
@@ -226,7 +228,7 @@ impl Verifier {
                     }
                 }
             }
-            None => match enrollment_key(req, &auth.kid) {
+            None => match enrollment_key(req, &auth.kid, self.cfg.state.as_ref(), now) {
                 Ok(key) => key,
                 Err(rej) => return rej,
             },
@@ -514,7 +516,12 @@ pub(crate) fn entry_active(entry: &RegistryEntry, now: i64) -> bool {
 // allow(result_large_err): the Err arm is the rare rejection path; boxing it
 // would obscure the Go shape it mirrors for no real gain.
 #[allow(clippy::result_large_err)]
-fn enrollment_key(req: &Request, kid: &str) -> Result<Vec<u8>, VerifyResult> {
+fn enrollment_key(
+    req: &Request,
+    kid: &str,
+    state: &dyn StateStore,
+    now: i64,
+) -> Result<Vec<u8>, VerifyResult> {
     let unknown = || {
         fail(
             VerifyResult::default(),
@@ -545,6 +552,11 @@ fn enrollment_key(req: &Request, kid: &str) -> Result<Vec<u8>, VerifyResult> {
     let Ok(args) = serde_json::from_str::<RawMembers>(arguments.get()) else {
         return Err(unknown());
     };
+    // Invite gate before any key handling, so a caller without a live invite
+    // learns nothing about key validity.
+    if !live_invite(state, &args, now) {
+        return Err(unknown());
+    }
     // A null/number/bool public_key is not a string -> unknown key.
     let Some(submitted) = args.get("public_key").and_then(|v| raw_as_string(v)) else {
         return Err(unknown());
@@ -576,6 +588,20 @@ fn enrollment_key(req: &Request, kid: &str) -> Result<Vec<u8>, VerifyResult> {
     Ok(key)
 }
 
+/// Reports whether `code` names an invite that exists and is unexpired at
+/// `now`. Read-only: the tool still consumes the invite atomically later.
+fn live_invite(state: &dyn StateStore, args: &RawMembers, now: i64) -> bool {
+    let Some(code) = args.get("code").and_then(|v| raw_as_string(v)) else {
+        return false;
+    };
+    let Ok(raw_code) = decode_b64url_fixed(&code, 32) else {
+        return false;
+    };
+    state
+        .lookup_invite(&invite_id_of(&raw_code))
+        .is_some_and(|invite| now < invite.expires_at)
+}
+
 /// Request or client answer (Go: kindRequest / kindResponse).
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum MessageKind {
@@ -602,9 +628,8 @@ struct RpcMessage {
 /// Body members as sent: a map type only accepts a JSON object (spec 02
 /// section 4: the body "MUST be a single UTF-8 JSON-RPC 2.0 object"; arrays,
 /// including batch arrays and positional representations, and scalars are
-/// invalid) and keeps the LAST value of a duplicated key (spec 02 section 4, README D13).
-/// A derived struct would instead also deserialize from arrays positionally
-/// and reject duplicates with `duplicate_field`.
+/// invalid). Duplicate names never reach it: `unacceptable_body` rejects them
+/// first. A derived struct would also deserialize from arrays positionally.
 type RawMembers = std::collections::HashMap<String, Box<RawValue>>;
 
 /// Returns Some only when the raw JSON text parses to a JSON string
@@ -622,75 +647,137 @@ const MAX_BODY_DEPTH: usize = 128;
 /// Reports whether the body text is unacceptable before parsing (spec 02
 /// section 4 step 2): a \uXXXX string escape that does not form a Unicode
 /// scalar value (a lone or unpaired surrogate), or nesting deeper than
-/// MAX_BODY_DEPTH levels of arrays and objects. One byte pass, constant extra
-/// space, no recursion, so the verdict never depends on the JSON library's
-/// own limits (RawValue capture scanning bypasses serde_json's recursion
-/// limit and a lone surrogate would otherwise only fail where serde_json
-/// materializes a value).
+/// MAX_BODY_DEPTH levels of arrays and objects, or an object with two members
+/// of the same name (compared after unescaping, exact). One byte pass, no
+/// recursion, memory bounded by the names of the open objects, so the verdict
+/// never depends on the JSON library's own limits (RawValue capture scanning
+/// bypasses serde_json's recursion limit and a lone surrogate would otherwise
+/// only fail where serde_json materializes a value).
 fn unacceptable_body(body: &[u8]) -> bool {
-    let mut in_string = false;
-    let mut depth: usize = 0;
+    // One frame per open container; Some(names) for an object.
+    let mut stack: Vec<Option<HashSet<String>>> = Vec::new();
+    let mut expect_key = false;
     let mut i = 0;
     while i < body.len() {
-        let c = body[i];
-        if !in_string {
-            match c {
-                b'"' => in_string = true,
-                b'{' | b'[' => {
-                    depth += 1;
-                    if depth > MAX_BODY_DEPTH {
-                        return true;
+        match body[i] {
+            b'"' => {
+                let collect = expect_key && matches!(stack.last(), Some(Some(_)));
+                let Some((end, name)) = scan_string(body, i + 1, collect) else {
+                    return true;
+                };
+                i = end;
+                if collect {
+                    expect_key = false;
+                    if let Some(Some(names)) = stack.last_mut() {
+                        if !names.insert(name) {
+                            return true; // duplicate member name
+                        }
                     }
                 }
-                b'}' | b']' => depth = depth.saturating_sub(1),
-                _ => {}
+                continue;
             }
-            i += 1;
-            continue;
-        }
-        match c {
-            b'"' => {
-                in_string = false;
-                i += 1;
-            }
-            b'\\' => {
-                if i + 1 >= body.len() {
+            b'{' | b'[' => {
+                if stack.len() >= MAX_BODY_DEPTH {
                     return true;
                 }
-                if body[i + 1] != b'u' {
+                let is_object = body[i] == b'{';
+                stack.push(is_object.then(HashSet::new));
+                expect_key = is_object;
+            }
+            b'}' | b']' => {
+                stack.pop();
+                expect_key = false;
+            }
+            b',' => expect_key = matches!(stack.last(), Some(Some(_))),
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Scans one string body starting after its opening quote. Returns the index
+/// after the closing quote and, when `collect` is set, the unescaped text;
+/// None when a \uXXXX escape is not a Unicode scalar value (lone surrogate)
+/// or the text ends inside an escape.
+fn scan_string(body: &[u8], start: usize, collect: bool) -> Option<(usize, String)> {
+    let mut out: Vec<u8> = Vec::new();
+    let mut i = start;
+    while i < body.len() {
+        let c = body[i];
+        match c {
+            b'"' => return Some((i + 1, String::from_utf8_lossy(&out).into_owned())),
+            b'\\' => {
+                let esc = *body.get(i + 1)?;
+                if esc != b'u' {
+                    if collect {
+                        out.push(simple_escape(esc));
+                    }
                     i += 2; // two-byte escape; an escaped backslash keeps the string going
                     continue;
                 }
                 if i + 6 > body.len() {
-                    return true;
+                    return None;
                 }
                 let Some(v) = hex4(&body[i + 2..i + 6]) else {
                     i += 2; // not a \uXXXX escape: invalid JSON, the parser rejects it
                     continue;
                 };
                 if (0xDC00..=0xDFFF).contains(&v) {
-                    return true; // lone low surrogate
+                    return None; // lone low surrogate
                 }
                 if !(0xD800..=0xDBFF).contains(&v) {
+                    push_scalar(&mut out, collect, v);
                     i += 6; // ordinary \uXXXX escape
                     continue;
                 }
                 // A high surrogate must be followed immediately by \uDC00..\uDFFF.
-                let paired = i + 12 <= body.len()
-                    && body[i + 6] == b'\\'
-                    && body[i + 7] == b'u'
-                    && hex4(&body[i + 8..i + 12])
-                        .is_some_and(|low| (0xDC00..=0xDFFF).contains(&low));
-                if paired {
-                    i += 12;
-                } else {
-                    return true;
-                }
+                let low = low_surrogate_at(body, i + 6)?;
+                push_scalar(&mut out, collect, 0x10000 + ((v - 0xD800) << 10) + (low - 0xDC00));
+                i += 12;
             }
-            _ => i += 1,
+            _ => {
+                if collect {
+                    out.push(c);
+                }
+                i += 1;
+            }
         }
     }
-    false
+    None // unterminated string: invalid JSON, the parser rejects it anyway
+}
+
+/// Reads a `\uDC00..\uDFFF` escape starting exactly at `at`, or None.
+fn low_surrogate_at(body: &[u8], at: usize) -> Option<u32> {
+    let escape = body.get(at..at + 6)?;
+    if escape[0] != b'\\' || escape[1] != b'u' {
+        return None;
+    }
+    hex4(&escape[2..]).filter(|low| (0xDC00..=0xDFFF).contains(low))
+}
+
+/// Maps the character after a backslash to the byte it stands for; an
+/// invalid escape is kept as is (the parser rejects the body later).
+fn simple_escape(esc: u8) -> u8 {
+    match esc {
+        b'n' => b'\n',
+        b'r' => b'\r',
+        b't' => b'\t',
+        b'b' => 0x08,
+        b'f' => 0x0C,
+        other => other,
+    }
+}
+
+/// Appends the UTF-8 form of a scalar value when names are being collected.
+fn push_scalar(out: &mut Vec<u8>, collect: bool, scalar: u32) {
+    if !collect {
+        return;
+    }
+    if let Some(ch) = char::from_u32(scalar) {
+        let mut buf = [0u8; 4];
+        out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+    }
 }
 
 /// Parses exactly four ASCII hex digits, or None.
@@ -784,7 +871,7 @@ mod tests {
     use super::*;
     use crate::encoding::encode_b64url;
     use crate::server::native::{Native, NativeOptions};
-    use crate::server::state::{MemoryState, StateEdit};
+    use crate::server::state::{InviteRecord, MemoryState, StateEdit};
     use ed25519_dalek::Signer;
     use ed25519_dalek::SigningKey;
     use sha2::{Digest, Sha256};
@@ -830,6 +917,38 @@ mod tests {
             })
             .expect("seeding must succeed");
         Arc::new(state)
+    }
+
+    const INVITE_CODE_RAW: [u8; 32] = [7u8; 32];
+
+    /// Canonical wire form of the test invite code.
+    fn invite_code() -> String {
+        encode_b64url(&INVITE_CODE_RAW)
+    }
+
+    /// Stores the invite for `invite_code()` expiring at `expires_at`.
+    fn add_invite(state: &Arc<dyn StateStore>, expires_at: i64) {
+        state
+            .update(&mut |edit: &mut StateEdit| {
+                edit.put_invite(InviteRecord {
+                    invite_id: invite_id_of(&INVITE_CODE_RAW),
+                    admin: false,
+                    created_by: "root".to_owned(),
+                    created_at: NOW - 10,
+                    expires_at,
+                    key_ttl_seconds: None,
+                });
+                Ok(())
+            })
+            .expect("seeding must succeed");
+    }
+
+    /// Arguments of an enrollment carrying the test invite code.
+    fn enroll_args(public_key: &str) -> String {
+        format!(
+            r#"{{"code":"{}","public_key":"{public_key}"}}"#,
+            invite_code()
+        )
     }
 
     fn config(
@@ -991,6 +1110,7 @@ mod tests {
         let (alice_key, alice) = test_key("alice");
         let (mallory_key, mallory) = test_key("mallory");
         let state = seeded_state(&[&alice]);
+        add_invite(&state, NOW + 60);
         let v = verifier(config(NOW, Arc::clone(&state), None));
 
         // (a) Unregistered kid, plain call: ends at step 4 unknown_key.
@@ -1003,10 +1123,7 @@ mod tests {
         // (b) Enrollment whose submitted key does not hash to kid: ends at
         // step 4 unknown_key (enrollment shape matches, the submitted key is
         // valid, but key_id(submitted) != kid).
-        let body = call_body(
-            TOOL_ENROLL,
-            Some(&format!(r#"{{"public_key":"{}"}}"#, alice.public_key)),
-        );
+        let body = call_body(TOOL_ENROLL, Some(&enroll_args(&alice.public_key)));
         let req = signed(
             "POST",
             "/mcp",
@@ -1022,10 +1139,7 @@ mod tests {
         // Ends at spec 03 section 3.2 step 3: validity precedes the hash
         // comparison.
         let bad_pub = encode_b64url(&[1u8; 32]);
-        let body = call_body(
-            TOOL_ENROLL,
-            Some(&format!(r#"{{"public_key":"{bad_pub}"}}"#)),
-        );
+        let body = call_body(TOOL_ENROLL, Some(&enroll_args(&bad_pub)));
         let req = signed(
             "POST",
             "/mcp",
@@ -1044,11 +1158,9 @@ mod tests {
         // operation_denied, nonce consumed, no audit event.
         let (carol_key, carol) = test_key("carol");
         let state = seeded_state(&[&alice]);
+        add_invite(&state, NOW + 60);
         let v = verifier(config(NOW, state, None));
-        let body = call_body(
-            TOOL_ENROLL,
-            Some(&format!(r#"{{"public_key":"{}"}}"#, carol.public_key)),
-        );
+        let body = call_body(TOOL_ENROLL, Some(&enroll_args(&carol.public_key)));
         let req = signed(
             "POST",
             "/mcp",
@@ -1067,11 +1179,9 @@ mod tests {
 
         // (e) Same with a handler: accepted, audit success.
         let state = seeded_state(&[&alice]);
+        add_invite(&state, NOW + 60);
         let v = verifier(config(NOW, state, Some(stub())));
-        let body = call_body(
-            TOOL_ENROLL,
-            Some(&format!(r#"{{"public_key":"{}"}}"#, carol.public_key)),
-        );
+        let body = call_body(TOOL_ENROLL, Some(&enroll_args(&carol.public_key)));
         let req = signed(
             "POST",
             "/mcp",
@@ -1118,7 +1228,8 @@ mod tests {
         let body = call_body(
             TOOL_ENROLL,
             Some(&format!(
-                r#"{{"public_key":"{}","x":1e999}}"#,
+                r#"{{"code":"{}","public_key":"{}","x":1e999}}"#,
+                invite_code(),
                 carol.public_key
             )),
         );
@@ -1131,12 +1242,109 @@ mod tests {
             NOW,
             &nonce(7),
         );
-        let v = verifier(config(NOW, seeded_state(&[&alice]), None));
+        let state = seeded_state(&[&alice]);
+        add_invite(&state, NOW + 60);
+        let v = verifier(config(NOW, state, None));
         let res = v.verify(&req);
         assert_eq!(res.http_status, 403);
         assert_eq!(res.code, codes::OPERATION_DENIED);
         assert!(res.nonce_recorded);
         assert!(res.audit.is_none());
+    }
+
+    /// Enrollment request of a fresh key with the given arguments.
+    fn enroll_request(arguments: &str, n: u64) -> (Request, String) {
+        let (key, entry) = test_key("carol");
+        let body = call_body(TOOL_ENROLL, Some(arguments));
+        let req = signed(
+            "POST",
+            "/mcp",
+            body.as_bytes(),
+            &key,
+            &entry.kid,
+            NOW,
+            &nonce(n),
+        );
+        (req, entry.public_key)
+    }
+
+    #[test]
+    fn enrollment_exception_requires_live_invite() {
+        let (_, carol) = test_key("carol");
+        let bad_code = format!("{}=", invite_code());
+        let cases: [(&str, Option<i64>, String); 5] = [
+            ("no invite in state", None, enroll_args(&carol.public_key)),
+            ("expired at now", Some(NOW), enroll_args(&carol.public_key)),
+            (
+                "non-canonical code",
+                Some(NOW + 60),
+                format!(
+                    r#"{{"code":"{bad_code}","public_key":"{}"}}"#,
+                    carol.public_key
+                ),
+            ),
+            (
+                "code is not a string",
+                Some(NOW + 60),
+                format!(
+                    r#"{{"code":7,"public_key":"{}"}}"#,
+                    carol.public_key
+                ),
+            ),
+            (
+                "code absent",
+                Some(NOW + 60),
+                format!(r#"{{"public_key":"{}"}}"#, carol.public_key),
+            ),
+        ];
+        for (label, expires_at, args) in cases {
+            let state = seeded_state(&[]);
+            if let Some(expires_at) = expires_at {
+                add_invite(&state, expires_at);
+            }
+            let cfg = config(NOW, state, Some(stub()));
+            let nonces = Arc::clone(&cfg.nonces);
+            let (req, _) = enroll_request(&args, 1);
+            let res = verifier(cfg).verify(&req);
+            assert_eq!(res.http_status, 401, "{label}");
+            assert_eq!(res.code, codes::UNKNOWN_KEY, "{label}");
+            assert!(!res.nonce_recorded, "{label}");
+            assert!(res.audit.is_none(), "{label}");
+            // The nonce is still unused: the rejection never touched the store.
+            let (kid, n) = (test_key("carol").1.kid, nonce(1));
+            assert!(!nonces.check_and_record(&kid, &n, NOW, NOW + 60), "{label}");
+        }
+    }
+
+    #[test]
+    fn enrollment_exception_accepts_live_invite() {
+        let state = seeded_state(&[]);
+        add_invite(&state, NOW + 1);
+        let v = verifier(config(NOW, state, Some(stub())));
+        let (_, carol) = test_key("carol");
+        let (req, _) = enroll_request(&enroll_args(&carol.public_key), 1);
+        let res = v.verify(&req);
+        assert!(res.accepted, "code: {}", res.code);
+        assert!(res.nonce_recorded);
+    }
+
+    #[test]
+    fn enrollment_with_duplicate_members_is_unknown_key() {
+        let state = seeded_state(&[]);
+        add_invite(&state, NOW + 60);
+        let v = verifier(config(NOW, state, Some(stub())));
+        let (_, carol) = test_key("carol");
+        let args = format!(
+            r#"{{"code":"{}","public_key":"{}","public_key":"{}"}}"#,
+            invite_code(),
+            carol.public_key,
+            carol.public_key
+        );
+        let (req, _) = enroll_request(&args, 1);
+        let res = v.verify(&req);
+        assert_eq!(res.http_status, 401);
+        assert_eq!(res.code, codes::UNKNOWN_KEY);
+        assert!(!res.nonce_recorded);
     }
 
     #[test]
@@ -1512,18 +1720,17 @@ mod tests {
         none("5");
         none(r#""hi""#);
 
-        // Duplicate members keep the LAST value (spec 02 section 4, README D13); a derived
-        // struct would instead reject them with duplicate_field.
-        let dup = classify_body(
-            r#"{"jsonrpc":"2.0","id":1,"method":"ping","method":"resources/read"}"#.as_bytes(),
-        )
-        .expect("duplicate members keep the last value");
-        assert_eq!(dup.method, "resources/read");
-        let dup = classify_body(
-            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"svc.status","name":"svc.reload"}}"#.as_bytes(),
-        )
-        .expect("duplicate params.name keeps the last value");
-        assert_eq!(dup.tool.as_deref(), Some("svc.reload"));
+        // Duplicate member names make the body unacceptable, compared after
+        // unescaping and at any depth.
+        none(r#"{"jsonrpc":"2.0","id":1,"method":"ping","method":"resources/read"}"#);
+        none(r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"a","name":"b"}}"#);
+        none(r#"{"jsonrpc":"2.0","id":1,"meth\u006fd":"ping","method":"ping"}"#);
+        none(r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":[{"a":1,"a":2}]}}"#);
+        none(r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":{"a":{"b":1,"b":1}}}}"#);
+        // Same name in different objects, case differences and a value equal
+        // to a name are fine.
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{"a":1,"A":2,"b":{"a":"a"},"c":[{"a":1},{"a":2}]}}"#;
+        assert!(classify_body(body.as_bytes()).is_some());
     }
 
     // spec 02 section 4 step 2: lone surrogate escapes and over-deep nesting
@@ -1661,16 +1868,43 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_members_last_value_wins() {
+    fn duplicate_members_rejected_after_authentication() {
         let (alice_key, alice) = test_key("alice");
         let state = seeded_state(&[&alice]);
         let v = verifier(config(NOW, Arc::clone(&state), Some(stub())));
 
-        // Duplicate params.name: if the FIRST value won, the native admin
-        // tool would be dispatched and rejected with admin_required (alice is
-        // not an admin); the call is ACCEPTED instead, proving the LAST value
-        // (an ordinary forwarded tool) reached dispatch.
-        let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.user.list","name":"svc.status"}}"#;
+        let bodies = [
+            // Nested in params.
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"svc.status","name":"jack.nope"}}"#,
+            // Top level, escaped spelling of the same name.
+            r#"{"jsonrpc":"2.0","id":1,"meth\u006fd":"ping","method":"ping"}"#,
+            // Object inside an array.
+            r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":[{"a":1,"a":2}]}}"#,
+            // Free-form tool arguments.
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"svc.status","arguments":{"k":1,"k":2}}}"#,
+        ];
+        for (i, body) in bodies.iter().enumerate() {
+            let req = signed(
+                "POST",
+                "/mcp",
+                body.as_bytes(),
+                &alice_key,
+                &alice.kid,
+                NOW,
+                &nonce(34 + i as u64),
+            );
+            let res = v.verify(&req);
+            assert_eq!(res.http_status, 400, "body: {body}");
+            assert_eq!(res.code, codes::INVALID_REQUEST, "body: {body}");
+            assert!(res.nonce_recorded, "body: {body}");
+        }
+    }
+
+    #[test]
+    fn same_member_name_in_different_objects_is_accepted() {
+        let (alice_key, alice) = test_key("alice");
+        let v = verifier(config(NOW, seeded_state(&[&alice]), Some(stub())));
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"svc.status","arguments":{"id":1,"x":[{"id":2},{"id":3}],"y":{"id":4}}}}"#;
         let req = signed(
             "POST",
             "/mcp",
@@ -1678,28 +1912,10 @@ mod tests {
             &alice_key,
             &alice.kid,
             NOW,
-            &nonce(34),
+            &nonce(40),
         );
         let res = v.verify(&req);
         assert!(res.accepted, "code: {}", res.code);
-        assert!(!res.native);
-        assert!(res.identity.is_some());
-
-        // Reverse: first ordinary, last an unknown jack.* tool -> 403
-        // operation_denied proves the LAST value won, not the first.
-        let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"svc.status","name":"jack.nope"}}"#;
-        let req = signed(
-            "POST",
-            "/mcp",
-            body.as_bytes(),
-            &alice_key,
-            &alice.kid,
-            NOW,
-            &nonce(35),
-        );
-        let res = v.verify(&req);
-        assert_eq!(res.http_status, 403);
-        assert_eq!(res.code, codes::OPERATION_DENIED);
     }
 
     #[test]

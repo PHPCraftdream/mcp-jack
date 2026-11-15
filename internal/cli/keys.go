@@ -5,12 +5,25 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
+	"net/http"
 	"time"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
 	"github.com/PHPCraftdream/mcp-jack/server"
 	"github.com/PHPCraftdream/mcp-jack/userkey"
 )
+
+// enrollUnauthorizedError replaces the generic authenticated-status text for a
+// 401 from jack.enroll: the usual cause is the invite or an unknown key, not
+// the transport.
+type enrollUnauthorizedError struct{}
+
+func (e *enrollUnauthorizedError) Error() string {
+	return "enroll rejected with HTTP 401; the invite may be invalid, expired or already used, or the key unknown"
+}
+
+func (e *enrollUnauthorizedError) Unwrap() error { return errRemote }
 
 func keygen(role, secretPath, publicPath string) error {
 	if secretPath == publicPath || privateParent(secretPath) != nil || privateParent(publicPath) != nil {
@@ -100,6 +113,11 @@ func enroll(ctx context.Context, configPath, invitePath, name string) error {
 	ctx, cancel := context.WithTimeout(ctx, conn.timeout)
 	defer cancel()
 	reply, status, err := conn.post(ctx, body)
+	var verified *verifiedStatusError
+	if errors.As(err, &verified) && verified.status == http.StatusUnauthorized {
+		// 401 from enroll: point at the invite/key instead of the transport.
+		return &enrollUnauthorizedError{}
+	}
 	if err != nil {
 		return err
 	}

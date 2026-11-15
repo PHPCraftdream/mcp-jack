@@ -19,6 +19,7 @@ import {
   type StateView,
   cloneInvites,
   cloneKeys,
+  lookupInviteRecord,
   lookupKey,
   serializeInviteRecord,
   serializeRegistryEntry,
@@ -333,6 +334,11 @@ export class FileState implements StateStore {
   /** Deep copy of the entry with the given kid, without copying the whole registry. */
   lookup(kid: string): RegistryEntry | undefined {
     return lookupKey(this.keys, kid);
+  }
+
+  /** Deep copy of the invite with the given id, without copying all invites. */
+  lookupInvite(inviteId: string): InviteRecord | undefined {
+    return lookupInviteRecord(this.invites, inviteId);
   }
 
   /**

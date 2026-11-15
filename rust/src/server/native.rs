@@ -299,7 +299,7 @@ fn active_admins(keys: &[RegistryEntry], now: i64) -> usize {
 
 /// Stored id of an invite: base64url(SHA-256(code)); the code itself is never
 /// stored (Go: inviteIDOf).
-fn invite_id_of(raw_code: &[u8]) -> String {
+pub(crate) fn invite_id_of(raw_code: &[u8]) -> String {
     encode_b64url(&Sha256::digest(raw_code))
 }
 

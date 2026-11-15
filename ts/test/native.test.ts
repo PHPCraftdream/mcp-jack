@@ -1129,6 +1129,10 @@ class InterleavingStore implements StateStore {
     return this.inner.lookup(kid);
   }
 
+  lookupInvite(inviteId: string): ReturnType<StateStore["lookupInvite"]> {
+    return this.inner.lookupInvite(inviteId);
+  }
+
   update(fn: (edit: StateEdit) => void): void {
     // Only the FIRST update interleaves; afterwards pure delegation.
     if (!this.ran && this.hook !== undefined) {
@@ -1202,6 +1206,7 @@ test("the last administrator survives interleaved, failing and sequential revoke
     const throwing: StateStore = {
       view: () => st.view(),
       lookup: (kid) => st.lookup(kid),
+      lookupInvite: (id) => st.lookupInvite(id),
       update: (fn) =>
         st.update((edit) => {
           fn(edit);

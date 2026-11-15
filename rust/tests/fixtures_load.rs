@@ -25,8 +25,8 @@ fn registry_load() {
 #[test]
 fn request_vectors_load() {
     let v = load_request_vectors().expect("load request-vectors.json");
-    // Current materialized request-vectors.json: exactly 94 cases, unique ids.
-    assert_eq!(v.cases.len(), 94);
+    // Current materialized request-vectors.json: exactly 102 cases, unique ids.
+    assert_eq!(v.cases.len(), 102);
     let ids: HashSet<_> = v.cases.iter().map(|c| c.id.as_str()).collect();
     assert_eq!(ids.len(), v.cases.len());
 }
@@ -34,8 +34,8 @@ fn request_vectors_load() {
 #[test]
 fn admin_vectors_load() {
     let v = load_admin_vectors().expect("load admin-vectors.json");
-    // Current materialized admin-vectors.json: exactly 95 cases, unique ids.
-    assert_eq!(v.cases.len(), 95);
+    // Current materialized admin-vectors.json: exactly 107 cases, unique ids.
+    assert_eq!(v.cases.len(), 107);
     let ids: HashSet<_> = v.cases.iter().map(|c| c.id.as_str()).collect();
     assert_eq!(ids.len(), v.cases.len());
     // Runner contract: every sequence has at least one step.

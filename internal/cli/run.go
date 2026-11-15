@@ -78,9 +78,14 @@ func Run(ctx context.Context, args []string, streams IO) int {
 	}
 	message := "operation failed"
 	var verified *verifiedStatusError
+	var enrollAuth *enrollUnauthorizedError
 	switch {
 	case errors.As(err, &verified):
 		message = verified.Error()
+	case errors.As(err, &enrollAuth):
+		// Must precede the errRemote fallback: a 401 from enroll carries the
+		// invite-specific diagnostic even though it unwraps to errRemote.
+		message = enrollAuth.Error()
 	case errors.Is(err, errConfig):
 		message = errConfig.Error()
 	case errors.Is(err, errProtocol):

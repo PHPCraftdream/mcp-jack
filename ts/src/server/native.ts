@@ -5,7 +5,7 @@
  * 03 section 3), and every state change is one StateStore.update, so it is
  * atomic (spec 03 section 9).
  */
-import { createHash, randomBytes as nodeRandomBytes } from "node:crypto";
+import { randomBytes as nodeRandomBytes } from "node:crypto";
 import {
   BadBase64UrlError,
   decodeBase64URLFixed,
@@ -36,6 +36,7 @@ import type {
   NativeTools,
   RawJsonNode,
 } from "./verify.js";
+import { inviteIdOf } from "./state.js";
 import type {
   InviteRecord,
   RegistryEntry,
@@ -236,11 +237,6 @@ export function activeAdmins(keys: readonly RegistryEntry[], now: number): numbe
     }
   }
   return n;
-}
-
-/** base64url(SHA-256(raw invite-code bytes)). */
-function inviteIdOf(rawCode: Uint8Array): string {
-  return encodeBase64URL(createHash("sha256").update(Buffer.from(rawCode)).digest());
 }
 
 /** Removes every invite no longer valid at now from the pending edit, so an invite-editing update never keeps dead records (spec 03: expired invites are not listed and need not be stored). Runs inside the same atomic update; a later failure rolls it back with the whole edit (Go purgeExpiredInvites). */

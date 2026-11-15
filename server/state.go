@@ -158,6 +158,9 @@ type StateStore interface {
 	// verification calls it once per request, so it must not copy the whole
 	// registry the way View does.
 	Lookup(kid string) (RegistryEntry, bool)
+	// LookupInvite returns a copy of the invite with the given id. It is
+	// read-only: the verifier calls it before authentication.
+	LookupInvite(inviteID string) (InviteRecord, bool)
 	Update(update StateUpdate) error
 }
 
@@ -194,6 +197,23 @@ func (s *MemoryState) Lookup(kid string) (RegistryEntry, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return lookupKey(s.keys, kid)
+}
+
+// LookupInvite returns a copy of the invite with the given id, if present.
+func (s *MemoryState) LookupInvite(inviteID string) (InviteRecord, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return lookupInvite(s.invites, inviteID)
+}
+
+// lookupInvite finds an invite by id and returns a deep copy of it.
+func lookupInvite(invites []InviteRecord, inviteID string) (InviteRecord, bool) {
+	for i := range invites {
+		if invites[i].InviteID == inviteID {
+			return cloneInvite(invites[i]), true
+		}
+	}
+	return InviteRecord{}, false
 }
 
 // lookupKey finds an entry by kid and returns a deep copy of it.

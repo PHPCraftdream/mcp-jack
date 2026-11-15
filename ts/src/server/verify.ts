@@ -26,6 +26,7 @@ import type { AuditEvent, AuditSink } from "./audit.js";
 import { AUDIT_FAILURE, AUDIT_SUCCESS } from "./audit.js";
 import type { NonceStore } from "./nonce.js";
 import type { RegistryEntry, StateStore } from "./state.js";
+import { inviteIdOf } from "./state.js";
 import { parseJsonRaw } from "../json-raw.js";
 import type { JsonValue, RawJsonNode } from "../json-raw.js";
 export { parseJsonRaw } from "../json-raw.js";
@@ -73,45 +74,88 @@ function isPlainObject(v: JsonValue): boolean {
 // (spec 02 section 4 step 2).
 const MAX_BODY_DEPTH = 128;
 
+/** Member names of one open object; expectKey is true while the next string is a name. */
+interface ObjectScope {
+  readonly names: Set<string>;
+  expectKey: boolean;
+}
+
+/** One-character escapes of JSON strings; anything else maps to itself (the parser rejects it later). */
+const SIMPLE_ESCAPES: ReadonlyMap<number, number> = new Map([
+  [0x62, 0x08],
+  [0x66, 0x0c],
+  [0x6e, 0x0a],
+  [0x72, 0x0d],
+  [0x74, 0x09],
+]);
+
+/** UTF-8 bytes of a scalar value as a Latin-1 string, so escaped and raw spellings of a name compare equal. */
+function utf8Latin1(cp: number): string {
+  if (cp < 0x80) return String.fromCharCode(cp);
+  if (cp < 0x800) return String.fromCharCode(0xc0 | (cp >> 6), 0x80 | (cp & 0x3f));
+  if (cp < 0x10000) {
+    return String.fromCharCode(0xe0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
+  }
+  return String.fromCharCode(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
+}
+
 /**
  * The body-text rules of spec 02 section 4 step 2, checked on the raw bytes
  * before decoding: a \uXXXX string escape that does not form a Unicode scalar
- * value (a lone or unpaired surrogate), or nesting deeper than MAX_BODY_DEPTH
- * levels of arrays and objects. One byte pass, constant extra space, no
- * recursion: JSON.parse-family parsing would keep a lone surrogate in the
- * decoded string, and the recursive tokenizer dies on the stack long after
+ * value (a lone or unpaired surrogate), nesting deeper than MAX_BODY_DEPTH
+ * levels of arrays and objects, or an object with two members of the same
+ * name (compared after unescaping, exact). One byte pass, no recursion, extra
+ * space bounded by the depth and the member names of the open objects:
+ * JSON.parse-family parsing would keep a lone surrogate and silently keep the
+ * last duplicate, and the recursive tokenizer dies on the stack long after
  * the limit.
  */
 function unacceptableBody(body: Uint8Array): boolean {
   let inString = false;
-  let depth = 0;
+  // Set only while inside a member NAME; undefined for every other string.
+  let name: string | undefined;
+  const scopes: (ObjectScope | null)[] = [];
   let i = 0;
   while (i < body.length) {
     const c = body[i] as number;
+    const top = scopes[scopes.length - 1];
     if (!inString) {
       if (c === 0x22) {
         inString = true;
+        name = top?.expectKey === true ? "" : undefined;
       } else if (c === 0x7b || c === 0x5b) {
-        depth += 1;
-        if (depth > MAX_BODY_DEPTH) return true;
+        scopes.push(c === 0x7b ? { names: new Set<string>(), expectKey: true } : null);
+        if (scopes.length > MAX_BODY_DEPTH) return true;
       } else if (c === 0x7d || c === 0x5d) {
-        depth = Math.max(0, depth - 1);
+        scopes.pop();
+      } else if (c === 0x3a && top) {
+        top.expectKey = false;
+      } else if (c === 0x2c && top) {
+        top.expectKey = true;
       }
       i += 1;
       continue;
     }
     if (c === 0x22) {
       inString = false;
+      if (name !== undefined && top) {
+        if (top.names.has(name)) return true;
+        top.names.add(name);
+      }
+      name = undefined;
       i += 1;
       continue;
     }
     if (c !== 0x5c) {
+      if (name !== undefined) name += String.fromCharCode(c);
       i += 1;
       continue;
     }
     // Escape handling mirrors the Go/Rust helpers byte for byte.
     if (i + 1 >= body.length) return true;
     if (body[i + 1] !== 0x75) {
+      const e = body[i + 1] as number;
+      if (name !== undefined) name += String.fromCharCode(SIMPLE_ESCAPES.get(e) ?? e);
       i += 2; // two-byte escape; an escaped backslash keeps the string going
       continue;
     }
@@ -123,6 +167,7 @@ function unacceptableBody(body: Uint8Array): boolean {
     }
     if (v >= 0xdc00 && v <= 0xdfff) return true; // lone low surrogate
     if (v < 0xd800 || v > 0xdbff) {
+      if (name !== undefined) name += utf8Latin1(v);
       i += 6; // ordinary \uXXXX escape
       continue;
     }
@@ -132,6 +177,7 @@ function unacceptableBody(body: Uint8Array): boolean {
         ? hex4(body, i + 8)
         : -1;
     if (low >= 0xdc00 && low <= 0xdfff) {
+      if (name !== undefined) name += utf8Latin1(0x10000 + ((v - 0xd800) << 10) + (low - 0xdc00));
       i += 12; // consume both escapes
       continue;
     }
@@ -523,7 +569,7 @@ export class Verifier {
       }
       caller = entry;
     } else {
-      const enrolled = this.enrollmentKey(req, auth.kid);
+      const enrolled = this.enrollmentKey(req, auth.kid, now);
       if ("rejection" in enrolled) {
         return enrolled.rejection;
       }
@@ -731,10 +777,11 @@ export class Verifier {
    * The one exception to "unknown key is rejected" (spec 01 section 4, spec
    * 03 section 3.2): an unregistered kid is accepted only for a POST
    * tools/call of jack.enroll whose submitted public key is valid and hashes
-   * to kid. Returns the SUBMITTED key to verify against, or a rejection
-   * Result (never throws JackError).
+   * to kid and whose `code` names a live invite (read-only check, before any
+   * signature or nonce work). Returns the SUBMITTED key to verify against, or
+   * a rejection Result (never throws JackError).
    */
-  private enrollmentKey(req: VerifyRequest, kid: string): { key: Uint8Array } | { rejection: VerifyResult } {
+  private enrollmentKey(req: VerifyRequest, kid: string, now: number): { key: Uint8Array } | { rejection: VerifyResult } {
     const unknown = { rejection: rejected(401, Code.UNKNOWN_KEY, "unknown key") };
     if (req.method !== "POST") return unknown;
     const msg = classifyBody(req.body);
@@ -751,6 +798,8 @@ export class Verifier {
       return unknown;
     }
     if (!isPlainObject(argsNode.value) || argsNode.members === undefined) return unknown;
+    // Gate before any key handling: an unknown kid must not probe key validity without an invite.
+    if (!liveInvite(this.state, argsNode.members.get("code")?.value, now)) return unknown;
     const pkNode = argsNode.members.get("public_key");
     if (pkNode === undefined || typeof pkNode.value !== "string") return unknown;
     const submitted = pkNode.value;
@@ -770,6 +819,20 @@ export class Verifier {
     if (keyId(key) !== kid) return unknown;
     return { key };
   }
+}
+
+/** Whether `code` is a canonical invite code naming a stored invite that is still valid at now (read-only). */
+function liveInvite(state: StateStore, code: unknown, now: number): boolean {
+  if (typeof code !== "string") return false;
+  let raw: Uint8Array;
+  try {
+    raw = decodeBase64URLFixed(code, 32);
+  } catch (err) {
+    if (err instanceof BadBase64UrlError) return false;
+    throw err;
+  }
+  const invite = state.lookupInvite(inviteIdOf(raw));
+  return invite !== undefined && now < invite.expiresAt;
 }
 
 /** Builds a rejection result (kid "" because authentication never completed). */
