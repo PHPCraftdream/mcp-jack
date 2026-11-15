@@ -19,7 +19,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 // Лимиты TS/Go reference (Go hardcoded 128/1024): аномальное число pending/retained handles отказывает.
 const MAX_PENDING: usize = 128;
-const MAX_RETIRED: usize = 1024;
+pub(crate) const MAX_RETIRED: usize = 1024;
+// Every key but the newest eventually retires and serving (select_pinned) refuses more than
+// MAX_RETIRED retired keys, so an announce must leave at most MAX_RETIRED + 1 keys in the ring.
+pub(crate) const MAX_ANNOUNCE_RING_KEYS: usize = MAX_RETIRED + 1;
 
 fn unavailable() -> RotationError {
     invalid("rotation_state_unavailable")
@@ -79,6 +82,7 @@ pub struct RotationServerProvider<C: FnMut() -> Result<u64, RotationError> + Sen
     store: Arc<Mutex<RotationServerStore<C>>>,
     keys: HashMap<(String, String), PinnedRotationSigner>,
     publishing: AtomicBool,
+    announce_ring_keys: usize,
 }
 
 /// Копирует public identity ОДИН раз; kid считается от копии, поэтому поздние изменения
@@ -228,9 +232,16 @@ impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> RotationServerPr
             store,
             keys: pinned,
             publishing: AtomicBool::new(false),
+            announce_ring_keys: MAX_ANNOUNCE_RING_KEYS,
         };
         provider.ready()?;
         Ok(provider)
+    }
+
+    /// Test only: lowers the announce bound so a test need not build a real 1025-key ring.
+    #[cfg(test)]
+    pub(crate) fn set_announce_ring_keys_for_tests(&mut self, bound: usize) {
+        self.announce_ring_keys = bound;
     }
 
     /// Readiness: committed ring, свежий ClockGuard и все pending/current handles доступны.
@@ -279,6 +290,7 @@ impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> RotationServerPr
         let (snapshot, _) = store.snapshot()?;
         if snapshot.public.head.ordinal == MAX_ORDINAL
             || snapshot.public.revision == MAX_ORDINAL
+            || snapshot.public.keys.len() >= self.announce_ring_keys
             || snapshot.public.keys.len() >= MAX_RETAINED_KEYS
         {
             return Err(unavailable());

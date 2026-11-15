@@ -1,3 +1,4 @@
+use super::server_provider::{MAX_ANNOUNCE_RING_KEYS, MAX_RETIRED};
 use super::store_tests::{options, Sandbox};
 use super::*;
 use crate::client::{ClientError, InMemorySigner, Signer};
@@ -451,4 +452,88 @@ fn constructor_inventory_validation() {
         },
     ];
     assert!(RotationServerProvider::new(Arc::clone(&f.store), duplicate).is_err());
+}
+
+/// Ring, который после объявления не сможет обслуживаться: все ключи, кроме новейшего,
+/// со временем retire, а serving отказывает выше MAX_RETIRED retired — значит ring не может
+/// расти дальше MAX_ANNOUNCE_RING_KEYS. Вместо построения реального ring на 1025 ключей
+/// (квадратичная проверка цепочки не по силам CI) тест понижает announce-предел через
+/// test-only setter и проверяет тот же отказ на 5 ключах.
+#[test]
+fn announce_refuses_ring_that_would_exceed_servable_keys() {
+    // Производственное соотношение обязанности setter'а: тестовый предел не расходится с prod.
+    assert_eq!(MAX_ANNOUNCE_RING_KEYS, MAX_RETIRED + 1);
+    let sandbox = Sandbox::new();
+    // 5 signer keys: 1 initial (anchor checkpoint key из options(), seed 31) + 4 inventory handles.
+    let mut keys: Vec<InMemorySigner> = vec![InMemorySigner::from_seed(&[31; 32]).unwrap()];
+    keys.extend((1..5usize).map(|index| {
+        let mut seed = [0u8; 32];
+        seed[0] = (index + 1) as u8;
+        InMemorySigner::from_seed(&seed).unwrap()
+    }));
+    let path = sandbox.file();
+    RotationServerStore::initialize_unused(&path, server_options(), || Ok(1000)).unwrap();
+    let now = Arc::new(AtomicU64::new(1000));
+    let samples = Arc::new(AtomicU64::new(0));
+    let clock_now = Arc::clone(&now);
+    let clock_samples = Arc::clone(&samples);
+    let store = Arc::new(Mutex::new(
+        RotationServerStore::open(&path, server_options(), move || {
+            clock_samples.fetch_add(1, Ordering::SeqCst);
+            Ok(clock_now.load(Ordering::SeqCst))
+        })
+        .unwrap(),
+    ));
+    // Один reference на все handles допустим: identity это (reference, kid), kids различаются.
+    let inventory: Vec<RotationServerKey> = keys
+        .iter()
+        .map(|signer| RotationServerKey {
+            reference: "anchor".into(),
+            signer: Arc::new(signer.clone()),
+        })
+        .collect();
+    assert_eq!(inventory.len(), 5);
+    assert!(inventory.len() <= MAX_RETAINED_KEYS, "inventory must load");
+    let mut provider = RotationServerProvider::new(Arc::clone(&store), inventory).unwrap();
+    provider.set_announce_ring_keys_for_tests(4);
+    // Часы стоят на 1000: predecessor cutoff'ы (117800+) далеко впереди, retired = 0,
+    // pending растёт максимум до 3 — отказ ниже приходит исключительно от нового предела.
+    for (step, key) in keys.iter().enumerate().take(4).skip(1) {
+        let publication = provider.announce("anchor", key.kid()).unwrap();
+        assert_eq!(publication.revision, step as u64 + 1);
+    }
+    let before = {
+        let mut store_guard = store
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (snapshot, _) = store_guard.snapshot().unwrap();
+        assert_eq!(snapshot.public.keys.len(), 4);
+        snapshot
+    };
+    // При 4 keys в ring ещё один announce отказывает: ring стал бы 5 > тестового предела 4.
+    // Без отказа select_pinned прошёл бы: retired = 0, pending = 3 < MAX_PENDING.
+    let error = provider
+        .announce("anchor", keys[4].kid())
+        .err()
+        .expect("announce must be refused");
+    assert_eq!(error.code, "rotation_state_unavailable");
+    let mut store_guard = store
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (after, _) = store_guard.snapshot().unwrap();
+    // Отказ ничего не мутит: то же состояние байт-в-байт.
+    assert_eq!(after.format_version, before.format_version);
+    assert_eq!(after.public.records, before.public.records);
+    assert_eq!(after.public.keys, before.public.keys);
+    assert_eq!(after.public.revision, before.public.revision);
+    assert_eq!(after.public.head.ordinal, before.public.head.ordinal);
+    assert_eq!(after.public.head.hash, before.public.head.hash);
+    assert_eq!(
+        after.public.checkpoint.ordinal,
+        before.public.checkpoint.ordinal
+    );
+    assert_eq!(after.signer_references, before.signer_references);
+    store_guard
+        .close()
+        .expect("refused announce must release the lease");
 }
