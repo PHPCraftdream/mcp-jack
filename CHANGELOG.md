@@ -10,6 +10,7 @@ This file records repository history. The `0.1.0 (unreleased)` section describes
 - User management with user-key rotation and a single strict-boolean admin flag.
 - Optional durable nonce admission with a bbolt-backed Go backend and fail-closed handling of unknown outcomes.
 - Server response-key rotation: `jack.server.key` delivery, fixed publication time P plus 48 h activation, overlap of both keys, strict cutoff on activation, and explicit single-page client refresh — in all three SDKs plus the Go CLI.
+- Candidate `jack.server.key` result decoding matches the response `id` canonically in Go, Rust and TypeScript: a numeric id must be the canonical JSON text of the expected value (`7.0`, `7e0`, `+7`, `07` fail with `rotation_result_invalid`).
 - Go CLI (`jack`): keygen/bootstrap/enroll/gateway/bridge, user and invite admin commands, nonce and server-key commands.
 - 3x3 interop matrices: request/response, rotation, and credential transfer.
 - Official MCP SDK end-to-end CI job over the bounded legacy 2025-11-25 stdio profile.
