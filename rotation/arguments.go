@@ -8,8 +8,8 @@ import (
 	jack "github.com/PHPCraftdream/mcp-jack"
 )
 
-// DecodeServerKeyArguments проверяет исходный member sequence, не last-wins map.
-// Caller ограничивает complete request body до вызова; parse не даёт checkpoint authority.
+// DecodeServerKeyArguments checks the original member sequence, not a last-wins map.
+// The caller bounds the complete request body before the call; parsing grants no checkpoint authority.
 func DecodeServerKeyArguments(data []byte) (ResultCursor, error) {
 	refuse := func() (ResultCursor, error) { return ResultCursor{}, invalid("invalid_params") }
 	value, err := strictJSON(data)

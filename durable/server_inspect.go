@@ -6,8 +6,8 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-// ServerInspection — публичные diagnostics, не serving permission или rollback evidence.
-// Protected references и complete private snapshot не выдаются.
+// ServerInspection holds public diagnostics, not serving permission or rollback evidence.
+// Protected references and the complete private snapshot are not exposed.
 type ServerInspection struct {
 	StoreID            string `json:"store_id"`
 	OwnerGeneration    uint64 `json:"owner_generation"`
@@ -24,7 +24,7 @@ type ServerInspection struct {
 	PublicationPresent bool   `json:"publication_present"`
 }
 
-// InspectServer требует exclusive owner даже offline; не создаёт DB и не вызывает clock.
+// InspectServer requires the exclusive owner even offline; it does not create a DB or call the clock.
 func InspectServer(path string, options ServerOptions) (report ServerInspection, result error) {
 	options, _, profile, err := normalizedServerOptions(options)
 	if err != nil {
@@ -52,7 +52,7 @@ func InspectServer(path string, options ServerOptions) (report ServerInspection,
 		if err != nil {
 			return ErrInvalidStore
 		}
-		// Flags сохраняются как diagnostics; несовместимую clock dependency не скрываем.
+		// Flags are preserved as diagnostics; an incompatible clock dependency is not hidden.
 		if snapshot.Public.Clock.HighWater > guard.Clock.HighWater || snapshot.Public.Clock.Revision > guard.Clock.Revision {
 			return ErrInvalidStore
 		}

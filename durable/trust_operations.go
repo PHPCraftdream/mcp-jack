@@ -8,7 +8,7 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-// RawClock — только sample для outer checks, не durable time authority.
+// RawClock is only a sample for outer checks, not a durable time authority.
 func (store *TrustStore) RawClock() (int64, error) {
 	done, err := store.begin()
 	if err != nil {
@@ -22,12 +22,12 @@ func (store *TrustStore) RawClock() (int64, error) {
 	return now, nil
 }
 
-// AdvanceAndCheck — единственная операция, меняющая authoritative H/revision/unsafe.
+// AdvanceAndCheck is the only operation that changes authoritative H/revision/unsafe.
 func (store *TrustStore) AdvanceAndCheck() (rotation.ClockTuple, error) {
 	return store.advanceTrustClock(nil)
 }
 
-// CheckSnapshotClock атомарно проверяет whole trust вместе с fresh guard operation.
+// CheckSnapshotClock atomically checks the whole trust together with a fresh guard operation.
 func (store *TrustStore) CheckSnapshotClock(expected rotation.TrustSnapshot) (rotation.ClockTuple, error) {
 	encoded, err := rotation.EncodeTrustSnapshot(expected, store.options.Binding, store.options.Window, store.options.Checkpoint)
 	if err != nil {
@@ -100,7 +100,7 @@ func (store *TrustStore) advanceTrustClock(expected []byte) (rotation.ClockTuple
 	return result, nil
 }
 
-// Snapshot читает committed state; не выполняет fresh clock operation или ACK.
+// Snapshot reads committed state; it does not perform a fresh clock operation or ACK.
 func (store *TrustStore) Snapshot() (rotation.TrustSnapshot, rotation.ClockTuple, error) {
 	done, err := store.begin()
 	if err != nil {
@@ -138,7 +138,7 @@ func (store *TrustStore) Snapshot() (rotation.TrustSnapshot, rotation.ClockTuple
 	return snapshot, guard.Clock, nil
 }
 
-// CompareAndSwap меняет whole trust ровно один раз, оставляя guard bytes неизменными.
+// CompareAndSwap changes the whole trust exactly once, leaving guard bytes unchanged.
 func (store *TrustStore) CompareAndSwap(expected, desired rotation.TrustSnapshot, clock rotation.ClockTuple) error {
 	previous, err := rotation.EncodeTrustSnapshot(expected, store.options.Binding, store.options.Window, store.options.Checkpoint)
 	if err != nil {
@@ -197,5 +197,5 @@ func (store *TrustStore) CompareAndSwap(expected, desired rotation.TrustSnapshot
 	return nil
 }
 
-// Fence закрывает текущего owner; заранее подтверждённый dirty блокирует restart.
+// Fence closes the current owner; a previously confirmed dirty marker blocks restart.
 func (store *TrustStore) Fence() { store.fenced.Store(true) }

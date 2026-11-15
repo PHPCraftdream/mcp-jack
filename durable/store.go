@@ -1,5 +1,5 @@
-// Package durable содержит transactional backend с единственным lifetime owner.
-// Поддержка filesystem и crash recovery требует отдельных qualification gates.
+// Package durable contains a transactional backend with a single lifetime owner.
+// Filesystem support and crash recovery require separate qualification gates.
 package durable
 
 import (
@@ -22,14 +22,14 @@ var (
 	ErrUnsupported      = errors.New("durable: unsupported platform or filesystem")
 )
 
-// Options связывает backend с независимо заданным deployment и immutable W.
+// Options binds the backend to an independently specified deployment and immutable W.
 type Options struct {
 	DeploymentID string
 	Window       int64
 	Now          func() int64
 }
 
-// Store удерживает exclusive bbolt lock; handle никогда не экспортируется.
+// Store holds the exclusive bbolt lock; the handle is never exported.
 type Store struct {
 	mu        sync.Mutex
 	db        *bolt.DB
@@ -70,9 +70,9 @@ func dbOptions(create bool) *bolt.Options {
 	}
 }
 
-// InitializeUnused — отдельная OOB операция только для доказанно неиспользованного
-// deployment. Не мигрирует volatile history и никогда не заменяет существующий файл.
-// При неизвестной ошибке файл сохраняется для recovery, а не удаляется/создаётся заново.
+// InitializeUnused is a separate OOB operation only for a provably unused
+// deployment. It does not migrate volatile history and never replaces an existing file.
+// On an unknown error the file is kept for recovery, not deleted/recreated.
 func InitializeUnused(path string, opts Options) error {
 	return initializeUnused(path, opts, syncDirectory)
 }
@@ -137,8 +137,8 @@ func initializeUnused(path string, opts Options, syncParent func(string) error) 
 	return nil
 }
 
-// Open открывает только существующий initialized store без implicit create/reset.
-// Dirty/unsafe startup всегда закрыт до отдельной явной recovery операции.
+// Open opens only an existing initialized store, without implicit create/reset.
+// Dirty/unsafe startup is always closed until a separate explicit recovery operation.
 func Open(path string, opts Options) (*Store, error) {
 	return openStore(path, opts, dbOptions(false))
 }
@@ -186,8 +186,8 @@ func openStore(path string, opts Options, options *bolt.Options) (*Store, error)
 	if err := db.Update(func(tx *bolt.Tx) error { return tx.Bucket([]byte("metadata")).Put(headerKey, encodeMetadata(m)) }); err != nil {
 		return nil, ErrUnavailable
 	}
-	// Сначала подтверждаем dirty marker, затем наблюдаем startup clock.
-	// Неопределённый unsafe-latch больше не может открыть clean restart.
+	// First confirm the dirty marker, then observe the startup clock.
+	// An indeterminate unsafe-latch can no longer open a clean restart.
 	now := opts.Now()
 	if now < 0 || now > maxTimestamp || now < m.HighWater {
 		m.Unsafe = true
@@ -203,11 +203,11 @@ func openStore(path string, opts Options, options *bolt.Options) (*Store, error)
 	return owner, nil
 }
 
-// Fence не ждёт leases и не повторяет uncertain transaction.
-// Уже подтверждённый dirty marker закрывает следующий startup.
+// Fence does not wait for leases and does not retry an uncertain transaction.
+// An already confirmed dirty marker closes the next startup.
 func (s *Store) Fence() { s.fenced.Store(true) }
 
-// Close прекращает admission, дожидается leases и очищает dirty только без fence.
+// Close stops admission, waits for leases, and clears dirty only when not fenced.
 func (s *Store) Close() error {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()

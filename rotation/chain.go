@@ -4,7 +4,7 @@ import jack "github.com/PHPCraftdream/mcp-jack"
 
 const MaxRetainedKeys = 1024 + 128 + 1
 
-// Checkpoint должен быть получен независимо или из ранее подтверждённого snapshot.
+// The checkpoint must be obtained independently or from a previously confirmed snapshot.
 type Checkpoint struct {
 	Ordinal     uint64
 	Hash        string
@@ -13,8 +13,8 @@ type Checkpoint struct {
 	PublishedAt int64
 }
 
-// VerifyChain проверяет contiguous extension; retained включает публичную историю.
-// Возвращаемые records не ссылаются на входные buffers.
+// VerifyChain checks a contiguous extension; retained includes the public history.
+// Returned records do not reference the input buffers.
 func VerifyChain(wires [][]byte, binding Binding, checkpoint Checkpoint, retained map[string][]byte) ([]Record, error) {
 	if len(wires) > MaxRetainedKeys || len(retained) > MaxRetainedKeys {
 		return nil, invalid("capacity")
@@ -72,7 +72,7 @@ func VerifyChain(wires [][]byte, binding Binding, checkpoint Checkpoint, retaine
 	return accepted, nil
 }
 
-// SelectedOrdinal выбирает greatest ordinal; входная цепочка уже должна быть проверена.
+// SelectedOrdinal selects the greatest ordinal; the input chain must already be verified.
 func SelectedOrdinal(records []Record, now int64) uint64 {
 	var selected uint64
 	for _, r := range records {
@@ -83,7 +83,7 @@ func SelectedOrdinal(records []Record, now int64) uint64 {
 	return selected
 }
 
-// AssignmentValid проверяет ts и строгий final cutoff по известной цепочке.
+// AssignmentValid checks ts and the strict final cutoff against the known chain.
 func AssignmentValid(records []Record, ordinal uint64, ts, finalNow int64) bool {
 	if ordinal > MaxOrdinal || ts < 0 || ts > MaxTimestamp || finalNow < 0 || finalNow > MaxTimestamp {
 		return false

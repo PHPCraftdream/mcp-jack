@@ -9,8 +9,8 @@ import (
 	"unicode/utf8"
 )
 
-// Stdlib проверяет JSON grammar; дополнительный guard запрещает lone surrogates,
-// которые encoding/json иначе заменяет на U+FFFD. Native JSON policy не меняется.
+// Stdlib checks the JSON grammar; an additional guard forbids lone surrogates,
+// which encoding/json would otherwise replace with U+FFFD. Native JSON policy is unchanged.
 func scalarJSON(data []byte) bool {
 	if !utf8.Valid(data) || !json.Valid(data) {
 		return false

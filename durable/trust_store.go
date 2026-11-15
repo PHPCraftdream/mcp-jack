@@ -14,7 +14,7 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-// TrustOptions задаются независимо от remote response и существующего DB.
+// TrustOptions are specified independently of the remote response and the existing DB.
 type TrustOptions struct {
 	Binding    rotation.Binding
 	Window     int64
@@ -22,7 +22,7 @@ type TrustOptions struct {
 	Now        func() int64
 }
 
-// TrustStore владеет отдельным lifetime-exclusive trust/clock domain.
+// TrustStore owns a separate lifetime-exclusive trust/clock domain.
 type TrustStore struct {
 	mu        sync.Mutex
 	db        *bolt.DB
@@ -39,7 +39,7 @@ type TrustStore struct {
 
 func trustError(code string) error { return &rotation.Error{Code: code} }
 
-// Provider обязан ограничивать время callback; panic не раскрывается caller.
+// Provider must bound callback time; a panic is not exposed to the caller.
 func sampleTrustNow(now func() int64) (sample int64, complete bool) {
 	defer func() {
 		if !complete {
@@ -99,7 +99,7 @@ func openTrustDB(path string, create bool) (*bolt.DB, *os.File, error) {
 	return db, file, nil
 }
 
-// InitializeTrustUnused — только явное OOB создание нового binding, не восстановление.
+// InitializeTrustUnused is only explicit OOB creation of a new binding, not recovery.
 func InitializeTrustUnused(path string, options TrustOptions) (result error) {
 	options, encoded, profile, err := normalizedTrustOptions(options)
 	if err != nil {
@@ -163,7 +163,7 @@ func InitializeTrustUnused(path string, options TrustOptions) (result error) {
 	return nil
 }
 
-// OpenTrust не создаёт DB и не снимает dirty/fenced/unsafe при startup.
+// OpenTrust does not create a DB and does not clear dirty/fenced/unsafe at startup.
 func OpenTrust(path string, options TrustOptions) (*TrustStore, error) {
 	options, _, profile, err := normalizedTrustOptions(options)
 	if err != nil {
@@ -242,7 +242,7 @@ func (store *TrustStore) failed() error {
 	return ErrUnavailable
 }
 
-// Close прекращает новые операции и не очищает dirty после неизвестного результата.
+// Close stops new operations and does not clear dirty after an unknown result.
 func (store *TrustStore) Close() error {
 	store.closeOnce.Do(func() {
 		store.mu.Lock()

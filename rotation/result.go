@@ -23,7 +23,7 @@ type ResultCursor struct {
 	Hash    string
 }
 
-// DecodedResult — owned schema data, не authenticated carrier или ACKed trust.
+// DecodedResult — owned schema data, not an authenticated carrier or ACKed trust.
 type DecodedResult struct {
 	Current  CurrentKey
 	Records  []string
@@ -94,9 +94,9 @@ func structuredResult(value any) (DecodedResult, error) {
 	return result, nil
 }
 
-// canonicalNumber возвращает канонический JSON текст числового id: точная
-// десятичная канонизация без float. Отклоняет |value| >= 2^1024 — точку,
-// где Number() в TS даёт Infinity.
+// canonicalNumber returns the canonical JSON text of a numeric id: exact
+// decimal canonicalization without float. Rejects |value| >= 2^1024, the point
+// where Number() in TS yields Infinity.
 func canonicalNumber(number json.Number) (string, bool) {
 	negative, digits, exponent, ok := parseNumberLexeme(number.String())
 	if !ok || !withinFloatRange(digits, exponent) {
@@ -105,9 +105,9 @@ func canonicalNumber(number json.Number) (string, bool) {
 	return canonicalDecimal(negative, digits, exponent), true
 }
 
-// parseNumberLexeme проверяет JSON number grammar
-// -?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)? и разбивает лексему:
-// знак, конкатенация цифр int+frac, E = exp - len(frac).
+// parseNumberLexeme checks the JSON number grammar
+// -?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)? and splits the lexeme into:
+// sign, concatenated digits int+frac, E = exp - len(frac).
 func parseNumberLexeme(text string) (bool, string, int, bool) {
 	rest := text
 	negative := false
@@ -161,11 +161,11 @@ func allDigits(text string) bool {
 	return true
 }
 
-// withinFloatRange — точный гейт |value| < 2^1024 через math/big:
-// E >= 0 сравнивает D·10^E с 2^1024, E < 0 — D с 2^1024·10^(-E).
-// Вне диапазона f64 гейт можно закрыть сразу: 10^309 > 2^1024;
-// E < -MaxResultBodyBytes ⇒ канонический текст длиннее лимита тела
-// и не может совпасть byte-for-byte с лексемой в принятом ответе.
+// withinFloatRange is an exact |value| < 2^1024 gate via math/big:
+// E >= 0 compares D·10^E with 2^1024, E < 0 compares D with 2^1024·10^(-E).
+// Outside the f64 range the gate can be closed immediately: 10^309 > 2^1024;
+// E < -MaxResultBodyBytes ⇒ the canonical text is longer than the body limit
+// and cannot match the lexeme in an accepted response byte-for-byte.
 func withinFloatRange(digits string, exponent int) bool {
 	if exponent > 308 {
 		return false
@@ -186,8 +186,8 @@ func withinFloatRange(digits string, exponent int) bool {
 	return value.Cmp(limit) < 0
 }
 
-// canonicalDecimal — кратчайший десятичный вид без экспоненты;
-// ведущие/хвостовые нули убираются, -0 → "0", минус только у ненулевого.
+// canonicalDecimal is the shortest decimal form without an exponent;
+// leading/trailing zeros are removed, -0 → "0", minus sign only on nonzero values.
 func canonicalDecimal(negative bool, digits string, exponent int) string {
 	digits = strings.TrimLeft(digits, "0")
 	if digits == "" {
@@ -218,8 +218,8 @@ func canonicalDecimal(negative bool, digits string, exponent int) string {
 	return text
 }
 
-// idMatches сравнивает id ответа с ожидаемым: строки — по декодированному
-// значению, числа — byte-for-byte с каноническим текстом значения expected.
+// idMatches compares the response id with the expected one: strings by decoded
+// value, numbers byte-for-byte with the canonical text of the expected value.
 func idMatches(actual, expected any) bool {
 	switch expectedValue := expected.(type) {
 	case string:
@@ -234,9 +234,9 @@ func idMatches(actual, expected any) bool {
 	}
 }
 
-// DecodeResult вызывать только после outer authentication, known interval и ClockGuard.
-// Проверяет success schema/parity/limits, не proofs/cursor/gaps/current binding;
-// не выполняет ACK, persistence, fetch или refresh. Signed errors обрабатывает caller.
+// DecodeResult call only after outer authentication, known interval and ClockGuard.
+// Checks success schema/parity/limits, not proofs/cursor/gaps/current binding;
+// performs no ACK, persistence, fetch or refresh. The caller handles signed errors.
 func DecodeResult(body []byte, expectedID json.RawMessage) (DecodedResult, error) {
 	fail := func() (DecodedResult, error) { return DecodedResult{}, invalid("rotation_result_invalid") }
 	if len(body) == 0 || len(body) > MaxResultBodyBytes {
