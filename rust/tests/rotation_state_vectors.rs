@@ -251,7 +251,13 @@ const EXCLUDED: [(&str, &str); 1] = [(
 )];
 
 /// (id, caveat) pairs for driven vectors whose every expectation is not observable.
-const DEVIATIONS: [(&str, &str); 7] = [
+const DEVIATIONS: [(&str, &str); 8] = [
+    (
+        "clock-equal-is-noop",
+        "The model's callbacks:0 counts durable clock callbacks while the Rust \
+         ClockGuard necessarily samples once (the equal sample is a durable \
+         noop: H/revision/unsafe are asserted exactly from the clock doc).",
+    ),
     (
         "clock-rollback-latch-unknown-is-unavailable",
         "The model writes a latch on the failed sample (writes:1); Rust maps a \
@@ -506,19 +512,28 @@ fn clock_doc(path: &Path) -> (u64, u64, bool) {
     (
         clock["high_water"].as_u64().expect("high_water"),
         clock["clock_revision"].as_u64().expect("revision"),
-        clock["unsafe_clock"].as_bool().expect("unsafe"),
+        // serde rename on ClockDocument.unsafe_clock (rust/src/rotation/trust_json_wire.rs).
+        clock["unsafe"].as_bool().expect("unsafe"),
     )
 }
 
 fn expect_ok(case: &ClientCase, result: RotationRefreshResult) {
     let expect = &case.expect;
     assert_eq!(expect.error, None, "{}: expected success", case.id);
+    // committed:null in the fixture expresses "no commit / zero trust-CAS".
     assert_eq!(
-        expect.committed,
-        Some(result.committed),
+        result.committed,
+        expect.committed.unwrap_or(false),
         "{}: committed",
         case.id
     );
+    if expect.committed.is_none() {
+        assert!(
+            !result.committed,
+            "{}: absent committed means no commit",
+            case.id
+        );
+    }
     assert_eq!(expect.ack_ordinal, result.head.ordinal, "{}: ack", case.id);
     // Trust-CAS callbacks are observable via commit: exactly one iff an
     // extension was adopted (duplicates invoke zero callbacks).
@@ -597,12 +612,16 @@ fn guard_fixture_shape_and_error_table() {
     let mut stale_cases = 0;
     let mut busy_cases = 0;
     for case in &vectors.client_cases {
-        assert_eq!(
-            Some(case.input.response.now),
-            u64::try_from(case.input.response.ts).ok(),
-            "{}: response now/ts agree",
-            case.id
-        );
+        // The stale vector deliberately ships a response ts (173800) newer than
+        // the client now (173769) — that divergence IS the vector's point.
+        if case.id != "new-key-lower-bound-minus-one-is-stale" {
+            assert_eq!(
+                Some(case.input.response.now),
+                u64::try_from(case.input.response.ts).ok(),
+                "{}: response now/ts agree",
+                case.id
+            );
+        }
         assert!(
             !case.input.response.request_sig.is_empty()
                 && !case.input.response.signature.is_empty(),
@@ -943,19 +962,31 @@ fn vector_trust_callback_unknown_fences() {
     seed_ord1(&sandbox.file(), &options, &vectors, 173_769);
     let clock = SharedClock::at(173_800);
     let mut store = open_trust(&sandbox.file(), &options, &clock);
-    // Inject the unknown CAS outcome: the temp-file replace inside
-    // compare_and_swap fails while the directory is read-only.
     fs::set_permissions(&sandbox.0, fs::Permissions::from_mode(0o500))
         .expect("chmod sandbox read-only");
-    let error = drive_refresh(&mut store, case).expect_err("unknown outcome");
-    let code = error.code.clone();
-    fs::set_permissions(&sandbox.0, fs::Permissions::from_mode(0o700))
-        .expect("restore sandbox permissions");
+    // The unknown CAS outcome can surface from the CAS itself (accept_refresh)
+    // or from the fenced advance inside RotationController::new; both are the
+    // same rotation_state_unknown the fixture expects.
+    let error = match RotationController::new(&mut store) {
+        Ok(mut controller) => controller
+            .accept_refresh(
+                response_of(case),
+                case.input.expected_id.to_string().as_bytes(),
+                &cursor_of(&case.input.cursor),
+            )
+            .expect_err("unknown CAS outcome"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, "rotation_state_unknown");
     assert_eq!(
-        code, "rotation_state_unknown",
-        "{}: unknown outcome",
+        case.expect.error.as_deref(),
+        Some("rotation_state_unknown"),
+        "{}: fixture expects the unknown outcome",
         case.id
     );
+    // Restore the sandbox before any close/reopen attempt.
+    fs::set_permissions(&sandbox.0, fs::Permissions::from_mode(0o700))
+        .expect("restore sandbox permissions");
     assert_eq!(case.expect.fenced, Some(true), "{}: model fences", case.id);
     drop(store);
     // fenced:true => a reopen is refused (the bundle stays dirty on disk).
