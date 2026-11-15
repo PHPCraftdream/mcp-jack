@@ -1031,7 +1031,7 @@ func runCapacityVector(t *testing.T, fc vectorCase, plan vectorPlan) {
 	assertCount(t, fc.ID, "transactCalls", counters.transactCalls, 1)
 	skip := map[string]bool{"highWater": true, "writes": true}
 	assertVectorEnd(t, fc.ID, owner, counters, fc.Expect, skip)
-	assertCount(t, fc.ID, "highWater", int(owner.meta.HighWater), plan.openNow)
+	assertCount(t, fc.ID, "highWater", int(owner.meta.HighWater), int(plan.openNow))
 	if owner.fenced.Load() {
 		t.Fatalf("%s: capacity refusal fenced the owner", fc.ID)
 	}
