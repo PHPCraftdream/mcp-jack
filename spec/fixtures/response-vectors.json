@@ -353,6 +353,32 @@
         "result": "reject",
         "code": "bad_signature"
       }
+    },
+    {
+      "id": "res-small-order-r-identity",
+      "description": "a response signature whose R is the identity encoding is rejected (spec 01 section 2)",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "pinned_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+        "pinned_server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+        "request_sig": "mwf3oDJvK8Hf2yt59COpii4WRF_GFNUmecamTJL_psTMbS3wMDfAeVzlvogSpAjSIFeIrVd9dDTxxdlQjRtGAQ"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "Jack-Auth",
+            "v1 kid=wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88,ts=1767225600,sig=AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABM3pVmIKso7RuOCnrSXowL5WUKswhz5vALl6_u-f4fDg"
+          ]
+        ],
+        "body_b64u": "eyJqc29ucnBjIjoiMi4wIiwiaWQiOjEsInJlc3VsdCI6eyJvayI6dHJ1ZX19",
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}"
+      },
+      "expect": {
+        "result": "reject",
+        "code": "bad_signature"
+      }
     }
   ]
 }
