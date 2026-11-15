@@ -16,6 +16,13 @@ import (
 	"github.com/PHPCraftdream/mcp-jack/server"
 )
 
+// Границы pre-auth admission. Связь с maxDurableWindow проверяет
+// TestGatewayAdmissionBudget: rate*(2*W+1) должно оставаться ниже capacity.
+const (
+	gatewayAdmissionRate = 64
+	gatewayNonceCapacity = 4096
+)
+
 type gatewayConfig struct {
 	Version            int                   `json:"version"`
 	Aud                string                `json:"aud"`
@@ -175,7 +182,7 @@ func gateway(ctx context.Context, path string) (result error) {
 			second, admitted = now, 0
 		}
 		admitted++
-		allowed := admitted <= 64
+		allowed := admitted <= gatewayAdmissionRate
 		rateMu.Unlock()
 		if !allowed {
 			http.Error(w, "busy", 503)
@@ -183,7 +190,7 @@ func gateway(ctx context.Context, path string) (result error) {
 		}
 		if nonces != nil {
 			nonces.Purge(now)
-			if nonces.Len() >= 4096 {
+			if nonces.Len() >= gatewayNonceCapacity {
 				http.Error(w, "busy", 503)
 				return
 			}

@@ -4,7 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -206,6 +209,11 @@ func relayFrame(ctx context.Context, c *connection, out io.Writer, b []byte, sta
 	} else if method == "initialize" || method == "notifications/initialized" {
 		return errProtocol
 	}
+	// Native jack.* tools are answered locally: a stdio client must not gain
+	// signed access to enrollment or administration through the bridge.
+	if request && method == "tools/call" && strings.HasPrefix(nativeToolName(m), bridgeNativePrefix) {
+		return writeReply(ctx, out, bridgeNativeDenial(id))
+	}
 	reply, status, err := c.post(ctx, b)
 	if err != nil {
 		return err
@@ -240,6 +248,12 @@ func relayFrame(ctx context.Context, c *connection, out io.Writer, b []byte, sta
 		}
 		*state = 1
 	}
+	return writeReply(ctx, out, reply)
+}
+
+// writeReply appends the framing LF and writes the whole frame. Every reply,
+// relayed or produced locally, uses this path while its worker owns admission.
+func writeReply(ctx context.Context, out io.Writer, reply []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -252,4 +266,30 @@ func relayFrame(ctx context.Context, c *connection, out io.Writer, b []byte, sta
 		frame = frame[n:]
 	}
 	return nil
+}
+
+// Native jack.* tools belong to the dedicated CLI commands, not to the bridge.
+const (
+	bridgeNativePrefix        = "jack."
+	bridgeNativeDenialCode    = -32602
+	bridgeNativeDenialMessage = "native jack tools are not available through the bridge"
+)
+
+// nativeToolName extracts params.name only when params is an object and the
+// name is a JSON string; any other shape is forwarded unchanged so the gateway
+// keeps rejecting it exactly as before.
+func nativeToolName(m map[string]json.RawMessage) string {
+	params, err := object(m["params"])
+	if err != nil {
+		return ""
+	}
+	return text(params["name"])
+}
+
+// bridgeNativeDenial builds the single-line local error response with the
+// original id. Arguments are never echoed.
+func bridgeNativeDenial(id json.RawMessage) []byte {
+	return []byte(`{"jsonrpc":"2.0","id":` + string(bytes.TrimSpace(id)) +
+		`,"error":{"code":` + strconv.Itoa(bridgeNativeDenialCode) +
+		`,"message":` + strconv.Quote(bridgeNativeDenialMessage) + `}}`)
 }

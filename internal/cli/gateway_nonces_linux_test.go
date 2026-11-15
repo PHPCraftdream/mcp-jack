@@ -60,7 +60,7 @@ func TestGatewaySelectsExistingDurableOwnerWithoutFallback(t *testing.T) {
 	}
 	for _, wrong := range []gatewayDurableConfig{
 		{Path: path, DeploymentID: "wrong-deployment", Window: 30},
-		{Path: path, DeploymentID: profile.DeploymentID, Window: 31},
+		{Path: path, DeploymentID: profile.DeploymentID, Window: 29},
 	} {
 		candidate := verification
 		closeStore, err := selectGatewayNonces(gatewayConfig{DurableNonces: &wrong, MaxConcurrent: 32}, &candidate)
