@@ -33,6 +33,16 @@ export function profileToJSON(p: Profile): { url: string; aud: string; server_pu
   };
 }
 
+/** Whether aud is non-empty and free of C0 control characters and DEL (bytes < 0x20 and 0x7f on the wire; UTF-8 multibyte sequences are all >= 0x80, so a code-unit check is exact). */
+function validAudience(aud: string): boolean {
+  if (aud === "") return false;
+  for (let i = 0; i < aud.length; i++) {
+    const c = aud.charCodeAt(i);
+    if (c < 0x20 || c === 0x7f) return false;
+  }
+  return true;
+}
+
 /** saveProfile returns p as indented JSON with a trailing newline (Go MarshalIndent + newline). */
 export function saveProfile(p: Profile): string {
   return JSON.stringify(profileToJSON(p), null, 2) + "\n";
@@ -59,8 +69,8 @@ export function validateProfile(p: Profile): void {
   if ((u.protocol !== "http:" && u.protocol !== "https:") || u.hostname === "") {
     throw new Error("jack client: profile url must be an absolute http/https URL with a host");
   }
-  if (p.aud === "") {
-    throw new Error("jack client: profile aud must be non-empty");
+  if (!validAudience(p.aud)) {
+    throw new Error("jack client: profile aud must be non-empty and contain no control characters");
   }
   let serverKey: Uint8Array;
   try {
