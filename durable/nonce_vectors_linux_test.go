@@ -381,15 +381,16 @@ func vectorSeedRowRecord(t *testing.T, m metadata, kind byte, kidName, nonceName
 	return row
 }
 
-func vectorSplitRowKey(t *testing.T, id, key string) (string, string) {
-	t.Helper()
+// vectorSplitRowKey derives the deterministic identity names of a seed row.
+// Pair rows are written "kid:nonce"; generated capacity rows ("seed-N") carry
+// a single name, so the nonce name falls back to a whole-key derivative.
+func vectorSplitRowKey(key string) (string, string) {
 	for index := 0; index < len(key); index++ {
 		if key[index] == ':' {
 			return key[:index], key[index+1:]
 		}
 	}
-	t.Fatalf("%s: seed row key %q has no ':' separator", id, key)
-	return "", ""
+	return key, key + "/nonce"
 }
 
 // vectorCaseRows builds every seed row of a case; encodeRecord (via
@@ -398,12 +399,12 @@ func vectorCaseRows(t *testing.T, fc vectorCase, m metadata) []nonceRecord {
 	t.Helper()
 	var rows []nonceRecord
 	for _, row := range fc.State.Live {
-		kidName, nonceName := vectorSplitRowKey(t, fc.ID, row.Key)
+		kidName, nonceName := vectorSplitRowKey(row.Key)
 		rows = append(rows, vectorSeedRowRecord(t, m, liveRecord, kidName, nonceName,
 			row.TS, row.RetainUntil, vectorRowHighWater(m.HighWater, row.TS)))
 	}
 	for _, row := range fc.State.Intents {
-		kidName, nonceName := vectorSplitRowKey(t, fc.ID, row.Key)
+		kidName, nonceName := vectorSplitRowKey(row.Key)
 		rows = append(rows, vectorSeedRowRecord(t, m, intentRecord, kidName, nonceName,
 			row.TS, row.RetainUntil, vectorRowHighWater(m.HighWater, row.TS)))
 	}
@@ -862,16 +863,18 @@ func runStoreDirectVector(t *testing.T, fc vectorCase, plan vectorPlan) {
 func runUnknownFinalVector(t *testing.T, fc vectorCase, plan vectorPlan) {
 	owner, path, opts, clock, counters, state := newSingleStore(t, fc, plan)
 	injected := errors.New("candidate-vector injected unknown final outcome")
-	original := owner.transact
+	counting := owner.transact
 	owner.transact = func(apply func(*bolt.Tx) error) error {
-		counters.transactCalls++
 		counters.eventCalls++
-		if counters.transactCalls != 2 {
-			return original(apply)
-		}
-		// Apply then fail: bbolt rolls the final transaction back, which is
-		// exactly the unknown-outcome ambiguity being exercised.
-		return original(func(tx *bolt.Tx) error {
+		// counting (installed by newSingleStore) is the only place the
+		// transaction ordinal advances; wrapping it again would double-count
+		// and mis-time the fault against the intent/final transactions.
+		return counting(func(tx *bolt.Tx) error {
+			if counters.transactCalls != 2 {
+				return apply(tx)
+			}
+			// Apply then fail: bbolt rolls the final transaction back, which is
+			// exactly the unknown-outcome ambiguity being exercised.
 			if err := apply(tx); err != nil {
 				return err
 			}
