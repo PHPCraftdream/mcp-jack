@@ -115,3 +115,25 @@ test("client-side server-key rejection carries no HTTP status", () => {
     );
   }
 });
+
+test("aud must be non-empty and free of control characters (client and profile)", () => {
+  const base = newValidTestProfile();
+  const doc = newValidProfileDoc();
+  const signer = seedSignerByName("alice");
+  for (const bad of ["a\nb", "a\rb", "a\u0000b", "a\tb", "a\u007fb"]) {
+    // Profile loader (validateProfile via loadProfile).
+    assert.throws(() => loadProfile(doc.replace(`"aud":"${base.aud}"`, `"aud":${JSON.stringify(bad)}`)),
+      /profile aud must be non-empty and contain no control characters/);
+    // Client constructor.
+    assert.throws(
+      () => new Client({ baseUrl: base.url, aud: bad, signer, serverKey: profileServerKeyBytes(base) }),
+      /aud must be non-empty and contain no control characters/,
+    );
+    // clientFromProfile validates the profile before building the Client.
+    assert.throws(() => clientFromProfile({ ...base, aud: bad }, signer), /profile aud must be non-empty and contain no control characters/);
+  }
+  // An ordinary value is still accepted end to end.
+  const loaded = loadProfile(doc);
+  assert.equal(loaded.aud, base.aud);
+  assert.doesNotThrow(() => new Client({ baseUrl: base.url, aud: base.aud, signer, serverKey: profileServerKeyBytes(base) }));
+});

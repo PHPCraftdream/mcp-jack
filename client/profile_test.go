@@ -204,3 +204,31 @@ func TestLocalKeyValidationHasNoHTTPStatus(t *testing.T) {
 	})
 	assertClientSide(t, err)
 }
+
+// TestAudControlCharsRejected pins the spec 01 section 3.1 aud rules on the
+// client side: NewClient and LoadProfile must reject a non-empty audience
+// containing control characters (bytes below 0x20 or 0x7f) and still accept
+// an ordinary value.
+func TestAudControlCharsRejected(t *testing.T) {
+	p, pub := newValidTestProfile(t)
+	signer := seedSignerByName(t, "alice")
+
+	if _, err := NewClient(Config{BaseURL: p.URL, Aud: p.Aud, Signer: signer, ServerKey: pub}); err != nil {
+		t.Fatalf("NewClient rejected an ordinary aud: %v", err)
+	}
+
+	for _, aud := range []string{"a\nb", "a\rb", "a\x00b", "a\tb", "a\x7fb"} {
+		_, err := NewClient(Config{BaseURL: p.URL, Aud: aud, Signer: signer, ServerKey: pub})
+		if err == nil {
+			t.Fatalf("NewClient accepted aud with control character %q", aud)
+		}
+		doc := strings.Replace(newValidProfileDoc(t), `"aud":"https://svc.example.test"`, `"aud":"`+aud+`"`, 1)
+		if _, err := LoadProfile(strings.NewReader(doc)); err == nil {
+			t.Fatalf("LoadProfile accepted aud with control character %q", aud)
+		}
+	}
+
+	if _, err := NewClient(Config{BaseURL: p.URL, Aud: "", Signer: signer, ServerKey: pub}); err == nil {
+		t.Fatal("NewClient accepted an empty aud")
+	}
+}

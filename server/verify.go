@@ -110,6 +110,17 @@ type Config struct {
 	Now func() int64
 }
 
+// audHasControl reports whether aud contains a byte below 0x20 or the byte
+// 0x7f (spec 01 section 3.1 aud rules).
+func audHasControl(aud string) bool {
+	for i := 0; i < len(aud); i++ {
+		if aud[i] < 0x20 || aud[i] == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
 // Verifier authenticates and authorizes requests (spec 01 section 4, spec 02
 // section 4).
 type Verifier struct{ cfg Config }
@@ -119,6 +130,8 @@ func NewVerifier(cfg Config) (*Verifier, error) {
 	switch {
 	case cfg.Aud == "":
 		return nil, errors.New("server: Config.Aud must be non-empty")
+	case audHasControl(cfg.Aud):
+		return nil, errors.New("server: Config.Aud must not contain control characters")
 	case cfg.State == nil:
 		return nil, errors.New("server: Config.State must be set")
 	case cfg.Nonces == nil && cfg.DurableNonces == nil:

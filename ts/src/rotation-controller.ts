@@ -28,6 +28,25 @@ export interface RotationRefreshResult {
 
 type Profile = Pick<RotationTrustSnapshot, "binding" | "window" | "checkpoint">;
 
+/**
+ * A refusal raised AFTER the compare-and-swap already committed: the caller
+ * receives both the committed outcome (`.result.committed === true`) and the
+ * error code, matching Go's `(RefreshResult, error)` return from AcceptRefresh
+ * (client/rotation/refresh.go: the post-CAS final gate returns the committed
+ * result together with the error). It is still a JackError (httpStatus 0), so
+ * existing code-based handling keeps working.
+ */
+export class RotationRefreshCommittedError extends JackError {
+  /** The committed outcome; committed is always true. */
+  readonly result: RotationRefreshResult;
+
+  constructor(code: string, result: RotationRefreshResult) {
+    super(0, code, "rotation committed before refusal");
+    this.name = "RotationRefreshCommittedError";
+    this.result = result;
+  }
+}
+
 function refuse(code: string): never {
   throw new JackError(0, code, "rotation response refused");
 }
@@ -147,12 +166,24 @@ export class RotationController {
         const desired = extendedRefreshSnapshot(owned.snapshot, prepared.extension, clock);
         this.store.compareAndSwap(owned.snapshot, desired, clock);
         const committed = Object.freeze({ ...result, committed: true, revision: desired.revision });
-        this.final(desired, owned.carrier);
+        try {
+          this.final(desired, owned.carrier);
+        } catch (error) {
+          // The swap committed: report BOTH the committed outcome and the late
+          // failure code (Go returns (result, err) here).
+          throw new RotationRefreshCommittedError(
+            error instanceof JackError || error instanceof RotationError ? error.code : "rotation_state_unknown",
+            committed,
+          );
+        }
         return committed;
       } finally {
         this.writer = false;
       }
     } catch (error) {
+      // A post-commit refusal already carries the committed outcome; re-wrap
+      // would strip it.
+      if (error instanceof RotationRefreshCommittedError) throw error;
       return mapped(error, "rotation_state_unknown");
     }
   }

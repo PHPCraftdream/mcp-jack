@@ -153,6 +153,9 @@ impl Verifier {
         if cfg.aud.is_empty() {
             return Err("server: Config.Aud must be non-empty".to_owned());
         }
+        if crate::client::auth::has_control(&cfg.aud) {
+            return Err("server: Config.Aud must not contain control characters".to_owned());
+        }
         Ok(Self {
             cfg,
             server_keys: None,
@@ -847,6 +850,29 @@ mod tests {
 
     fn verifier(cfg: Config) -> Verifier {
         Verifier::new(cfg).expect("test config is valid")
+    }
+
+    #[test]
+    fn new_rejects_control_characters_in_aud() {
+        // The signing string is LF-joined lines including the audience, so an
+        // aud with control characters would make it ambiguous (Go:
+        // audHasControl in NewVerifier).
+        for bad in ["a\nb", "a\rb", "a\0b", "a\tb", "a\u{7f}b"] {
+            let mut cfg = config(NOW, Arc::new(MemoryState::new()), None);
+            cfg.aud = bad.to_owned();
+            let err = match Verifier::new(cfg) {
+                Err(err) => err,
+                Ok(_) => panic!("control-character aud must be rejected: {bad:?}"),
+            };
+            assert_eq!(
+                err, "server: Config.Aud must not contain control characters",
+                "aud {bad:?}"
+            );
+        }
+        // An ordinary value is still accepted.
+        let mut cfg = config(NOW, Arc::new(MemoryState::new()), None);
+        cfg.aud = "https://svc.example.test".to_owned();
+        Verifier::new(cfg).expect("ordinary aud must be accepted");
     }
 
     fn call_body(tool: &str, arguments: Option<&str>) -> String {
