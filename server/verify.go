@@ -278,7 +278,7 @@ func (v *Verifier) Verify(req Request) Result {
 	}
 
 	// The nonce is recorded only after the signature verified, so
-	// unauthenticated requests cannot fill the cache (spec 01 section 4).
+	// requests that fail verification cannot fill the cache (spec 01 section 4).
 	if v.cfg.Nonces.CheckAndRecord(auth.Kid, auth.Nonce, now, auth.TS+v.cfg.Window) {
 		return rejection(401, jack.CodeReplayedNonce, "nonce was already used")
 	}
