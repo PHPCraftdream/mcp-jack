@@ -13,6 +13,7 @@ import (
 	"time"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
+	spec "github.com/PHPCraftdream/mcp-jack/spec"
 )
 
 // newTransport builds a Transport pinned to the test server key with fixed
@@ -252,5 +253,85 @@ func TestTransportRejectsStaleTimestamp(t *testing.T) {
 	}
 	if jErr.Code != jack.CodeTimestampOutOfWindow {
 		t.Fatalf("Code = %q, want %q", jErr.Code, jack.CodeTimestampOutOfWindow)
+	}
+}
+
+// streamingRefusalCase is one row of spec/fixtures/client-streaming-refusal.json.
+type streamingRefusalCase struct {
+	Name        string   `json:"name"`
+	ContentType []string `json:"content_type"`
+	Refused     bool     `json:"refused"`
+}
+
+// TestTransportStreamingRefusalFixture runs the shared client streaming-
+// refusal table through a spy base transport. The FIRST Content-Type header
+// value decides (Header.Get). A refused row must surface
+// ErrStreamingUnsupported with the response body closed and never read, and
+// a non-refused row must reach verification: the pinned key is random and
+// the answer unsigned, so the observable outcome is the missing-auth
+// jack.Error, proving the stream guard did not fire.
+func TestTransportStreamingRefusalFixture(t *testing.T) {
+	data, err := spec.Fixture("client-streaming-refusal.json")
+	if err != nil {
+		t.Fatalf("spec.Fixture: %v", err)
+	}
+	var doc struct {
+		Cases []streamingRefusalCase `json:"cases"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("decode client-streaming-refusal.json: %v", err)
+	}
+	if len(doc.Cases) == 0 {
+		t.Fatal("client-streaming-refusal.json has no cases")
+	}
+	for _, c := range doc.Cases {
+		t.Run(c.Name, func(t *testing.T) {
+			body := &closeSpyBody{Reader: strings.NewReader("data: x\n\n")}
+			base := &spyBase{fn: func(*http.Request) (*http.Response, error) {
+				hdr := http.Header{}
+				if len(c.ContentType) > 0 {
+					hdr["Content-Type"] = c.ContentType
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     hdr,
+					Body:       body,
+				}, nil
+			}}
+			pub, _, err := ed25519.GenerateKey(nil)
+			if err != nil {
+				t.Fatalf("ed25519.GenerateKey: %v", err)
+			}
+			tr := &Transport{
+				Aud:       fixtureAud,
+				Signer:    seedSignerByName(t, "alice"),
+				ServerKey: pub,
+				Now:       fixedClock(fixtureNow),
+				Window:    30 * time.Second,
+				Base:      base,
+			}
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://svc.example.test/mcp", strings.NewReader(`{"ping":1}`))
+			if err != nil {
+				t.Fatalf("http.NewRequestWithContext: %v", err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			_, err = tr.RoundTrip(req)
+			if base.calls != 1 {
+				t.Fatalf("base calls = %d, want 1", base.calls)
+			}
+			if c.Refused {
+				if !errors.Is(err, ErrStreamingUnsupported) {
+					t.Fatalf("err = %v, want ErrStreamingUnsupported", err)
+				}
+				if !body.closed || body.reads != 0 {
+					t.Fatalf("body closed=%v reads=%d, want closed without any read", body.closed, body.reads)
+				}
+				return
+			}
+			var jErr *jack.Error
+			if !errors.As(err, &jErr) || jErr.Code != jack.CodeMissingAuth {
+				t.Fatalf("err = %v, want jack.Error missing_auth (verification ran, no stream refusal)", err)
+			}
+		})
 	}
 }

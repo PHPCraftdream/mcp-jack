@@ -83,7 +83,7 @@ func TestDecodeResultMatchesSharedRotationCorpus(t *testing.T) {
 			}
 		}
 	}
-	if len(document.ResultBodies) != 45 || accepted != 10 || rejected != 35 {
+	if len(document.ResultBodies) != 54 || accepted != 14 || rejected != 40 {
 		t.Fatalf("corpus size drift: %d cases, %d accepted, %d rejected", len(document.ResultBodies), accepted, rejected)
 	}
 }

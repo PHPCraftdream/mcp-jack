@@ -582,14 +582,21 @@ async fn perform(
         TransportError::Transport(format!("jack client: http transport: HTTP request: {e}"))
     })?;
     let status = response.status().as_u16();
-    if response
+    // Only the FIRST Content-Type header value decides (Go Header.Get): a
+    // later event-stream value must not refuse an answer whose first value is
+    // a normal media type. A non-UTF-8 first value, like Go's raw Get, is
+    // simply not equal to text/event-stream.
+    if let Some(v) = response
         .headers()
         .get_all(http::header::CONTENT_TYPE)
         .iter()
-        .filter_map(|v| v.to_str().ok())
-        .any(|v| crate::client::transport::media_type(v) == "text/event-stream")
+        .next()
     {
-        return Err(TransportError::Streaming);
+        if let Ok(v) = v.to_str() {
+            if crate::client::transport::media_type(v) == "text/event-stream" {
+                return Err(TransportError::Streaming);
+            }
+        }
     }
     let mut headers = Vec::new();
     for (name, value) in response.headers().iter() {

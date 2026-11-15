@@ -4,6 +4,7 @@ use crate::ed25519::validate_public_key;
 use crate::encoding::{decode_b64url_fixed, key_id};
 use serde::Deserialize;
 use serde_json::value::RawValue;
+use std::cmp::Ordering;
 
 pub const MAX_RESULT_BODY_BYTES: usize = 256 * 1024;
 pub const MAX_PAGE_RECORDS: usize = 16;
@@ -83,20 +84,159 @@ fn id_matches(actual: &RawValue, expected: &RawValue) -> bool {
         };
     }
     // Числовой id: ответ обязан быть byte-for-byte каноническим JSON текстом
-    // значения expected id, как JSON.stringify в TS: кратчайший десятичный вид
-    // без экспоненты; -0 канонизируется в "0".
+    // значения expected id: кратчайший десятичный вид без экспоненты, точная
+    // арифметика без float; -0 канонизируется в "0".
     canonical_id(expected).is_some_and(|canonical| actual == canonical)
 }
 
 fn canonical_id(text: &str) -> Option<String> {
-    let value: f64 = text.parse().ok()?;
-    if !value.is_finite() {
+    let (negative, digits, exponent) = parse_number_lexeme(text)?;
+    if !within_float_range(&digits, exponent) {
         return None;
     }
-    if value == 0.0 {
-        return Some("0".to_string());
+    Some(canonical_decimal(negative, &digits, exponent))
+}
+
+// JSON number grammar: -?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?;
+// разбивает лексему на знак, цифры int+frac и E = exp - len(frac).
+fn parse_number_lexeme(text: &str) -> Option<(bool, String, i64)> {
+    let (negative, rest) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text),
+    };
+    let (mantissa, exp_text) = match rest.split_once(['e', 'E']) {
+        Some((mantissa, exp_text)) => (mantissa, Some(exp_text)),
+        None => (rest, None),
+    };
+    let (int_part, frac_part) = match mantissa.split_once('.') {
+        Some((int_part, frac_part)) => (int_part, Some(frac_part)),
+        None => (mantissa, None),
+    };
+    if int_part.is_empty()
+        || !int_part.bytes().all(|byte| byte.is_ascii_digit())
+        || (int_part.len() > 1 && int_part.starts_with('0'))
+    {
+        return None;
     }
-    Some(value.to_string())
+    if let Some(frac_part) = frac_part {
+        if frac_part.is_empty() || !frac_part.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+    }
+    let mut digits = String::from(int_part);
+    let mut exponent: i64 = 0;
+    if let Some(frac_part) = frac_part {
+        digits.push_str(frac_part);
+        exponent -= frac_part.len() as i64;
+    }
+    if let Some(exp_text) = exp_text {
+        let (sign, digits_text) = match exp_text.strip_prefix('-') {
+            Some(rest) => (-1i64, rest),
+            None => (1i64, exp_text.strip_prefix('+').unwrap_or(exp_text)),
+        };
+        if digits_text.is_empty() || !digits_text.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        // Гигантская экспонента всё равно отсекается overflow-гейтом: reject на parse корректен.
+        let parsed: i64 = digits_text.parse().ok()?;
+        exponent += sign * parsed;
+    }
+    Some((negative, digits, exponent))
+}
+
+// Десятичные цифры 2^exponent (старшие первыми): повторное удвоение с переносом,
+// без float и без big-int crate.
+fn power_of_two_decimal(exponent: u32) -> Vec<u8> {
+    let mut digits: Vec<u8> = vec![1];
+    for _ in 0..exponent {
+        let mut carry = 0u8;
+        for digit in digits.iter_mut() {
+            let value = *digit * 2 + carry;
+            *digit = value % 10;
+            carry = value / 10;
+        }
+        while carry > 0 {
+            digits.push(carry % 10);
+            carry /= 10;
+        }
+    }
+    digits.reverse();
+    digits
+}
+
+// Точный гейт |value| < 2^1024: сравнение строк цифр value = D·10^E против
+// 2^1024. Сначала сравнение длин, чтобы не строить гигантские повторения нулей.
+fn within_float_range(digits: &str, exponent: i64) -> bool {
+    // Вне диапазона f64 гейт можно закрыть сразу: 10^309 > 2^1024;
+    // E < -MAX_RESULT_BODY_BYTES ⇒ канонический текст длиннее лимита тела
+    // и не может совпасть byte-for-byte с лексемой в принятом ответе.
+    if exponent > 308 {
+        return false;
+    }
+    if -exponent > MAX_RESULT_BODY_BYTES as i64 {
+        return false;
+    }
+    let stripped = digits.trim_start_matches('0');
+    if stripped.is_empty() {
+        return true;
+    }
+    let limit = power_of_two_decimal(1024);
+    let (left_len, right_len) = if exponent >= 0 {
+        (stripped.len() as i64 + exponent, limit.len() as i64)
+    } else {
+        (stripped.len() as i64, limit.len() as i64 - exponent)
+    };
+    match left_len.cmp(&right_len) {
+        Ordering::Less => true,
+        Ordering::Greater => false,
+        // Равные длины => повторения нулей ограничены: E >= 0 — не более
+        // 308 нулей; E < 0 — защитой по памяти плюс длиной входных цифр.
+        Ordering::Equal => {
+            let left = if exponent >= 0 {
+                format!("{stripped}{}", "0".repeat(exponent as usize))
+            } else {
+                stripped.to_string()
+            };
+            let mut right: String = limit.iter().map(|digit| char::from(b'0' + digit)).collect();
+            if exponent < 0 {
+                right.push_str(&"0".repeat((-exponent) as usize));
+            }
+            left < right
+        }
+    }
+}
+
+// Кратчайший десятичный вид без экспоненты; ведущие/хвостовые нули убираются,
+// -0 → "0", минус только у ненулевого значения.
+fn canonical_decimal(negative: bool, digits: &str, exponent: i64) -> String {
+    let digits = digits.trim_start_matches('0');
+    if digits.is_empty() {
+        return "0".to_string();
+    }
+    let mut text = if exponent >= 0 {
+        format!("{digits}{}", "0".repeat(exponent as usize))
+    } else {
+        let split = (-exponent) as usize;
+        let (int_part, frac_part) = if digits.len() > split {
+            let (int_part, frac_part) = digits.split_at(digits.len() - split);
+            (int_part.to_string(), frac_part.to_string())
+        } else {
+            (
+                "0".to_string(),
+                format!("{}{digits}", "0".repeat(split - digits.len())),
+            )
+        };
+        let frac_part = frac_part.trim_end_matches('0');
+        if frac_part.is_empty() {
+            int_part
+        } else {
+            format!("{int_part}.{frac_part}")
+        }
+    };
+    if negative {
+        text.insert(0, '-');
+    }
+    text
 }
 
 fn payload(text: &str) -> Result<DecodedResult, RotationError> {

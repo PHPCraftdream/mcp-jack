@@ -337,10 +337,12 @@ export function createSigningFetch(config: SigningFetchConfig, fetchImpl: typeof
     await refuseRedirected(resp, normalized.url);
 
     // Streaming guard BEFORE buffering: a stream cannot be body-hashed, so it
-    // cannot be verified (spec 01 section 5, open question Q1).
-    const ct = resp.headers.get("content-type");
-    if (ct !== null) {
-      const mediaType = ct.split(";")[0]?.trim().toLowerCase();
+    // cannot be verified (spec 01 section 5, open question Q1). The FIRST
+    // Content-Type header value decides (Go Header.Get): Headers.get would
+    // comma-combine duplicate headers and hide the first value's media type.
+    const firstContentType = [...resp.headers].find(([name]) => name === "content-type");
+    if (firstContentType !== undefined) {
+      const mediaType = firstContentType[1].split(";")[0]?.trim().toLowerCase();
       if (mediaType === "text/event-stream") {
         await cancelBody(resp);
         throw new StreamingUnsupportedError();

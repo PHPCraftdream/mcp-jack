@@ -92,13 +92,19 @@ function same(left: RawJsonNode, right: RawJsonNode): boolean {
  * не carrier trust, persistence, ACK, fetch или refresh. Signed errors обрабатывает caller.
  * Numeric request ID сопоставляется с exact JSON.stringify lexeme SDK request.
  */
-export function decodeRotationResult(body: Uint8Array, expectedId: string | number): DecodedRotationResult {
+export function decodeRotationResult(body: Uint8Array, expectedId: string | number | bigint): DecodedRotationResult {
   try {
-    if (!(body instanceof Uint8Array) || body.length === 0 || body.length > ROTATION_MAX_BODY_BYTES || (typeof expectedId !== "string" && (typeof expectedId !== "number" || !Number.isFinite(expectedId)))) invalid();
+    if (!(body instanceof Uint8Array) || body.length === 0 || body.length > ROTATION_MAX_BODY_BYTES || (typeof expectedId !== "string" && typeof expectedId !== "bigint" && (typeof expectedId !== "number" || !Number.isFinite(expectedId)))) invalid();
     const root = object(parseCandidateJsonRaw(utf8.decode(body)), ["jsonrpc", "id", "result"]);
     const id = field(root, "id");
-    if (field(root, "jsonrpc").value !== "2.0" || id.value !== expectedId) invalid();
-    if (typeof expectedId === "number" && id.text !== JSON.stringify(expectedId)) invalid();
+    if (field(root, "jsonrpc").value !== "2.0") invalid();
+    // A bigint carries an integer beyond 2^53 exactly: only the exact decimal text matches.
+    if (typeof expectedId === "bigint") {
+      if (typeof id.value !== "number" || id.text !== expectedId.toString()) invalid();
+    } else {
+      if (id.value !== expectedId) invalid();
+      if (typeof expectedId === "number" && id.text !== JSON.stringify(expectedId)) invalid();
+    }
     const result = object(field(root, "result"), ["content", "structuredContent", "isError"]);
     if (field(result, "isError").value !== false) invalid();
     const content = field(result, "content").items;
