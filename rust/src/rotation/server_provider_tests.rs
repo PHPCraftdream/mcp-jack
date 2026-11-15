@@ -498,8 +498,8 @@ fn announce_refuses_ring_that_would_exceed_servable_keys() {
     provider.set_announce_ring_keys_for_tests(4);
     // Часы стоят на 1000: predecessor cutoff'ы (117800+) далеко впереди, retired = 0,
     // pending растёт максимум до 3 — отказ ниже приходит исключительно от нового предела.
-    for step in 1..=3usize {
-        let publication = provider.announce("anchor", keys[step].kid()).unwrap();
+    for (step, key) in keys.iter().enumerate().take(4).skip(1) {
+        let publication = provider.announce("anchor", key.kid()).unwrap();
         assert_eq!(publication.revision, step as u64 + 1);
     }
     let before = {
