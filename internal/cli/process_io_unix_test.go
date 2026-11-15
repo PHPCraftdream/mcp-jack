@@ -313,6 +313,55 @@ func TestPreparedPipeRawPollInterruption(t *testing.T) {
 	}
 }
 
+func socketPair(t *testing.T) (child, peer *os.File) {
+	t.Helper()
+	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child = os.NewFile(uintptr(fds[0]), "socket-child")
+	peer = os.NewFile(uintptr(fds[1]), "socket-peer")
+	t.Cleanup(func() { _ = child.Close(); _ = peer.Close() })
+	return child, peer
+}
+
+// Node child_process отдаёт stdio дочернему процессу как UNIX socketpair.
+func TestPrepareProcessIOAcceptsUnixSocketpairs(t *testing.T) {
+	in, inPeer := socketPair(t)
+	out, outPeer := socketPair(t)
+	streams, err := prepareProcessIO(in, out)
+	if err != nil {
+		t.Fatalf("socketpair stdio was not prepared: %v", err)
+	}
+	t.Cleanup(func() { _ = streams.In.Close(); _ = streams.Out.Close() })
+	reader := streams.In.(*os.File)
+	writer := streams.Out.(*os.File)
+	if _, err := inPeer.Write([]byte("frame\n")); err != nil {
+		t.Fatal(err)
+	}
+	if reader.SetReadDeadline(time.Now().Add(time.Second)) != nil {
+		t.Fatal("prepared socket stdin lacks read deadline support")
+	}
+	var frame [6]byte
+	if _, err := io.ReadFull(reader, frame[:]); err != nil || string(frame[:]) != "frame\n" {
+		t.Fatalf("prepared socket stdin read: %q %v", frame, err)
+	}
+	if _, err := writer.Write([]byte("reply\n")); err != nil {
+		t.Fatal(err)
+	}
+	var reply [6]byte
+	if _, err := io.ReadFull(outPeer, reply[:]); err != nil || string(reply[:]) != "reply\n" {
+		t.Fatalf("prepared socket stdout write: %q %v", reply, err)
+	}
+	if reader.SetReadDeadline(time.Now().Add(50*time.Millisecond)) != nil {
+		t.Fatal("read deadline reset failed")
+	}
+	var b [1]byte
+	if n, err := reader.Read(b[:]); n != 0 || !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("idle prepared socket read did not honor deadline: n=%d err=%v", n, err)
+	}
+}
+
 func TestPrepareProcessIORejectsRegularFiles(t *testing.T) {
 	f, err := os.CreateTemp(t.TempDir(), "regular")
 	if err != nil {

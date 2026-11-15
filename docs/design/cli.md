@@ -347,11 +347,14 @@ with no input does not wait forever once setup has completed.
 
 The executable and child-test entry use `RunProcess`/`ProcessIO`, which prepare
 stdio **only for bridge**. On supported Unix systems, both descriptors must be
-pipes/FIFOs: duplicate them, set `O_NONBLOCK` on the duplicates **before**
-`os.NewFile`, then require successful `SetReadDeadline`/`SetWriteDeadline`
-capability checks. Failure closes owned duplicates and fails closed. Regular
-files, terminals, sockets, and non-Unix bridge stdio are intentionally unsupported.
-Help/keygen/bootstrap/enroll/gateway do not require pipe stdio.
+pipes/FIFOs or UNIX-domain sockets (Node's `child_process`, and therefore
+Node-based MCP clients, hand stdio to children as socketpairs; the official
+TypeScript SDK client was observed failing against pipe-only acceptance): duplicate
+them, set `O_NONBLOCK` on the duplicates **before** `os.NewFile`, then require
+successful `SetReadDeadline`/`SetWriteDeadline` capability checks. Failure closes
+owned duplicates and fails closed. Regular files, terminals, and non-Unix bridge
+stdio are intentionally unsupported. Help/keygen/bootstrap/enroll/gateway do not
+require pipe stdio.
 
 The Go poller receives nonblocking descriptors rather than reusing the inherited
 potentially blocking `os.Stdin`/`os.Stdout` wrappers. No `File.Fd` call is made on
