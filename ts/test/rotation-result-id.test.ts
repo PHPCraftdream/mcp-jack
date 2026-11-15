@@ -18,7 +18,7 @@ function envelope(idLexeme: string): string {
   return `{"jsonrpc":"2.0","id":${idLexeme},"result":{"content":[{"type":"text","text":${JSON.stringify(payload)}}],"structuredContent":${payload},"isError":false}}`;
 }
 const raw = (text: string): Uint8Array => Buffer.from(text, "utf8");
-function rejected(wire: string, id: string | number = 7): void {
+function rejected(wire: string, id: string | number | bigint = 7): void {
   assert.throws(
     () => rotation.decodeRotationResult(raw(wire), id),
     (error: unknown) => error instanceof rotation.RotationError && error.code === "rotation_result_invalid",
