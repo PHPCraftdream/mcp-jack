@@ -302,6 +302,13 @@ func (s *FileState) Lookup(kid string) (RegistryEntry, bool) {
 	return lookupKey(s.keys, kid)
 }
 
+// LookupInvite returns a copy of the invite with the given id, if present.
+func (s *FileState) LookupInvite(inviteID string) (InviteRecord, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return lookupInvite(s.invites, inviteID)
+}
+
 // Update runs update on a deep copy of the state; on error nothing is
 // written and the error is returned unchanged. On success the new state is
 // written atomically to the file (temp file in the same directory, fsync,

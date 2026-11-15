@@ -283,7 +283,8 @@ export function validateStateFile(doc) {
 // integer rule of spec 03 section 3 reads the JSON text, which JSON.parse
 // cannot recover. `sources` mirrors the parsed tree with one node per value; a
 // number's node carries its source text in `.text`. Keys are exact member
-// names, so no member name can alias another member's path.
+// names, so no member name can alias another member's path. An object with two
+// members of the same (unescaped) name is a parse failure (spec 02 section 2).
 function parseJSONRaw(src) {
   let i = 0;
   const fail = () => { throw new Error('invalid JSON'); };
@@ -353,10 +354,13 @@ function parseJSONRaw(src) {
       i += 1;
       ws();
       const obj = {};
+      const seen = new Set();
       if (src[i] === '}') { i += 1; return obj; }
       for (;;) {
         if (src[i] !== '"') fail();
         const key = string();
+        if (seen.has(key)) fail(); // duplicate member name: body unacceptable
+        seen.add(key);
         ws();
         if (src[i] !== ':') fail();
         i += 1;
@@ -437,6 +441,15 @@ function unacceptableBodyText(text) {
     i += 6;
   }
   return false;
+}
+
+// A live invite for a submitted code: canonical 32-byte base64url string, the invite
+// exists and now < expires_at (spec 03 section 3.2). Read-only.
+function liveInvite(state, code) {
+  const raw = strictB64u(code, 32);
+  if (!raw) return null;
+  const id = b64u(sha256(raw));
+  return state.invites.find((i) => i.invite_id === id && state.now < i.expires_at) ?? null;
 }
 
 function classify(body) {
@@ -547,9 +560,8 @@ function nativeCall(tool, rawArgs, ctx) {
     if (caller) throw new Rej(409, 'key_exists');
     const args = argObject(rawArgs);
     if (typeof args.code !== 'string' || typeof args.name !== 'string' || !NAME_RE.test(args.name)) throw bad();
-    const rawCode = strictB64u(args.code, 32);
-    const inviteId = rawCode ? b64u(sha256(rawCode)) : null;
-    const invite = state.invites.find((i) => i.invite_id === inviteId && state.now < i.expires_at);
+    // Re-check and consume atomically; a race after the pre-auth check ends here.
+    const invite = liveInvite(state, args.code);
     if (!invite) throw new Rej(403, 'invalid_invite');
     if (entries.some((e) => e.name === args.name)) throw new Rej(409, 'name_taken');
     const entry = {
@@ -691,11 +703,16 @@ export function verifyRequest(req, state, hooks = defaultHooks) {
     if (!isActive(caller, state.now)) return reject(401, 'key_inactive');
     verifyKey = caller.public_key;
   } else {
-    // Enrollment exception: the submitted key must hash to kid and be a valid key.
+    // Enrollment exception (spec 01 section 4, 03 section 3.2). Order: POST, acceptable
+    // jack.enroll tools/call with object arguments, live invite for `code`, public_key
+    // string, valid key (400), hash == kid. Everything else is the ordinary unknown_key.
     const parsed = req.method === 'POST' ? classify(body) : null;
-    const submitted = parsed?.kind === 'request' && parsed.msg.method === 'tools/call' && parsed.msg.params?.name === 'jack.enroll'
-      ? parsed.msg.params.arguments?.public_key
+    const args = parsed?.kind === 'request' && parsed.msg.method === 'tools/call' && parsed.msg.params?.name === 'jack.enroll'
+      ? parsed.msg.params.arguments
       : undefined;
+    if (!isObj(args)) return reject(401, 'unknown_key');
+    if (!liveInvite(state, args.code)) return reject(401, 'unknown_key');
+    const submitted = args.public_key;
     if (typeof submitted !== 'string') return reject(401, 'unknown_key');
     const raw = strictB64u(submitted, 32);
     if (!raw || validatePublicKey(raw)) return reject(400, 'key_rejected');

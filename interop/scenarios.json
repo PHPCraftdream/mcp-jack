@@ -684,12 +684,11 @@
       ],
       "expected": {
         "outcome": "rejected",
-        "http_status": 403,
-        "code": "invalid_invite",
+        "http_status": 401,
+        "code": "unknown_key",
         "data": null
       },
-      "source": "spec/03-user-management.md:single-use invite",
-      "response_signature": "required"
+      "source": "spec/03-user-management.md:single-use invite; a consumed invite is no longer live, so the unknown kid gets the ordinary unsigned unknown_key"
     },
     "rotate": {
       "identity": "alice",

@@ -10,14 +10,14 @@ import assert from "node:assert/strict";
 import { createPrivateKey, createPublicKey, randomBytes, sign as nodeSign } from "node:crypto";
 import type { KeyObject } from "node:crypto";
 import { test } from "node:test";
-import { formatRequestAuth } from "../src/auth-header.js";
+import { formatRequestAuth, parseRequestAuth } from "../src/auth-header.js";
 import { encodeBase64URL, keyId } from "../src/encoding.js";
 import { Code, JackError } from "../src/errors.js";
 import { requestSigningString } from "../src/signing.js";
 import { MemoryAuditSink, AUDIT_FAILURE } from "../src/server/audit.js";
 import { Native } from "../src/server/native.js";
 import { NonceStore } from "../src/server/nonce.js";
-import { MemoryState } from "../src/server/state.js";
+import { MemoryState, inviteIdOf } from "../src/server/state.js";
 import type { RegistryEntry } from "../src/server/state.js";
 import {
   Verifier,
@@ -196,6 +196,41 @@ class RecordingNative implements NativeTools {
 const ALICE = "alice";
 const ROOT = "root";
 
+/** Fixed raw invite code; the harness stores only its hash, like the real tools. */
+const ENROLL_CODE_RAW = new Uint8Array(32).fill(7);
+
+/** Stores an invite for ENROLL_CODE_RAW and returns the code string a client would send. */
+function seedInvite(h: Harness, expiresAt: number = NOW + 60): string {
+  h.state.update((edit) => {
+    edit.putInvite({ inviteId: inviteIdOf(ENROLL_CODE_RAW), createdBy: ROOT, createdAt: NOW - 1, expiresAt });
+  });
+  return encodeBase64URL(ENROLL_CODE_RAW);
+}
+
+/** A signed jack.enroll request body for key k carrying the given code member (omitted when undefined). */
+function enrollBody(k: KeyMaterial, code: unknown): Uint8Array {
+  const args: Record<string, unknown> = { public_key: encodeBase64URL(k.pub) };
+  if (code !== undefined) args["code"] = code;
+  return encoder.encode(
+    JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: TOOL_ENROLL, arguments: args } }),
+  );
+}
+
+/** Asserts the ordinary unsigned unknown_key rejection with no nonce and no audit event. */
+function assertUnknownKey(h: Harness, req: VerifyRequest, kid: string, label: string): void {
+  const res = h.verifier.verify(req);
+  assert.equal(res.accepted, false, `${label}: accepted`);
+  assert.equal(res.httpStatus, 401, `${label}: status`);
+  assert.equal(res.code, Code.UNKNOWN_KEY, `${label}: code`);
+  assert.equal(res.nonceRecorded, false, `${label}: nonceRecorded`);
+  assert.equal(res.kid, "", `${label}: unsigned kid`);
+  assert.equal(res.requestSig, "", `${label}: unsigned requestSig`);
+  assert.equal(res.audit, undefined, `${label}: audit`);
+  // The request's own nonce was never recorded: recording it now is not a replay.
+  const { nonce } = parseRequestAuth(req.authValues);
+  assert.equal(h.nonces.checkAndRecord(kid, nonce, NOW, NOW + 30), false, `${label}: nonce untouched`);
+}
+
 // ---------------------------------------------------------------------------
 // 1. Scheme before parameters.
 // ---------------------------------------------------------------------------
@@ -247,7 +282,7 @@ test("enrollment exception passes authentication (steps 5-8 skipped for the regi
     const h = harness();
     const k = randomKey();
     const body = encoder.encode(
-      `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${TOOL_ENROLL}","arguments":{"public_key":"${encodeBase64URL(k.pub)}"}}}`,
+      `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${TOOL_ENROLL}","arguments":{"code":"${seedInvite(h)}","public_key":"${encodeBase64URL(k.pub)}"}}}`,
     );
     const { req } = signed(k, { body });
     const res = h.verifier.verify(req);
@@ -265,7 +300,7 @@ test("enrollment exception passes authentication (steps 5-8 skipped for the regi
     const k = randomKey();
     const k2 = randomKey();
     const body = encoder.encode(
-      `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${TOOL_ENROLL}","arguments":{"public_key":"${encodeBase64URL(k2.pub)}"}}}`,
+      `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${TOOL_ENROLL}","arguments":{"code":"${seedInvite(h)}","public_key":"${encodeBase64URL(k2.pub)}"}}}`,
     );
     const { req } = signed(k, { body });
     const res = h.verifier.verify(req);
@@ -277,7 +312,7 @@ test("enrollment exception passes authentication (steps 5-8 skipped for the regi
     const h = harness();
     const k = randomKey();
     const body = encoder.encode(
-      `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${TOOL_ENROLL}","arguments":{"public_key":"${encodeBase64URL(new Uint8Array(32))}"}}}`,
+      `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${TOOL_ENROLL}","arguments":{"code":"${seedInvite(h)}","public_key":"${encodeBase64URL(new Uint8Array(32))}"}}}`,
     );
     const { req } = signed(k, { body });
     const res = h.verifier.verify(req);
@@ -289,7 +324,7 @@ test("enrollment exception passes authentication (steps 5-8 skipped for the regi
     const h = harness();
     const k = randomKey();
     const body = encoder.encode(
-      `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${TOOL_ENROLL}","arguments":{"public_key":"not-base64url!!"}}}`,
+      `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${TOOL_ENROLL}","arguments":{"code":"${seedInvite(h)}","public_key":"not-base64url!!"}}}`,
     );
     const { req } = signed(k, { body });
     const res = h.verifier.verify(req);
@@ -322,6 +357,69 @@ test("enrollment exception passes authentication (steps 5-8 skipped for the regi
     assert.equal(res.code, Code.OPERATION_DENIED, "f: code");
     assert.equal(res.nonceRecorded, true, "f: nonceRecorded");
   }
+});
+
+// ---------------------------------------------------------------------------
+// 3b. The enrollment exception requires a live invite (read-only gate).
+// ---------------------------------------------------------------------------
+
+test("enrollment exception: unknown kid without any invite is unknown_key, nothing recorded", () => {
+  const h = harness({ withAudit: true });
+  const k = randomKey();
+  const { req } = signed(k, { body: enrollBody(k, encodeBase64URL(ENROLL_CODE_RAW)), nonce: NONCE });
+  assertUnknownKey(h, req, k.kid, "no invite");
+  assert.equal(h.audit?.events().length, 0, "no audit event");
+});
+
+test("enrollment exception: an invite expiring exactly now is not live", () => {
+  const h = harness({ withAudit: true });
+  const k = randomKey();
+  const code = seedInvite(h, NOW);
+  const { req } = signed(k, { body: enrollBody(k, code) });
+  assertUnknownKey(h, req, k.kid, "now == expiresAt");
+  assert.equal(h.audit?.events().length, 0, "no audit event");
+});
+
+test("enrollment exception: code must be a canonical 32-byte base64url string", () => {
+  const h = harness();
+  seedInvite(h);
+  const k = randomKey();
+  const canonical = encodeBase64URL(ENROLL_CODE_RAW);
+  const cases: [string, unknown][] = [
+    ["padded", `${canonical}=`],
+    ["short", canonical.slice(0, 40)],
+    ["standard alphabet", `${canonical.slice(0, 10)}+${canonical.slice(11)}`],
+    ["non-canonical trailing bits", `${canonical.slice(0, 42)}d`],
+    ["not a string", 7],
+    ["absent", undefined],
+  ];
+  for (const [label, code] of cases) {
+    const { req } = signed(k, { body: enrollBody(k, code) });
+    assertUnknownKey(h, req, k.kid, label);
+  }
+});
+
+test("enrollment exception: the invite gate runs before public key validation", () => {
+  const h = harness();
+  const k = randomKey();
+  const body = encoder.encode(
+    `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${TOOL_ENROLL}","arguments":{"code":"${encodeBase64URL(ENROLL_CODE_RAW)}","public_key":"not-base64url!!"}}}`,
+  );
+  const { req } = signed(k, { body });
+  assertUnknownKey(h, req, k.kid, "bad key without invite is unknown_key, not key_rejected");
+});
+
+test("enrollment exception: a live invite is accepted and the verifier does not consume it", () => {
+  const h = harness();
+  const k = randomKey();
+  const code = seedInvite(h, NOW + 1);
+  const { req } = signed(k, { body: enrollBody(k, code) });
+  const res = h.verifier.verify(req);
+  // No native handler configured: authentication succeeded, the tool gate says 403.
+  assert.equal(res.httpStatus, 403, "status");
+  assert.equal(res.code, Code.OPERATION_DENIED, "code");
+  assert.equal(res.nonceRecorded, true, "nonceRecorded");
+  assert.ok(h.state.lookupInvite(inviteIdOf(ENROLL_CODE_RAW)) !== undefined, "invite still stored");
 });
 
 // ---------------------------------------------------------------------------
@@ -521,6 +619,35 @@ test("classifyBody: surrogate escapes and the 128-level depth cap (spec 02 secti
   ok(
     `{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"${"[".repeat(200)}${"]".repeat(200)}"}}`,
   );
+});
+
+test("classifyBody: duplicate member names make the body unacceptable at any depth", () => {
+  const ok = (body: string) => assert.ok(classifyBody(encoder.encode(body)) !== undefined, body);
+  const bad = (body: string) => assert.equal(classifyBody(encoder.encode(body)), undefined, body);
+  bad('{"jsonrpc":"2.0","id":1,"method":"ping","method":"pong"}'); // top level
+  bad('{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"a","name":"b"}}'); // nested in params
+  bad('{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":[1,{"k":1,"k":2}]}}'); // object inside an array
+  bad('{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.x","arguments":{"a":{"b":1,"b":1}}}}'); // free-form arguments
+  bad('{"jsonrpc":"2.0","id":1,"meth\\u006fd":"ping","method":"ping"}'); // escaped spelling of the same name
+  bad('{"jsonrpc":"2.0","id":1,"method":"ping","params":{"\\u00e9":1,"\u00e9":2}}'); // escaped vs raw non-ASCII
+  bad('{"jsonrpc":"2.0","id":1,"method":"ping","params":{"__proto__":1,"__proto__":2}}'); // prototype key
+  // Same name in different objects, and a value equal to a name, are fine.
+  ok('{"jsonrpc":"2.0","id":1,"method":"ping","params":{"a":{"x":1},"b":{"x":2},"c":[{"x":1},{"x":2}]}}');
+  ok('{"jsonrpc":"2.0","id":1,"method":"ping","params":{"constructor":1,"__proto__":2,"id":"method"}}');
+  // Names differing only in case are different names.
+  ok('{"jsonrpc":"2.0","id":1,"method":"ping","params":{"A":1,"a":2}}');
+});
+
+test("a duplicate member is 400 invalid_request after authentication; the nonce stays consumed", () => {
+  const h = harness();
+  const alice = materialFor(ALICE);
+  const body = encoder.encode('{"jsonrpc":"2.0","id":1,"method":"ping","method":"ping"}');
+  const { req } = signed(alice, { body });
+  const res = h.verifier.verify(req);
+  assert.equal(res.accepted, false, "accepted");
+  assert.equal(res.httpStatus, 400, "status");
+  assert.equal(res.code, Code.INVALID_REQUEST, "code");
+  assert.equal(res.nonceRecorded, true, "nonceRecorded");
 });
 
 // ---------------------------------------------------------------------------

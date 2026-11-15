@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"math"
@@ -266,7 +267,7 @@ func (v *Verifier) Verify(req Request) Result {
 		}
 		verifyKey = key
 	} else {
-		key, rej, ok := enrollmentKey(req, auth.Kid)
+		key, rej, ok := enrollmentKey(req, auth.Kid, v.cfg.State, now)
 		if !ok {
 			return rej
 		}
@@ -406,8 +407,10 @@ func (v *Verifier) authorize(req Request, auth jack.RequestAuth, now int64, call
 // enrollmentKey implements the one exception to "unknown key is rejected"
 // (spec 01 section 4, spec 03 section 3.2): an unregistered kid is accepted
 // for a POST tools/call of jack.enroll whose submitted public key is valid and
-// hashes to kid. The request is then verified against that submitted key.
-func enrollmentKey(req Request, kid string) ([]byte, Result, bool) {
+// hashes to kid and whose code names a live invite. The request is then
+// verified against that submitted key. The invite lookup is read-only and runs
+// before any nonce is recorded; a dead invite looks like any unknown kid.
+func enrollmentKey(req Request, kid string, state StateStore, now int64) ([]byte, Result, bool) {
 	unknown := rejection(401, jack.CodeUnknownKey, "unknown key")
 	if req.Method != "POST" {
 		return nil, unknown, false
@@ -418,6 +421,9 @@ func enrollmentKey(req Request, kid string) ([]byte, Result, bool) {
 	}
 	var args map[string]json.RawMessage
 	if err := json.Unmarshal(msg.arguments, &args); err != nil || args == nil {
+		return nil, unknown, false
+	}
+	if !liveInvite(state, args["code"], now) {
 		return nil, unknown, false
 	}
 	submitted, ok := jsonString(args["public_key"])
@@ -432,6 +438,22 @@ func enrollmentKey(req Request, kid string) ([]byte, Result, bool) {
 		return nil, unknown, false
 	}
 	return key, Result{}, true
+}
+
+// liveInvite reports whether rawCode is a JSON string holding a canonical
+// invite code that names a stored invite not yet expired at now. The jack.enroll
+// tool re-checks and consumes the invite atomically.
+func liveInvite(state StateStore, rawCode json.RawMessage, now int64) bool {
+	code, ok := jsonString(rawCode)
+	if !ok {
+		return false
+	}
+	codeBytes, err := jack.DecodeBase64URLFixed(code, 32)
+	if err != nil {
+		return false
+	}
+	invite, found := state.LookupInvite(inviteIDOf(codeBytes))
+	return found && now < invite.ExpiresAt
 }
 
 const (
@@ -453,12 +475,14 @@ type rpcMessage struct {
 // validated before decoding because encoding/json silently replaces invalid
 // bytes, and members are looked up through a map because encoding/json would
 // match struct fields case-insensitively. unacceptableBody rejects lone
-// surrogate escapes and over-deep nesting before decoding (spec 02 section 4 step 2).
+// surrogate escapes and over-deep nesting before decoding (spec 02 section 4
+// step 2); hasDuplicateMember rejects repeated member names so no member is
+// silently dropped by the map decoding.
 func classifyBody(body []byte) (rpcMessage, bool) {
 	if !utf8.Valid(body) {
 		return rpcMessage{}, false
 	}
-	if unacceptableBody(body) {
+	if unacceptableBody(body) || hasDuplicateMember(body) {
 		return rpcMessage{}, false
 	}
 	var m map[string]json.RawMessage
@@ -566,6 +590,58 @@ func unacceptableBody(body []byte) bool {
 		}
 	}
 	return false
+}
+
+// memberFrame tracks one open container of the duplicate-name scan.
+type memberFrame struct {
+	names    map[string]struct{} // nil for an array
+	wantName bool
+}
+
+// hasDuplicateMember reports whether any object, at any depth, repeats a
+// member name after unescaping. Memory is one name set per open object; the
+// token decoder does the unescaping. Malformed JSON returns false: the parser
+// rejects it afterwards.
+func hasDuplicateMember(body []byte) bool {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber() // huge literals like 1e999 must not error the token scan and hide later duplicates
+	var stack []*memberFrame
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return false
+		}
+		var top *memberFrame
+		if len(stack) > 0 {
+			top = stack[len(stack)-1]
+		}
+		if d, isDelim := tok.(json.Delim); isDelim {
+			switch d {
+			case '{':
+				stack = append(stack, &memberFrame{names: map[string]struct{}{}, wantName: true})
+			case '[':
+				stack = append(stack, &memberFrame{})
+			default:
+				stack = stack[:len(stack)-1]
+				if len(stack) > 0 && stack[len(stack)-1].names != nil {
+					stack[len(stack)-1].wantName = true
+				}
+			}
+			continue
+		}
+		if top == nil || top.names == nil {
+			continue
+		}
+		if name, isString := tok.(string); isString && top.wantName {
+			if _, dup := top.names[name]; dup {
+				return true
+			}
+			top.names[name] = struct{}{}
+			top.wantName = false
+			continue
+		}
+		top.wantName = true
+	}
 }
 
 // hex4 parses exactly four ASCII hex digits, or -1.

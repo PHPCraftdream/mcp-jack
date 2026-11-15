@@ -225,7 +225,7 @@ function requestExpect(opts, [result, http_status, code]) {
   }
   const body = typeof opts.body === 'string' ? opts.body : '';
   const names = [...body.matchAll(JACK_TOOL_RE)].map((m) => m[1]);
-  const tool = names[names.length - 1]; // duplicated member names: last wins
+  const tool = names[names.length - 1]; // the cases name at most one jack.* tool, or reject before it
   // An enrollment whose submitted key fails validation is rejected inside 01
   // step 4, before the nonce exists: no audit, no nonce (03 sections 3.2 and 8).
   // Admin tools validate keys inside the tool: post-auth, audited, nonce consumed.
@@ -239,7 +239,8 @@ function requestExpect(opts, [result, http_status, code]) {
       want.structured = { users: [...registryJson.keys].sort(byName).map(userView) };
       want.audit = { tool, outcome: 'success', code: null, actor_kid: caller.kid };
     }
-  } else if (!preAuth && AUDITED_TOOLS.has(tool)) {
+  } else if (!preAuth && code !== 'invalid_request' && AUDITED_TOOLS.has(tool)) {
+    // invalid_request is a body rejection: the call never reaches the tool, so no audit.
     want.audit = { tool, outcome: 'failure', code, actor_kid: caller.kid };
   }
   want.nonce_recorded = !preAuth;
@@ -324,7 +325,7 @@ function expectStep(shadow, generated, s, key, tuple) {
   const args = shadowArgs(s);
   // The caller is the entry named by the header kid; rotation may have moved it.
   const caller = shadow.users.find((e) => e.kid === K[key].kid);
-  const kid = s.tool === 'jack.enroll' ? kidOfB64(args.public_key) : K[key].kid;
+  const kid = s.tool === 'jack.enroll' && typeof args.public_key === 'string' ? kidOfB64(args.public_key) : K[key].kid;
   const want = { result };
   if (accept) want.kid = kid;
   else {
@@ -337,7 +338,8 @@ function expectStep(shadow, generated, s, key, tuple) {
   const preAuth = result === 'reject' && (AUTH_FAILURES.has(code) || (code === 'key_rejected' && s.tool === 'jack.enroll'));
   const nonceRecorded = !preAuth;
   want.nonce_recorded = nonceRecorded;
-  if (s.tool && AUDITED_TOOLS.has(s.tool) && nonceRecorded) {
+  // invalid_request is a body rejection: the call never reaches the tool, so no audit.
+  if (s.tool && AUDITED_TOOLS.has(s.tool) && nonceRecorded && code !== 'invalid_request') {
     want.audit = { tool: s.tool, outcome: accept ? 'success' : 'failure', code: accept ? null : code, actor_kid: kid };
   }
   if (accept && !s.tool) want.identity = { kid, name: caller.name, admin: caller.admin }; // forwarded accept
@@ -378,10 +380,9 @@ const pingBody = (bad) => Buffer.concat([
   bad,
   Buffer.from('"}}', 'utf8'),
 ]);
-// Bodies with one duplicated member name for the last-member-wins rule
-// (spec README D13, 02 section 2): the duplicate pair sits adjacent so the
-// fixture bytes show both occurrences and their order. A first-wins parser
-// fails each order-sensitive pair; a merging parser fails the disjoint case.
+// Bodies with one duplicated member name: a duplicate makes the body
+// unacceptable (02 section 2). The pair sits adjacent so the fixture bytes
+// show both occurrences; both orders are kept so no parser can pass by position.
 const dupMethodBody = (first, last) =>
   `{"jsonrpc":"2.0","id":1,"method":"${first}","method":"${last}"}`;
 const dupToolBody = (first, last) =>
@@ -494,13 +495,21 @@ const REQUEST_CASES = [
   ['request-utf8-overlong', 'an overlong UTF-8 encoding is rejected although lossy decoding yields valid JSON', { body: pingBody(Buffer.from([0xc0, 0xaf])) }, [], ['reject', 400, 'invalid_request']],
   ['request-utf8-lone-surrogate', 'a UTF-8-encoded surrogate code point is rejected although lossy decoding yields valid JSON', { body: pingBody(Buffer.from([0xed, 0xa0, 0x80])) }, [], ['reject', 400, 'invalid_request']],
   ['request-utf8-truncated', 'a truncated multibyte sequence is rejected although lossy decoding yields valid JSON', { body: pingBody(Buffer.from([0xe2, 0x82])) }, [], ['reject', 400, 'invalid_request']],
-  ['dup-method-tools-call-last-invalid', 'a duplicated method member keeps the last occurrence: ping then tools/call without params.name', { body: dupMethodBody('ping', 'tools/call') }, [], ['reject', 400, 'invalid_request']],
-  ['dup-method-tools-call-first-invalid', 'the same duplicated pair in the other order: tools/call then ping', { body: dupMethodBody('tools/call', 'ping') }, [], ['accept']],
-  ['dup-tool-name-first-allow-last-deny', 'a duplicated params.name keeps the last occurrence: jack.whoami then an admin tool called by a non-admin', { body: dupToolBody('jack.whoami', 'jack.admin.user.list') }, [], ['reject', 403, 'admin_required']],
-  ['dup-tool-name-first-deny-last-allow', 'the same duplicated params.name in the other order: admin tool then jack.whoami', { body: dupToolBody('jack.admin.user.list', 'jack.whoami') }, [], ['accept']],
-  ['dup-jsonrpc-first-wrong-last-right', 'a duplicated jsonrpc member keeps the last occurrence', { body: '{"jsonrpc":"1.0","jsonrpc":"2.0","id":1,"method":"ping"}' }, [], ['accept']],
-  ['dup-member-escaped-name-last-wins', 'a member whose name unescapes to an earlier name is its duplicate and keeps the last value', { body: '{"jsonrpc":"2.0","id":1,"method":"ping","meth\\u006fd":"tools/call"}' }, [], ['reject', 400, 'invalid_request']],
-  ['dup-params-object-last-without-name', 'a duplicated params object keeps the last one whole: no member union, so the earlier name does not survive', { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"},"params":{"other":1}}' }, [], ['reject', 400, 'invalid_request']],
+  ['dup-method-ping-then-tools-call', 'a duplicated method member makes the body unacceptable: ping then tools/call', { body: dupMethodBody('ping', 'tools/call') }, [], ['reject', 400, 'invalid_request']],
+  ['dup-method-tools-call-then-ping', 'the same duplicated pair in the other order is equally unacceptable', { body: dupMethodBody('tools/call', 'ping') }, [], ['reject', 400, 'invalid_request']],
+  ['dup-tool-name-whoami-then-admin', 'a duplicated params.name makes the body unacceptable: invalid_request, not a dispatch decision', { body: dupToolBody('jack.whoami', 'jack.admin.user.list') }, [], ['reject', 400, 'invalid_request']],
+  ['dup-tool-name-admin-then-whoami', 'the same duplicated params.name in the other order is equally unacceptable', { body: dupToolBody('jack.admin.user.list', 'jack.whoami') }, [], ['reject', 400, 'invalid_request']],
+  ['dup-jsonrpc-wrong-then-right', 'a duplicated jsonrpc member makes the body unacceptable even when one occurrence is "2.0"', { body: '{"jsonrpc":"1.0","jsonrpc":"2.0","id":1,"method":"ping"}' }, [], ['reject', 400, 'invalid_request']],
+  ['dup-member-escaped-name-method', 'a member whose name unescapes to an earlier name is its duplicate', { body: '{"jsonrpc":"2.0","id":1,"method":"ping","meth\\u006fd":"tools/call"}' }, [], ['reject', 400, 'invalid_request']],
+  ['dup-params-object', 'a duplicated params object makes the body unacceptable', { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"},"params":{"other":1}}' }, [], ['reject', 400, 'invalid_request']],
+  ['dup-params-nested-member', 'a duplicate inside params (a non-tool method) makes the body unacceptable', { body: '{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":1,"x":2}}' }, [], ['reject', 400, 'invalid_request']],
+  ['dup-arguments-free-form-member', 'a duplicate inside free-form arguments of an ordinary tool makes the body unacceptable', { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{"text":"a","text":"b"}}}' }, [], ['reject', 400, 'invalid_request']],
+  ['dup-arguments-deep-member', 'a duplicate several levels below arguments makes the body unacceptable', { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{"a":{"b":{"c":1,"c":1}}}}}' }, [], ['reject', 400, 'invalid_request']],
+  ['dup-array-element-object-member', 'a duplicate inside an object that is an array element makes the body unacceptable', { body: '{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":[{"a":1},{"b":1,"b":2}]}}' }, [], ['reject', 400, 'invalid_request']],
+  ['dup-escaped-name-in-arguments', 'a plain name and its \\u0061 spelling in one arguments object are duplicates', { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{"a":1,"\\u0061":2}}}' }, [], ['reject', 400, 'invalid_request']],
+  ['dup-response-object-member', 'a duplicate in a JSON-RPC response object makes the body unacceptable', { body: '{"jsonrpc":"2.0","id":1,"result":{},"result":{}}' }, [], ['reject', 400, 'invalid_request']],
+  ['dup-same-name-different-objects-ok', 'the same names in different objects (params, arguments, nested, array elements) are not duplicates', { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{"name":"x","method":"y","params":{"name":"z","method":"w"},"list":[{"a":1},{"a":2}]}}}' }, [], ['accept']],
+  ['dup-name-case-differs-ok', 'member names are compared exactly, without case folding: method and Method are distinct', { body: '{"jsonrpc":"2.0","id":1,"method":"ping","Method":"tools/call"}' }, [], ['accept']],
   ['sig-small-order-r-identity', 'a signature whose R is the identity encoding satisfies the verification equation but is rejected (spec 01 section 2)', { body: STATUS, smallR: true }, [], ['reject', 401, 'bad_signature']],
   ['request-escape-lone-surrogate-method', 'a lone surrogate escape in the method is not acceptable body text (spec 02 section 4)', { body: '{"jsonrpc":"2.0","id":1,"method":"pi\\ud800ng"}' }, [], ['reject', 400, 'invalid_request']],
   ['request-escape-lone-surrogate-member-name', 'a lone surrogate escape in a member name is not acceptable body text', { body: '{"jsonrpc":"2.0","id":1,"m\\ud800":1,"method":"ping"}' }, [], ['reject', 400, 'invalid_request']],
@@ -574,27 +583,27 @@ seq('enroll-admin-invite', 'the invite carries admin and the enrolled entry is a
 seq('enroll-invite-last-second', 'an invite is valid until expires_at exclusive', init(['root'], { invites: [inv('i1', { expires_at: NOW + 1 })] }), [
   step('newbie', 'jack.enroll', enrollArgs('i1', 'newbie', pk('newbie')), A('accept')),
 ]);
-seq('enroll-invite-expired', 'an expired invite is invalid', init(['root'], { invites: [inv('i1', { expires_at: NOW })] }), [
-  step('newbie', 'jack.enroll', enrollArgs('i1', 'newbie', pk('newbie')), A('reject', 403, 'invalid_invite')),
+seq('enroll-invite-expired', 'an expired invite (expires_at = now) is not live: ordinary unsigned unknown_key before the signature check, no nonce, no audit', init(['root'], { invites: [inv('i1', { expires_at: NOW })] }), [
+  step('newbie', 'jack.enroll', enrollArgs('i1', 'newbie', pk('newbie')), A('reject', 401, 'unknown_key')),
 ]);
-seq('enroll-code-reuse', 'an invite is single-use', init(['root'], { invites: [inv('i1')] }), [
+seq('enroll-code-reuse', 'an invite is single-use: once consumed the code is no longer live, so the second enrollment is unknown_key', init(['root'], { invites: [inv('i1')] }), [
   step('newbie', 'jack.enroll', enrollArgs('i1', 'newbie', pk('newbie')), A('accept')),
-  step('newbie2', 'jack.enroll', enrollArgs('i1', 'newbie2', pk('newbie2')), A('reject', 403, 'invalid_invite')),
+  step('newbie2', 'jack.enroll', enrollArgs('i1', 'newbie2', pk('newbie2')), A('reject', 401, 'unknown_key')),
 ]);
-seq('enroll-unknown-code', 'an unknown code is invalid', init(['root'], { invites: [inv('i1')] }), [
-  step('newbie', 'jack.enroll', enrollArgs('nope', 'newbie', pk('newbie')), A('reject', 403, 'invalid_invite')),
+seq('enroll-unknown-code', 'a code that names no invite is not live: unknown_key', init(['root'], { invites: [inv('i1')] }), [
+  step('newbie', 'jack.enroll', enrollArgs('nope', 'newbie', pk('newbie')), A('reject', 401, 'unknown_key')),
 ]);
-seq('enroll-unknown-kid-unread-member', 'an unread arguments member with an out-of-range number does not block the unknown-kid enrollment exception', init(['root'], { invites: [inv('i1')] }), [
-  step('newbie', 'jack.enroll', rawArg({ code: codeOf('nope'), name: 'newbie', public_key: pk('newbie') }, 'x', '1e999'), A('reject', 403, 'invalid_invite')),
+seq('enroll-unknown-kid-unread-member', 'with a live invite, an unread arguments member with an out-of-range number is never range-checked: the unknown-kid enrollment succeeds', init(['root'], { invites: [inv('i1')] }), [
+  step('newbie', 'jack.enroll', rawArg({ code: codeOf('i1'), name: 'newbie', public_key: pk('newbie') }, 'x', '1e999'), A('accept')),
 ]);
-seq('enroll-malformed-code', 'a code that is not canonical base64url is invalid, not a parameter error', init(['root'], { invites: [inv('i1')] }), [
-  step('newbie', 'jack.enroll', { code: 'not-a-code!!', name: 'newbie', public_key: pk('newbie') }, A('reject', 403, 'invalid_invite')),
+seq('enroll-malformed-code', 'a code that is not canonical base64url is not live: unknown_key', init(['root'], { invites: [inv('i1')] }), [
+  step('newbie', 'jack.enroll', { code: 'not-a-code!!', name: 'newbie', public_key: pk('newbie') }, A('reject', 401, 'unknown_key')),
 ]);
-seq('enroll-code-not-string', 'code of the wrong type', init(['root'], { invites: [inv('i1')] }), [
-  step('newbie', 'jack.enroll', { code: 7, name: 'newbie', public_key: pk('newbie') }, A('reject', 400, 'invalid_params')),
+seq('enroll-code-not-string', 'a code that is not a JSON string is not live: unknown_key, not invalid_params', init(['root'], { invites: [inv('i1')] }), [
+  step('newbie', 'jack.enroll', { code: 7, name: 'newbie', public_key: pk('newbie') }, A('reject', 401, 'unknown_key')),
 ]);
-seq('enroll-missing-code', 'code is required', init(['root'], { invites: [inv('i1')] }), [
-  step('newbie', 'jack.enroll', { name: 'newbie', public_key: pk('newbie') }, A('reject', 400, 'invalid_params')),
+seq('enroll-missing-code', 'a missing code is not live: unknown_key, not invalid_params', init(['root'], { invites: [inv('i1')] }), [
+  step('newbie', 'jack.enroll', { name: 'newbie', public_key: pk('newbie') }, A('reject', 401, 'unknown_key')),
 ]);
 seq('enroll-invalid-name', 'name must match the allowed character set', init(['root'], { invites: [inv('i1')] }), [
   step('newbie', 'jack.enroll', enrollArgs('i1', 'bad name!', pk('newbie')), A('reject', 400, 'invalid_params')),
@@ -789,7 +798,7 @@ seq('invite-list-live-only', 'expired invites are not listed', init(STD, { invit
 ]);
 seq('invite-revoke-ok', 'a revoked invite can no longer be used', init(STD, { invites: [inv('i1')] }), [
   step('root', 'jack.admin.invite.revoke', { invite_id: inviteIdOf(codeOf('i1')) }, A('accept')),
-  step('newbie', 'jack.enroll', enrollArgs('i1', 'newbie', pk('newbie')), A('reject', 403, 'invalid_invite')),
+  step('newbie', 'jack.enroll', enrollArgs('i1', 'newbie', pk('newbie')), A('reject', 401, 'unknown_key')),
 ]);
 seq('invite-revoke-unknown', 'unknown or expired invite ids are unknown_target', init(STD, { invites: [inv('old', { expires_at: NOW })] }), [
   step('root', 'jack.admin.invite.revoke', { invite_id: inviteIdOf(codeOf('nope')) }, A('reject', 404, 'unknown_target')),
@@ -829,6 +838,38 @@ seq('enroll-key-trailing-bits', 'a public key differing only in unused trailing 
 ]);
 seq('enroll-key-whitespace', 'a public key with embedded whitespace is rejected', init(['root'], { invites: [inv('i1')] }), [
   step('newbie', 'jack.enroll', enrollArgs('i1', 'newbie', `${pk('newbie').slice(0, 21)} ${pk('newbie').slice(21)}`), A('reject', 400, 'key_rejected')),
+]);
+
+// Unknown-kid enrollment needs a live invite for `code` before anything else
+// (spec 01 section 4, 03 section 3.2): every miss is the ordinary unknown_key,
+// with no nonce recorded and no audit event.
+seq('enroll-unknown-kid-no-invite', 'a well-formed self-signed enrollment with no invite in the state is unknown_key', init(['root']), [
+  step('newbie', 'jack.enroll', enrollArgs('i1', 'newbie', pk('newbie')), A('reject', 401, 'unknown_key')),
+]);
+seq('enroll-unknown-kid-expired-invite', 'an invite with expires_at = now is not live: unknown_key, and a byte-identical retry is unknown_key again (no nonce was recorded)', init(['root'], { invites: [inv('i1', { expires_at: NOW })] }), [
+  step('newbie', 'jack.enroll', enrollArgs('i1', 'newbie', pk('newbie')), A('reject', 401, 'unknown_key')),
+  { repeat: 0, want: A('reject', 401, 'unknown_key') },
+]);
+seq('enroll-unknown-kid-code-padded', 'a code with base64url padding is not canonical: unknown_key', init(['root'], { invites: [inv('i1')] }), [
+  step('newbie', 'jack.enroll', enrollArgs('i1', 'newbie', pk('newbie')), A('reject', 401, 'unknown_key'), { body: call('jack.enroll', { code: `${codeOf('i1')}=`, name: 'newbie', public_key: pk('newbie') }) }),
+]);
+seq('enroll-unknown-kid-code-trailing-bits', 'a code differing only in unused trailing bits is not canonical: unknown_key', init(['root'], { invites: [inv('i1')] }), [
+  step('newbie', 'jack.enroll', enrollArgs('i1', 'newbie', pk('newbie')), A('reject', 401, 'unknown_key'), { body: call('jack.enroll', { code: withTrailingBits(codeOf('i1')), name: 'newbie', public_key: pk('newbie') }) }),
+]);
+seq('enroll-unknown-kid-live-invite', 'a live invite lets the unknown kid enroll; only the matching invite is consumed', init(['root'], { invites: [inv('i1'), inv('live', { admin: true })] }), [
+  step('newbie', 'jack.enroll', enrollArgs('live', 'newbie', pk('newbie')), A('accept')),
+]);
+seq('enroll-unknown-kid-bad-key-no-invite', 'an identity public key with no live invite is unknown_key, not key_rejected (the invite check comes first)', init(['root']), [
+  step('newbie', 'jack.enroll', enrollArgs('i1', 'newbie', b64u(IDENTITY)), A('reject', 401, 'unknown_key'), { hdr: { kid: kidOf(IDENTITY) }, sign: { kid: kidOf(IDENTITY) } }),
+]);
+seq('enroll-unknown-kid-missing-public-key', 'a live invite but no public_key: unknown_key, not invalid_params', init(['root'], { invites: [inv('i1')] }), [
+  step('newbie', 'jack.enroll', { code: codeOf('i1'), name: 'newbie' }, A('reject', 401, 'unknown_key')),
+]);
+seq('enroll-unknown-kid-public-key-not-string', 'a live invite but a non-string public_key: unknown_key', init(['root'], { invites: [inv('i1')] }), [
+  step('newbie', 'jack.enroll', { code: codeOf('i1'), name: 'newbie', public_key: 7 }, A('reject', 401, 'unknown_key')),
+]);
+seq('enroll-unknown-kid-live-invite-duplicate-member', 'a live invite but a duplicate member in the body: the body is not acceptable, so unknown_key (no nonce, no audit)', init(['root'], { invites: [inv('i1')] }), [
+  step('newbie', 'jack.enroll', enrollArgs('i1', 'newbie', pk('newbie')), A('reject', 401, 'unknown_key'), { body: callRaw('jack.enroll', rawArg(enrollArgs('i1', 'newbie', pk('newbie')), 'name', '"newbie","name":"newbie"')) }),
 ]);
 
 // rotation new-key argument encodings (spec 03 section 3.1)
@@ -878,20 +919,29 @@ for (const [id, description, literal] of [
 seq('invite-create-ttl-decoy-member', 'a decoy member cannot override the ttl_seconds number text', init(['root']), [
   step('root', 'jack.admin.invite.create', undefined, A('accept'), { body: decoyBody, model: { admin: true, ttl_seconds: 60 } }),
 ]);
-seq('invite-create-ttl-dup-invalid-then-valid', 'a duplicated ttl_seconds member keeps the last occurrence: 1.5 then 60', init(['root']), [
-  step('root', 'jack.admin.invite.create', undefined, A('accept'), { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.invite.create","arguments":{"ttl_seconds":1.5,"ttl_seconds":60}}}', model: { ttl_seconds: 60 } }),
+seq('invite-create-ttl-dup-invalid-then-valid', 'a duplicated ttl_seconds member makes the body unacceptable (1.5 then 60): invalid_request after authentication, state unchanged, no tool audit', init(['root']), [
+  step('root', 'jack.admin.invite.create', undefined, A('reject', 400, 'invalid_request'), { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.invite.create","arguments":{"ttl_seconds":1.5,"ttl_seconds":60}}}' }),
 ]);
-seq('invite-create-ttl-dup-valid-then-invalid', 'the same duplicated pair in the other order: 60 then 1.5', init(['root']), [
-  step('root', 'jack.admin.invite.create', undefined, A('reject', 400, 'invalid_params'), { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.invite.create","arguments":{"ttl_seconds":60,"ttl_seconds":1.5}}}' }),
+seq('invite-create-ttl-dup-valid-then-invalid', 'the same duplicated pair in the other order (60 then 1.5) is equally unacceptable', init(['root']), [
+  step('root', 'jack.admin.invite.create', undefined, A('reject', 400, 'invalid_request'), { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.invite.create","arguments":{"ttl_seconds":60,"ttl_seconds":1.5}}}' }),
 ]);
-seq('invite-create-arguments-dup-invalid-then-valid', 'a duplicated arguments object keeps the last one: mistyped admin then valid arguments', init(['root']), [
-  step('root', 'jack.admin.invite.create', undefined, A('accept'), { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.invite.create","arguments":{"admin":"true"},"arguments":{"admin":true,"ttl_seconds":60}}}', model: { admin: true, ttl_seconds: 60 } }),
+seq('invite-create-arguments-dup-invalid-then-valid', 'a duplicated arguments object makes the body unacceptable (mistyped admin, then valid arguments)', init(['root']), [
+  step('root', 'jack.admin.invite.create', undefined, A('reject', 400, 'invalid_request'), { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.invite.create","arguments":{"admin":"true"},"arguments":{"admin":true,"ttl_seconds":60}}}' }),
 ]);
-seq('invite-create-arguments-dup-valid-then-invalid', 'the same duplicated arguments in the other order: valid then mistyped admin', init(['root']), [
-  step('root', 'jack.admin.invite.create', undefined, A('reject', 400, 'invalid_params'), { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.invite.create","arguments":{"admin":true,"ttl_seconds":60},"arguments":{"admin":"true"}}}' }),
+seq('invite-create-arguments-dup-valid-then-invalid', 'the same duplicated arguments in the other order (valid, then mistyped admin) is equally unacceptable', init(['root']), [
+  step('root', 'jack.admin.invite.create', undefined, A('reject', 400, 'invalid_request'), { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.invite.create","arguments":{"admin":true,"ttl_seconds":60},"arguments":{"admin":"true"}}}' }),
 ]);
-seq('invite-create-arguments-sibling-members-not-merged', 'duplicate arguments are not merged: the last object alone cannot borrow the earlier admin', init(['root']), [
-  step('root', 'jack.admin.invite.create', undefined, A('accept'), { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.invite.create","arguments":{"admin":"true"},"arguments":{"ttl_seconds":60}}}', model: { ttl_seconds: 60 } }),
+seq('invite-create-arguments-dup-disjoint', 'duplicated arguments objects with disjoint members are not merged or resolved: the body is unacceptable', init(['root']), [
+  step('root', 'jack.admin.invite.create', undefined, A('reject', 400, 'invalid_request'), { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.invite.create","arguments":{"admin":"true"},"arguments":{"ttl_seconds":60}}}' }),
+]);
+seq('invite-create-params-nested-dup', 'a duplicate member in params next to a well-formed arguments object makes the body unacceptable', init(['root']), [
+  step('root', 'jack.admin.invite.create', undefined, A('reject', 400, 'invalid_request'), { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.invite.create","arguments":{"ttl_seconds":60},"_meta":1,"_meta":2}}' }),
+]);
+seq('invite-create-ttl-dup-escaped-name', 'ttl_seconds and its \\u005f-escaped spelling in one arguments object are duplicates', init(['root']), [
+  step('root', 'jack.admin.invite.create', undefined, A('reject', 400, 'invalid_request'), { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.invite.create","arguments":{"ttl_seconds":60,"ttl\\u005fseconds":61}}}' }),
+]);
+seq('invite-create-same-name-in-nested-object', 'the same member name in different objects is not a duplicate: the nested ttl_seconds does not touch the real one', init(['root']), [
+  step('root', 'jack.admin.invite.create', undefined, A('accept'), { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.invite.create","arguments":{"ttl_seconds":60,"meta":{"ttl_seconds":1.5}}}}', model: { ttl_seconds: 60 } }),
 ]);
 
 // Run every sequence against the reference verifier. The expectation is built
