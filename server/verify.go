@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -131,7 +132,8 @@ func audHasControl(aud string) bool {
 type Verifier struct {
 	cfg Config
 	mu  sync.Mutex
-	// high is the highest clock sample seen.
+	// high is the highest clock sample seen; it starts at the minimum so the
+	// first sample is used unchanged.
 	high int64
 }
 
@@ -173,7 +175,7 @@ func NewVerifier(cfg Config) (*Verifier, error) {
 	if cfg.Now == nil {
 		cfg.Now = func() int64 { return time.Now().Unix() }
 	}
-	return &Verifier{cfg: cfg}, nil
+	return &Verifier{cfg: cfg, high: math.MinInt64}, nil
 }
 
 // Request is one HTTP request reduced to what verification needs.

@@ -757,9 +757,13 @@ fn origin_form_target(uri: &http::Uri) -> Option<String> {
     is_origin_form_target(target).then(|| target.to_owned())
 }
 
-/// Origin-form starts with '/'; '#' is never part of a signable target.
+/// Origin-form starts with '/' and consists only of the bytes 0x21 to 0x7E;
+/// '#' is never part of a signable target (spec 01 section 3.1).
 fn is_origin_form_target(target: &str) -> bool {
-    target.starts_with('/') && !target.contains('#')
+    target.starts_with('/')
+        && target
+            .bytes()
+            .all(|b| (0x21..=0x7e).contains(&b) && b != b'#')
 }
 
 /// Unsigned JSON error for requests that never reached authentication
@@ -840,6 +844,9 @@ mod tests {
             "",
             "/mcp#f",
             "/mcp?q=1#f",
+            "/mcp?q=é",
+            "/a b",
+            "/ab",
         ] {
             assert!(!is_origin_form_target(bad), "target {bad:?}");
         }

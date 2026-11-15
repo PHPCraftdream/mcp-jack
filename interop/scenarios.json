@@ -271,17 +271,17 @@
       "raw_request": {
         "method": "POST",
         "target": "/mcp?q=é",
+        "sign_target": "/mcp",
         "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"
       },
       "steps": [
-        "The request line carries the raw UTF-8 bytes C3 A9 in the query (not percent-encoded). The signing tool signs the UTF-8 target string and the harness writes the same bytes on the wire; non-ASCII bytes are signed as sent."
+        "The request line carries the raw UTF-8 bytes C3 A9 in the query (not percent-encoded) and the signature is made over /mcp. A target consists only of the bytes 0x21 to 0x7E, so every server must refuse the request before verification with an unsigned 400, not a 401 bad_signature. Some servers answer from their HTTP library with a bare 400 (no code), so the code is not compared."
       ],
       "expected": {
-        "outcome": "ok",
-        "http_status": 200,
-        "code": null
+        "outcome": "rejected",
+        "http_status": 400
       },
-      "source": "spec/01-authentication.md:3.1 non-ASCII bytes signed as sent"
+      "source": "spec/01-authentication.md:3.1 a target consists only of the bytes 0x21 to 0x7E"
     },
     "target-absolute-form": {
       "identity": "alice",

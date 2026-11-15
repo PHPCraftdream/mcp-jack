@@ -364,7 +364,8 @@ async function runMatrix(opts) {
     };
     const okOut = run.result.outcome === expected.outcome;
     const okStatus = run.result.http_status === expected.http_status;
-    const okCode = run.result.code === expected.code;
+    // A scenario that omits `code` does not compare it (an HTTP library may answer a bare 400).
+    const okCode = expected.code === undefined || run.result.code === expected.code;
     const okData = expected.data === undefined || (expected.data === null ? run.result.data === null : subsetMatches(expected.data, run.result.data));
     if (okOut && okStatus && okCode && okData) return true;
     recordFailure(sc.id, pairLabel, sc.expected, {

@@ -199,7 +199,7 @@ The focused TypeScript raw-path integration controls are in `ts/test/interop-cli
 | `identity-get` | `GET /identity?x=%2F` returns Alice identity, empty body, method and target |
 | `identity-dot-target` | `GET /a/../identity?x=%2F` returns Alice identity, empty body, method and exact raw target |
 | `target-percent-utf8-post`, `target-percent-utf8-get` | raw-request cases (below): `/mcp?q=%C3%A9` and `/identity?q=%C3%A9` are signed by each client and accepted by each server: `ok`, HTTP 200 |
-| `target-raw-utf8` | raw-request case: `/mcp?q=` followed by the raw UTF-8 bytes C3 A9 is signed as sent and accepted: `ok`, HTTP 200 |
+| `target-raw-utf8` | raw-request case: `/mcp?q=` followed by the raw UTF-8 bytes C3 A9 is refused before verification: `rejected`, HTTP 400 (unsigned; the code is not compared because an HTTP library may answer a bare 400) |
 | `target-absolute-form`, `target-fragment` | raw-request cases: `http://svc.example.test/mcp` and `/mcp#frag` are refused before verification: `rejected`, HTTP 400 `invalid_request` (unsigned; the response signature is not checked) |
 | `app-permission-allowed` | `ok`, HTTP 200; app result contains text `ok` |
 | `app-permission-denied` | `rejected`, HTTP 403 `application_permission_denied` (signed) |

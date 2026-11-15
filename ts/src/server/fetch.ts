@@ -117,12 +117,15 @@ export function jackIdentity(req: Request): JackIdentity | undefined {
 
 /**
  * Spec 01 section 3.1: the signed target is an origin-form request target:
- * it starts with '/' (so not absolute-, authority- or asterisk-form) and has
- * no fragment.
+ * it starts with '/' (so not absolute-, authority- or asterisk-form), has no
+ * fragment and consists only of the bytes 0x21 to 0x7E.
  */
 export function isOriginFormTarget(target: string): boolean {
-  return target.startsWith("/") && !target.includes("#");
+  return target.startsWith("/") && TARGET_BYTES.test(target) && !target.includes("#");
 }
+
+/** The bytes 0x21 to 0x7E: anything else must be percent-encoded by the client. */
+const TARGET_BYTES = /^[\x21-\x7e]+$/;
 
 /**
  * Fetch's Headers joins repeated Jack-Auth lines with ", ". A valid single

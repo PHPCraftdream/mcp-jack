@@ -8,22 +8,6 @@ const DEFAULT_MAX_BODY_BYTES = 1 << 20;
 
 const noop = (): void => {};
 
-const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true });
-
-/**
- * Node's req.url is the latin1 decoding of the wire bytes, but the verifier
- * UTF-8 encodes its target string. Re-decoding the wire bytes as UTF-8 makes
- * that encoding reproduce the received bytes exactly; bytes that are not
- * valid UTF-8 cannot be carried losslessly and yield undefined (refused).
- */
-export function wireTarget(latin1Url: string): string | undefined {
-  try {
-    return STRICT_UTF8.decode(Buffer.from(latin1Url, "latin1"));
-  } catch {
-    return undefined;
-  }
-}
-
 type ReadResult =
   | { kind: "body"; body: Buffer }
   | { kind: "too-large" }
@@ -135,11 +119,12 @@ export function serveNode(
     }
     const body = read.body;
 
-    const wireUrl = typeof req.url === "string" && req.url !== "" ? req.url : "/";
-    // Spec 01 section 3.1: only an origin-form target is signed; refuse the
-    // rest (absolute-, authority-, asterisk-form, fragments) before verification.
-    const rawTarget = wireTarget(wireUrl);
-    if (rawTarget === undefined || !isOriginFormTarget(rawTarget)) {
+    const rawTarget = typeof req.url === "string" && req.url !== "" ? req.url : "/";
+    // Spec 01 section 3.1: only an origin-form target of the bytes 0x21 to 0x7E
+    // is signed; refuse the rest (absolute-, authority-, asterisk-form,
+    // fragments, raw non-ASCII bytes) before verification. node:http's own
+    // parser already answers a bare 400 to some of them.
+    if (!isOriginFormTarget(rawTarget)) {
       writeError(res, 400, "invalid_request", "malformed request target");
       return;
     }

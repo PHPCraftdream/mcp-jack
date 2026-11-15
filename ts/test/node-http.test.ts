@@ -441,12 +441,24 @@ test("E10 repeated Set-Cookie headers preserved", { timeout: 5000 }, async () =>
 // -- Request target: origin-form, exact wire bytes (spec 01 section 3.1). --
 
 test("E10 refused targets answer unsigned 400 invalid_request", { timeout: 10000 }, async () => {
-  const refused = ["http://example.com/mcp", "*", "example.com:80", "/mcp#frag", "/mcp?q=\u00e9"];
+  const refused = ["http://example.com/mcp", "*", "/mcp#frag"];
   for (const target of refused) {
     const res = await rawRequest(port, "GET", target, {}, Buffer.alloc(0));
     assert.equal(res.status, 400, `status for ${JSON.stringify(target)}`);
     const parsed = JSON.parse(res.body.toString("utf-8")) as { error: { code: string } };
     assert.equal(parsed.error.code, "invalid_request", `code for ${JSON.stringify(target)}`);
+    assert.deepEqual(jackAuthValues(res.headers), [], `unsigned for ${JSON.stringify(target)}`);
+  }
+});
+
+test("E10b targets with bytes outside 0x21-0x7E or in authority form are refused with an unsigned 400", { timeout: 10000 }, async () => {
+  // node:http's own parser may answer these with a bare 400 before the adapter
+  // runs, so only the status and the absence of a signature are asserted.
+  // The two non-ASCII targets are the latin1 byte E9 and the UTF-8 bytes C3 A9 of "\u00e9".
+  const refused = ["example.com:80", "/mcp?q=\u00e9", "/mcp?q=\u00c3\u00a9", "/a\u007fb"];
+  for (const target of refused) {
+    const res = await rawRequest(port, "GET", target, {}, Buffer.alloc(0));
+    assert.equal(res.status, 400, `status for ${JSON.stringify(target)}`);
     assert.deepEqual(jackAuthValues(res.headers), [], `unsigned for ${JSON.stringify(target)}`);
   }
 });
@@ -459,12 +471,3 @@ test("E11 percent-encoded non-ASCII target verifies over the exact bytes", { tim
   assert.equal(res.status, 200);
 });
 
-test("E12 raw UTF-8 target bytes are hashed as received", { timeout: 5000 }, async () => {
-  const alice = seedSignerByName("alice");
-  // The client signs the UTF-8 bytes of the target; node writes each char
-  // below U+0100 of the path as one latin1 byte, so the chars below are the
-  // two wire bytes C3 A9 of "é".
-  const header = signRequest(alice, fixtureAud, "GET", "/mcp?q=\u00e9", new Uint8Array(0), randomNonce(), fixtureNow);
-  const res = await rawRequest(port, "GET", "/mcp?q=\u00c3\u00a9", { "jack-auth": header }, Buffer.alloc(0));
-  assert.equal(res.status, 200);
-});

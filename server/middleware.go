@@ -169,10 +169,19 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // originFormTarget reports whether the raw request target is origin-form: it
-// starts with '/' and has no fragment. Absolute-, authority- and asterisk-form
-// targets would make the signed bytes ambiguous (spec 01 section 3.1).
+// starts with '/', has no fragment and consists only of the bytes 0x21 to
+// 0x7E. Absolute-, authority- and asterisk-form targets, spaces, controls and
+// non-ASCII bytes would make the signed bytes ambiguous (spec 01 section 3.1).
 func originFormTarget(raw string) bool {
-	return strings.HasPrefix(raw, "/") && !strings.Contains(raw, "#")
+	if !strings.HasPrefix(raw, "/") {
+		return false
+	}
+	for i := 0; i < len(raw); i++ {
+		if c := raw[i]; c < 0x21 || c > 0x7e || c == '#' {
+			return false
+		}
+	}
+	return true
 }
 
 // reject answers a failed request. Once authentication has succeeded the
