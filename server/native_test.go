@@ -210,3 +210,108 @@ func TestAdminToolsRequireAdminBeforeArguments(t *testing.T) {
 		t.Fatalf("error = %v, want admin_required", jerr)
 	}
 }
+
+func TestInviteCreatePurgesExpiredInvites(t *testing.T) {
+	st := NewMemoryState()
+	admin := stateTestKey("admin-1", "admin1")
+	admin.Admin = true
+	if err := st.Update(func(e *StateEdit) error {
+		e.PutKey(admin)
+		e.PutInvite(InviteRecord{InviteID: "expired", CreatedBy: admin.Kid, CreatedAt: testNow - 100, ExpiresAt: testNow - 1})
+		e.PutInvite(InviteRecord{InviteID: "live", CreatedBy: admin.Kid, CreatedAt: testNow, ExpiresAt: testNow + 7200})
+		return nil
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	n := NewNativeTools(NativeOptions{})
+	later := testNow + 3601
+	if _, jerr := n.Call(&NativeCall{
+		Tool: ToolAdminInviteCreate, Arguments: json.RawMessage(`{"ttl_seconds":3600}`),
+		Caller: &admin, Kid: admin.Kid, Now: later, State: st,
+	}); jerr != nil {
+		t.Fatalf("invite.create: %v", jerr)
+	}
+	invites := st.View().Invites
+	if len(invites) != 2 {
+		t.Fatalf("stored invites = %d, want 2 (the live seed and the new invite)", len(invites))
+	}
+	liveKept := false
+	newKept := false
+	for _, inv := range invites {
+		switch inv.InviteID {
+		case "live":
+			liveKept = true
+		case "expired":
+			t.Error("the expired invite is still stored after a successful invite.create")
+		default:
+			if inv.CreatedAt == later {
+				newKept = true
+			}
+		}
+	}
+	if !liveKept {
+		t.Fatal("a live invite must never be purged")
+	}
+	if !newKept {
+		t.Fatalf("the new invite (created_at %d) is missing from the stored document", later)
+	}
+}
+
+func TestFailedInviteEditsKeepExpiredInvites(t *testing.T) {
+	st := NewMemoryState()
+	admin := stateTestKey("admin-1", "admin1")
+	admin.Admin = true
+	raw := make([]byte, 32)
+	for i := range raw {
+		raw[i] = byte(i)
+	}
+	code := jack.EncodeBase64URL(raw)
+	expiredID := inviteIDOf(raw)
+	if err := st.Update(func(e *StateEdit) error {
+		e.PutKey(admin)
+		e.PutInvite(InviteRecord{InviteID: expiredID, CreatedBy: admin.Kid, CreatedAt: testNow - 200, ExpiresAt: testNow - 1})
+		return nil
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	n := NewNativeTools(NativeOptions{})
+	// An expired invite still answers invalid_invite on enroll ...
+	fresh := stateTestKey("fresh", "fresh")
+	args := json.RawMessage(fmt.Sprintf(`{"code":%q,"name":"fresh","public_key":%q}`, code, fresh.PublicKey))
+	if _, jerr := n.Call(&NativeCall{
+		Tool: ToolEnroll, Arguments: args, Kid: fresh.Kid, TS: testNow, Now: testNow, Aud: "aud", State: st,
+	}); jerr == nil || jerr.Code != jack.CodeInvalidInvite {
+		t.Fatalf("enroll with an expired invite: %v, want invalid_invite", jerr)
+	}
+	// ... and unknown_target on revoke. Both updates failed, so the atomic
+	// edit rolled back and the record stays stored exactly as before.
+	if _, jerr := n.Call(&NativeCall{
+		Tool: ToolAdminInviteRevoke, Arguments: json.RawMessage(fmt.Sprintf(`{"invite_id":%q}`, expiredID)),
+		Caller: &admin, Kid: admin.Kid, Now: testNow, State: st,
+	}); jerr == nil || jerr.Code != jack.CodeUnknownTarget {
+		t.Fatalf("revoke of an expired invite: %v, want unknown_target", jerr)
+	}
+	invites := st.View().Invites
+	if len(invites) != 1 || invites[0].InviteID != expiredID {
+		t.Fatalf("a failed invite edit must not change the stored document, got %d invites", len(invites))
+	}
+}
+
+func TestBootstrapAdminPurgesExpiredInvites(t *testing.T) {
+	st := NewMemoryState()
+	if err := st.Update(func(e *StateEdit) error {
+		e.PutInvite(InviteRecord{InviteID: "expired", CreatedBy: "old", CreatedAt: 0, ExpiresAt: 1})
+		return nil
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := BootstrapAdmin(st, testNow, 600, NativeOptions{}); err != nil {
+		t.Fatalf("BootstrapAdmin: %v", err)
+	}
+	invites := st.View().Invites
+	if len(invites) != 1 || invites[0].CreatedBy != "bootstrap" {
+		t.Fatalf("bootstrap must leave exactly the fresh admin invite, got %+v", invites)
+	}
+}

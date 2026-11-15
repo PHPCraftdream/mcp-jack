@@ -45,8 +45,8 @@ reviewer's opinion before deciding.
 | F-03 | Medium | A single forward clock jump raises the store high-water mark `H`; when the clock returns, the nonce store, the server ring and every client trust store latch `unsafe` for good. There is no recovery command in 0.1. | Documented limitation with operator and client procedure in `docs/operations.md`. Open: requirements on the time source, a plausibility threshold before advancing `H`. |
 | F-04 | Medium, conditional | The bridge signed and forwarded `tools/call` for `jack.*` tools from the stdio side. With `native_admin` enabled and an administrator key in the bridge, a prompt-injected agent could create administrators. | Fixed: the bridge refuses `jack.*` tool calls locally and never signs them. |
 | F-05 | Low | The same signed body gets different verdicts in Go, Rust and TypeScript (lone surrogates, nesting depth, GET with a body). See section 3. | Open for the reviewer; to be fixed in the shared corpus and specification. |
-| F-06 | Low | Ed25519: Rust uses strict verification and rejects a signature whose `R` is a small-order point; Go and TypeScript accept it. A malicious server-key holder could publish a rotation record that Go and TypeScript clients accept and Rust clients reject. | Open; the threat model mentions the divergence. Needs a vector and a normative decision. |
-| F-07 | Low | Expired invites are never removed; at 1024 stored invites `invite.create` fails and a gateway with 1025 does not start. | Documented limitation. |
+| F-06 | Low | Ed25519: Rust uses strict verification and rejects a signature whose `R` is a small-order point; Go and TypeScript accepted it. A malicious server-key holder could publish a rotation record that Go and TypeScript clients accept and Rust clients reject. | Fixed: Go and TypeScript reject a signature whose `R` is one of the eight small-order encodings and the specification states the rule; regression tests build the crafted signatures at test time. Open: a shared fixture vector (the reference verifier must reject small-order `R` first). A small-order public key at direct `Verify` time is still accepted by Go and TypeScript and rejected by Rust; all three reject such keys at admission. |
+| F-07 | Low | Expired invites are never removed; at 1024 stored invites `invite.create` fails and a gateway with 1025 does not start. | Fixed: expired invites are removed in the same atomic state edit that creates, enrolls with or revokes an invite, in all three SDKs; the gateway cap is evaluated after the purge. |
 | F-08 | Low | The announce limit (1153 keys) and the retired-key limit (1024) differ, so a long-lived deployment could eventually refuse to sign. Compaction is not implemented. | Documented limitation; not reachable in practice at 48 hours per rotation. |
 | F-09 | Low | At the reviewed commit the top-level documents said that durable nonces and rotation were not implemented, and did not state that only the Go server SDK has a durable nonce store. | Resolved by the documentation refresh: Rust and TypeScript nonce stores are stated to remain in memory. |
 | F-10 | Low | The gateway applies global rate and connection limits before authentication, so garbage traffic can deny service to everyone. | Documented in the CLI design notes, the threat model and the operations guide. |
@@ -67,7 +67,7 @@ that was not verified. Rows 1, 2, 3 and 5 are the ones that change a verdict.
 |---|---|---|---|---|
 | 1 | Lone surrogate `\ud800` in `method`, `params.name` or a member name | replaced by U+FFFD, accepted | `400 invalid_request` (hypothesis) | accepted as is |
 | 2 | JSON nesting depth | rejected above 10000 | raw members unlimited, parsed arguments 128 (hypothesis) | recursive parser, stack limit, error caught as `400` |
-| 3 | Signature with a small-order `R` | accepted | rejected | accepted (hypothesis) |
+| 3 | Signature with a small-order `R` | rejected | rejected | rejected |
 | 4 | Absolute-form request target | full URI is signed | path and query only | raw `req.url` |
 | 5 | GET with a body | body is hashed | body is hashed | Node adapter drops the body |
 | 6 | `#fragment` in the target | kept in the signing string | dropped by `http::Uri` (hypothesis) | kept |
@@ -92,7 +92,7 @@ that was not verified. Rows 1, 2, 3 and 5 are the ones that change a verdict.
    the time source protected?
 4. Must the three SDKs return one verdict for lone surrogates, nesting depth and
    GET with a body? Which behaviour is normative?
-5. Is a small-order `R` accepted? A vector is needed either way.
+5. Is rejecting a small-order `R` the right normative rule? A shared vector is still to be added to the corpus.
 6. Do read-then-rename under an `.owner` marker (Rust, TypeScript) give the same
    guarantee as a bbolt compare-and-swap when the process stops between rename
    and the directory fsync?

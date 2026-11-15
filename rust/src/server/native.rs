@@ -88,6 +88,7 @@ pub fn bootstrap_admin(
     let native = Native::new(opts);
     let (code, invite_id) = native.new_invite_code()?;
     state.update(&mut |e| {
+        purge_expired_invites(e, now);
         e.put_invite(InviteRecord {
             invite_id: invite_id.clone(),
             admin: true,
@@ -302,6 +303,23 @@ fn invite_id_of(raw_code: &[u8]) -> String {
     encode_b64url(&Sha256::digest(raw_code))
 }
 
+/// Removes every invite no longer valid at `now` from the pending edit, so an
+/// invite-editing update never keeps dead records (spec 03: expired invites
+/// are not listed and need not be stored). Runs inside the same atomic
+/// update; a later failure rolls it back with the whole edit (Go:
+/// purgeExpiredInvites).
+fn purge_expired_invites(e: &mut StateEdit, now: i64) {
+    let expired: Vec<String> = e
+        .invites()
+        .into_iter()
+        .filter(|i| now >= i.expires_at)
+        .map(|i| i.invite_id)
+        .collect();
+    for invite_id in &expired {
+        e.remove_invite(invite_id);
+    }
+}
+
 /// Adds `seconds` to `now` without wrapping. The spec has no overflow case, so
 /// an overflowing TTL fails closed as an internal error instead of wrapping
 /// into an immortal key (Go's plain `+` could wrap — deliberate divergence).
@@ -384,6 +402,7 @@ impl Native {
 
         let mut enrolled: Option<RegistryEntry> = None;
         c.state.update(&mut |e| {
+            purge_expired_invites(e, c.now);
             let invite = e.invite(&invite_id).filter(|i| c.now < i.expires_at);
             let Some(invite) = invite else {
                 return Err(invalid_invite());
@@ -695,6 +714,7 @@ impl Native {
         c.state.update(&mut |e| {
             // Caller re-read + admin gate against the CURRENT registry.
             current_admin(e, c.kid)?;
+            purge_expired_invites(e, c.now);
             e.put_invite(InviteRecord {
                 invite_id: invite_id.clone(),
                 admin,
@@ -743,6 +763,7 @@ impl Native {
 
         c.state.update(&mut |e| {
             current_admin(e, c.kid)?;
+            purge_expired_invites(e, c.now);
             let invite = e.invite(&invite_id).filter(|i| c.now < i.expires_at);
             if invite.is_none() {
                 return Err(JackError::new(404, codes::UNKNOWN_TARGET, "no such invite"));
@@ -1377,16 +1398,18 @@ mod tests {
 
     #[test]
     fn failed_tool_calls_mutate_nothing() {
-        // Validation precedes the first mutation in EVERY native tool: each
-        // closure is checks-then-mutate (enroll: put_key/remove_invite after
-        // the invite+name+kid checks; rotate: remove/put after key_exists;
-        // user.create: put after current_admin+name+kid; set_admin: put after
+        // Tool-specific checks still precede each tool's OWN mutation (enroll:
+        // put_key/remove_invite after the invite+name+kid checks; rotate:
+        // remove/put after key_exists; user.create: put after
+        // current_admin+name+kid; set_admin: put after
         // current_admin+target+last_admin; revoke: remove after current_admin
         // +target+last_admin; invite.create: put after current_admin;
         // invite.revoke: remove after found+expiry; bootstrap: put after the
-        // ttl check). This pins the tool-level half; the store-level
-        // commit-only-on-Ok property (a closure that DOES mutate then fail
-        // rolls back) is pinned by state.rs::rollback_on_error.
+        // ttl check). The one shared mutation that runs BEFORE those checks is
+        // purge_expired_invites in the invite-editing tools; any later failure
+        // rolls it back with the whole edit. This pins the tool-level half; the
+        // store-level commit-only-on-Ok property (a closure that DOES mutate
+        // then fail rolls back) is pinned by state.rs::rollback_on_error.
         let state: Arc<dyn StateStore> = Arc::new(MemoryState::new());
         let root = admin_key("root", "root");
         let bob_signing = test_signing("bob");
@@ -1441,8 +1464,9 @@ mod tests {
         assert_eq!(err.http_status, 409);
         assert_eq!(err.code, codes::NAME_TAKEN);
         assert_eq!(before, state.view());
-        // view() does not filter: the seeded expired invite plus the bootstrap one.
-        assert_eq!(state.view().invites.len(), 2);
+        // bootstrap_admin purged the seeded expired invite in its own edit, so
+        // only the bootstrap invite is stored (the failed enroll rolled back).
+        assert_eq!(state.view().invites.len(), 1);
         assert!(state.lookup(&fresh.kid).is_none());
 
         // 2. rotate: valid proof but the new kid is already registered ->
@@ -1600,5 +1624,117 @@ mod tests {
         assert_eq!(err.code, "internal_error");
         // The invite was NOT consumed and no key was added.
         assert_eq!(before, state.view());
+    }
+
+    #[test]
+    fn invite_create_purges_expired_and_keeps_live() {
+        let state = Arc::new(MemoryState::new());
+        let caller = admin_key("admin", "root");
+        let expired = InviteRecord {
+            invite_id: "expired".into(),
+            created_by: caller.kid.clone(),
+            created_at: NOW - 100,
+            expires_at: NOW - 1,
+            ..Default::default()
+        };
+        let live = InviteRecord {
+            invite_id: "live".into(),
+            created_by: caller.kid.clone(),
+            created_at: NOW,
+            expires_at: NOW + 100,
+            ..Default::default()
+        };
+        seed(
+            std::slice::from_ref(&caller),
+            &[expired, live],
+            state.as_ref(),
+        );
+        let native = deterministic_native();
+        let mut call = make_call(
+            TOOL_ADMIN_INVITE_CREATE,
+            raw_args("{}"),
+            Some(&caller),
+            &caller.kid,
+            Arc::clone(&state) as Arc<dyn StateStore>,
+        );
+        // Advance the verifier clock past the seeded expiry.
+        call.now = NOW + 1;
+        native.call(&mut call).unwrap();
+        let invites = state.view().invites;
+        assert_eq!(
+            invites.len(),
+            2,
+            "the live seed and the new invite must stay"
+        );
+        let ids: Vec<&str> = invites.iter().map(|i| i.invite_id.as_str()).collect();
+        assert!(
+            !ids.contains(&"expired"),
+            "the expired invite must be purged"
+        );
+        assert!(ids.contains(&"live"), "a live invite is never purged");
+    }
+
+    #[test]
+    fn failed_invite_edits_keep_expired_invites() {
+        let state = Arc::new(MemoryState::new());
+        let caller = admin_key("admin", "root");
+        let raw = [0x42u8; 32];
+        let code = encode_b64url(&raw);
+        let expired = InviteRecord {
+            invite_id: invite_id_of(&raw),
+            created_by: caller.kid.clone(),
+            created_at: NOW - 200,
+            expires_at: NOW - 1,
+            ..Default::default()
+        };
+        seed(std::slice::from_ref(&caller), &[expired], state.as_ref());
+        let native = deterministic_native();
+        // An expired invite still answers invalid_invite on enroll ...
+        let fresh = test_key("fresh", "fresh");
+        let mut call = make_call(
+            TOOL_ENROLL,
+            raw_args(&format!(
+                r#"{{"code":"{code}","name":"fresh","public_key":"{}"}}"#,
+                fresh.public_key
+            )),
+            None,
+            &fresh.kid,
+            Arc::clone(&state) as Arc<dyn StateStore>,
+        );
+        let err = native.call(&mut call).unwrap_err();
+        assert_eq!(err.http_status, 403);
+        assert_eq!(err.code, codes::INVALID_INVITE);
+        // ... and unknown_target on revoke. Both updates failed, so the whole
+        // atomic edit (purge included) rolled back: the record stays stored.
+        let mut call = make_call(
+            TOOL_ADMIN_INVITE_REVOKE,
+            raw_args(&format!(r#"{{"invite_id":"{}"}}"#, invite_id_of(&raw))),
+            Some(&caller),
+            &caller.kid,
+            Arc::clone(&state) as Arc<dyn StateStore>,
+        );
+        let err = native.call(&mut call).unwrap_err();
+        assert_eq!(err.http_status, 404);
+        assert_eq!(err.code, codes::UNKNOWN_TARGET);
+        let invites = state.view().invites;
+        assert_eq!(invites.len(), 1);
+        assert_eq!(invites[0].invite_id, invite_id_of(&raw));
+    }
+
+    #[test]
+    fn bootstrap_admin_purges_expired_invites() {
+        let state = Arc::new(MemoryState::new());
+        let expired = InviteRecord {
+            invite_id: "expired".into(),
+            created_by: "old".into(),
+            created_at: 0,
+            expires_at: 1,
+            ..Default::default()
+        };
+        seed(&[], &[expired], state.as_ref());
+        bootstrap_admin(state.as_ref(), NOW, 600, NativeOptions::default()).unwrap();
+        let invites = state.view().invites;
+        assert_eq!(invites.len(), 1);
+        assert_eq!(invites[0].created_by, "bootstrap");
     }
 }

@@ -67,6 +67,7 @@ function call(partial: {
   arguments?: string | undefined;
   caller?: RegistryEntry | undefined;
   kid?: string;
+  now?: number;
   state: StateStore;
 }): NativeCall {
   return {
@@ -75,7 +76,7 @@ function call(partial: {
     caller: partial.caller,
     kid: partial.kid ?? partial.caller?.kid ?? "",
     ts: NOW,
-    now: NOW,
+    now: partial.now ?? NOW,
     aud: "aud",
     state: partial.state,
     target: "",
@@ -747,6 +748,76 @@ test("invite.revoke removes a live invite; an expired one is unknown_target", ()
   );
   assert.equal(err.httpStatus, 404);
   assert.equal(err.code, Code.UNKNOWN_TARGET);
+});
+
+test("invite.create purges expired invites in the same edit and keeps live ones", () => {
+  const st = new MemoryState();
+  const rootKey = key("root");
+  const admin = entry(rootKey, "admin-a", true);
+  st.update((e) => {
+    e.putKey(admin);
+    e.putInvite({ inviteId: "expired", createdBy: admin.kid, createdAt: NOW - 100, expiresAt: NOW - 1 });
+    e.putInvite({ inviteId: "live", createdBy: admin.kid, createdAt: NOW, expiresAt: NOW + 100 });
+  });
+  const result = native.call(call({ tool: TOOL_ADMIN_INVITE_CREATE, arguments: "{}", caller: admin, now: NOW + 1, state: st }));
+  assert.ok(result.structured, "invite.create must succeed");
+  const ids = st.view().invites.map((i) => i.inviteId);
+  assert.equal(ids.length, 2, "the live seed and the new invite must stay");
+  assert.ok(!ids.includes("expired"), "the expired invite must be gone from the stored document");
+  assert.ok(ids.includes("live"), "a live invite is never purged");
+});
+
+test("a failed enroll or revoke of an expired invite keeps the old error and leaves it stored", () => {
+  const st = new MemoryState();
+  const rootKey = key("root");
+  const admin = entry(rootKey, "admin-a", true);
+  const raw = Buffer.alloc(32, 0x42);
+  const code = encodeBase64URL(raw);
+  st.update((e) => {
+    e.putKey(admin);
+    e.putInvite({ inviteId: keyId(raw), createdBy: admin.kid, createdAt: NOW - 200, expiresAt: NOW - 1 });
+  });
+  const fresh = key("newbie");
+  const enrollErr = jackErrorOf(() =>
+    native.call(
+      call({
+        tool: TOOL_ENROLL,
+        arguments: JSON.stringify({ code, name: "fresh", public_key: fresh.publicKey }),
+        caller: undefined,
+        kid: fresh.kid,
+        state: st,
+      }),
+    ),
+  );
+  assert.equal(enrollErr.httpStatus, 403);
+  assert.equal(enrollErr.code, Code.INVALID_INVITE);
+  const revokeErr = jackErrorOf(() =>
+    native.call(
+      call({
+        tool: TOOL_ADMIN_INVITE_REVOKE,
+        arguments: JSON.stringify({ invite_id: keyId(raw) }),
+        caller: admin,
+        state: st,
+      }),
+    ),
+  );
+  assert.equal(revokeErr.httpStatus, 404);
+  assert.equal(revokeErr.code, Code.UNKNOWN_TARGET);
+  // Both edits failed, so the whole atomic edit (purge included) rolled back.
+  assert.deepEqual(st.view().invites.map((i) => i.inviteId), [keyId(raw)]);
+});
+
+test("bootstrapAdmin purges expired invites in the same edit", () => {
+  const st = new MemoryState();
+  st.update((e) => {
+    e.putInvite({ inviteId: "expired", createdBy: "old", createdAt: 0, expiresAt: 1 });
+  });
+  bootstrapAdmin(st, NOW, 600);
+  const invites = st.view().invites;
+  assert.equal(invites.length, 1);
+  const invite = invites[0];
+  assert.ok(invite, "the fresh admin invite expected");
+  assert.equal(invite.createdBy, "bootstrap");
 });
 
 // ---------------------------------------------------------------------------

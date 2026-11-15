@@ -21,7 +21,9 @@ type NativeOptions struct {
 
 // Native implements the protocol-native tools of spec 03: enrollment, key
 // rotation, whoami and user and invite administration. Every state change is
-// one StateStore.Update, so it is atomic (spec 03 section 9).
+// one StateStore.Update, so it is atomic (spec 03 section 9). An
+// invite-editing update also removes expired invites in the same edit; a
+// rejected update rolls the purge back.
 type Native struct {
 	random func(n int) ([]byte, error)
 }
@@ -186,6 +188,18 @@ func inviteIDOf(rawCode []byte) string {
 	return jack.EncodeBase64URL(sum[:])
 }
 
+// purgeExpiredInvites removes every invite no longer valid at now from the
+// pending edit, so an invite-editing update never keeps dead records (spec 03:
+// expired invites are not listed and need not be stored). It runs inside the
+// same atomic update; a later failure rolls it back with the whole edit.
+func purgeExpiredInvites(e *StateEdit, now int64) {
+	for _, inv := range e.Invites() {
+		if now >= inv.ExpiresAt {
+			e.RemoveInvite(inv.InviteID)
+		}
+	}
+}
+
 // Call dispatches one protocol-native tool.
 func (n *Native) Call(c *NativeCall) (NativeResult, *jack.Error) {
 	switch c.Tool {
@@ -229,6 +243,7 @@ func (n *Native) enroll(c *NativeCall) (NativeResult, *jack.Error) {
 
 	var enrolled RegistryEntry
 	err = c.State.Update(func(e *StateEdit) error {
+		purgeExpiredInvites(e, c.Now)
 		invite, ok := e.Invite(inviteID)
 		if !ok || c.Now >= invite.ExpiresAt {
 			return perr(403, jack.CodeInvalidInvite, "the invite is not valid")
@@ -546,6 +561,7 @@ func (n *Native) inviteCreate(c *NativeCall, args argMap) (NativeResult, *jack.E
 		if jerr != nil {
 			return jerr
 		}
+		purgeExpiredInvites(e, c.Now)
 		e.PutInvite(InviteRecord{
 			InviteID: inviteID, Admin: admin, CreatedBy: caller.Kid,
 			CreatedAt: c.Now, ExpiresAt: expiresAt, KeyTTLSeconds: keyTTL,
@@ -592,6 +608,7 @@ func (n *Native) inviteRevoke(c *NativeCall, args argMap) (NativeResult, *jack.E
 		if _, jerr := currentAdmin(e, c); jerr != nil {
 			return jerr
 		}
+		purgeExpiredInvites(e, c.Now)
 		invite, found := e.Invite(inviteID)
 		if !found || c.Now >= invite.ExpiresAt {
 			return perr(404, jack.CodeUnknownTarget, "no such invite")
@@ -620,6 +637,7 @@ func BootstrapAdmin(state StateStore, now, ttlSeconds int64, opts NativeOptions)
 		return "", err
 	}
 	err = state.Update(func(e *StateEdit) error {
+		purgeExpiredInvites(e, now)
 		e.PutInvite(InviteRecord{
 			InviteID: inviteID, Admin: true, CreatedBy: "bootstrap",
 			CreatedAt: now, ExpiresAt: now + ttlSeconds,
