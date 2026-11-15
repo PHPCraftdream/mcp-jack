@@ -2,16 +2,22 @@
   "go": {
     "server": ["interop/bin/go-server"],
     "client": ["interop/bin/go-client"],
-    "transfer": ["interop/bin/go-transfer"]
+    "transfer": ["interop/bin/go-transfer"],
+    "rotation_server": ["interop/bin/go-rotation-server"],
+    "rotation_client": ["interop/bin/go-rotation-client"]
   },
   "rust": {
     "server": ["rust/target/release/interop-server"],
     "client": ["rust/target/release/interop-client"],
-    "transfer": ["rust/target/release/interop-transfer"]
+    "transfer": ["rust/target/release/interop-transfer"],
+    "rotation_server": ["rust/target/release/interop-server", "--mode", "rotation-server"],
+    "rotation_client": ["rust/target/release/interop-client", "--mode", "rotation-client"]
   },
   "typescript": {
     "server": ["node", "ts/dist/interop/server.js"],
     "client": ["node", "ts/dist/interop/client.js"],
-    "transfer": ["node", "ts/dist/interop/transfer.js"]
+    "transfer": ["node", "ts/dist/interop/transfer.js"],
+    "rotation_server": ["node", "ts/dist/interop/rotation-server.js"],
+    "rotation_client": ["node", "ts/dist/interop/rotation-client.js"]
   }
 }

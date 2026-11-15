@@ -4,6 +4,16 @@
 pub mod net;
 pub mod scenarios;
 
+// Rotation-matrix modes (private-file rotation stores are linux-only). Each
+// bin crate compiles this whole shared module tree, so the other mode is dead
+// code in it — hence allow(dead_code).
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+pub mod rotation_client;
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+pub mod rotation_server;
+
 /// The only response codes whose 401 answers may be unsigned (interop README
 /// section 5; mirror of interop/go/client/scenarios.go authFailureCodes).
 pub const AUTH_FAILURE_CODES: [&str; 8] = [

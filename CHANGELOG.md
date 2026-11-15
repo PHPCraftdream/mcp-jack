@@ -21,6 +21,7 @@ This changelog records repository history and planned work without implying rele
 
 ### Planned, not implemented or accepted
 
+- Operator serving release, tombstone disposition and server-ring recovery are not part of v0.1.0 (owner decision 2026-11-15). Stores fail closed after an abnormal stop and recovery is a manual operator procedure described in `docs/design/cli.md`; a supported in-product recovery path is deferred.
 - **Task #96** covers artifact-only RC production, verification, and final disposition. Its candidate receipt remains unfilled. No candidate artifact, checksum, attestation, exact-artifact consumer receipt, or RC acceptance is claimed. Foundation policy acceptance does **not** depend on future Task #96 receipts or settings evidence; there is no circular dependency.
 - Artifact-only RC scope means no registry publication. Registry-publisher/trusted-publisher ownership is deferred and is not an artifact-only RC prerequisite. No tag, version change, publication, GitHub Release, or announcement is authorized.
 - Restart replay protection and server-key rotation remain release gaps. D-2 restart semantics and D-3 server-key rotation delivery/semantics are unresolved; sr1 closes neither. User-key rotation does not resolve D-3.
