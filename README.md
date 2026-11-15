@@ -158,6 +158,7 @@ See also [docs/operations.md](docs/operations.md) and [docs/threat-model.md](doc
 | [docs/threat-model.md](docs/threat-model.md) | threat model |
 | [docs/security-review-package.md](docs/security-review-package.md) | internal pre-review findings, SDK divergences and questions for an external reviewer |
 | [docs/independent-review.md](docs/independent-review.md) | result of the independent AI review: findings, coverage, dispositions |
+| [docs/cross-language-conformance.md](docs/cross-language-conformance.md) | audit of what proves that Go, Rust and TypeScript behave identically: rules, shared vectors, interop coverage, gaps |
 | [SECURITY.md](SECURITY.md) | security policy |
 | [CHANGELOG.md](CHANGELOG.md) | repository history and unreleased changes |
 | [docs/versioning.md](docs/versioning.md) | versioning policy |

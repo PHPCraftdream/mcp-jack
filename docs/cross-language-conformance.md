@@ -1,0 +1,184 @@
+# Cross-language conformance audit (Go · Rust · TypeScript)
+
+Static audit of commit `993b539`, dated 2026-11-15 (a dated snapshot: the gaps in section 7 are being closed and the matrix is updated as they land; rows that changed since are listed in `CHANGELOG.md` and `docs/independent-review.md`). Investigation only: no code and no fixtures were changed, and no build, test, or harness was executed. Every status below is based on reading code, fixtures, and workflow definitions; anything that would require execution to decide is marked `unverifiable-without-running`.
+
+## 1. Method and sources
+
+- **Specifications**: `spec/01-authentication.md`, `spec/02-authorization.md`, `spec/03-user-management.md`; candidates `spec/candidate/durable-nonces.md`, `spec/candidate/server-key-rotation.md`. Boundary rules from `spec/README.md`, `spec/fixtures/README.md`, `spec/fixtures/candidate/README.md`, `spec/tests/README.md`.
+- **Shared vectors**: eight generated v0.1 files directly under `spec/fixtures/` (admin-vectors, key-vectors, keys, load-vectors, registry, request-vectors, response-vectors, state-file-vectors; 263 cases total per `spec/tests/CASES.md`) plus two hand-maintained SDK tables (`client-url-policy.json`, 207 rows; `user-key-transfer.json`, 66 cases); three candidate files under `spec/fixtures/candidate/` (nonce-vectors 24 events, rotation-state-vectors 14+8 cases, rotation-vectors 19 negative + 2 valid chains). Generator `spec/tools/gen-fixtures.mjs`, reference verifier `spec/tools/reference-verifier.mjs`, candidate tooling `spec/tools/candidate/*.mjs` + `spec/tests/candidate/*.test.mjs`.
+- **Per-SDK suites**: Go package tests (root, `server/`, `client/`, `rotation/`, `durable/`, `userkey/`, `spec/`); Rust `rust/tests/` + in-src unit tests; TypeScript `ts/test/`.
+- **Interop**: `interop/run.mjs` (33 request scenarios + 8 sign/verify oracle cases), `interop/transfer.mjs` family, `interop/rotation.mjs` (14 checks), `tools/mcp-e2e/run.mjs` (official MCP SDK matrix).
+- **CI**: `.github/workflows/ci.yml` (jobs `go`, `go-race`, `go-cli-process`, `go-cli-process-darwin`, `go-cli-artifacts`, `fixtures`, `rust`, `rust-msrv`, `ts`, `interop` = "interop matrix (3x3)", `rotation-interop` = "rotation interop matrix (3x3)", `mcp-compat-e2e`, `credential-transfer` = "credential transfer matrix (3x3)", `consumer-go/rust/ts`), plus `spec-fixtures.yml` (v0.1 `--check` + candidate generation/verification, Node-only).
+- `docs/security-review-package.md` and `docs/threat-model.md` were used as pointers only; all conclusions here were re-derived from code.
+
+## 2. Status values
+
+| Value | Meaning |
+|---|---|
+| identical-proven | Same observable result in all three SDKs AND a shared vector or interop scenario that all three execute. |
+| implemented-per-sdk-tests-only | Each SDK has its own test, but no shared vector/interop run covers it. |
+| divergent | An observable difference between SDKs was found; described inline. |
+| missing-in-sdk | Not implemented in one SDK; noted whether the spec permits that. |
+| unverifiable-without-running | Needs execution to decide. |
+
+## 3. Coverage matrix
+
+Implementation cells cite representative functions (repo-relative).
+
+### 3.1 spec/01-authentication.md
+
+| Rule (§) | Go | Rust | TypeScript | Shared vector(s) | Interop | Status |
+|---|---|---|---|---|---|---|
+| A1 Ed25519 only (§2) | ed25519.go | rust/src/ed25519.rs | ts/src/ed25519.ts | key-vectors (24) | all scenarios | identical-proven |
+| A2 public-key validity, registry rejection (§2, 03§2) | ed25519.go:ValidatePublicKey; server/statefile.go | rust/src/ed25519.rs:validate_public_key; server/state_file.rs | ts/src/ed25519.ts:validatePublicKey; server/state-file.ts | key-vectors; load-vectors | enroll, rotate, admin-create | identical-proven. TS additionally rejects x=0 with sign bit 1 (matches dalek strict decode; stricter than spec text) |
+| A3 strict signature (S<L, non-small-order R) (§2) | ed25519.go (small-order R table + S<L) | rust/src/ed25519.rs:verify (verify_strict + scalar check) | ts/src/ed25519.ts:verify (SMALL_ORDER_R + S<L; non-canonical R delegated to node:crypto) | request-vectors sig-*; response-vectors res-small-order-r-identity | verify phase tamper control | identical-proven. TS non-canonical-R rejection depends on the OpenSSL backend — unverifiable-without-running |
+| A4 kid = base64url(SHA-256(pk)) (§2) | base64.go/keys | rust/src/encoding.rs:key_id | ts/src/encoding.ts:keyId | keys.json; sign-cases | sign phase | identical-proven |
+| A5 canonical unpadded base64url (§2) | base64.go | rust/src/encoding.rs:decode_b64url | ts/src/encoding.ts:decodeBase64URL | request-vectors (padded/trailing-bit cases) | sign phase | identical-proven |
+| A6 sizes kid43/nonce22/sig86 (§2) | authheader.go | rust/src/auth_header.rs | ts/src/auth-header.ts | request-vectors malformed-* | sign phase | identical-proven |
+| A7 request header grammar (§3) | authheader.go:ParseRequestAuth | rust/src/auth_header.rs:parse_auth_values | ts/src/auth-header.ts:parseAuthValues | request-vectors malformed-*/ts-* | sign phase | identical-proven |
+| A8 unsupported_version vs malformed_auth, scheme-first on raw bytes (§3) | authheader.go:52-62 | rust/src/auth_header.rs:scheme_is_unsupported_version (byte-level, pre-UTF-8) | ts/src/auth-header.ts (scheme checked before params) | request-vectors unsupported-version + malformed-* | — | identical-proven |
+| A9 request signing string, byte-for-byte target, aud config (§3.1) | signing.go:RequestSigningString; client/transport.go (RequestURI) | rust/src/signing.rs:request_signing_string; client/url.rs:request_target | ts/src/signing.ts:requestSigningString; client raw-target adapter | sign-cases (8 exact-byte oracles); request-vectors debug | sign phase + identity-dot-target (3x3) | identical-proven. Note: TS client signs the WHATWG-normalized path (dot segments resolved) while Go/Rust sign the configured request target; self-consistent inside TS, INFERRED divergence only for exotic configured URLs |
+| A10 hash+verify before parse; body cap (§3.1) | server/middleware.go (MaxBytesReader), server/verify.go | rust/src/server/http.rs:buffer_body, server/verify.rs | ts/src/server/fetch.ts (maxBodyBytes), server/verify.ts | request-vectors (order) | invalid-request | identical-proven for ordering; the cap response itself is 413 `invalid_request` (unsigned) in all three — a spec-silent adapter code; per-SDK tests only |
+| A11 server verify order steps 1-8 + codes (§4) | server/verify.go:Verifier.verify | rust/src/server/verify.rs:Verifier::verify | ts/src/server/verify.ts:Verifier.verify | request-vectors (93) | unknown-key, replay, clock-skew, tampered-body, expired-key, key-not-yet-valid (all 3x3) | identical-proven |
+| A12 enrollment exception at step 4 (§4, 03§3.2) | server/verify.go:enrollmentKey | rust/src/server/verify.rs:enrollment_key | ts/src/server/verify.ts:Verifier.enrollmentKey | enroll-* vectors | enroll, enroll-used-invite (3x3) | identical-proven |
+| A13 nonce rules (record-after-sig, atomic, kid-scoped, retention, step-9 consumption) (§4) | server/nonce.go; server/verify.go | rust/src/server/nonce.rs:check_and_record | ts/src/server/nonce.ts:NonceStore.checkAndRecord (JS single-thread atomicity) | request-vectors replay-*; `nonce_recorded` field | replay (3x3) | identical-proven. Cache capacity/rate bounds are deployment duties, implemented only in the Go CLI gateway |
+| A14 error body; Content-Type; WWW-Authenticate SHOULD (§4) | server/middleware.go:errorBody | rust/src/server/http.rs:reject | ts/src/server/fetch.ts:writeError | request-vectors (body shape) | all rejection scenarios | identical-proven for body/status/code; the WWW-Authenticate header is asserted per-SDK only (not in vector schema) — that part implemented-per-sdk-tests-only |
+| A15 response auth header + signing string + pinning (§5) | server/middleware.go:writeSigned; client/auth.go:VerifyResponse | rust/src/server/http.rs:signed_with_headers; rust/src/signing.rs:verify_response | ts/src/server/fetch.ts:writeSigned; ts/src/client/auth.ts:verifyResponse | response-vectors (15) | sign/verify phases; bad-server-key | identical-proven |
+| A16 client verify order (§5) | client/auth.go (parse→pin→window→sig) | rust/src/signing.rs:verify_response | ts/src/client/auth.ts:verifyResponse | response-vectors | bad-server-key | identical-proven. All three zero the client-side HTTP status; comments in rust/src/signing.rs:97 and transport.rs:337 claiming a Go divergence are stale (Go zeroes too: client/auth.go:91-95) |
+| A17 unsigned/unverified response handling (§5) | client/transport.go | rust/src/client/transport.rs:round_trip_as | ts/src/client/transport.ts:createSigningFetch | request-vectors (401 family unsigned) | harness negative control (unsigned 403 → client_error missing_auth) | identical-proven |
+| A18 501 streaming_unsupported (§5, 02§2) | server/middleware.go | rust/src/server/http.rs:forward | ts/src/server/fetch.ts:forward | — | stream (3x3) | identical-proven; see divergence D2 for client-side refusal differences |
+
+### 3.2 spec/02-authorization.md
+
+| Rule (§) | Go | Rust | TypeScript | Shared vector(s) | Interop | Status |
+|---|---|---|---|---|---|---|
+| B1 registry load validation incl. legacy kind/scopes naming member (§1) | server/statefile.go; spec package LoadRegistry (test-only) | rust/src/server/state_file.rs (deny_unknown_fields) | ts/src/server/state-file.ts | load-vectors (19) | legacy-stored-kind/scopes (3x3, server-only) | identical-proven for entry rules, with caveat: Rust/TS have no registry-document (aud-bearing) loader API; they adapt load-vectors by dropping `aud`, so the registry document shape itself is proven only in Go |
+| B2 admin strict bool, default false, always in results, gates only jack.admin.* (§1) | server/native.go | rust/src/server/native.rs | ts/src/server/native.ts | load-vectors admin-*; admin-vectors | admin-required, set-admin-* (3x3) | identical-proven |
+| B3 active window, exclusive end (§1) | server/verify.go:entryActive | rust/src/server/verify.rs:entry_active | ts/src/server/verify.ts:entryActive | request-vectors key-not-yet-valid/key-expired | expired-key, key-not-yet-valid (3x3) | identical-proven |
+| B4 name unique (§1) | server/statefile.go, native.go | rust/src/server/state_file.rs, native.rs | ts/src/server/state-file.ts, native.ts | load-vectors duplicate-name; admin-vectors | — | identical-proven |
+| B5 GET accepted; other methods SHOULD 405 (§2) | server/middleware.go | rust/src/server/http.rs | ts/src/server/fetch.ts | — | mcp-e2e G4 (upstream 405 asserted for go/rust servers, recorded for TS) | implemented-per-sdk-tests-only; body code `method_not_allowed` is spec-silent but identical in all three |
+| B6 POST body JSON-RPC validity (UTF-8, surrogates, depth 128, batch, empty, jsonrpc) (§2) | server/verify.go:classifyBody | rust/src/server/verify.rs:classify_body | ts/src/server/verify.ts:classifyBody (fatal TextDecoder + raw-byte surrogate scan) | request-vectors request-* (22) | invalid-request (3x3) | identical-proven. Note: TS rejects a UTF-8 BOM (`ignoreBOM:true`); the repo's own reference verifier strips it — spec-vs-tool divergence, SDKs agree |
+| B7 response object passes (§2) | server/verify.go | rust/src/server/verify.rs | ts/src/server/verify.ts | request-vectors | — | identical-proven. All three check `id` presence only, not its JSON type — consistently laxer than JSON-RPC 2.0 |
+| B8 params.name string (§2) | server/verify.go | rust/src/server/verify.rs | ts/src/server/verify.ts | request-vectors | invalid-request | identical-proven |
+| B9 jack.* dispatch; operation_denied; admin_required (§2) | server/verify.go:authorize | rust/src/server/verify.rs:authorize | ts/src/server/verify.ts:Verifier.authorize | request-vectors admin-gate-*, unknown-native-tool | admin-required, unknown-native-tool (3x3) | identical-proven. The candidate `jack.server.key` is routed out-of-band in all three when a rotation profile is configured |
+| B10 forward unchanged, no tools/list filtering (§2) | server/verify.go | rust/src/server/verify.rs | ts/src/server/fetch.ts:forward | — | ping, echo, identity-* (3x3) | identical-proven |
+| B11 SSE refused, signed 501 (§2) | server/middleware.go | rust/src/server/http.rs:forward | ts/src/server/fetch.ts:forward | — | stream (3x3) | identical-proven |
+| B12 duplicate members last-wins, per-object, unescaped names, body only (§2) | server/verify.go (RawMessage map) | rust/src/server/verify.rs (serde map) | ts/src/json-raw.ts:parseRawJson | request-vectors dup-* (7) | identity-forward (noncanonical bytes) | identical-proven. Rust has no explicit test for unescaped-name equivalence (`"m\u0065thod"`); INFERRED to hold via serde |
+| B13 verified identity snapshot to wrapped handler (§3) | server/identity.go | rust/src/server/identity.rs:VerifiedIdentity | ts/src/server/verify.ts (frozen snapshot + WeakMap) | request-vectors identity field | identity-forward, identity-get, identity-dot-target (3x3) | identical-proven |
+| B14 post-auth rejection consumes nonce (§2) | server/verify.go | rust/src/server/verify.rs | ts/src/server/verify.ts | request-vectors `nonce_recorded` | replay | identical-proven |
+
+### 3.3 spec/03-user-management.md
+
+| Rule (§) | Go | Rust | TypeScript | Shared vector(s) | Interop | Status |
+|---|---|---|---|---|---|---|
+| C1 name pattern (§1) | syntax.go:ValidName | rust/src/syntax.rs:valid_name | ts/src/syntax.ts:validName | load-vectors bad-name; admin-vectors | — | identical-proven |
+| C2 key validity before store/at load → 400 key_rejected (§2) | ed25519.go, server/native.go | rust/src/server/native.rs:public_key_arg | ts/src/server/native.ts:publicKeyArg | key-vectors; enroll-key-* classes | enroll, rotate | identical-proven |
+| C3 result envelope; invalid_params; strict integer lexeme rule; ranges (§3) | server/native.go:intFrom (lexical) | rust/src/server/native.rs:json_int/int_arg (lexical, i128) | ts/src/server/native.ts:intArg (INTEGER_TEXT lexical) | admin-vectors invite-create-ttl-*, admin-create-not-after-* | set-admin-* (3x3) | identical-proven for tool arguments; see divergence D1 for the state-file loaders |
+| C4 unknown args inert; wrong type fails closed; dup args last-wins (§3) | server/native.go:argMap | rust/src/server/native.rs:Args | ts/src/server/native.ts:parseArgs | admin-vectors admin-create-stale-members-inert | — | identical-proven |
+| C5 jack.whoami (§3.1) | server/native.go:whoami | rust/src/server/native.rs:whoami | ts/src/server/native.ts:Native.whoami | request-vectors whoami-* | whoami, admin-identity (3x3) | identical-proven |
+| C6 jack.key.rotate proof + order; old key removed; admin preserved (§3.1) | server/native.go:rotate; signing.go:rotateProofString | rust/src/server/native.rs:rotate; rust/src/signing.rs:rotate_proof_string | ts/src/server/native.ts:Native.rotate; ts/src/signing.ts:rotateProofString | admin-vectors rotate-* (13) | rotate (3x3) | identical-proven |
+| C7 enrollment 8-step order; invite rules; name_taken doesn't consume; atomic (§3.2) | server/native.go:enroll | rust/src/server/native.rs:enroll | ts/src/server/native.ts:Native.enroll | admin-vectors enroll-* (29) | enroll, enroll-used-invite (3x3) | identical-proven. The key_exists-before-arguments order for an already-registered kid is identical in all three but pinned by no fixture with invalid args |
+| C8 admin tools; set_admin REQUIRED; invite TTL bounds; code shown once; invite_id=SHA-256(code) (§3.3) | server/native.go | rust/src/server/native.rs | ts/src/server/native.ts | admin-vectors invite-*, admin-set-admin-* | admin-create (3x3) | identical-proven. Rust fail-closes TTL overflow with checked_add where Go wraps — unreachable within the 1..31536000 bound |
+| C9 admin check order; last_admin vs post-change state (§4) | server/native.go:currentAdmin | rust/src/server/native.rs:active_admins | ts/src/server/native.ts:activeAdmins | admin-vectors admin-last-admin-counts-active-only | last-admin (3x3) | identical-proven |
+| C10 bootstrap local operation, no default credential (§5) | server/native.go:BootstrapAdmin; CLI | rust/src/server/native.rs:bootstrap_admin | ts/src/server/native.ts:bootstrapAdmin | — | none (interop harness explicitly does not use bootstrap mode) | implemented-per-sdk-tests-only |
+| C11 error-code table (§7) | errors.go | rust/src/error.rs:codes | ts/src/errors.ts:Code | request/admin vectors (all codes) | all rejection scenarios | identical-proven. Adapter-only extra codes (405 `method_not_allowed`, 413 `invalid_request`, 502 `response_too_large`) are spec-silent but identical across SDKs |
+| C12 audit events (§8) | server/verify.go + server/audit.go | rust/src/server/verify.rs + audit.rs | ts/src/server/verify.ts + audit.ts | request-vectors/admin-vectors `audit` expectations | none | identical-proven for event fields via vector assertions in all three conformance runners; sink destinations are per-SDK |
+| C13 atomicity + concurrent last-admin serialization (§9) | server/state.go/statefile.go (mutex, write-then-swap) | rust/src/server/state.rs:MemoryState::update | ts/src/server/state.ts (clone-edit-swap), state-file.ts | — | none | implemented-per-sdk-tests-only (race tests exist in Go and Rust; TS relies on the JS event loop) |
+| C14 state file load + legacy rejection, never rewritten (§10) | server/statefile.go | rust/src/server/state_file.rs:FileState::open | ts/src/server/state-file.ts | state-file-vectors (18); load-vectors | legacy-stored-kind/scopes (3x3) | identical-proven; see divergence D1 |
+
+### 3.4 spec/candidate/durable-nonces.md
+
+| Rule (§) | Go | Rust | TypeScript | Shared vector(s) | Interop | Status |
+|---|---|---|---|---|---|---|
+| D1 intent_id binding (§1) | server/admission.go:NonceIntentID; durable/record.go | — | — | none (nonce-vectors unconsumed) | none | Go implemented (bbolt backend, wired via server/admission.go DurableNonceStore seam + CLI); Rust/TS missing-in-sdk — permitted: candidate profile, spec §6 selects no Rust/TS dependency |
+| D2 admission sequence (§2) | durable/admit.go:Reserve | — | — | none | none | Go implemented-per-sdk-tests-only (Linux-gated) |
+| D3 error precedence (replayed before capacity; 503 family; stale final sample keeps reservation) (§2) | durable/transaction.go, admit.go | — | — | none | none | Go implemented-per-sdk-tests-only |
+| D4 store loader + metadata schema (§3) | durable/metadata.go, store.go, record.go, layout.go | — | — | none | none | Go implemented-per-sdk-tests-only. Known Go-internal tension: the 16 MiB budget is enforced by a post-commit size check that fences the store |
+| D5 caps 4096/64/16MiB/128-purge (§6) | durable (admit.go, transaction.go) | — | — | none | none | Go implemented-per-sdk-tests-only; the 64/s, 32-concurrent, 64-queued caps are implemented nowhere |
+| D6 commit outcomes + unknown tombstones (§4) | durable/transaction.go, recovery_reconcile.go | — | — | none | none | Go implemented-per-sdk-tests-only (Linux-gated crash/recovery tests) |
+| D7 client never trusts unsigned 503 / no auto-retry (§5) | client/transport.go | rust/src/client/transport.rs | ts/src/client/transport.ts | request-vectors (unsigned 401 family) | harness negative control | implemented-per-sdk-tests-only (same behavior in all three, no dedicated shared run) |
+| candidate/nonce-vectors.json | not loaded by any Go test | not loaded | not loaded | consumed only by spec/tools/candidate/semantic-verify.mjs (Node) | — | gap G1 |
+
+### 3.5 spec/candidate/server-key-rotation.md
+
+| Rule (§) | Go | Rust | TypeScript | Shared vector(s) | Interop | Status |
+|---|---|---|---|---|---|---|
+| R1 record codec: B_i ten lines, R_i twelve lines, proofs, domain min1 (§2) | rotation/record.go:Parse, rotation/sign.go:CreateRecord | rust/src/rotation/record.rs, sign.rs | ts/src/rotation-record.ts, rotation-sign.ts | rotation-vectors (2 valid chains + 19 negatives, exact bytes) | rotation matrix c1 | identical-proven |
+| R2 schedule A=P+172800, ordinal tie-break, empty intervals (§1) | rotation/chain.go:SelectedOrdinal/AssignmentValid | rust/src/rotation/chain.rs | ts/src/rotation-chain.ts | rotation-vectors overlapping/tie chains | announce, s3, s4, s5 (3x3) | identical-proven |
+| R3 server tool jack.server.key: strict args, cursor rules, page ≤16, error map (§3) | server/rotation/native.go | rust/src/server/server_key.rs | ts/src/server/server-key-tool.ts | rotation-vectors; rust/tests/rotation-property-corpus.json (args: 50 cases) consumed by ALL THREE (Go rotation/result_corpus_test.go, Rust, TS rotation-property-corpus.test.ts) | n1-n3 (3x3) | identical-proven |
+| R4 client strict envelope: id lexeme rule, text↔structuredContent deep compare, 256 KiB cap (§3) | rotation/result.go:DecodeResult | rust/src/rotation/result.rs:decode | ts/src/rotation-result.ts:decodeRotationResult | rotation-property-corpus.json (45 result cases) consumed by all three | rotation matrix s2, n5 | identical-proven; see divergence D3 (f64 canonicalization) |
+| R5 client precedence + rotation_* error order (§3-4) | client/rotation/refresh.go | rust/src/rotation/controller.rs | ts/src/rotation-controller.ts | rotation-state-vectors.json — consumed by NO SDK (see G2) | n5, n5b, c2 | implemented-per-sdk-tests-only; `rotation_bridge_expired` is produced in all three but asserted by no test anywhere |
+| R6 ClockGuard: H/revision/unsafe latch, advanceAndCheck, strict cutoff (§4) | durable/trust_operations.go (client/rotation uses it) | rust/src/rotation/store.rs (+controller) | ts/src/rotation-store.ts, rotation-controller.ts | rotation-state-vectors clock events — unconsumed | rotation matrix injects monotone clock files (no rollback/latch coverage) | implemented-per-sdk-tests-only; all durable tests are Linux-gated in Rust and TS |
+| R7 trust store schema/loader, CAS-once, fencing (§5) | rotation/trust.go, trust_json.go; durable trust store | rust/src/rotation/{store,store_format,trust*}.rs | ts/src/rotation-store*.ts, rotation-trust*.ts | rotation-state-vectors client_cases — unconsumed | none | implemented-per-sdk-tests-only |
+| R8 server provider: publication, P sampled once, dirty epoch, signer fail-closed (§6) | server/rotation/provider.go, publication.go | rust/src/rotation/server_provider.rs, server_store.rs | ts/src/rotation-server-provider.ts, rotation-server-store.ts | rotation-state-vectors event_cases — unconsumed | announce, s4, c2 (3x3) | identical-proven for announce/emission basics via the rotation matrix; durability (crash, restart, exclusive owner) implemented-per-sdk-tests-only (Linux-gated) |
+| R9 final emission gate: fresh sample, never re-sign/switch kid (§1,§3) | server/rotation/provider.go:Final | rust/src/rotation/server_provider.rs | ts/src/rotation-server-provider.ts | emission event vectors — unconsumed | s4, s5 (3x3) | partially identical-proven (cutoff accept/refuse); "never re-sign" unproven |
+| R10 client refresh flow (§4-5) | client/rotation/http.go:Refresh | rust/src/rotation/controller.rs:accept_refresh | ts/src/rotation-controller.ts | rotation-state-vectors — unconsumed | s2, c1, c2, n5b (3x3) | identical-proven for single-page refresh; multi-page pagination unproven (interop is single-page by design) |
+
+### 3.6 Cross-cutting
+
+| Rule | Go | Rust | TypeScript | Shared vector(s) | Interop | Status |
+|---|---|---|---|---|---|---|
+| X1 client URL policy | client/urlpolicy.go:checkDestination | rust/src/client/url.rs + policy table test | ts/src/client/urlpolicy.ts | client-url-policy.json (207 rows) — FULL in all three | identity-dot-target | identical-proven |
+| X2 user-key transfer + envelopes | userkey/transfer.go (fixture literals embedded in transfer_test.go, cross-checked against keys.json seeds — not read from the file at runtime) | rust/tests/user_key_transfer.rs (reads file) | ts/test (reads file) | user-key-transfer.json (66 cases); transfer matrix 3x3 (63 handoffs, 594 visits, 2250 checks, 17 refusals) | credential-transfer job (3x3) | identical-proven; drift risk note: Go does not re-read the fixture file at test runtime |
+| X3 client profile loading | client/profile.go (strict, no private key field) | rust/src/client (profile load) | ts/src/client | — | none | implemented-per-sdk-tests-only |
+| X4 registry/state-file loaders as SDK API | server.OpenFileState + spec.LoadRegistry (test pkg) | rust/src/server/state_file.rs | ts/src/server/state-file.ts | state-file-vectors, load-vectors | legacy-stored-* | identical-proven for the state file; registry document loader exists as API only in Go's spec package |
+
+## 4. Divergences found (observable, with evidence)
+
+| # | Where | Difference | Evidence | Severity |
+|---|---|---|---|---|
+| D1 | State-file/registry integer fields | TS accepts non-integer lexemes (`1.0`, `1e3`) because `JSON.parse` yields integral numbers and it checks `Number.isInteger`; Go and Rust decode lexically and reject them. Spec 03§3 defines the lexical rule for tool arguments only; §10/02§1 say just "integer" — spec-ambiguous, but a real TS↔Go/Rust difference on identical documents. No vector covers it (scan of load/state-file vectors found none). | ts/src/server/state-file.ts:88,100,260 vs server/statefile.go (typed decode) vs rust/src/server/state_file.rs (serde ints) | divergent (spec-ambiguous) |
+| D2 | Client streaming refusal | Rust refuses `text/event-stream` even with malformed Content-Type parameters; Go's `mime.ParseMediaType` error path does not refuse; TS refuses on header presence before reading the body. The server-side signed 501 outcome is identical; client-side refusal differs on inputs like `text/event-stream ; x`. | rust/src/client/transport.rs:357-369 (test :703-737) vs client/transport.go vs ts/src/server/fetch.ts:360-367 | divergent (edge input) |
+| D3 | Rotation numeric response-id canonicalization | Go (rotation/result.go:99-111) and Rust (rust/src/rotation/result.rs) canonicalize numeric ids through float64 (`ParseFloat`/`FormatFloat`), so ids ≥ 2^53 round; TS compares lexemes without float coercion (ts/src/rotation-result.ts:85,101). A request id like 9007199254740993 would be accepted/rejected differently. INFERRED for real traffic (no vector covers ids ≥ 2^53; candidate spec says "shortest decimal spelling", which f64 rounding violates). | cited files | divergent (INFERRED, unexercised) |
+| D4 | Stale cross-SDK comments | Rust comments claim Go propagates HTTP 401 on client verify errors and surfaces unsigned-body codes; Go actually zeroes the status and never parses unsigned bodies (client/auth.go:91-95; transport.go). All three implementations agree; only the Rust comments are wrong — a maintenance hazard for future "parity" edits. | rust/src/signing.rs:95-102, transport.rs:337 | documented-only |
+
+## 5. How each shared fixture file is consumed
+
+| Fixture | Go | Rust | TypeScript | Notes |
+|---|---|---|---|---|
+| request-vectors.json (93) | spec fixture runner + client sign tests — FULL (status, code, identity, structured, audit, nonce_recorded, after-state; byte-exact header reproduction) | conformance runner — FULL | conformance test — FULL | normative per 01§7 |
+| response-vectors.json (15) | client/verify_test.go — FULL (code + status 0) | conformance runner — FULL | conformance test — FULL | normative per 01§7 |
+| admin-vectors.json (94) | server fixture runner — FULL (incl. `after` durable state) | conformance runner — FULL | conformance test — FULL | client/tools_test.go re-plays enroll/rotate request bytes but ignores the fixture's status/error fields (partial, supplementary) |
+| key-vectors.json (24) | root ed25519_test.go — FULL | conformance runner — FULL | conformance test — FULL | tests/README requires every runner to confirm all keys |
+| load-vectors.json (19) | spec/statefile_loader_test.go — FULL (ErrStateCorrupt; strict bool) | tests/state_file.rs — FULL (adapts by dropping `aud`) | test — FULL (same adaptation) | registry-document (`aud`) shape itself exercised only in Go |
+| state-file-vectors.json (18) | spec/statefile_loader_test.go — FULL (per-case after-state, byte-stability, legacy no-rewrite) | tests/state_file.rs — FULL (disk variant adds byte-level checks) | test — FULL | integer-lexeme gap: see D1 |
+| keys.json (15) | client/signer_test.go — FULL | conformance — FULL | conformance — FULL | client/fuzz_test.go also pins hardcoded literals (drift-detection weakness) |
+| registry.json (10) | spec/fixtures_test.go — decode + kid formula only (WEAK standalone; fully consumed indirectly via request-vectors) | consumed indirectly via request vectors | same | fine per tests/README (registry is request-vector input) |
+| client-url-policy.json (207) | client/urlpolicy_test.go — FULL (allow/refuse + zero side-effect on refusal) | tests/client_url_policy.rs — FULL (7 entry points × every row) | test — FULL | hand-maintained table; not covered by generator `--check` |
+| user-key-transfer.json (66) | userkey/transfer_test.go — literals EMBEDDED, cross-checked against keys.json seeds; FULL assertion matrix, but fixture-file drift is not mechanically detected from Go | tests/user_key_transfer.rs — FULL (reads file) | test — FULL (reads file) | 14 positives, 51 negatives, 1 context |
+| candidate/rotation-vectors.json | rotation/record_test.go — FULL (exact bytes, proofs regenerated from seeds, all 19 negatives) + fuzz seeds | 8 test files — FULL | rotation.test.ts — FULL | the only candidate file consumed by all three |
+| candidate/rotation-state-vectors.json | NOT LOADED by any Go test | NOT LOADED | NOT LOADED | only spec/tools/candidate/semantic-verify.mjs reads it |
+| candidate/nonce-vectors.json | NOT LOADED (durable tests are hand-written scenarios) | NOT LOADED (durable store not implemented) | NOT LOADED | only semantic-verify.mjs reads it |
+
+## 6. Interop coverage map
+
+| Job (ci.yml) | Pairs | Content | Rules exercised |
+|---|---|---|---|
+| interop (3x3) | all 9 client×server language pairs, 33 scenarios from interop/scenarios.json, plus sign phase (8 exact-byte oracles, every language) and verify phase (every signer×server + tamper control) | A7-A17, B5-B14, C1-C9, C11 | 3x3 genuine: pair loop in interop/run.mjs over interop/targets.json (go, rust, typescript) |
+| credential-transfer (3x3) | 9 issuer×client handoffs ×7 credentials; 66 fixture cases ×9 pairs; 9 client→server public-import pairs (2250 verdict checks); 17 expected-identity refusals | X2 (envelopes, credentials, trust tuple, canonical bytes, error classes) | real cross-language byte equality of issued credentials is asserted |
+| rotation-interop (3x3, Linux-only by SDK design) | 14 checks: announce, s1-s5, n1-n5b, c1, c2 | R1-R3, R8-R10 basics (announce, overlap refresh, cutoff, cursor errors, tamper refusal, no-fallback) | clock injected via clock files; documented limits: single-page refresh, no quarantine/conflict, no capacity/compaction, no concurrent publishers/restart, no bridge-expired case, no durable-nonce profile |
+| mcp-compat-e2e | official MCP SDK matrix: go-sdk 1.8.0, @modelcontextprotocol 2.4.0 (+node 2.1.2), rmcp 3.9.0, through the jack CLI gateway/bridge; per-cell 4 signed hops, tamper cells, G4 GET probes | end-to-end stdio↔gateway↔server path, A11/A15/A16 observables | KNOWN LIMITS: TS-server cells are expected SKIP (initialize→SSE→gateway 501), so the matrix is effectively 2 server languages proven ×3 clients; tamper cells pin the server to Go only; the job has no `needs:` gate |
+| fixtures / spec-fixtures.yml | Node-only | regenerates/validates vectors; candidate generation + semantic verify + `node --test spec/tests/candidate` | vector supply chain; SDK consumption happens inside the go/rust/ts test jobs |
+
+Rules exercised by NO interop scenario: 03§5 bootstrap (harness never uses `--bootstrap-ttl`), 03§8 audit sinks, 03§9 concurrency/atomicity, 02§1 non-legacy load rejections (duplicate kid/name, kid≠hash, invalid name, bad time fields — covered only by load/state-file vectors), rotation pagination/conflict/capacity/restart/bridge-expired, the durable-nonce profile.
+
+## 7. Gaps, ranked
+
+For each gap: missing evidence → smallest closing step → code change needed.
+
+| # | Gap | Missing evidence | Smallest fix | Change needed |
+|---|---|---|---|---|
+| G1 | candidate/nonce-vectors.json (24 admission events) is consumed by no SDK | Whether any implementation matches the hand-stated durable-admission expectations | Go: one table test loading the file against the durable store model (Linux-gated, next to durable/*_linux_test.go). Rust/TS: ship a portable decision model or document non-implementation explicitly (candidate is optional) | Go: new test only; Rust/TS: none if documented |
+| G2 | candidate/rotation-state-vectors.json (14 refresh + 8 clock/server events) consumed by no SDK, and `rotation_bridge_expired` is asserted nowhere | Refresh/clock/emission semantics across languages | Load the file in each SDK's rotation controller/refresh tests (Go: rotation or client/rotation tests; Rust: rust/tests; TS: ts/test) | tests only |
+| G3 | D1 divergence: TS state-file integers accept `1.0`/`1e3` | A vector proving the intended lexeme rule | Add lexical integer check in ts/src/server/state-file.ts mirroring ts/src/server/native.ts, plus generator cases in spec/tools/gen-fixtures.mjs (owner decision — regenerates fixtures) | TS code + generator + fixtures |
+| G4 | D3 divergence: f64 id canonicalization in Go and Rust | A corpus/vector case with id ≥ 2^53 | Pure-lexeme canonicalization in rotation/result.go and rust/src/rotation/result.rs + one corpus case | Go + Rust code |
+| G5 | D2 divergence: client streaming-refusal asymmetry (Rust stricter than Go) | A pinned expectation for `text/event-stream ; x` | One shared expectation + align Go client media-type handling or document the difference | possibly client/transport.go |
+| G6 | mcp-e2e blind spots: TS-server cells SKIP silently (exit 0 with SKIPs), tamper cells server-pinned to Go, job lacks `needs:` | True 3-server-language e2e proof | Make SKIP visible/failing-by-default, add tamper cells per server language, add `needs: [go, rust, ts, fixtures]` | tools/mcp-e2e/run.mjs + ci.yml |
+| G7 | Registry-document (aud) loader missing in Rust/TS (B1) | The 02§1 document shape proven outside Go | Either an SDK registry loader or generator-side aud-bearing vectors consumed by all three | Rust/TS code or fixtures |
+| G8 | Bootstrap (03§5) has no cross-language evidence | Local-first-admin behavior parity | One interop scenario using the existing `--bootstrap-ttl` server flag per language | interop harness only |
+| G9 | Rotation durability (ClockGuard rollback/latch, trust fencing, provider crash/restart) is per-SDK, Linux-gated only | Cross-language equality of failure semantics | Extend rotation.mjs with rollback/fence scenarios using the existing clock-file mechanism (Linux runner) | interop/rotation.mjs only |
+| G10 | WWW-Authenticate (01§4 SHOULD) asserted per-SDK only, not in vectors | Shared proof of the header | Add header expectations to request-vectors (generator change) | generator + fixtures |
+| G11 | Interop/transfer/rotation/mcp-e2e jobs run on a single ubuntu runner only | No second-OS cross-language run (go/rust/ts unit jobs do run ubuntu+windows) | One windows leg for interop + transfer (rotation stays Linux-only by design) | ci.yml |
+| G12 | Only request/response vectors are declared normative (01§7); the other six generated files are bound only descriptively via spec/tests/README.md, and 02/03 never reference their fixtures | Normative anchoring | Add conformance clauses to 02/03 (documentation-only) | spec docs |
+
+Per-SDK-only areas accepted as inherent (no shared run possible or needed): filesystem/backing-store specifics (Go bbolt, Linux-gated stores), concurrency scheduling, fuzz corpora, MCP-official-SDK versions, adapter-only codes (405/413/502).
