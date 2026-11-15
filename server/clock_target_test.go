@@ -109,7 +109,7 @@ func TestClockMovingForwardStillWorks(t *testing.T) {
 }
 
 func TestMiddlewareRefusesNonOriginFormTargets(t *testing.T) {
-	for _, target := range []string{"http://host.example/mcp", "*", "host.example:443", "/mcp#x"} {
+	for _, target := range []string{"http://host.example/mcp", "*", "host.example:443", "/a b", "/mcp?q=\xc3\xa9"} {
 		h := newHarness(t, 0, okHandler)
 		req, _ := signedRequest(t, testPrivateKey(t, "alice"), "POST", "/mcp", toolCallBody("svc.status"))
 		req.RequestURI = target
@@ -125,6 +125,17 @@ func TestMiddlewareRefusesNonOriginFormTargets(t *testing.T) {
 		if h.next.Load() != 0 || h.native.calls.Load() != 0 {
 			t.Fatalf("%q: nothing downstream may be reached", target)
 		}
+	}
+}
+
+func TestMiddlewareDropsTheFragmentBeforeVerifying(t *testing.T) {
+	h := newHarness(t, 0, okHandler)
+	req, _ := signedRequest(t, testPrivateKey(t, "alice"), "POST", "/mcp", toolCallBody("svc.status"))
+	req.RequestURI = "/mcp#x"
+	rec := httptest.NewRecorder()
+	h.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("fragment request: got %d %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -144,7 +155,7 @@ func TestOriginFormTarget(t *testing.T) {
 	cases := map[string]bool{
 		"/": true, "/mcp?q=%C3%A9": true, "": false, "*": false,
 		"http://h/p": false, "h:1": false, "/p#f": true,
-		"/mcp?q=é": false, "/a b": false, "/ab": false, "/a	b": false,
+		"/mcp?q=é": false, "/a b": false, "/a\x7fb": false, "/a\tb": false,
 	}
 	for raw, want := range cases {
 		if got := originFormTarget(raw); got != want {
