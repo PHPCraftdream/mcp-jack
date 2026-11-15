@@ -12,7 +12,7 @@ import { test } from "node:test";
 import { createHash, randomBytes } from "node:crypto";
 import { bodyHash, decodeBase64URLFixed, encodeBase64URL } from "../src/encoding.js";
 import { DurableNonceStore } from "../src/server/durable-store.js";
-import { pairKeyOf } from "../src/server/durable-format.js";
+import { intentIdOf, pairKeyOf } from "../src/server/durable-format.js";
 import type { DurableStoreOptions } from "../src/server/durable-store.js";
 import type { DurableDocument, DurableMetadata, DurableReceipt } from "../src/server/durable-format.js";
 import { JackError } from "../src/errors.js";
@@ -69,13 +69,20 @@ function meta(overrides: Partial<DurableMetadata> = {}): DurableMetadata {
 
 function rowFor(name: string, index: number): DurableReceipt {
   const identity = synthetic(name);
+  const signatureRaw = randomBytes(64);
+  const signature = encodeBase64URL(signatureRaw);
+  const requestHash = bodyHash(Buffer.from(`seed-signing/${index}`, "utf8"));
+  const operationId = createHash("sha256").update(`seed-op/${index}`).digest().subarray(0, 16);
   return {
     version: 1, deploymentId: DEPLOYMENT, storeGeneration: 1, ownerGeneration: 1,
-    intentId: encodeBase64URL(createHash("sha256").update(`seed-intent/${index}`).digest()),
-    operationId: encodeBase64URL(createHash("sha256").update(`seed-op/${index}`).digest().subarray(0, 16)),
+    // Intent identity per spec section 1: the strict loader recomputes it.
+    intentId: intentIdOf(DEPLOYMENT, decodeBase64URLFixed(identity.kid, 32),
+      decodeBase64URLFixed(identity.nonce, 16), signatureRaw, decodeBase64URLFixed(requestHash, 32),
+      operationId),
+    operationId: encodeBase64URL(operationId),
     kid: identity.kid, nonce: identity.nonce,
-    signature: encodeBase64URL(randomBytes(64)),
-    requestHash: bodyHash(Buffer.from(`seed-signing/${index}`, "utf8")),
+    signature,
+    requestHash,
     timestamp: 100, retainUntil: 130, highWater: 100,
   };
 }
@@ -170,7 +177,8 @@ test("durable store: delayed crypto and delayed final refuse and clean up the in
     DurableNonceStore.initializeUnused(path2, config2);
     const store2 = DurableNonceStore.open(path2, config2);
     assert.throws(() => store2.reserve(admission(id.kid, id.nonce, 100)), denies(401, "timestamp_out_of_window"));
-    assert.equal(store2.state().meta.highWater, 0, "no expiry decision, no H advance");
+    assert.equal(store2.state().meta.highWater, 100,
+      "H stays at the startup sample; the refusal advanced no expiry decision (never 131)");
     store2.close();
   });
 
@@ -254,7 +262,9 @@ test("durable store: reconcile refuses clean stores and wrong hashes; inspect re
     DurableNonceStore.initializeUnused(path, config);
     const store = DurableNonceStore.open(path, config);
     const id = synthetic("reconcile-refusals");
-    store.reserve(admission(id.kid, id.nonce, 100));
+    // Release the reservation so close() sees no outstanding serving lease.
+    const reservation = store.reserve(admission(id.kid, id.nonce, 100));
+    reservation.release();
     // Inspection requires the exclusive owner to be gone.
     assert.throws(() => DurableNonceStore.inspectRecovery(path, config), unavailable);
     store.close();
@@ -393,10 +403,11 @@ test("durable store: snapshot change, window mismatch and out-of-domain timestam
 test("durable store: invalid clock samples fail closed and fence durably", { skip: !linux }, (context) => {
   const { dir, path } = directory();
   context.after(() => rmSync(dir, { recursive: true, force: true }));
-  const config = options(scriptClock(100, Number.NaN, 100, 100));
+  const config = options(scriptClock(100, 100, Number.NaN));
   DurableNonceStore.initializeUnused(path, config);
   const store = DurableNonceStore.open(path, config);
   const id = synthetic("bad-clock");
+  // init=100, startup=100: open succeeds; the reserve entry sample is invalid.
   assert.throws(() => store.reserve(admission(id.kid, id.nonce, 100)), denies(503, "clock_unsafe"));
   assert.equal(store.isFenced(), true);
   simulateCrash(path);
@@ -411,6 +422,11 @@ test("durable store: strict loading rejects tampered and noncanonical documents"
   const row = rowFor("strict", 0);
   DurableNonceStore.seedDocumentForTest(path, doc(meta({ live: 1 }), [row], [], []));
   const config = options(scriptClock(100));
+  // The un-tampered seed must open cleanly: refusals below come from tampering.
+  {
+    const probe = DurableNonceStore.open(path, config);
+    probe.close();
+  }
   const good = Buffer.from(readFileSync(path));
 
   // One flipped payload byte breaks the seal: load refuses, no repair.

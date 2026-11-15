@@ -307,7 +307,8 @@ function vectorReceipt(row: VectorRow, meta: DurableMetadata): DurableReceipt {
   const identity = syntheticIdentity(row.key);
   const signatureRaw = decodeBase64URLFixed(identity.signature, 64);
   const requestHash = bodyHash(Buffer.from(identity.signingBytes, "utf8"));
-  const operationId = row.operationId ?? syntheticOperation(row.intentId);
+  // The mapping contract digests operation ids: feed the raw name in.
+  const operationId = syntheticOperation(row.operationId ?? row.intentId);
   // The seeded loader forces ts - W <= highWater <= meta.highWater.
   const highWater = Math.max(Math.min(row.ts, meta.highWater), row.ts - WINDOW);
   return {

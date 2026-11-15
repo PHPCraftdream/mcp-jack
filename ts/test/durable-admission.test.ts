@@ -114,11 +114,15 @@ interface Rig {
   readonly caller: { priv: KeyObject; pub: Uint8Array; kid: string };
 }
 
+/** Reusable caller key passed into a second rig (same kid after restart). */
+interface ExistingKey { priv: KeyObject; pub: Uint8Array; kid: string }
+
 /** Opens a fresh durable store and wires it into a verifier with the seam. */
-function rig(clock: () => number, path: string, opts?: { window?: number }): Rig {
+function rig(clock: () => number, path: string, opts?: { window?: number },
+  existing?: ExistingKey): Rig {
   const store = DurableNonceStore.open(path, { deploymentId: DEPLOYMENT, window: WINDOW, now: clock });
   const admission = new DurableNonceAdmission({ store, now: clock });
-  const caller = freshKey();
+  const caller = existing ?? freshKey();
   const nonces = new NonceStore();
   const verifier = new Verifier({
     aud: AUD,
@@ -172,7 +176,8 @@ test("durable admission: accepted request, volatile store untouched, replay afte
     // Simulated crash/restart: close the store, reopen it, wire a new rig.
     // The finish ran with the response, so no serving lease is outstanding.
     first.store.close();
-    const second = rig(clock, path);
+    // Reuse the first caller's key: the replay must be the same kid/nonce.
+    const second = rig(clock, path, undefined, first.caller);
     const handle2 = jackFetchHandler({ verifier: second.verifier, serverKey: serverKey.priv }, async () => {
       calls++;
       return new Response(NEXT_JSON, { headers: { "content-type": "application/json" } });
@@ -320,6 +325,9 @@ test("durable admission: enrollment reserves durably before invite consumption a
     const store = DurableNonceStore.open(path, { deploymentId: DEPLOYMENT, window: WINDOW, now: clock });
     const admission = new DurableNonceAdmission({ store, now: clock });
     const state = new MemoryState();
+    const root = freshKey();
+    // Admin root key registered first: enrollment needs a live admin creator.
+    state.update((edit) => edit.putKey({ kid: root.kid, publicKey: encodeBase64URL(root.pub), name: "root", admin: true }));
     const raw = new Uint8Array(32).fill(7);
     const code = encodeBase64URL(raw);
     state.update((edit) => edit.putInvite({ inviteId: inviteIdOf(raw), createdBy: "root", createdAt: 99, expiresAt: 200 }));
@@ -333,8 +341,10 @@ test("durable admission: enrollment reserves durably before invite consumption a
     const sig = encodeBase64URL(new Uint8Array(nodeSign(null, Buffer.from(msg), k.priv)));
     const res = verifier.verify({ method: "POST", target: TARGET,
       authValues: [formatRequestAuth({ kid: k.kid, ts: 100, nonce, sig })], body: enrollBody });
-    assert.equal(res.accepted, true, "enrollment accepted");
-    assert.equal(res.native, true, "answered by the native tool");
+    assert.equal(res.accepted, true,
+      `enrollment accepted (status=${res.httpStatus} code=${res.code} message=${res.message})`);
+    assert.equal(res.native, true,
+      `answered by the native tool (status=${res.httpStatus} code=${res.code} message=${res.message})`);
     // The durable reservation was committed BEFORE the invite was consumed.
     assert.equal(store.state().counts.live, 1, "nonce reserved durably");
     assert.equal(state.lookupInvite(inviteIdOf(raw)), undefined, "invite consumed after the reservation");
@@ -364,5 +374,7 @@ test("durable admission: absent option keeps the volatile default path identical
   assert.equal(replay.accepted, false, "volatile replay refused");
   assert.equal(replay.httpStatus, 401, "volatile replay status");
   assert.equal(replay.code, "replayed_nonce", "volatile replay code");
-  assert.equal(replay.nonceRecorded, true, "volatile replay is nonce-recorded");
+  // A replay rejection has no nonce-recorded receipt and stays unsigned.
+  assert.equal(replay.nonceRecorded, false, "volatile replay has no nonce-recorded receipt");
+  assert.equal(replay.requestSig, "", "volatile replay stays unsigned");
 });
