@@ -19,10 +19,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 // Лимиты TS/Go reference (Go hardcoded 128/1024): аномальное число pending/retained handles отказывает.
 const MAX_PENDING: usize = 128;
-const MAX_RETIRED: usize = 1024;
+pub(crate) const MAX_RETIRED: usize = 1024;
 // Every key but the newest eventually retires and serving (select_pinned) refuses more than
 // MAX_RETIRED retired keys, so an announce must leave at most MAX_RETIRED + 1 keys in the ring.
-const MAX_ANNOUNCE_RING_KEYS: usize = MAX_RETIRED + 1;
+pub(crate) const MAX_ANNOUNCE_RING_KEYS: usize = MAX_RETIRED + 1;
 
 fn unavailable() -> RotationError {
     invalid("rotation_state_unavailable")

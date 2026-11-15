@@ -1,3 +1,4 @@
+use super::server_provider::{MAX_ANNOUNCE_RING_KEYS, MAX_RETIRED};
 use super::store_tests::{options, Sandbox};
 use super::*;
 use crate::client::{ClientError, InMemorySigner, Signer};
