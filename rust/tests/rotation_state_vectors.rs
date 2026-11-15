@@ -22,7 +22,7 @@ use serde::Deserialize;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::rc::Rc;
@@ -595,7 +595,8 @@ fn guard_fixture_shape_and_error_table() {
     let mut busy_cases = 0;
     for case in &vectors.client_cases {
         assert_eq!(
-            case.input.response.now, case.input.response.ts,
+            Some(case.input.response.now),
+            u64::try_from(case.input.response.ts).ok(),
             "{}: response now/ts agree",
             case.id
         );
@@ -1104,14 +1105,15 @@ fn open_guard_store(
 ) -> RotationTrustStore<BoxClock> {
     assert_eq!(guard.revision, 4, "guard revision the fixture ships");
     assert_eq!(guard.window, 30);
-    let snapshot = find_client(&load_vectors(), "first-bridge-before-cutoff")
+    let vectors = load_vectors();
+    let snapshot = &find_client(&vectors, "first-bridge-before-cutoff")
         .input
         .snapshot;
     assert_eq!(
         guard.binding, snapshot.endpoint,
         "guard binding is the endpoint of the seeded snapshot"
     );
-    let options = trust_options(&snapshot);
+    let options = trust_options(snapshot);
     assert!(guard.high_water >= 3);
     clock.set(guard.high_water - 2);
     initialize_trust(path, &options, guard.high_water - 3);
@@ -1427,7 +1429,7 @@ fn vector_server_final_eligible_single_signature() {
         panic!("emission input");
     };
     assert_eq!(clock_generation_before, clock_generation_now);
-    assert_eq!(*signing_time, emission_time);
+    assert_eq!(signing_time, emission_time);
     assert_eq!(records.len(), 1, "fixture ring holds R1 only");
     assert_eq!(
         selected_kid.as_str(),
@@ -1443,7 +1445,7 @@ fn vector_server_final_eligible_single_signature() {
     let auth = emission_authorized(&ring, *selected_ordinal as usize, *signing_time);
     let gate = auth.final_gate;
     assert!(gate().is_ok(), "eligible emission passes the final gate");
-    auth.release();
+    (auth.release)();
     eprintln!(
         "verdict {} = driven-with-deviation (gate Ok; signer selected exactly once; fixture kid \
          literals mapped by ring ordinal/public-key equivalence)",
@@ -1467,7 +1469,7 @@ fn vector_server_final_cutoff_no_resign() {
     else {
         panic!("emission input");
     };
-    assert_eq!(signer_ready, Some(true));
+    assert_eq!(*signer_ready, Some(true));
     assert_eq!(records.len(), 2, "fixture ring holds R1 and R2");
     assert_eq!(
         selected_kid.as_str(),
@@ -1485,7 +1487,7 @@ fn vector_server_final_cutoff_no_resign() {
         error, "rotation_state_unavailable",
         "strict cutoff, no fallback"
     );
-    auth.release();
+    (auth.release)();
     eprintln!(
         "verdict {} = driven-with-deviation (emit:false via refused final gate at emission 177400 \
          vs cutoff 177400; resigns:0 structural - there is no re-sign API)",
@@ -1511,7 +1513,7 @@ fn vector_server_final_generation_fence_no_fallback() {
     };
     assert_eq!(
         clock_generation_before + 1,
-        clock_generation_now,
+        *clock_generation_now,
         "the model bumps clockGeneration between signing and emission"
     );
     assert_eq!(records.len(), 2);
@@ -1523,7 +1525,7 @@ fn vector_server_final_generation_fence_no_fallback() {
     let gate = auth.final_gate;
     let error = gate().err().expect("fence refuses").code;
     assert_eq!(error, "rotation_state_unavailable");
-    auth.release();
+    (auth.release)();
     eprintln!(
         "verdict {} = driven-with-deviation (emit:false via refused final gate after a clock \
          rollback; Rust has no clockGeneration so the rollback is the documented equivalent)",
