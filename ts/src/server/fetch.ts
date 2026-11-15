@@ -116,6 +116,52 @@ export function jackIdentity(req: Request): JackIdentity | undefined {
 }
 
 /**
+ * Spec 01 section 3.1: the signed target is an origin-form request target:
+ * it starts with '/' (so not absolute-, authority- or asterisk-form) and
+ * consists only of the bytes 0x21 to 0x7E.
+ */
+export function isOriginFormTarget(target: string): boolean {
+  return target.startsWith("/") && TARGET_BYTES.test(target);
+}
+
+/** The first '#' and everything after it is not part of the target (spec 01 section 3.1). */
+export function dropFragment(target: string): string {
+  const i = target.indexOf("#");
+  return i < 0 ? target : target.slice(0, i);
+}
+
+/** The bytes 0x21 to 0x7E: anything else must be percent-encoded by the client. */
+const TARGET_BYTES = /^[\x21-\x7e]+$/;
+
+/**
+ * Fetch's Headers joins repeated Jack-Auth lines with ", ". A valid single
+ * value has no whitespace after a comma (spec 01 section 3 grammar), so such a
+ * comma proves more than one line; the pieces are handed to the verifier,
+ * which answers malformed_auth exactly like for two raw lines.
+ */
+export function splitRepeatedAuthLines(combined: string): string[] {
+  return combined.split(/,[ \t]+/);
+}
+
+/**
+ * Candidate target from a WHATWG-parsed URL, or undefined when it cannot be
+ * proved to be the received target (not stable under re-parsing). The URL
+ * parser has already separated a fragment from pathname and search.
+ */
+function targetFromUrl(requestUrl: string): string | undefined {
+  let u: URL;
+  try {
+    u = new URL(requestUrl);
+  } catch {
+    return undefined;
+  }
+  const target = u.pathname + u.search;
+  if (!isOriginFormTarget(target)) return undefined;
+  const again = new URL(target, "http://localhost");
+  return again.pathname + again.search === target ? target : undefined;
+}
+
+/**
  * Wraps next, an unmodified MCP server, so that only authenticated and
  * authorized requests reach it and every verified answer is signed (port of
  * Go NewHandler/ServeHTTP). Protocol-native tools are answered here and never
@@ -503,28 +549,25 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     let target: string;
     const rawTarget = (req as JackRequest)[RAW_TARGET_SYMBOL];
     if (rawTarget !== undefined) {
+      if (!isOriginFormTarget(rawTarget)) return writeError(400, "invalid_request", "malformed request target");
       target = rawTarget;
     } else {
-      let u: URL;
-      try {
-        u = new URL(req.url);
-      } catch {
-        return writeError(400, "invalid_request", "malformed request target");
-      }
-      target = u.pathname + u.search;
+      // LIMIT: the WHATWG parser has already resolved dot segments and
+      // escaped spaces/non-ASCII before this adapter sees the URL, so those
+      // cannot be detected here; only the node adapter (raw target on the
+      // symbol) can refuse them. A fragment is dropped by URL parsing.
+      const fromUrl = targetFromUrl(req.url);
+      if (fromUrl === undefined) return writeError(400, "invalid_request", "malformed request target");
+      target = fromUrl;
     }
 
     // The exact Jack-Auth header values in order. Without raw headers a
-    // repeated Jack-Auth header cannot be detected (undici's Headers merges
-    // duplicates with ", "); the node adapter supplies the exact values via
-    // the symbol.
+    // repeated Jack-Auth header is recovered from the ", " that Headers
+    // inserts; the node adapter supplies the exact values via the symbol.
     const rawAuth = (req as JackRequest)[AUTH_VALUES_SYMBOL];
+    const combined = req.headers.get("jack-auth");
     const authValues =
-      rawAuth !== undefined
-        ? rawAuth
-        : req.headers.get("jack-auth") === null
-          ? []
-          : [req.headers.get("jack-auth") as string];
+      rawAuth !== undefined ? rawAuth : combined === null ? [] : splitRepeatedAuthLines(combined);
 
     const res = config.verifier.verify({ method, target, authValues, body });
     if (!res.accepted) {

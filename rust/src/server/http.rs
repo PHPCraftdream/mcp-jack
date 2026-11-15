@@ -340,10 +340,13 @@ where
         };
 
         // Never normalized: the signing string binds the target as received.
-        let target = match parts.uri.path_and_query() {
-            Some(pq) => pq.as_str().to_owned(),
-            // Asterisk/authority forms have no path_and_query.
-            None => parts.uri.path().to_owned(),
+        // Only origin-form targets are signable (spec 01 section 3.1).
+        let Some(target) = origin_form_target(&parts.uri) else {
+            return Ok(plain_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "request target must be origin-form",
+            ));
         };
         let method = parts.method.as_str().to_owned();
 
@@ -742,6 +745,25 @@ enum BodyReadError {
     Read,
 }
 
+/// The origin-form target exactly as received, or None for absolute-form,
+/// authority-form or asterisk-form. The http crate drops a fragment while
+/// parsing the request line, so it never reaches this check (spec 01 section 3.1).
+fn origin_form_target(uri: &http::Uri) -> Option<String> {
+    // Absolute-form has a scheme; authority-form has an authority and no
+    // path. A genuine origin-form target has neither.
+    if uri.scheme().is_some() || uri.authority().is_some() {
+        return None;
+    }
+    let target = uri.path_and_query()?.as_str();
+    is_origin_form_target(target).then(|| target.to_owned())
+}
+
+/// Origin-form starts with '/' and consists only of the bytes 0x21 to 0x7E
+/// (spec 01 section 3.1).
+fn is_origin_form_target(target: &str) -> bool {
+    target.starts_with('/') && target.bytes().all(|b| (0x21..=0x7e).contains(&b))
+}
+
 /// Unsigned JSON error for requests that never reached authentication
 /// (Go: writeError): Content-Type only, no WWW-Authenticate, no signature.
 fn plain_error(status: StatusCode, code: &str, message: &str) -> http::Response<Full<Bytes>> {
@@ -802,4 +824,37 @@ struct RpcResponse<'a> {
     /// None serializes as null, matching Go's nil json.RawMessage.
     id: Option<Box<RawValue>>,
     result: CallToolResult<'a>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn origin_form_decision_on_target_text() {
+        assert!(is_origin_form_target("/mcp"));
+        assert!(is_origin_form_target("/mcp?q=%C3%A9"));
+        for bad in [
+            "*",
+            "host:80",
+            "http://h/mcp",
+            "mcp",
+            "",
+            "/mcp?q=é",
+            "/a b",
+            "/ab",
+        ] {
+            assert!(!is_origin_form_target(bad), "target {bad:?}");
+        }
+    }
+
+    #[test]
+    fn non_origin_uris_have_no_target() {
+        for bad in ["http://h/mcp", "https://h", "h:80", "*"] {
+            let uri: http::Uri = bad.parse().expect("uri parses");
+            assert_eq!(origin_form_target(&uri), None, "uri {bad:?}");
+        }
+        let uri: http::Uri = "/mcp?q=%C3%A9".parse().expect("uri parses");
+        assert_eq!(origin_form_target(&uri).as_deref(), Some("/mcp?q=%C3%A9"));
+    }
 }

@@ -491,6 +491,8 @@ export class Verifier {
   private readonly serverKeys: NativeTools | undefined;
   private readonly window: number;
   private readonly now: () => number;
+  // Highest valid clock sample seen by this instance (see effectiveNow).
+  private highWater = 0;
 
   /** Throws when aud is "", contains control characters, or state/nonces/now are missing (Go NewVerifier parity). */
   constructor(cfg: VerifierConfig) {
@@ -518,6 +520,18 @@ export class Verifier {
     return this.now;
   }
 
+  /**
+   * Request time that never goes backwards within this verifier: max(sample,
+   * highest valid sample so far). A wall-clock step back therefore cannot
+   * purge a volatile nonce and then accept its replay; a request whose
+   * ts + window is below the high-water mark is out of window. Only valid
+   * samples reach here, so a broken clock cannot poison the mark.
+   */
+  private effectiveNow(sample: number): number {
+    if (sample > this.highWater) this.highWater = sample;
+    return this.highWater;
+  }
+
   /** Whether candidate jack.server.key routing is configured (Go cfg.ServerKeys != nil); the fetch adapter requires a rotation profile when it is. */
   get routesServerKey(): boolean {
     return this.serverKeys !== undefined;
@@ -536,6 +550,7 @@ export class Verifier {
     if (!Number.isFinite(this.window) || this.window <= 0) {
       return rejected(500, "internal_error", "internal error");
     }
+    const effective = this.effectiveNow(now);
 
     // Step 1: header grammar. JackError carries its own status/code; any
     // other error is a programming error reported as 500 internal_error.
@@ -577,7 +592,7 @@ export class Verifier {
     }
 
     // Step 3: timestamp window.
-    if (Math.abs(now - auth.ts) > this.window) {
+    if (Math.abs(effective - auth.ts) > this.window) {
       return rejected(401, Code.TIMESTAMP_OUT_OF_WINDOW, "timestamp is outside the acceptance window");
     }
 
@@ -600,7 +615,7 @@ export class Verifier {
 
     // Step 5: nonce, only after the signature verified, so
     // requests that fail verification cannot fill the cache (spec 01 section 4). True = live replay.
-    if (this.nonces.checkAndRecord(auth.kid, auth.nonce, now, auth.ts + this.window)) {
+    if (this.nonces.checkAndRecord(auth.kid, auth.nonce, effective, auth.ts + this.window)) {
       return rejected(401, Code.REPLAYED_NONCE, "nonce was already used");
     }
 

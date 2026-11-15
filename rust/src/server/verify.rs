@@ -1,6 +1,7 @@
 //! Request verifier: authentication + authorization (Go: server/verify.go).
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 
 use serde_json::value::RawValue;
@@ -134,7 +135,10 @@ pub struct Config {
     /// Timestamp window seconds; <= 0 means DEFAULT_WINDOW_SECONDS (Go: zero
     /// means DefaultWindow).
     pub window_seconds: i64,
-    /// Verifier clock, Unix seconds.
+    /// Verifier clock, Unix seconds. The verifier never lets its request time
+    /// go backwards: freshness and the volatile nonce store use the highest
+    /// sample seen so far, so a clock step back cannot revive a purged nonce.
+    /// Response timestamps use the raw sample.
     pub now: Clock,
 }
 
@@ -146,6 +150,8 @@ pub struct Verifier {
     /// denies the route. Deliberately NOT a Config field: adding a field
     /// would break every existing struct literal of the static public API.
     server_keys: Option<Arc<dyn NativeTools>>,
+    /// Highest clock sample seen; request time is monotonic within a process.
+    high_water: AtomicI64,
 }
 
 impl Verifier {
@@ -161,6 +167,7 @@ impl Verifier {
         Ok(Self {
             cfg,
             server_keys: None,
+            high_water: AtomicI64::new(i64::MIN),
         })
     }
 
@@ -189,11 +196,19 @@ impl Verifier {
         (self.cfg.now)()
     }
 
+    /// Request time that never goes backwards: max(sample, highest seen).
+    fn effective_now(&self, sample: i64) -> i64 {
+        self.high_water
+            .fetch_max(sample, Ordering::SeqCst)
+            .max(sample)
+    }
+
     /// Runs the pipeline of spec 01 section 4 and spec 02 section 4 on one
     /// request. Stops at the first failing step; a rejection never reveals
     /// more than its code.
     pub fn verify(&self, req: &Request) -> VerifyResult {
         let now = (self.cfg.now)();
+        let effective = self.effective_now(now);
         let auth_values: Vec<&str> = req.auth_values.iter().map(String::as_str).collect();
 
         let auth = match parse_request_auth(&auth_values) {
@@ -236,7 +251,7 @@ impl Verifier {
 
         // Step 6: window. abs_diff cannot overflow where `now - ts` would.
         let window = self.window();
-        if now.abs_diff(auth.ts) > window.unsigned_abs() {
+        if effective.abs_diff(auth.ts) > window.unsigned_abs() {
             return fail(
                 VerifyResult::default(),
                 401,
@@ -282,7 +297,7 @@ impl Verifier {
         if self
             .cfg
             .nonces
-            .check_and_record(&auth.kid, &auth.nonce, now, auth.ts + window)
+            .check_and_record(&auth.kid, &auth.nonce, effective, auth.ts + window)
         {
             return fail(
                 VerifyResult::default(),
@@ -1049,6 +1064,58 @@ mod tests {
 
     fn get(key: &SigningKey, kid: &str, ts: i64, nonce: &str) -> Request {
         signed("GET", "/mcp", b"", key, kid, ts, nonce)
+    }
+
+    /// Config whose clock is the shared atomic, so tests can step it.
+    fn stepping_config(clock: &Arc<AtomicI64>, state: Arc<dyn StateStore>) -> Config {
+        let mut cfg = config(NOW, state, None);
+        let clock = Arc::clone(clock);
+        cfg.now = Arc::new(move || clock.load(Ordering::SeqCst));
+        cfg
+    }
+
+    #[test]
+    fn clock_step_back_cannot_revive_a_nonce() {
+        let (key, entry) = test_key("alice");
+        let clock = Arc::new(AtomicI64::new(NOW + 1000));
+        let v = verifier(stepping_config(&clock, seeded_state(&[&entry])));
+
+        let req = get(&key, &entry.kid, NOW + 1000, &nonce(1));
+        assert!(v.verify(&req).accepted);
+
+        // Wall clock steps back to NOW: the replay is still a live nonce.
+        clock.store(NOW, Ordering::SeqCst);
+        let res = v.verify(&req);
+        assert_eq!(res.http_status, 401);
+        assert_eq!(res.code, codes::REPLAYED_NONCE);
+
+        // A request stamped at the stepped-back time is outside the window
+        // measured from the high-water mark (window is 30 s).
+        let stale = get(&key, &entry.kid, NOW, &nonce(2));
+        let res = v.verify(&stale);
+        assert_eq!(res.http_status, 401);
+        assert_eq!(res.code, codes::TIMESTAMP_OUT_OF_WINDOW);
+        // The response clock stays raw.
+        assert_eq!(v.now(), NOW);
+    }
+
+    #[test]
+    fn freshness_is_judged_against_the_high_water_mark() {
+        let (key, entry) = test_key("alice");
+        let clock = Arc::new(AtomicI64::new(NOW + 1000));
+        let v = verifier(stepping_config(&clock, seeded_state(&[&entry])));
+        let first = v.verify(&get(&key, &entry.kid, NOW + 1000, &nonce(1)));
+        assert!(first.accepted);
+
+        // Raw time NOW alone would reject ts NOW + 1000 (1000 s > window).
+        clock.store(NOW, Ordering::SeqCst);
+        let res = v.verify(&get(&key, &entry.kid, NOW + 1000, &nonce(2)));
+        assert!(res.accepted, "got {} {}", res.http_status, res.code);
+
+        // Normal forward movement keeps working.
+        clock.store(NOW + 1010, Ordering::SeqCst);
+        let res = v.verify(&get(&key, &entry.kid, NOW + 1010, &nonce(3)));
+        assert!(res.accepted, "got {} {}", res.http_status, res.code);
     }
 
     struct StubNative;
