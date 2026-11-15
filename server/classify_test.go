@@ -1,6 +1,9 @@
 package server
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestClassifyBody pins the body-classification rules of spec 02 section 4:
 // request/notification/response shapes, case-sensitive member names, strict
@@ -31,6 +34,12 @@ func TestClassifyBody(t *testing.T) {
 		{"tools/call with a numeric name", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":7}}`, false, 0},
 		{"tools/call with a null name", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":null}}`, false, 0},
 		{"invalid UTF-8", "{\"jsonrpc\":\"2.0\",\"method\":\"p\xffng\"}", false, 0},
+		{"lone surrogate escape in method", `{"jsonrpc":"2.0","id":1,"method":"pi\ud800ng"}`, false, 0},
+		{"lone surrogate escape in a member name", `{"jsonrpc":"2.0","id":1,"m\ud800":1,"method":"ping"}`, false, 0},
+		{"lone surrogate escape in params.name", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"stat\udc00us"}}`, false, 0},
+		{"lone surrogate escape after a valid pair", `{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"\ud83d\ude00\ud800"}}`, false, 0},
+		{"paired surrogate escape is accepted", `{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"\ud83d\ude00"}}`, true, kindRequest},
+		{"escaped backslash is not a surrogate escape", `{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"a\\ud800b"}}`, true, kindRequest},
 	}
 	for _, c := range cases {
 		c := c
@@ -43,5 +52,31 @@ func TestClassifyBody(t *testing.T) {
 				t.Fatalf("kind = %d, want %d", msg.kind, c.kind)
 			}
 		})
+	}
+}
+
+// TestClassifyBodyDepth pins the 128-level nesting maximum and the
+// string-skip rule of the pre-parse scan (spec 02 section 4 step 2).
+func TestClassifyBodyDepth(t *testing.T) {
+	okBody := func(levels int) string {
+		return `{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":` +
+			strings.Repeat("[", levels) + strings.Repeat("]", levels) + `}}`
+	}
+	if _, ok := classifyBody([]byte(okBody(126))); !ok {
+		t.Fatal("128 container levels must classify")
+	}
+	if _, ok := classifyBody([]byte(okBody(127))); ok {
+		t.Fatal("129 container levels must be rejected before parsing")
+	}
+	// Braces and brackets inside string values never count toward depth.
+	inString := `{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"` +
+		strings.Repeat("[[", 200) + strings.Repeat("]]", 200) + `"}}`
+	if _, ok := classifyBody([]byte(inString)); !ok {
+		t.Fatal("containers inside string values must not count toward depth")
+	}
+	// Sibling members do not accumulate depth.
+	siblings := `{"jsonrpc":"2.0","id":1,"method":"ping","params":{"a":{"b":{"c":1}},"d":{"e":{"f":2}}}}`
+	if _, ok := classifyBody([]byte(siblings)); !ok {
+		t.Fatal("sibling members must not accumulate depth")
 	}
 }

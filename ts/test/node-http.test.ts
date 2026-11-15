@@ -358,6 +358,34 @@ test("E6b forwarded request preserves raw target beside normalized URL and priva
   });
 });
 
+test("E6c a GET with a body is verified over the exact bytes sent", { timeout: 5000 }, async () => {
+  // Pipeline: verify. undici's Request constructor refuses a GET body, so
+  // WITHOUT the RAW_BODY_SYMBOL handoff the bytes never reach the hash and
+  // the verifier sees an empty body -> bad_signature; with it, the GET is
+  // forwarded and the answer is signed (spec 01 section 3.1).
+  const alice = seedSignerByName("alice");
+  const bodyBuf = Buffer.from(pingBody, "utf-8");
+  const header = signRequest(alice, fixtureAud, "GET", "/mcp", utf8(pingBody), randomNonce(), fixtureNow);
+  const sig = parseRequestAuth([header]).sig;
+  const res = await rawRequest(port, "GET", "/mcp", { "jack-auth": header, "content-type": "application/json" }, bodyBuf);
+  assert.equal(res.status, 200);
+  assert.equal(res.body.toString("utf-8"), nextJson);
+  assert.ok(jackAuthValues(res.headers).length > 0, "the forwarded GET answer is signed");
+  verifyResponse(serverPub, res.status, jackAuthValues(res.headers), sig, new Uint8Array(res.body), fixtureNow, 30);
+});
+
+test("E6d a GET body covered by a signature over different bytes is bad_signature", { timeout: 5000 }, async () => {
+  // Pins that the GET body bytes really enter the hash: signing over other
+  // bytes while sending bodyBuf must fail; it would also fail if the bytes
+  // were dropped (different failure mode), so E6c is the discriminating test.
+  const alice = seedSignerByName("alice");
+  const bodyBuf = Buffer.from(pingBody, "utf-8");
+  const header = signRequest(alice, fixtureAud, "GET", "/mcp", utf8('{"jsonrpc":"2.0","id":1,"method":"other"}'), randomNonce(), fixtureNow);
+  const res = await rawRequest(port, "GET", "/mcp", { "jack-auth": header, "content-type": "application/json" }, bodyBuf);
+  assert.equal(res.status, 401);
+  assert.ok(res.body.toString("utf-8").includes("bad_signature"), res.body.toString("utf-8"));
+});
+
 test("E7 event-stream endpoint refused with 501", { timeout: 5000 }, async () => {
   // Pipeline: GET authorized by authentication alone -> forward -> next
   // answers text/event-stream -> adapter buffers and answers SIGNED 501

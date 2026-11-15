@@ -504,6 +504,25 @@ test("classifyBody table (Go TestClassifyBody)", () => {
   assert.equal(classifyBody(new Uint8Array([0x7b, 0xff, 0x7d])), undefined, "invalid UTF-8 bytes");
 });
 
+test("classifyBody: surrogate escapes and the 128-level depth cap (spec 02 section 4)", () => {
+  const ok = (body: string) => assert.ok(classifyBody(encoder.encode(body)) !== undefined, body);
+  const bad = (body: string) => assert.equal(classifyBody(encoder.encode(body)), undefined, body);
+  bad('{"jsonrpc":"2.0","id":1,"method":"pi\\ud800ng"}');
+  bad('{"jsonrpc":"2.0","id":1,"m\\ud800":1,"method":"ping"}');
+  bad('{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"stat\\udc00us"}}');
+  bad('{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"\\ud83d\\ude00\\ud800"}}');
+  ok('{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"\\ud83d\\ude00"}}');
+  ok('{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"a\\\\ud800b"}}');
+  const deep = (levels: number): string =>
+    `{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":${"[".repeat(levels)}${"]".repeat(levels)}}}`;
+  ok(deep(126));
+  bad(deep(127));
+  // Brackets inside string values never count toward the depth.
+  ok(
+    `{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"${"[".repeat(200)}${"]".repeat(200)}"}}`,
+  );
+});
+
 // ---------------------------------------------------------------------------
 // 10. rpcId keeps the raw JSON text.
 // ---------------------------------------------------------------------------

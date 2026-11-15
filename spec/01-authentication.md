@@ -34,7 +34,7 @@ Grammar rules (strict; any violation is `malformed_auth`):
 - the parameter set is exactly `kid`, `ts`, `nonce`, `sig`, each once, in any order;
 - `ts` is a Unix time in whole seconds, decimal, no sign, no leading zeros (`0` is allowed), at most 12 digits;
 - `nonce` is 16 bytes from a CSPRNG, fresh for every request;
-- a scheme of the form `v` + digits other than `v1` is `unsupported_version`; any other scheme is `malformed_auth`. The scheme is examined first: a header whose scheme is `v2` is `unsupported_version` even if its parameters are malformed, because the grammar of other versions is unknown.
+- a scheme of the form `v` + digits other than `v1` is `unsupported_version`; any other scheme is `malformed_auth`. The scheme is examined first, on the raw header bytes, before any character-encoding check: a header whose scheme is `v2` is `unsupported_version` even if its parameters are malformed or carry bytes outside the `A-Za-z0-9_-` value alphabet, because the grammar of other versions is unknown.
 
 ### 3.1 Signing string
 

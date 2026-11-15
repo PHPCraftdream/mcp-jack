@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   b64u, sha256, kidOf, requestSigningString, responseSigningString, rotateProofString,
-  verifyRequest, verifyResponse, validatePublicKey, malleateSignature, defaultHooks,
+  verifyRequest, verifyResponse, validatePublicKey, malleateSignature, forgeSmallOrderRSig, defaultHooks,
   validateRegistry, validateStateFile,
   decodePoint, addPoints, encodePoint, BASE_POINT, findOrder8Point, fromBig,
 } from './reference-verifier.mjs';
@@ -100,6 +100,12 @@ function buildRequest(id, o = {}) {
   const fields = { method, target, aud, kid: K[key].kid, ts, nonce, body: bodyBuf, ...o.sign };
   const signing = requestSigningString(fields);
   let sig = sigOf(signKey, signing);
+  if (o.smallR) {
+    // A signature forged with R = the identity encoding: it satisfies the
+    // verification equation, so only the small-order-R rule can reject it
+    // (spec 01 section 2). Signed by the header key itself.
+    sig = b64u(forgeSmallOrderRSig(K[key].seed, K[key].pub, Buffer.from(signing, 'utf8')));
+  }
   if (flipSig) {
     const raw = Buffer.from(sig, 'base64url');
     raw[0] ^= 1;
@@ -380,6 +386,11 @@ const dupMethodBody = (first, last) =>
   `{"jsonrpc":"2.0","id":1,"method":"${first}","method":"${last}"}`;
 const dupToolBody = (first, last) =>
   `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${first}","name":"${last}"}}`;
+// A ping whose params.x nests `levels` arrays: the body reaches
+// `levels + 2` container levels (the root object and params), so 126 sits
+// exactly at the 128-level maximum and 127 exceeds it (spec 02 section 4).
+const deepBody = (levels) =>
+  `{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":${'['.repeat(levels)}${']'.repeat(levels)}}}`;
 const REQUEST_CASES = [
   // accept: forwarded ordinary MCP traffic (spec 02 section 2). The old
   // contract denied these at the policy layer; now every authenticated caller
@@ -486,6 +497,14 @@ const REQUEST_CASES = [
   ['dup-jsonrpc-first-wrong-last-right', 'a duplicated jsonrpc member keeps the last occurrence', { body: '{"jsonrpc":"1.0","jsonrpc":"2.0","id":1,"method":"ping"}' }, [], ['accept']],
   ['dup-member-escaped-name-last-wins', 'a member whose name unescapes to an earlier name is its duplicate and keeps the last value', { body: '{"jsonrpc":"2.0","id":1,"method":"ping","meth\\u006fd":"tools/call"}' }, [], ['reject', 400, 'invalid_request']],
   ['dup-params-object-last-without-name', 'a duplicated params object keeps the last one whole: no member union, so the earlier name does not survive', { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status"},"params":{"other":1}}' }, [], ['reject', 400, 'invalid_request']],
+  ['sig-small-order-r-identity', 'a signature whose R is the identity encoding satisfies the verification equation but is rejected (spec 01 section 2)', { body: STATUS, smallR: true }, [], ['reject', 401, 'bad_signature']],
+  ['request-escape-lone-surrogate-method', 'a lone surrogate escape in the method is not acceptable body text (spec 02 section 4)', { body: '{"jsonrpc":"2.0","id":1,"method":"pi\\ud800ng"}' }, [], ['reject', 400, 'invalid_request']],
+  ['request-escape-lone-surrogate-member-name', 'a lone surrogate escape in a member name is not acceptable body text', { body: '{"jsonrpc":"2.0","id":1,"m\\ud800":1,"method":"ping"}' }, [], ['reject', 400, 'invalid_request']],
+  ['request-escape-lone-surrogate-params-name', 'a lone surrogate escape in params.name is not acceptable body text', { body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"stat\\udc00us"}}' }, [], ['reject', 400, 'invalid_request']],
+  ['request-escape-lone-surrogate-after-pair', 'a lone surrogate escape after a valid pair is still not acceptable body text', { body: '{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"\\ud83d\\ude00\\ud800"}}' }, [], ['reject', 400, 'invalid_request']],
+  ['request-escape-surrogate-pair-valid', 'a correctly paired surrogate escape is acceptable body text', { body: '{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"\\ud83d\\ude00"}}' }, [], ['accept']],
+  ['request-depth-128-ok', 'nesting exactly 128 levels of arrays and objects is accepted', { body: deepBody(126) }, [], ['accept']],
+  ['request-depth-129-rejected', 'nesting 129 levels of arrays and objects is invalid_request (spec 02 section 4)', { body: deepBody(127) }, [], ['reject', 400, 'invalid_request']],
 ];
 
 const requestVectors = REQUEST_CASES.map(([id, description, opts, cache, tuple]) => {
@@ -1056,7 +1075,13 @@ const OK_BODY = '{"jsonrpc":"2.0","id":1,"result":{"ok":true}}';
 function buildResponse(o = {}) {
   const { status = 200, body = OK_BODY, ts = NOW, signKey = 'svc', kid = K.svc.kid } = o;
   const fields = { status, reqSig: REQ_SIG, kid: K.svc.kid, ts, body: Buffer.from(body), ...o.sign };
-  const sig = sigOf(signKey, responseSigningString(fields));
+  const message = responseSigningString(fields);
+  // A signature forged with R = the identity encoding: it satisfies the
+  // verification equation, so only the small-order-R rule can reject it
+  // (spec 01 section 2). The default 'svc' signer is the pinned key.
+  const sig = o.smallR
+    ? b64u(forgeSmallOrderRSig(K.svc.seed, K.svc.pub, Buffer.from(message, 'utf8')))
+    : sigOf(signKey, message);
   const h = { kid, ts, sig, ...o.hdr };
   let header = `v1 kid=${h.kid},ts=${h.ts},sig=${h.sig}`;
   if (o.mutate) header = o.mutate(header);
@@ -1084,6 +1109,7 @@ const RESPONSE_CASES = [
   ['res-tampered-status', 'status changed after signing', { send: { status: 500 } }, ['reject', 'bad_signature']],
   ['res-wrong-request-binding', 'signed over a different request signature', { sign: { reqSig: b64u(Buffer.alloc(64, 7)) } }, ['reject', 'bad_signature']],
   ['res-wrong-key-with-pinned-kid', 'pinned kid, signed by another key', { signKey: 'mallory' }, ['reject', 'bad_signature']],
+  ['res-small-order-r-identity', 'a response signature whose R is the identity encoding is rejected (spec 01 section 2)', { smallR: true }, ['reject', 'bad_signature']],
 ];
 
 const resState = () => ({

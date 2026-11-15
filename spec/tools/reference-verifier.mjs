@@ -150,16 +150,47 @@ export function parseAuth(values, allowed) {
   return { ...raw, ts: Number(raw.ts) };
 }
 
+// Strict verification: S must be below L, and R must not be a small-order point
+// (spec 01 section 2). The encodings of the eight small-order points:
+const SMALL_ORDER_R = [
+  `01${'00'.repeat(31)}`, // identity
+  '00'.repeat(32), // y = 0, sign 0
+  `${'00'.repeat(31)}80`, // y = 0, sign 1
+  `ec${'ff'.repeat(30)}7f`, // order 2
+  '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05', // order 8
+  '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85', // order 8, sign set
+  'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a', // order 8
+  'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa', // order 8, sign set
+];
+
 // Strict verification: S must be below L (spec 01 section 2).
 export function verifySig(publicKeyB64u, message, sigB64u) {
   const sig = Buffer.from(sigB64u, 'base64url');
   if (sig.length !== 64 || toBig(sig.subarray(32)) >= L) return false;
+  // A signature whose R is a small-order point is invalid even if the
+  // verification equation holds (spec 01 section 2).
+  if (SMALL_ORDER_R.includes(sig.subarray(0, 32).toString('hex'))) return false;
   const key = createPublicKey({
     key: Buffer.concat([SPKI_PREFIX, Buffer.from(publicKeyB64u, 'base64url')]),
     format: 'der',
     type: 'spki',
   });
   return verify(null, Buffer.from(message, 'utf8'), key, sig);
+}
+
+// A forged signature with R set to the identity encoding (RFC 8032): with R
+// the identity, [S]B = R + [k]A holds because [S]B = [k*a]B = [k]A, so only
+// the small-order-R rule can reject it.
+export function forgeSmallOrderRSig(seed, publicKey, message) {
+  const h = createHash('sha512').update(seed).digest();
+  h[0] &= 248;
+  h[31] &= 127;
+  h[31] |= 64;
+  const a = toBig(h.subarray(0, 32));
+  const r = Buffer.from(`01${'00'.repeat(31)}`, 'hex');
+  const k = mod(toBig(createHash('sha512').update(Buffer.concat([r, Buffer.from(publicKey), Buffer.from(message)])).digest()), L);
+  const s = mod(k * a, L);
+  return Buffer.concat([r, fromBig(s, 32)]);
 }
 
 // Same signature with S replaced by S + L: it satisfies the verification equation but is non-canonical.
@@ -361,10 +392,53 @@ function parseJSONRaw(src) {
   return { value: v, sources: root };
 }
 
+const MAX_BODY_DEPTH = 128;
+
+// Normative body-text rules (spec 02 section 4 step 2): a \uXXXX escape that
+// does not form a Unicode scalar value (a lone or unpaired surrogate) or
+// nesting deeper than 128 levels of arrays and objects makes the body
+// unacceptable. Single pass, constant extra space, no recursion.
+function unacceptableBodyText(text) {
+  let inString = false;
+  let depth = 0;
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (!inString) {
+      if (c === '"') inString = true;
+      else if (c === '{' || c === '[') {
+        depth++;
+        if (depth > MAX_BODY_DEPTH) return true;
+      } else if (c === '}' || c === ']') depth = Math.max(0, depth - 1);
+      i++;
+      continue;
+    }
+    if (c === '"') { inString = false; i++; continue; }
+    if (c !== '\\') { i++; continue; }
+    if (i + 1 >= text.length) return true; // truncated escape
+    if (text[i + 1] !== 'u') { i += 2; continue; }
+    const hex = text.slice(i + 2, i + 6);
+    if (!/^[0-9a-fA-F]{4}$/.test(hex)) { i += 2; continue; }
+    const v = parseInt(hex, 16);
+    if (v >= 0xdc00 && v <= 0xdfff) return true; // lone low surrogate
+    if (v >= 0xd800 && v <= 0xdbff) {
+      // A low-surrogate escape must follow immediately.
+      const low = text.slice(i + 8, i + 12);
+      if (text[i + 6] === '\\' && text[i + 7] === 'u' && /^[0-9a-fA-F]{4}$/.test(low)
+        && parseInt(low, 16) >= 0xdc00 && parseInt(low, 16) <= 0xdfff) i += 12;
+      else return true; // unpaired high surrogate
+      continue;
+    }
+    i += 6;
+  }
+  return false;
+}
+
 function classify(body) {
   let parsed;
   try {
     const text = new TextDecoder('utf-8', { fatal: true }).decode(body);
+    if (unacceptableBodyText(text)) return null;
     parsed = parseJSONRaw(text);
   } catch {
     return null;
