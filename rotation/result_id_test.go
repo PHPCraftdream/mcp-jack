@@ -1,6 +1,7 @@
 package rotation_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -10,12 +11,16 @@ import (
 
 func TestDecodeResultRejectsNonCanonicalNumericResponseIDLexemes(t *testing.T) {
 	payload := resultPayload(t)
-	for _, lexeme := range []json.RawMessage{
-		[]byte(`7.0`), []byte(`7e0`), []byte(`7E0`), []byte(`+7`), []byte(`07`), []byte(`-0`), []byte(`7.`),
-	} {
-		requireResultInvalid(t, resultEnvelope(t, payload, nil, lexeme))
+	// json.Marshal отвергает невалидные лексемы (+7, 07, 7.), поэтому id подставляется в готовое тело.
+	base := resultEnvelope(t, payload, nil, json.RawMessage(`7`))
+	for _, lexeme := range []string{`7.0`, `7e0`, `7E0`, `+7`, `07`, `-0`, `7.`} {
+		body := bytes.Replace(base, []byte(`"id":7,`), []byte(`"id":`+lexeme+`,`), 1)
+		if bytes.Equal(body, base) {
+			t.Fatalf("id lexeme %s was not substituted", lexeme)
+		}
+		requireResultInvalid(t, body)
 	}
-	requireResultInvalid(t, resultEnvelope(t, payload, nil, []byte(`"7"`)))
+	requireResultInvalid(t, resultEnvelope(t, payload, nil, json.RawMessage(`"7"`)))
 }
 
 func TestDecodeResultRejectsNumberResponseForStringExpectedID(t *testing.T) {

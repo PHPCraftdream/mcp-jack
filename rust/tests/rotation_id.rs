@@ -20,7 +20,7 @@ fn envelope(id: &str, payload: &str) -> Vec<u8> {
     .into_bytes()
 }
 
-fn rejected_code(body: &[u8], expected: &[u8]) -> String {
+fn rejected_code(body: &[u8], expected: &[u8]) -> &'static str {
     rotation::decode_result(body, expected)
         .expect_err("invalid id accepted")
         .code
