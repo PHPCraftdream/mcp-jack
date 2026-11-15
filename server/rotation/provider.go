@@ -102,7 +102,7 @@ func (provider *Provider) selectSigner(snapshot rotation.ServerSnapshot, clock r
 		if key.KnownCutoff != nil && *key.KnownCutoff <= clock.HighWater {
 			retiredCount++
 		}
-		if pendingCount > 128 || retiredCount > 1024 {
+		if pendingCount > 128 || retiredCount > servedRetiredKeys {
 			return pinnedSigner{}, ErrUnavailable
 		}
 		if !eligible && !pending {

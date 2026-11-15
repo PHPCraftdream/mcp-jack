@@ -6,6 +6,7 @@ import { join } from "node:path";
 import type { TestContext } from "node:test";
 import { test } from "node:test";
 import { client, Code, encodeBase64URL, JackError, keyId, rotation, ServerKeyTool, TOOL_SERVER_KEY } from "../src/index.js";
+import { MAX_ANNOUNCE_RING_KEYS, MAX_RETIRED } from "../src/rotation-server-provider.js";
 import type { NativeCall } from "../src/index.js";
 import { corpus, denies, WINDOW } from "./rotation-server-fixtures.js";
 
@@ -198,4 +199,36 @@ test("jack.server.key tool: leases are released on every path so the store can c
   assert.throws(() => tool.call(call({ aud: "other" })), refusal(503, "rotation_state_unavailable"));
   env.store.close();
   assert.throws(() => tool.call(call()), refusal(503, "rotation_state_unavailable"));
+});
+
+test("server provider: announce refuses a ring that would grow beyond the servable key bound", { skip: !linux }, (context) => {
+  // Инвариант: announce-предел выводится из retired-предела, литерал 1024 не повторяется.
+  assert.equal(MAX_ANNOUNCE_RING_KEYS, MAX_RETIRED + 1);
+  const count = 5; // 1 anchor key + 4 кандидата на announce.
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "mcp-jack-server-provider-capacity-")));
+  chmodSync(dir, 0o700);
+  context.after(() => rmSync(dir, { recursive: true, force: true }));
+  const signers = Array.from({ length: count }, (_, index) => seed(index));
+  const first = signers[0];
+  assert.ok(first);
+  const root: rotation.RotationCheckpoint = { ordinal: 0, hash: "-", kid: keyId(first.publicKey()), publicKeyB64u: encodeBase64URL(first.publicKey()), publishedAt: 0 };
+  let current = 1000;
+  const config: rotation.RotationServerStoreOptions = { binding: corpus.binding, checkpoint: root, window: WINDOW, anchorReference: "ref-0", now: () => current };
+  const path = join(dir, "ring");
+  rotation.RotationServerStore.initializeUnused(path, config);
+  const store = rotation.RotationServerStore.open(path, config);
+  const keys = signers.map((signer, index) => ({ reference: `ref-${index}`, signer }));
+  const provider = new rotation.RotationServerProvider(store, keys);
+  const kids = signers.map((signer) => keyId(signer.publicKey()));
+  provider.setAnnounceRingKeysForTests(4);
+  for (let index = 1; index <= 3; index++) {
+    const publication = provider.announce(`ref-${index}`, kids[index] as string);
+    assert.equal(publication.record.ordinal, index, `announce ${index} succeeds below the lowered bound`);
+    assert.equal(publication.revision, index + 1);
+  }
+  const before = store.snapshot().snapshot;
+  assert.equal(before.trust.keys.length, 4, "ring holds 3 announces + anchor, exactly at the lowered bound");
+  // 4-й announce превысил бы пониженный предел (retired=0, pending=3 < MAX_PENDING), поэтому отказ исключительно из bound-check.
+  assert.throws(() => provider.announce("ref-4", kids[4] as string), unavailable);
+  assert.deepEqual(store.snapshot().snapshot, before, "trust state is unchanged after the refusal");
 });

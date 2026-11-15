@@ -4,10 +4,14 @@ package rotationserver_test
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
 	"sync/atomic"
 	"testing"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
+	"github.com/PHPCraftdream/mcp-jack/durable"
 	"github.com/PHPCraftdream/mcp-jack/rotation"
 	rotationserver "github.com/PHPCraftdream/mcp-jack/server/rotation"
 )
@@ -89,6 +93,74 @@ func TestAnnounceConcurrentClockConflictDoesNotRetryOrPublish(t *testing.T) {
 	snapshot, _, err := f.store.Snapshot()
 	if err != nil || snapshot.Public.Revision != 1 || len(snapshot.Public.Records) != 0 {
 		t.Fatal("definite conflict changed ring or fenced healthy owner")
+	}
+}
+
+func setupCapacityFixture(t *testing.T, count int) fixture {
+	t.Helper()
+	keys := make([]testSigner, count)
+	for index := range keys {
+		keys[index] = makeSigner(byte(31 + index))
+	}
+	checkpoint := rotation.Checkpoint{Hash: "-", KID: jack.KeyID(keys[0].PublicKey())}
+	copy(checkpoint.PublicKey[:], keys[0].PublicKey())
+	now := &atomic.Int64{}
+	now.Store(1000)
+	directory, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	options := durable.ServerOptions{TrustOptions: durable.TrustOptions{Binding: rotation.Binding{Endpoint: "https://public.invalid/mcp", Audience: "provider-test"}, Window: 30, Checkpoint: checkpoint, Now: now.Load}, AnchorReference: "anchor"}
+	path := filepath.Join(directory, "server.db")
+	if err := durable.InitializeServerUnused(path, options); err != nil {
+		t.Fatal(err)
+	}
+	store, err := durable.OpenServer(path, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	inventory := make([]rotationserver.Key, count)
+	inventory[0] = rotationserver.Key{Reference: "anchor", Signer: keys[0]}
+	for index := 1; index < count; index++ {
+		inventory[index] = rotationserver.Key{Reference: "next", Signer: keys[index]}
+	}
+	return fixture{store: store, now: now, keys: keys, inventory: inventory}
+}
+
+func TestAnnounceRefusesRingBeyondServableRetiredCapacity(t *testing.T) {
+	if rotationserver.MaxAnnounceRingKeysForTest() != rotationserver.ServedRetiredKeysForTest()+1 {
+		t.Fatal("announce bound does not match serving retired limit")
+	}
+	restore := rotationserver.SetMaxAnnounceRingKeysForTest(4)
+	t.Cleanup(restore)
+	f := setupCapacityFixture(t, 5)
+	provider, err := rotationserver.New(f.store, f.inventory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for step := 1; step <= 3; step++ {
+		publication, err := provider.Announce("next", jack.KeyID(f.keys[step].PublicKey()))
+		if err != nil || publication.Record.ActivatesAt != f.now.Load()+rotation.GraceSeconds {
+			t.Fatalf("announce %d refused: err=%v", step, err)
+		}
+	}
+	before, _, err := f.store.Snapshot()
+	if err != nil || len(before.Public.Keys) != 4 {
+		t.Fatalf("ring after 3 announces: keys=%d err=%v", len(before.Public.Keys), err)
+	}
+	if _, err := provider.Announce("next", jack.KeyID(f.keys[4].PublicKey())); !errors.Is(err, rotationserver.ErrUnavailable) {
+		t.Fatalf("announce with 4-key ring not refused: err=%v", err)
+	}
+	after, _, err := f.store.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Public.Revision != before.Public.Revision || after.Public.Head != before.Public.Head || !reflect.DeepEqual(before.Public.Keys, after.Public.Keys) || !reflect.DeepEqual(before.Public.Records, after.Public.Records) {
+		t.Fatal("refused announcement mutated committed ring")
 	}
 }
 

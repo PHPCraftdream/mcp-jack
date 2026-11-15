@@ -16,7 +16,10 @@ import type { DecodedRotationResult } from "./rotation-result.js";
 import { TOOL_SERVER_KEY } from "./server/verify.js";
 
 const MAX_PENDING = 128;
-const MAX_RETIRED = 1024;
+/** @internal Test only. */
+export const MAX_RETIRED = 1024;
+/** @internal Test only. Every key but the newest eventually retires; serving refuses above MAX_RETIRED retired keys. */
+export const MAX_ANNOUNCE_RING_KEYS = MAX_RETIRED + 1;
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 /** Заранее настроенный handle подписанта: reference не заменяет проверку публичного ключа. */
@@ -86,6 +89,7 @@ function pin(input: RotationServerKey): PinnedRotationSigner {
 export class RotationServerProvider {
   private readonly keys = new Map<string, PinnedRotationSigner>();
   private publishing = false;
+  private announceRingKeys = MAX_ANNOUNCE_RING_KEYS;
 
   /** Не создаёт state и не разрешает publication; отказывает, если ring не готов к serving. */
   constructor(private readonly store: RotationServerStore, keys: readonly RotationServerKey[]) {
@@ -108,6 +112,12 @@ export class RotationServerProvider {
     } finally {
       release();
     }
+  }
+
+  /** @internal Test only: lowers the announce bound so a test need not build a real 1025-key ring. */
+  setAnnounceRingKeysForTests(bound: number): void {
+    if (typeof bound !== "number" || !Number.isSafeInteger(bound) || bound < 2 || bound > MAX_ANNOUNCE_RING_KEYS) unavailable();
+    this.announceRingKeys = bound;
   }
 
   /**
@@ -243,7 +253,7 @@ export class RotationServerProvider {
     const last = trust.keys[trust.keys.length - 1];
     const tail = snapshot.signerReferences[snapshot.signerReferences.length - 1];
     if (last === undefined || tail === undefined || trust.head.ordinal === ROTATION_MAX_ORDINAL || trust.revision === ROTATION_MAX_ORDINAL ||
-      trust.keys.length >= ROTATION_MAX_RETAINED_KEYS) unavailable();
+      trust.keys.length >= ROTATION_MAX_RETAINED_KEYS || trust.keys.length >= this.announceRingKeys) unavailable();
     if (trust.keys.some((key) => key.kid === kid || key.publicKeyB64u === next.publicKeyB64u)) unavailable();
     const old = this.keys.get(identity(tail.reference, last.kid));
     if (old === undefined || old.publicKeyB64u !== last.publicKeyB64u) unavailable();
