@@ -16,8 +16,8 @@ import (
 	"github.com/PHPCraftdream/mcp-jack/server"
 )
 
-// Границы pre-auth admission. Связь с maxDurableWindow проверяет
-// TestGatewayAdmissionBudget: rate*(2*W+1) должно оставаться ниже capacity.
+// Pre-auth admission bounds. TestGatewayAdmissionBudget verifies the
+// relation with maxDurableWindow: rate*(2*W+1) must stay below capacity.
 const (
 	gatewayAdmissionRate = 64
 	gatewayNonceCapacity = 4096
@@ -136,7 +136,7 @@ func gateway(ctx context.Context, path string, audit io.Writer) (result error) {
 		native: server.NewNativeTools(server.NativeOptions{}), serverKID: signing.anchorKID,
 		serverKIDs: signing.serverKIDs, adminEnabled: bool(c.NativeAdmin),
 	}
-	// Аудит-события пишутся строками JSON в стандартный поток ошибок процесса; ошибки записи игнорируются.
+	// Audit events are written as JSON lines to the process stderr; write errors are ignored.
 	verification := server.Config{Aud: c.Aud, State: boundedState{state}, Native: policy, Audit: server.NewJSONLAuditSink(audit)}
 	if signing.provider != nil {
 		policy.serverKeys = signing.provider
@@ -168,7 +168,7 @@ func gateway(ctx context.Context, path string, audit io.Writer) (result error) {
 	}
 	var connections sync.WaitGroup
 	slots := make(chan struct{}, c.MaxConcurrent)
-	// Общий transport limit действует до auth; durable capacity проверяет backend.
+	// General transport limit applies before auth; the backend enforces durable capacity.
 	var rateMu sync.Mutex
 	var second int64
 	var admitted int

@@ -11,7 +11,7 @@ const servedRetiredKeys = 1024
 // and serving refuses more than servedRetiredKeys retired keys, so the ring holds at most that + 1.
 var maxAnnounceRingKeys = servedRetiredKeys + 1
 
-// Publication возвращается только после exact durable ACK; не является HTTP delivery.
+// Publication is returned only after the exact durable ACK; it is not HTTP delivery.
 type Publication struct {
 	Record   rotation.Record
 	Revision uint64
@@ -30,8 +30,8 @@ func createPublication(binding rotation.Binding, previous rotation.Checkpoint, o
 	return record, result
 }
 
-// Announce — одна explicit authorization для заранее настроенного next handle.
-// P фиксируется одним fresh sample; отказ/конфликт/unknown не повторяются автоматически.
+// Announce is a single explicit authorization for the pre-configured next handle.
+// The fence is fixed by one fresh sample; failure/conflict/unknown are not retried automatically.
 func (provider *Provider) Announce(reference, kid string) (Publication, error) {
 	if provider == nil || provider.store == nil || !provider.publication.CompareAndSwap(false, true) {
 		return Publication{}, ErrUnavailable

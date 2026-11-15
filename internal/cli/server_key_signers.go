@@ -16,7 +16,7 @@ type serverKeySignerConfig struct {
 	SeedFile  string `json:"seed_file"`
 }
 
-// Только metadata validation; init/status не проверяют существование seed files.
+// Metadata validation only; init/status do not check that seed files exist.
 func validServerKeyInventory(entries []serverKeySignerConfig) bool {
 	if len(entries) > rotation.MaxRetainedKeys {
 		return false
@@ -49,7 +49,7 @@ func (signer *localServerKeySigner) Sign(message []byte) ([]byte, error) {
 	return ed25519.Sign(signer.private, message), nil
 }
 
-// Caller освобождает private buffers только после drain/Close server store.
+// The caller releases private buffers only after drain/Close of the server store.
 func loadServerKeyInventory(entries []serverKeySignerConfig) ([]rotationserver.Key, func(), error) {
 	if len(entries) == 0 || !validServerKeyInventory(entries) {
 		return nil, nil, errConfig

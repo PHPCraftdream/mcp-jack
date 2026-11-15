@@ -30,7 +30,7 @@ func testGatewayDurableNativeHTTP(t *testing.T, admin bool) {
 			t.Fatal(err)
 		}
 		config.DurableNonces = &gatewayDurableConfig{Path: path, DeploymentID: opts.DeploymentID, Window: opts.Window}
-		// Cleanup helper останавливает gateway раньше этой проверки.
+		// The cleanup helper stops the gateway before this check.
 		t.Cleanup(func() {
 			owner, err := durable.Open(path, opts)
 			if err != nil {

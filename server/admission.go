@@ -13,9 +13,9 @@ import (
 
 const maxDurableTimestamp int64 = 999999999999
 
-// AdmissionStateStore сериализует callback со всеми изменениями registry.
-// Callback вызывается синхронно ровно один раз; не вызывает state, handler или проверку подписи.
-// Внешний store обязан обеспечить тот же gate для каждого своего writer.
+// AdmissionStateStore serializes the callback with all registry mutations.
+// The callback is invoked synchronously exactly once; it must not invoke state, handler, or signature verification.
+// The external store must enforce the same gate for each of its writers.
 type AdmissionStateStore interface {
 	StateStore
 	WithAdmission(kid string, check func(RegistryEntry, bool) error) error
@@ -35,8 +35,8 @@ func (s *FileState) WithAdmission(kid string, check func(RegistryEntry, bool) er
 	return check(entry, known)
 }
 
-// NonceAdmission передаётся только после успешной проверки подписи.
-// Backend не сохраняет Now/Validate и не вызывает их после Reserve.
+// NonceAdmission is delivered only after successful signature verification.
+// The backend must not retain Now/Validate and must not call them after Reserve.
 type NonceAdmission struct {
 	KID          string
 	Nonce        string
@@ -48,7 +48,7 @@ type NonceAdmission struct {
 	Validate     func(int64) bool
 }
 
-// NonceReceipt подтверждает точную final reservation, не только подготовку intent.
+// NonceReceipt confirms the exact final reservation, not merely the intent preparation.
 type NonceReceipt struct {
 	Version         uint32
 	DeploymentID    string
@@ -65,18 +65,18 @@ type NonceReceipt struct {
 	HighWater       int64
 }
 
-// NonceLease удерживает serving epoch до завершения запроса.
-// Valid атомарно проверяет owner/generation/fence; Release идемпотентен.
+// NonceLease holds the serving epoch until the request completes.
+// Valid atomically checks owner/generation/fence; Release is idempotent.
 type NonceLease interface {
 	Valid() bool
 	Release()
 }
 
-// DurableNonceStore — доверенная application-owned transactional граница.
-// Успех разрешён только после подтверждённого durable final commit.
-// Ошибка/unknown не допускают dispatch, retry или подмену операции.
-// Fence немедленно закрывает admission; uncertain persistence требует dirty startup gate.
-// Реальная durability и lifetime-exclusive ownership обеспечиваются backend, не интерфейсом.
+// DurableNonceStore is a trusted, application-owned transactional boundary.
+// Success is permitted only after a confirmed durable final commit.
+// Error/unknown must not allow dispatch, retry, or substitution of the operation.
+// Fence closes admission immediately; uncertain persistence requires the dirty startup gate.
+// Real durability and lifetime-exclusive ownership are provided by the backend, not the interface.
 type DurableNonceStore interface {
 	Reserve(NonceAdmission) (NonceReceipt, NonceLease, *jack.Error)
 	Fence()
@@ -87,15 +87,15 @@ type admissionLease struct {
 	lease NonceLease
 }
 
-// Done освобождает lease; прямой caller Verify обязан вызвать Done после обработки.
-// NewHandler вызывает Done автоматически, включая native/error ветки.
+// Done releases the lease; a direct Verify caller must call Done after handling.
+// NewHandler calls Done automatically, including native/error paths.
 func (r Result) Done() {
 	if r.admission != nil {
 		r.admission.once.Do(r.admission.lease.Release)
 	}
 }
 
-// NonceIntentID строит точную storage identity из candidate durable-nonce spec.
+// NonceIntentID builds the exact storage identity from the candidate durable-nonce spec.
 func NonceIntentID(deployment string, admission NonceAdmission, operation [16]byte) (string, error) {
 	if !utf8.ValidString(deployment) || len(deployment) == 0 || len(deployment) > 1024 {
 		return "", errors.New("server: invalid deployment identity")

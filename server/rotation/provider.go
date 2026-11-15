@@ -1,4 +1,4 @@
-// Package rotationserver связывает concrete server store с explicit ResponseKeys profile.
+// Package rotationserver binds the concrete server store to the explicit ResponseKeys profile.
 package rotationserver
 
 import (
@@ -14,8 +14,8 @@ import (
 
 var ErrUnavailable = errors.New("rotation server: response authorization unavailable")
 
-// Key задаётся независимо от remote payload; Reference не заменяет проверку PublicKey.
-// Signer callbacks должны быть bounded; custody и Close принадлежат caller.
+// Key is set independently of the remote payload; Reference does not replace PublicKey verification.
+// Signer callbacks must be bounded; custody and Close belong to the caller.
 type Key struct {
 	Reference string
 	Signer    server.ResponseSigner
@@ -34,7 +34,7 @@ type pinnedSigner struct {
 func (signer pinnedSigner) PublicKey() []byte                   { return append([]byte{}, signer.public[:]...) }
 func (signer pinnedSigner) Sign(message []byte) ([]byte, error) { return signer.signer.Sign(message) }
 
-// Provider копирует public identities; приватные handles не экспортируются и не закрываются.
+// Provider copies public identities; private handles are not exported and not closed.
 type Provider struct {
 	store       *durable.ServerStore
 	keys        map[keyIdentity]pinnedSigner
@@ -62,7 +62,7 @@ func pinKey(input Key) (output pinnedSigner, result error) {
 	return output, nil
 }
 
-// New не создаёт state и не разрешает publication; signer inventory только OOB.
+// New does not create state and does not permit publication; the signer inventory is out-of-band only.
 func New(store *durable.ServerStore, keys []Key) (*Provider, error) {
 	if store == nil || len(keys) == 0 || len(keys) > rotation.MaxRetainedKeys {
 		return nil, ErrUnavailable
@@ -87,9 +87,9 @@ func New(store *durable.ServerStore, keys []Key) (*Provider, error) {
 	return provider, nil
 }
 
-// selectSigner требует все pending handles и текущий signer; retired handles необязательны.
+// selectSigner requires all pending handles and the current signer; retired handles are optional.
 func (provider *Provider) selectSigner(snapshot rotation.ServerSnapshot, clock rotation.ClockTuple) (pinnedSigner, error) {
-	// Snapshot уже полностью проверен; после fresh sample — только interval arithmetic.
+	// The snapshot is already fully verified; after the fresh sample only interval arithmetic remains.
 	var selected pinnedSigner
 	found := false
 	pendingCount, retiredCount := 0, 0
@@ -123,8 +123,8 @@ func (provider *Provider) selectSigner(snapshot rotation.ServerSnapshot, clock r
 	return selected, nil
 }
 
-// AuthorizeResponse не доверяет body/tool при выборе identity и не делает fallback.
-// Final однократен; Release обязателен после physical write, также при любой ошибке.
+// AuthorizeResponse does not trust the body/tool when selecting an identity and does not fall back.
+// Final is single-use; Release is required after the physical write, including on any error.
 func (provider *Provider) AuthorizeResponse(input server.ResponseKeyRequest) (server.ResponseKeyAuthorization, error) {
 	if provider == nil || provider.store == nil {
 		return server.ResponseKeyAuthorization{}, ErrUnavailable
