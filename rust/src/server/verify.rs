@@ -10,6 +10,10 @@ use crate::auth_header::{parse_request_auth, RequestAuth};
 use crate::encoding::{decode_b64url_fixed, key_id};
 use crate::error::{codes, JackError};
 use crate::server::audit::{AuditEvent, AuditSink, AUDIT_FAILURE, AUDIT_SUCCESS};
+#[cfg(target_os = "linux")]
+use crate::server::durable_admission::{
+    reserve_durable, AdmissionFinish, SharedDurableNonceStore, SnapshotWindow,
+};
 use crate::server::identity::VerifiedIdentity;
 use crate::server::native::invite_id_of;
 use crate::server::nonce::NonceStore;
@@ -150,6 +154,10 @@ pub struct Verifier {
     /// denies the route. Deliberately NOT a Config field: adding a field
     /// would break every existing struct literal of the static public API.
     server_keys: Option<Arc<dyn NativeTools>>,
+    /// Candidate durable nonce store (Go: Config.DurableNonces); None uses
+    /// the volatile store. Builder-only for the same static-API reason.
+    #[cfg(target_os = "linux")]
+    durable: Option<Arc<SharedDurableNonceStore>>,
     /// Highest clock sample seen; request time is monotonic within a process.
     high_water: AtomicI64,
 }
@@ -167,6 +175,8 @@ impl Verifier {
         Ok(Self {
             cfg,
             server_keys: None,
+            #[cfg(target_os = "linux")]
+            durable: None,
             high_water: AtomicI64::new(i64::MIN),
         })
     }
@@ -177,6 +187,16 @@ impl Verifier {
     /// infallible static constructor.
     pub fn with_server_keys(mut self, server_keys: Arc<dyn NativeTools>) -> Self {
         self.server_keys = Some(server_keys);
+        self
+    }
+
+    /// Selects the candidate durable nonce profile (Go: Config.DurableNonces).
+    /// The volatile nonce store is not used while one is configured; every
+    /// refusal maps to the candidate storage statuses and codes (spec section
+    /// 5). Linux-gated together with the durable store.
+    #[cfg(target_os = "linux")]
+    pub fn with_durable_nonces(mut self, durable: Arc<SharedDurableNonceStore>) -> Self {
+        self.durable = Some(durable);
         self
     }
 
@@ -289,6 +309,26 @@ impl Verifier {
                 codes::BAD_SIGNATURE,
                 "signature does not verify",
             );
+        }
+
+        // Candidate durable profile: reserve AFTER signature verification and
+        // BEFORE any authorization/state change/dispatch (spec section 2); the
+        // volatile store below is skipped. The committed lease is finished by
+        // the HTTP adapter after the response is produced.
+        #[cfg(target_os = "linux")]
+        if let Some(store) = self.durable.as_ref() {
+            let snapshot = match caller.as_ref() {
+                Some(entry) => SnapshotWindow::of_entry(entry.not_before, entry.not_after),
+                None => SnapshotWindow::unbounded(),
+            };
+            let window = self.window();
+            let outcome = reserve_durable(store, &auth, &signing, window, snapshot, &self.cfg.now);
+            return match outcome.final_now {
+                Some(final_now) => {
+                    self.authorize(req, &auth, final_now, caller.as_ref(), outcome.result)
+                }
+                None => outcome.result,
+            };
         }
 
         // Step 8: the nonce is recorded only after the signature verified, so
@@ -492,6 +532,10 @@ pub struct VerifyResult {
     /// handler; None for rejections and protocol-native calls (spec 02
     /// section 3).
     pub identity: Option<VerifiedIdentity>,
+    /// Committed durable admission lease; finished after the response is
+    /// produced (Go: Result.admission + Done). Linux-gated with the store.
+    #[cfg(target_os = "linux")]
+    pub admission: AdmissionFinish,
 }
 
 /// Builds the rejection form of a result: only status, code and message.
