@@ -79,11 +79,11 @@ function expectedId(entry: ResultCase): string | number {
 test("differential corpus is well-formed and sized", () => {
   assert.equal(corpus.format, "mcp-jack-rotation-property-corpus-v1");
   assert.equal(corpus.server_key_arguments.length, 50);
-  assert.equal(corpus.result_bodies.length, 33);
+  assert.equal(corpus.result_bodies.length, 45);
   assert.equal(corpus.server_key_arguments.filter((entry) => entry.accept).length, 9);
   assert.equal(corpus.server_key_arguments.filter((entry) => !entry.accept).length, 41);
-  assert.equal(corpus.result_bodies.filter((entry) => entry.accept).length, 8);
-  assert.equal(corpus.result_bodies.filter((entry) => !entry.accept).length, 25);
+  assert.equal(corpus.result_bodies.filter((entry) => entry.accept).length, 10);
+  assert.equal(corpus.result_bodies.filter((entry) => !entry.accept).length, 35);
   assert.equal(corpus.anchor_kid.length, 43);
   assert.equal(corpus.cursor_hash.length, 43);
   const record = corpus.server_key_arguments.find((entry) => entry.id === "record-cursor");

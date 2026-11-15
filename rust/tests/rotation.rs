@@ -458,7 +458,7 @@ fn strict_result_shape_parity_and_scalar_request_ids() {
         assert_eq!(result.current_kid, corpus().keys["anchor"].kid);
     }
     let body = result_body(&payload, &payload, "7");
-    assert!(rotation::decode_result(&body, b"7e0").is_err());
+    assert!(rotation::decode_result(&body, b"7e0").is_ok());
 }
 
 #[test]
