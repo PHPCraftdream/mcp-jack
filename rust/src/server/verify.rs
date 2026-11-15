@@ -272,7 +272,7 @@ impl Verifier {
         }
 
         // Step 8: the nonce is recorded only after the signature verified, so
-        // unauthenticated requests cannot fill the cache (spec 01 section 4).
+        // requests that fail verification cannot fill the cache (spec 01 section 4).
         // Store polarity: true means a live REPLAY.
         if self
             .cfg

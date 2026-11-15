@@ -435,8 +435,8 @@ export class Verifier {
       return rejected(401, Code.BAD_SIGNATURE, "signature does not verify");
     }
 
-    // Step 5: nonce, only after the signature verified, so unauthenticated
-    // requests cannot fill the cache (spec 01 section 4). True = live replay.
+    // Step 5: nonce, only after the signature verified, so
+    // requests that fail verification cannot fill the cache (spec 01 section 4). True = live replay.
     if (this.nonces.checkAndRecord(auth.kid, auth.nonce, now, auth.ts + this.window)) {
       return rejected(401, Code.REPLAYED_NONCE, "nonce was already used");
     }
