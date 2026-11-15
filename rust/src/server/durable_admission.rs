@@ -26,13 +26,8 @@ pub type SharedDurableNonceStore = DurableNonceStore<BoxedDurableClock>;
 /// Holds the dirty-serving lease of one committed reservation until the
 /// response is produced (Go: admissionLease + Result.Done). Dropping it also
 /// releases the lease, so a forgotten finish degrades safely.
+#[derive(Default)]
 pub struct AdmissionFinish(Option<DurableLease>);
-
-impl Default for AdmissionFinish {
-    fn default() -> Self {
-        Self(None)
-    }
-}
 
 impl std::fmt::Debug for AdmissionFinish {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -109,7 +104,7 @@ pub(crate) fn with_snapshot_window<T>(window: SnapshotWindow, f: impl FnOnce() -
 pub(crate) fn snapshot_window_valid(now: i64) -> bool {
     SNAPSHOT.with(|slot| {
         let window = *slot.borrow();
-        now >= 0 && now <= MAX_TIMESTAMP && now >= window.not_before && now < window.not_after
+        (0..=MAX_TIMESTAMP).contains(&now) && now >= window.not_before && now < window.not_after
     })
 }
 
@@ -251,7 +246,7 @@ pub(crate) fn reserve_durable(
         // Post-commit freshness sample (spec section 2): one further raw
         // sample after the final reservation committed, before dispatch.
         let final_now = (now_fn)();
-        if final_now < 0 || final_now > MAX_TIMESTAMP || final_now < receipt.high_water {
+        if !(0..=MAX_TIMESTAMP).contains(&final_now) || final_now < receipt.high_water {
             store.fence();
             return DurableAdmissionOutcome {
                 result: fail(

@@ -250,7 +250,7 @@ impl OwnerFile {
         let right = self.parent.metadata().map_err(|_| unavailable_store())?;
         if left.dev() != right.dev()
             || left.ino() != right.ino()
-            || read_at(&self.parent, &self.marker_name.as_os_str(), 128)? != self.marker
+            || read_at(&self.parent, self.marker_name.as_os_str(), 128)? != self.marker
         {
             return Err(unavailable_store());
         }
@@ -404,7 +404,7 @@ impl<C: FnMut() -> i64> Session<C> {
         if self.blocked() {
             return Err(unavailable());
         }
-        if now < 0 || now > MAX_TIMESTAMP || now < self.state.metadata.high_water.get() {
+        if !(0..=MAX_TIMESTAMP).contains(&now) || now < self.state.metadata.high_water.get() {
             let latched = self.update(|state| {
                 if let Some(row) = prepared {
                     remove_exact_intent(state, row)?;
@@ -715,7 +715,7 @@ impl<C: FnMut() -> i64> DurableNonceStore<C> {
         let owner = OwnerFile::acquire(path)?;
         let result = (|| {
             let sample = now();
-            if sample < 0 || sample > MAX_TIMESTAMP {
+            if !(0..=MAX_TIMESTAMP).contains(&sample) {
                 return Err(DurableStoreError::InvalidStore);
             }
             let store_id = random_bytes::<16>()?;
@@ -792,7 +792,7 @@ impl<C: FnMut() -> i64> DurableNonceStore<C> {
             write_snapshot(&owner, &encode_state(&state)?)?;
             // First confirm the dirty marker, then observe the startup clock.
             let sample = now();
-            if sample < 0 || sample > MAX_TIMESTAMP || sample < state.metadata.high_water.get() {
+            if !(0..=MAX_TIMESTAMP).contains(&sample) || sample < state.metadata.high_water.get() {
                 state.metadata.unsafe_latched = true;
                 let _ = write_snapshot(&owner, &encode_state(&state)?);
                 return Err(DurableStoreError::RecoveryRequired);

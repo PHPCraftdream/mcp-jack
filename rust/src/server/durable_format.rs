@@ -45,6 +45,7 @@ pub(crate) struct HighWater(i64);
 impl HighWater {
     /// Builds a latch value; negative inputs saturate to zero so every
     /// persisted high-water stays a valid timestamp-like value.
+    #[cfg(test)]
     pub(crate) fn new(value: i64) -> Self {
         Self(value.max(0))
     }

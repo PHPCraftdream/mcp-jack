@@ -166,7 +166,7 @@ fn seeded_live(
             nonce[..4].copy_from_slice(&i.wrapping_mul(3).to_be_bytes());
             let mut operation = [0; 16];
             operation[..4].copy_from_slice(&i.to_be_bytes());
-            let row = record_of(
+            record_of(
                 metadata,
                 kind,
                 &encode_b64url(&kid),
@@ -174,8 +174,7 @@ fn seeded_live(
                 operation,
                 ts,
                 hw,
-            );
-            row
+            )
         })
         .collect()
 }
@@ -291,8 +290,8 @@ fn different_kid_same_nonce_is_not_a_replay() {
     let store = initialized(&sandbox, &[100]);
     let (kid_a, nonce) = pair(1);
     let (kid_b, _) = pair(2);
-    store.reserve(&admission(&kid_a, &nonce, 100)).unwrap();
-    store.reserve(&admission(&kid_b, &nonce, 100)).unwrap();
+    drop(store.reserve(&admission(&kid_a, &nonce, 100)).unwrap());
+    drop(store.reserve(&admission(&kid_b, &nonce, 100)).unwrap());
     assert_eq!(decoded(&sandbox).live.len(), 2);
     store.close().unwrap();
 }
@@ -302,7 +301,7 @@ fn expiry_equality_is_live_reuse_needs_h_advance() {
     let sandbox = Sandbox::new();
     let store = initialized(&sandbox, &[100, 130, 131]);
     let (kid, nonce) = pair(1);
-    store.reserve(&admission(&kid, &nonce, 100)).unwrap();
+    drop(store.reserve(&admission(&kid, &nonce, 100)).unwrap());
     // now == retainUntil stays live; H does not advance for a pure replay.
     let error = store.reserve(&admission(&kid, &nonce, 130)).unwrap_err();
     assert_eq!(error.code, "replayed_nonce");
@@ -405,7 +404,7 @@ fn sample_below_high_water_latches_clock_unsafe_and_persists() {
     // Samples: three at 200 for the first commit, then 150 on the next entry.
     let store = initialized(&sandbox, &[200, 200, 200, 150]);
     let (kid, nonce) = pair(1);
-    store.reserve(&admission(&kid, &nonce, 200)).unwrap();
+    drop(store.reserve(&admission(&kid, &nonce, 200)).unwrap());
     // Entry sample 150 is below H=200: latch first, then clock_unsafe.
     let error = store
         .reserve(&admission(&b64(2, 32), &b64(3, 16), 150))
@@ -453,7 +452,7 @@ fn reopen_below_high_water_fails_closed_before_absence() {
     let sandbox = Sandbox::new();
     let store = initialized(&sandbox, &[216]);
     let (kid, nonce) = pair(1);
-    store.reserve(&admission(&kid, &nonce, 186)).unwrap();
+    drop(store.reserve(&admission(&kid, &nonce, 186)).unwrap());
     store.close().unwrap();
     assert!(DurableNonceStore::open(&sandbox.file(), &options(), clock(&[215])).is_err());
     let snapshot = inspect_recovery(&sandbox.file(), &options()).unwrap();
@@ -605,7 +604,7 @@ fn capacity_4096_refuses_without_eviction() {
     store.seed_records(&records).unwrap();
     // The 4096th slot is taken by a real intent + final conversion.
     let (kid, nonce) = pair(1);
-    store.reserve(&admission(&kid, &nonce, 100)).unwrap();
+    drop(store.reserve(&admission(&kid, &nonce, 100)).unwrap());
     let state = decoded(&sandbox);
     assert_eq!(state.live.len(), 4096);
     // The next admission is refused atomically, with no live row evicted.
@@ -652,9 +651,11 @@ fn purge_is_bounded_to_128_removals_per_transaction() {
     store.seed_records(&records).unwrap();
     assert_eq!(decoded(&sandbox).live.len(), 200);
     // First admission at 131 advances H and removes at most 128 expired rows.
-    store
-        .reserve(&admission(&b64(6, 32), &b64(7, 16), 131))
-        .unwrap();
+    drop(
+        store
+            .reserve(&admission(&b64(6, 32), &b64(7, 16), 131))
+            .unwrap(),
+    );
     let state = decoded(&sandbox);
     assert_eq!(state.metadata.high_water.get(), 131);
     assert_eq!(
@@ -663,9 +664,11 @@ fn purge_is_bounded_to_128_removals_per_transaction() {
         "128 expired rows removed plus the new one"
     );
     // The next transaction removes the remaining 72.
-    store
-        .reserve(&admission(&b64(8, 32), &b64(9, 16), 131))
-        .unwrap();
+    drop(
+        store
+            .reserve(&admission(&b64(8, 32), &b64(9, 16), 131))
+            .unwrap(),
+    );
     let state = decoded(&sandbox);
     assert_eq!(state.live.len(), 1);
     assert_eq!(state.expiry.len(), 1);
@@ -1022,7 +1025,7 @@ fn inspect_reports_fields_and_sensitive_hash_changes_with_state() {
     let sandbox = Sandbox::new();
     let store = initialized(&sandbox, &[100]);
     let (kid, nonce) = pair(1);
-    store.reserve(&admission(&kid, &nonce, 100)).unwrap();
+    drop(store.reserve(&admission(&kid, &nonce, 100)).unwrap());
     store.close().unwrap();
     let snapshot = inspect_recovery(&sandbox.file(), &options()).unwrap();
     assert_eq!(snapshot.deployment_id, "candidate-test-deployment");

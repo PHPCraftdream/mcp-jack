@@ -109,9 +109,9 @@ pub fn reconcile_unknown(
         if !state.metadata.dirty || snapshot_hash(&state)? != expected_hash {
             return Err(DurableStoreError::RecoveryRequired);
         }
-        let terminal = move_row_to_tombstone(&mut state, &key, receipt)?;
+        move_row_to_tombstone(&mut state, &key, receipt)?;
         write_state_bytes(&owner, &encode_state(&state)?)?;
-        Ok(terminal)
+        Ok(())
     })();
     let released = owner.release();
     match (reconciled, released) {
@@ -133,9 +133,9 @@ fn move_row_to_tombstone(
         }
         return Err(DurableStoreError::RecoveryRequired);
     }
-    let kind = if state.live.get(key).is_some() {
+    let kind = if state.live.contains_key(key) {
         RecordKind::Live
-    } else if state.intents.get(key).is_some() {
+    } else if state.intents.contains_key(key) {
         RecordKind::Intent
     } else {
         // A missing record is not proof of abort: refuse and keep the fence.
