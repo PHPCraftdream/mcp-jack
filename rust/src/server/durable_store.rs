@@ -579,8 +579,8 @@ impl<C: FnMut() -> i64> Session<C> {
                 return Err(unavailable());
             }
             state.metadata.high_water.raise(final_now);
+            // The operation index keeps its entry: the live row carries the same operation id.
             state.intents.remove(&key);
-            state.operations.remove(&operation);
             state.live.insert(key, committed.clone());
             state
                 .expiry
