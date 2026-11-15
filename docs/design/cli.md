@@ -758,6 +758,17 @@ and drain the gateway before using the local announcement command. Server-store
 recovery/serving release and broader platform/process-kill qualification remain
 separate acceptance work; selecting this profile does not authorize them.
 
+**v0.1.0 decision (owner, 2026-11-15).** v0.1.0 ships no operator command for
+serving release, tombstone disposition or ring recovery. After a crash, kill or
+power loss the ring and nonce stores stay dirty or unknown and every SDK entry
+point keeps refusing to serve (fail closed). The SDK never repairs, resets or
+clears them, and a copied clock or a copied file is not evidence. Recovery is a
+manual operator procedure outside the SDK: establish out of band that the
+previous process is gone, keep the old files untouched for investigation, and
+provision clean state. A new ring needs a checkpoint that clients already trust or
+a new out-of-band server-key pin; rotation records cannot bridge a discarded ring.
+A supported in-product recovery path is deferred to a later release.
+
 ### Shipping-binary restart qualification
 
 The mandatory Linux `Go CLI binary process qualification` job supplies the built
