@@ -211,11 +211,9 @@ fn open_trust_store(flags: &Flags, clock: &ClockFile) -> RotationTrustStore<Cloc
     };
     let path = Path::new(&flags.store);
     if !path.exists() {
-        if let Err(e) = RotationTrustStore::initialize_unused(
-            path,
-            options.clone(),
-            clock_fn(clock),
-        ) {
+        if let Err(e) =
+            RotationTrustStore::initialize_unused(path, options.clone(), clock_fn(clock))
+        {
             fatal(format!("rotation store: {}", e.code));
         }
     }
@@ -347,7 +345,7 @@ fn run_call(
                 }
             }
             Err(e) => StepResult::client_error(e.code),
-        }
+        },
     };
     finish(&mut store, &flags.step, outcome)
 }
@@ -410,7 +408,7 @@ fn run_refresh(
                 }))),
             },
             Err(e) => StepResult::client_error(e.code),
-        }
+        },
     };
     finish(&mut store, &flags.step, outcome)
 }

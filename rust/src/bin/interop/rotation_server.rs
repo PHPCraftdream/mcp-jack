@@ -230,11 +230,9 @@ pub fn run() -> ! {
     if !store_path.exists() {
         // Fresh closure per store construction; the generic C unifies per
         // call site.
-        if let Err(e) = RotationServerStore::initialize_unused(
-            store_path,
-            options.clone(),
-            clock_fn(&clock),
-        ) {
+        if let Err(e) =
+            RotationServerStore::initialize_unused(store_path, options.clone(), clock_fn(&clock))
+        {
             fatal(format!("rotation store: {}", e.code));
         }
     }
@@ -286,8 +284,10 @@ pub fn run() -> ! {
         Ok(verifier) => verifier,
         Err(e) => fatal(format!("verifier: {e}")),
     };
-    let verifier = verifier
-        .with_server_keys(Arc::new(ServerKeyTool::new(Arc::clone(&store), Arc::clone(&provider))));
+    let verifier = verifier.with_server_keys(Arc::new(ServerKeyTool::new(
+        Arc::clone(&store),
+        Arc::clone(&provider),
+    )));
 
     let layer = JackLayer::rotating(RotatingHandlerConfig {
         verifier: Arc::new(verifier),
