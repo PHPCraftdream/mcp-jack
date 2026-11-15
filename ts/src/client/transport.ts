@@ -23,6 +23,14 @@ export class StreamingUnsupportedError extends Error {
   }
 }
 
+/** Reports whether a (comma-joined) Content-Type value has a member whose media type is text/event-stream. */
+function isEventStreamValue(value: string): boolean {
+  return value.split(",").some((member) => {
+    const base = (member.split(";")[0] ?? "").replace(/^[ \t]+|[ \t]+$/g, "");
+    return base.replace(/[A-Z]/g, (c) => c.toLowerCase()) === "text/event-stream";
+  });
+}
+
 /** Reports a 401 answered WITHOUT a verified Jack-Auth header: only the status is surfaced, the body is untrusted and never parsed (spec 01 section 5). */
 export class UnauthenticatedResponseError extends Error {
   readonly status: number;
@@ -337,16 +345,14 @@ export function createSigningFetch(config: SigningFetchConfig, fetchImpl: typeof
     await refuseRedirected(resp, normalized.url);
 
     // Streaming guard BEFORE buffering: a stream cannot be body-hashed, so it
-    // cannot be verified (spec 01 section 5, open question Q1). The FIRST
-    // Content-Type header value decides (Go Header.Get): Headers.get would
-    // comma-combine duplicate headers and hide the first value's media type.
-    const firstContentType = [...resp.headers].find(([name]) => name === "content-type");
-    if (firstContentType !== undefined) {
-      const mediaType = firstContentType[1].split(";")[0]?.trim().toLowerCase();
-      if (mediaType === "text/event-stream") {
-        await cancelBody(resp);
-        throw new StreamingUnsupportedError();
-      }
+    // cannot be verified (spec 01 section 5, open question Q1). Headers.get
+    // already joins duplicate Content-Type lines with ", ": any member whose
+    // media type is text/event-stream (text before the first ';', SP/HTAB
+    // trimmed, ASCII case-insensitive) refuses the response.
+    const contentType = resp.headers.get("content-type");
+    if (contentType !== null && isEventStreamValue(contentType)) {
+      await cancelBody(resp);
+      throw new StreamingUnsupportedError();
     }
 
     const respBody = await readBodyCapped(resp, MAX_BODY_BYTES);

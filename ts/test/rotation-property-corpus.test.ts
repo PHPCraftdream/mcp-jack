@@ -79,7 +79,7 @@ function expectation(entry: ResultCase): {
  * numbers (Infinity: rejected, like the exact overflow gate of Go and Rust).
  */
 function exactBigInt(lexeme: string): bigint | undefined {
-  const m = /^(-?)(0|[1-9][0-9]*)(?:.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$/.exec(lexeme);
+  const m = /^(-?)(0|[1-9][0-9]*)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$/.exec(lexeme);
   if (m === null) return undefined;
   const sign = m[1] ?? "";
   const whole = m[2] ?? "0";

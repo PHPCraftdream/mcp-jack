@@ -264,8 +264,8 @@ type streamingRefusalCase struct {
 }
 
 // TestTransportStreamingRefusalFixture runs the shared client streaming-
-// refusal table through a spy base transport. The FIRST Content-Type header
-// value decides (Header.Get). A refused row must surface
+// refusal table through a spy base transport. All Content-Type field lines
+// take part (joined with commas, any member decides). A refused row must surface
 // ErrStreamingUnsupported with the response body closed and never read, and
 // a non-refused row must reach verification: the pinned key is random and
 // the answer unsigned, so the observable outcome is the missing-auth

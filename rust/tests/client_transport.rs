@@ -199,8 +199,8 @@ fn transport_rejects_stale_timestamp() {
 /// by the fake server with exactly the listed Content-Type header values. A
 /// refused row must yield exactly TransportError::Streaming before any
 /// verification; a non-refused row must reach verification and fail with
-/// Protocol(missing_auth), proving the stream guard did not fire. The FIRST
-/// header value decides, mirroring Go's Header.Get.
+/// Protocol(missing_auth), proving the stream guard did not fire. All
+/// Content-Type lines take part (joined with commas, any member decides).
 #[test]
 fn streaming_refusal_fixture() {
     let f = common::fixtures::load_client_streaming_refusal()

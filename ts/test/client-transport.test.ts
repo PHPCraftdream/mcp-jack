@@ -361,7 +361,7 @@ function loadStreamingRefusalCases(): readonly StreamingRefusalCase[] {
 // preserves duplicates). A refused row must reject with
 // StreamingUnsupportedError; a non-refused row must reach verification and
 // fail as an unsigned answer (missing_auth), proving the stream guard did not
-// fire. The FIRST header value decides, mirroring Go's Header.Get.
+// fire. All Content-Type lines take part (joined with commas, any member decides).
 test("client-streaming-refusal.json table", async () => {
   const cases = loadStreamingRefusalCases();
   assert.ok(cases.some((c) => c.refused) && cases.some((c) => !c.refused), "table has both kinds of rows");
