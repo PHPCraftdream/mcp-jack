@@ -197,24 +197,17 @@ func TestGatewayAuditEventsOnStderr(t *testing.T) {
 		t.Fatalf("audit time = %v, want a positive unix timestamp", events[0]["time"])
 	}
 
-	// An enrollment attempt whose invite is already used still reaches the
-	// tool with a fresh unregistered key: exactly one failure line.
+	// An enrollment attempt with an invite that is already used is no longer
+	// live: the unregistered key is an ordinary unsigned 401 unknown_key before
+	// the tool, so no new audit line is written.
 	reuse, _, _ := userkey.IssueLocalPair()
-	reuseSigner, err := userkey.ImportClientKey(reuse.Secret())
-	if err != nil {
-		t.Fatal(err)
-	}
 	reusePath := saveJSON(t, d, "reuse.json", clientConfig{Version: 1, Endpoint: "http://" + listen + "/mcp", Aud: "svc", ServerPublicKey: jack.EncodeBase64URL(pub), ServerKID: jack.KeyID(pub), KeyFile: save(t, d, "reuse.seed", reuse.Secret()), KeyFormat: "raw-seed", CallTimeoutMS: 1000})
 	if err := enroll(context.Background(), reusePath, invite, "again"); err == nil {
 		t.Fatal("invite reused")
 	}
 	events = auditEvents(t, &audit)
-	if len(events) != 2 {
-		t.Fatalf("audit lines = %d, want 2 after a failed enroll: %v", len(events), events)
-	}
-	checkAuditEvent(t, events[1], []string{"time", "tool", "outcome", "code", "actor_kid", "target"}, server.ToolEnroll, server.AuditFailure, jack.CodeInvalidInvite, "again")
-	if events[1]["actor_kid"] != reuseSigner.KID() {
-		t.Fatalf("audit actor_kid = %v, want %s", events[1]["actor_kid"], reuseSigner.KID())
+	if len(events) != 1 {
+		t.Fatalf("audit lines = %d, want 1 after an enroll refused before the tool: %v", len(events), events)
 	}
 
 	// A failed admin call (native admin is disabled): exactly one failure
@@ -231,12 +224,12 @@ func TestGatewayAuditEventsOnStderr(t *testing.T) {
 		t.Fatalf("admin call = %d, %v, want a signed 403", status, postErr)
 	}
 	events = auditEvents(t, &audit)
-	if len(events) != 3 {
-		t.Fatalf("audit lines = %d, want 3 after a failed admin call: %v", len(events), events)
+	if len(events) != 2 {
+		t.Fatalf("audit lines = %d, want 2 after a failed admin call: %v", len(events), events)
 	}
-	checkAuditEvent(t, events[2], []string{"time", "tool", "outcome", "code", "actor_kid", "actor_name"}, server.ToolAdminInviteList, server.AuditFailure, jack.CodeOperationDenied, "")
-	if events[2]["actor_kid"] != kid || events[2]["actor_name"] != "first-admin" {
-		t.Fatalf("audit actor = %v/%v, want %s/first-admin", events[2]["actor_kid"], events[2]["actor_name"], kid)
+	checkAuditEvent(t, events[1], []string{"time", "tool", "outcome", "code", "actor_kid", "actor_name"}, server.ToolAdminInviteList, server.AuditFailure, jack.CodeOperationDenied, "")
+	if events[1]["actor_kid"] != kid || events[1]["actor_name"] != "first-admin" {
+		t.Fatalf("audit actor = %v/%v, want %s/first-admin", events[1]["actor_kid"], events[1]["actor_name"], kid)
 	}
 	if upstreamCalls.Load() != 0 {
 		t.Fatal("native enrollment/admin reached upstream")

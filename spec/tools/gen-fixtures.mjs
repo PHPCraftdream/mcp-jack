@@ -856,8 +856,8 @@ seq('enroll-unknown-kid-code-padded', 'a code with base64url padding is not cano
 seq('enroll-unknown-kid-code-trailing-bits', 'a code differing only in unused trailing bits is not canonical: unknown_key', init(['root'], { invites: [inv('i1')] }), [
   step('newbie', 'jack.enroll', enrollArgs('i1', 'newbie', pk('newbie')), A('reject', 401, 'unknown_key'), { body: call('jack.enroll', { code: withTrailingBits(codeOf('i1')), name: 'newbie', public_key: pk('newbie') }) }),
 ]);
-seq('enroll-unknown-kid-live-invite', 'a live invite lets the unknown kid enroll; only the matching invite is consumed', init(['root'], { invites: [inv('i1'), inv('i2', { admin: true })] }), [
-  step('newbie', 'jack.enroll', enrollArgs('i2', 'newbie', pk('newbie')), A('accept')),
+seq('enroll-unknown-kid-live-invite', 'a live invite lets the unknown kid enroll; only the matching invite is consumed', init(['root'], { invites: [inv('i1'), inv('live', { admin: true })] }), [
+  step('newbie', 'jack.enroll', enrollArgs('live', 'newbie', pk('newbie')), A('accept')),
 ]);
 seq('enroll-unknown-kid-bad-key-no-invite', 'an identity public key with no live invite is unknown_key, not key_rejected (the invite check comes first)', init(['root']), [
   step('newbie', 'jack.enroll', enrollArgs('i1', 'newbie', b64u(IDENTITY)), A('reject', 401, 'unknown_key'), { hdr: { kid: kidOf(IDENTITY) }, sign: { kid: kidOf(IDENTITY) } }),
