@@ -941,8 +941,7 @@ fn expects_reopen_refused(harness: &Harness, case_id: &str) {
     );
     assert!(
         matches!(reopened, Err(DurableStoreError::RecoveryRequired)),
-        "{case_id}: reopened a fenced store: {:?}",
-        reopened
+        "{case_id}: a fenced store must refuse reopening with RecoveryRequired"
     );
 }
 
@@ -1086,8 +1085,8 @@ fn run_sequence(case: &VectorCase, plan: Plan) {
             "/mcp"
         };
         let result = drive_event(&harness, event, target);
-        let (status, code) = statuses[index];
-        assert_status(&case.id, &result, status, &code);
+        let (status, code) = &statuses[index];
+        assert_status(&case.id, &result, *status, code);
         if result.nonce_recorded {
             recorded += 1;
         }
