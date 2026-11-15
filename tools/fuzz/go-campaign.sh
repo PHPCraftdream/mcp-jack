@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bounded Go fuzz campaign over the trust/parse/credential boundaries: every
+# Bounded Go fuzz campaign over the trust/parse/credential, rotation and durable boundaries: every
 # target runs for a fixed fuzztime then fuzzminimizetime, so the campaign
 # always finishes. Per-target execution, logging and failure-evidence
 # collection live in run-target.sh. One failing target fails CI, but only
@@ -26,6 +26,15 @@ targets=(
   "client FuzzLoadProfile"
   "userkey FuzzImportEnvelopes"
   "userkey FuzzValidateCredential"
+  "rotation FuzzParseRecord"
+  "rotation FuzzDecodeResult"
+  "rotation FuzzDecodeServerKeyArguments"
+  "rotation FuzzDecodeServerSnapshot"
+  "rotation FuzzDecodeTrustSnapshot"
+  "rotation FuzzVerifyChain"
+  "durable FuzzDecodeMetadata"
+  "durable FuzzDecodeRecord"
+  "durable FuzzDecodeTrustGuard"
 )
 
 failed=0
