@@ -549,7 +549,7 @@ fn enrollment_key(req: &Request, kid: &str) -> Result<Vec<u8>, VerifyResult> {
     let Some(submitted) = args.get("public_key").and_then(|v| raw_as_string(v)) else {
         return Err(unknown());
     };
-    let key = match decode_b64url_fixed(submitted, 32) {
+    let key = match decode_b64url_fixed(&submitted, 32) {
         Ok(key) => key,
         Err(_) => {
             return Err(fail(
