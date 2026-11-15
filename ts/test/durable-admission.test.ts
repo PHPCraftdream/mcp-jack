@@ -334,7 +334,7 @@ test("durable admission: enrollment reserves durably before invite consumption a
     const nonces = new NonceStore();
     const verifier = new Verifier({ aud: AUD, state, nonces, native: new Native(), now: clock, durable: admission });
     const k = freshKey();
-    const args = JSON.stringify({ public_key: encodeBase64URL(k.pub), code });
+    const args = JSON.stringify({ name: "svc-enrolled", public_key: encodeBase64URL(k.pub), code });
     const enrollBody = utf8(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.enroll","arguments":${args}}}`);
     const nonce = encodeBase64URL(randomNonce());
     const msg = requestSigningString("POST", TARGET, AUD, k.kid, 100, nonce, enrollBody);

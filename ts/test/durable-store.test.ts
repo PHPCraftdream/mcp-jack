@@ -314,7 +314,7 @@ test("durable store: intents and tombstones count against capacity without live 
     assert.throws(() => store.reserve(admission(id.kid, id.nonce, 100)), denies(503, "capacity_exhausted"),
       "the outstanding intent counts against the combined cap");
     assert.equal(store.state().counts.live, 4095, "no live row is evicted");
-    store.close();
+    assert.throws(() => store.close(), unavailable, "close refuses while an outstanding intent remains");
 
     // 64 tombstones exhaust the unknown cap.
     const path3 = join(dir, "nonce-store-tomb");
@@ -327,16 +327,16 @@ test("durable store: intents and tombstones count against capacity without live 
     const store3 = DurableNonceStore.open(path3, config);
     assert.throws(() => store3.reserve(admission(id.kid, id.nonce, 100)), denies(503, "capacity_exhausted"));
     assert.equal(store3.state().counts.tombstones, 64, "no tombstone is evicted");
-    store3.close();
+    assert.throws(() => store3.close(), unavailable, "close refuses at the tombstone cap");
   });
 
 test("durable store: purge removes at most 128 expired rows per transaction", { skip: !linux }, (context) => {
   const { dir, path } = directory();
   context.after(() => rmSync(dir, { recursive: true, force: true }));
-  // 200 rows expired at 91; H=100; entry at 101 purges a bounded batch.
+  // 200 rows expired at 91 (ts=61, W=30); H=100; entry at 101 purges a bounded batch.
   const expired = sortByPair(Array.from({ length: 200 }, (_, index) => {
     const row = rowFor(`expired-${index}`, index);
-    return { ...row, timestamp: 60, retainUntil: 91, highWater: 61 };
+    return { ...row, timestamp: 61, retainUntil: 91, highWater: 61 };
   }));
   const config = options(scriptClock(100, 101, 101, 101));
   DurableNonceStore.seedDocumentForTest(path, doc(meta({ live: expired.length }), expired, [], []));
@@ -348,8 +348,9 @@ test("durable store: purge removes at most 128 expired rows per transaction", { 
   reservation.release();
   // A second admission purges the remaining expired rows.
   const second = synthetic("purge-bounded-2");
-  store.reserve(admission(second.kid, second.nonce, 101));
+  const secondReservation = store.reserve(admission(second.kid, second.nonce, 101));
   assert.equal(store.state().counts.live, 2, "only the two fresh rows remain");
+  secondReservation.release();
   store.close();
 });
 
@@ -358,7 +359,7 @@ test("durable store: expiry equality stays live; only retainUntil+1 after an H a
     const { dir, path } = directory();
     context.after(() => rmSync(dir, { recursive: true, force: true }));
     const row = rowFor("expiry", 0);
-    const config = options(scriptClock(130, 130, 130, 130));
+    const config = options(scriptClock(129, 130, 130, 130));
     DurableNonceStore.seedDocumentForTest(path, doc(meta({ highWater: 129, live: 1 }), [row], [], []));
     const store = DurableNonceStore.open(path, config);
     assert.throws(() => store.reserve(admission(row.kid, row.nonce, 100)), denies(401, "replayed_nonce"),
@@ -366,7 +367,7 @@ test("durable store: expiry equality stays live; only retainUntil+1 after an H a
     assert.equal(store.state().meta.highWater, 129, "no expiry decision, no H advance");
     store.close();
 
-    const config2 = options(scriptClock(131, 131, 131, 131));
+    const config2 = options(scriptClock(129, 131, 131, 131));
     DurableNonceStore.seedDocumentForTest(path, doc(meta({ highWater: 129, live: 1 }), [row], [], []));
     const store2 = DurableNonceStore.open(path, config2);
     const fresh = synthetic("expiry-plus-one");

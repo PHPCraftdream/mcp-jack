@@ -398,7 +398,7 @@ test("shared nonce vectors: verdict table drives every case", { skip: !linux }, 
       const seeded = buildDocument(vector.state);
       DurableNonceStore.seedDocumentForTest(path, seeded.document);
       // Startup sample: never below the seeded (possibly deviated) high water.
-      harness.queue(Math.max(events[0]?.entryNow ?? 0, seeded.highWater));
+      harness.queue(seeded.highWater);
       seededHighWater = seeded.highWater;
     }
     harness.store = DurableNonceStore.open(path, harness.config);
