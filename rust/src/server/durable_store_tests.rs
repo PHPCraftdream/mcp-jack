@@ -901,7 +901,7 @@ fn strict_loader_rejects_duplicate_and_inconsistent_indexes() {
 fn strict_loader_rejects_wrong_typed_and_inconsistent_records() {
     let (_, metadata, key, receipt) = valid_fixture();
     let metadata_sealed = encode_metadata(&metadata).unwrap();
-    let mut build = |receipt: DurableReceipt, kind_value: Option<u8>| {
+    let build = |receipt: DurableReceipt, kind_value: Option<u8>| {
         let record = DurableRecord {
             kind: RecordKind::Live,
             key,

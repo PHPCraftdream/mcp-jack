@@ -761,13 +761,13 @@ impl<C: FnMut() -> i64> DurableNonceStore<C> {
     pub fn open(
         path: &Path,
         options: &DurableStoreOptions,
-        now: C,
+        mut now: C,
     ) -> Result<Self, DurableStoreError> {
         normalized_options(options)?;
         let owner = OwnerFile::acquire(path)?;
         let loaded = (|| {
             let bytes = read_at(&owner.parent, owner.name.as_os_str(), MAX_FILE_BYTES)?;
-            let mut state = decode_state(&bytes)?;
+            let state = decode_state(&bytes)?;
             if state.metadata.deployment != options.deployment_id
                 || state.metadata.window != options.window
             {
