@@ -962,6 +962,8 @@ async function runCellFlow(ctx) {
   // Диагностика: хвосты stdout/stderr SDK-клиента всегда видны в логе CI.
   chk.note(`client stderr tail: ${JSON.stringify(run.stderr.slice(-1500))}`);
   chk.note(`client stdout tail: ${JSON.stringify(run.stdout.slice(-600))}`);
+  chk.note(`gateway stderr tail: ${JSON.stringify(held.gatewayChild._stderr().slice(-1500))}`);
+  chk.note(`proxy captures (${proxy.captures.length}): ${(() => { try { return JSON.stringify(proxy.captures.slice(0, 6)).slice(0, 1500); } catch { return 'unserializable'; } })()}`);
   const stdoutLines = run.stdout.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== '');
   const parsed = stdoutLines.length > 0 ? parseJsonOr(stdoutLines[stdoutLines.length - 1]) : null;
   // Snapshot before the purity probe adds its own 4 requests to the proxy.
