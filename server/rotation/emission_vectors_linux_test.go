@@ -178,7 +178,7 @@ func driveEmissionVector(t *testing.T, event emissionVectorEvent) {
 	if input.SelectedOrdinal == 0 {
 		name = "candidate-server-anchor"
 	}
-	fixtureKid := jack.KeyID(vectorSeed(name).PublicKey().(ed25519.PublicKey))
+	fixtureKid := jack.KeyID(vectorSeed(name).Public().(ed25519.PublicKey))
 	if input.SelectedKid != fixtureKid {
 		t.Fatalf("selectedOrdinal %d maps to kid %s, fixture selected %s",
 			input.SelectedOrdinal, fixtureKid, input.SelectedKid)

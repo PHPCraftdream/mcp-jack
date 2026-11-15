@@ -251,8 +251,8 @@ func driveClockVector(t *testing.T, event clockVectorEvent, binding rotation.Bin
 	if input.Guard.Window != 30 || input.Guard.HighWater != 173800 || input.Guard.Revision != 4 {
 		t.Fatalf("unexpected guard %+v", input.Guard)
 	}
-	if input.Binding != binding.Endpoint {
-		t.Fatalf("guard binding %q, want %q", input.Binding, binding.Endpoint)
+	if input.Guard.Binding != binding.Endpoint {
+		t.Fatalf("guard binding %q, want %q", input.Guard.Binding, binding.Endpoint)
 	}
 	var expect clockVectorExpect
 	if err := json.Unmarshal(event.Expect, &expect); err != nil {

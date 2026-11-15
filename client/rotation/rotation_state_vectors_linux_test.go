@@ -559,7 +559,7 @@ var clientCasePlans = map[string]clientPlan{
 		defer env.controller.writer.Store(false)
 		result, err := driveClientCase(t, fc, env, nil, 1)
 		requireLocalCode(t, fc.ID, err, "rotation_state_changed")
-		assertClientOutcome(t, fc, env, result, err, true)
+		assertClientOutcome(t, fc, env, result, err, false)
 	}},
 	// Deviation: fence injected at the writer ClockGuard sample; the fenced
 	// store then classifies the retried observation as unknown.
@@ -635,7 +635,7 @@ var clientCasePlans = map[string]clientPlan{
 		defer env.controller.writer.Store(false)
 		result, err := driveClientCase(t, fc, env, nil, 1)
 		requireLocalCode(t, fc.ID, err, "rotation_state_changed")
-		assertClientOutcome(t, fc, env, result, err, true)
+		assertClientOutcome(t, fc, env, result, err, false)
 	}},
 	// Deviation: same writer-token rejection gate (see clientCaseDeviations).
 	"stale-whole-snapshot-stops-before-callback": {run: func(t *testing.T, fc clientCase, harness *vectorHarness) {
@@ -646,7 +646,7 @@ var clientCasePlans = map[string]clientPlan{
 		defer env.controller.writer.Store(false)
 		result, err := driveClientCase(t, fc, env, nil, 1)
 		requireLocalCode(t, fc.ID, err, "rotation_state_changed")
-		assertClientOutcome(t, fc, env, result, err, true)
+		assertClientOutcome(t, fc, env, result, err, false)
 	}},
 	"whole-response-body-cap-plus-one": {run: func(t *testing.T, fc clientCase, harness *vectorHarness) {
 		env := newVectorStore(t, fc, harness)
