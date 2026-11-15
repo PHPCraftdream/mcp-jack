@@ -1,4 +1,3 @@
-#![allow(dead_code)] // the module is linux-gated; see interop/mod.rs.
 //! `--mode rotation-server` of interop-server: serves the trivial MCP handler
 //! under the rotating response profile backed by a private-file rotation ring
 //! store (interop/README.md rotation matrix). Announce commands arrive as one
@@ -19,7 +18,6 @@ use mcp_jack::server::http::{JackLayer, RotatingHandlerConfig};
 use mcp_jack::server::native::{Native, NativeOptions};
 use mcp_jack::server::nonce::NonceStore;
 use mcp_jack::server::server_key::ServerKeyTool;
-use mcp_jack::server::state::StateStore as _;
 use mcp_jack::server::state_file::FileState;
 use mcp_jack::server::verify::{Clock, Config, Verifier};
 use tower_layer::Layer as _;
@@ -289,7 +287,7 @@ pub fn run() -> ! {
 
     let layer = JackLayer::rotating(RotatingHandlerConfig {
         verifier: Arc::new(verifier),
-        response_keys: Arc::clone(&provider),
+        response_keys: provider.clone(),
         // 0 means the SDK default 1 MiB body/response limits.
         max_body_bytes: 0,
         max_response_bytes: 0,

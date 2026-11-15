@@ -141,18 +141,15 @@ function parseFlags(argv: readonly string[]): Flags {
     }
   }
   if (!STEPS.has(flags.step)) fail("--step must be call|refresh|wire|state");
-  const missing = (
-    [
-      ["--url", flags.url],
-      ["--aud", flags.aud],
-      ["--seed-hex", flags.seedHex],
-      ["--clock-file", flags.clockFile],
-    ] as const
-  ).filter(([_, value]) => value === "");
-  if (flags.step !== "wire") {
-    missing.push(...([["--anchor", flags.anchor], ["--store", flags.store]] as const).filter(([_, value]) => value === ""));
-  }
-  if (missing.length > 0) fail(`required flags: ${missing.map(([name]) => name).join(", ")}`);
+  const required: [string, string][] = [
+    ["--url", flags.url],
+    ["--aud", flags.aud],
+    ["--seed-hex", flags.seedHex],
+    ["--clock-file", flags.clockFile],
+  ];
+  if (flags.step !== "wire") required.push(["--anchor", flags.anchor], ["--store", flags.store]);
+  const missing = required.filter(([, value]) => value === "").map(([name]) => name);
+  if (missing.length > 0) fail(`required flags: ${missing.join(", ")}`);
   return flags;
 }
 

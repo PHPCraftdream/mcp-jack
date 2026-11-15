@@ -1,4 +1,3 @@
-#![allow(dead_code)] // the module is linux-gated; see interop/mod.rs.
 //! `--mode rotation-client` of interop-client: single-step client side of the
 //! rotation interop matrix (interop/README.md). Prints exactly one JSON
 //! result line via the shared emit() helper; startup errors go to stderr
@@ -321,7 +320,7 @@ fn run_call(
     };
     let status = response.status;
     let auth_headers = response.headers.clone();
-    let body = response.body;
+    let body = response.body.clone();
 
     let outcome: StepResult = match RotationController::new(&mut store) {
         Err(e) => StepResult::client_error(e.code),
