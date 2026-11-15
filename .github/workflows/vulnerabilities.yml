@@ -59,7 +59,7 @@ jobs:
         with:
           persist-credentials: false
       # The advisory scanner's toolchain baseline is separate from product MSRV 1.85.
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@1.120.0
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny@0.20.2
