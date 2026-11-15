@@ -20,21 +20,17 @@ const client = new Client(
   { versionNegotiation: { mode: 'legacy' }, supportedProtocolVersions: ['2025-11-25'] },
 );
 
+// Stderr моста копится с самого начала, чтобы ошибка соединения была видна в логе.
+let bridgeStderr = '';
+const stderrStream = transport.stderr ?? null;
+if (stderrStream) {
+  stderrStream.on('data', (chunk) => {
+    bridgeStderr += chunk.toString('utf8');
+  });
+}
+
 try {
   await client.connect(transport);
-
-  let stderrBytes = null;
-  const stderrStream = transport.stderr ?? null;
-  if (stderrStream) {
-    stderrBytes = 0;
-    void (async () => {
-      try {
-        for await (const chunk of stderrStream) stderrBytes += chunk.length;
-      } catch {
-        // closed while draining; the count stays partial
-      }
-    })();
-  }
 
   const tools = await client.listTools();
   if (!Array.isArray(tools.tools) || !tools.tools.some((tool) => tool.name === 'echo')) {
@@ -46,10 +42,11 @@ try {
     throw new Error('tools/call: echo marker missing');
   }
 
-  console.log(JSON.stringify({ ok: true, client: 'ts', echo_listed: true, marker_found: true, bridge_stderr_bytes: stderrBytes }));
+  console.log(JSON.stringify({ ok: true, client: 'ts', echo_listed: true, marker_found: true, bridge_stderr_bytes: stderrStream ? Buffer.byteLength(bridgeStderr) : null }));
   process.exit(0);
 } catch (err) {
   console.error(String(err));
+  console.error(`bridge stderr: ${bridgeStderr.slice(-800)}`);
   process.exit(1);
 } finally {
   try {

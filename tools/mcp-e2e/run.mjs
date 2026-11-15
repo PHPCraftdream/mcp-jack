@@ -274,7 +274,10 @@ function rawRequest(options, timeoutMs) {
 // the upstream content-length header stays valid for the client.
 function startProxy(proxyPort, gwPort, tamper) {
   const captures = [];
+  // Диагностика: запросы фиксируются при получении, до ответа upstream.
+  const received = [];
   const server = httpCreateServer((req, res) => {
+    received.push(`${req.method} ${req.url}`);
     req.on('error', () => {
       try {
         res.destroy();
@@ -357,6 +360,7 @@ function startProxy(proxyPort, gwPort, tamper) {
       resolve({
         port: proxyPort,
         captures,
+        received,
         close: () => new Promise((done) => {
           if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
           server.close(() => done());
@@ -962,6 +966,7 @@ async function runCellFlow(ctx) {
   // Диагностика: хвосты stdout/stderr SDK-клиента всегда видны в логе CI.
   chk.note(`client stderr tail: ${JSON.stringify(run.stderr.slice(-1500))}`);
   chk.note(`client stdout tail: ${JSON.stringify(run.stdout.slice(-600))}`);
+  chk.note(`proxy received (${proxy.received.length}): ${JSON.stringify(proxy.received.slice(0, 8))}`);
   chk.note(`gateway stderr tail: ${JSON.stringify(held.gatewayChild._stderr().slice(-1500))}`);
   chk.note(`proxy captures (${proxy.captures.length}): ${(() => { try { return JSON.stringify(proxy.captures.slice(0, 6)).slice(0, 1500); } catch { return 'unserializable'; } })()}`);
   const stdoutLines = run.stdout.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== '');
