@@ -256,6 +256,50 @@ jobs:
       - name: Run the rotation matrix
         run: node interop/rotation.mjs
 
+  mcp-compat-e2e:
+    name: mcp compat e2e (official clients x official servers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.25.0'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/mcp-e2e/rust
+      - name: Require committed fixture lockfiles
+        run: |
+          missing=0
+          for f in tools/mcp-e2e/go/go.sum tools/mcp-e2e/ts/package-lock.json tools/mcp-e2e/rust/Cargo.lock; do
+            if [ ! -f "$f" ]; then
+              echo "::error::Missing $f: generate it from the pinned fixtures (go mod tidy / npm install / cargo generate-lock) and commit it before this job can run."
+              missing=1
+            fi
+          done
+          exit "$missing"
+      - name: Download pinned Go fixture dependencies
+        working-directory: tools/mcp-e2e/go
+        run: go mod download
+      - name: Install pinned TypeScript fixtures
+        working-directory: tools/mcp-e2e/ts
+        run: npm ci --no-audit --no-fund
+      - name: Build the Rust fixtures (locked)
+        working-directory: tools/mcp-e2e/rust
+        run: cargo build --locked --release
+      - name: Build the shipping CLI
+        run: go build -trimpath -o "$RUNNER_TEMP/jack" ./cmd/jack
+      - name: Run the official MCP SDK end-to-end matrix
+        env:
+          JACK_BIN: ${{ runner.temp }}/jack
+        run: node tools/mcp-e2e/run.mjs
+
   credential-transfer:
     name: credential transfer matrix (3x3)
     runs-on: ubuntu-latest
