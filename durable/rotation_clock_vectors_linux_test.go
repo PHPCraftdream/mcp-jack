@@ -207,6 +207,13 @@ func TestRotationStateClockVectors(t *testing.T) {
 		"clock-advance-persists-revision":             true,
 	}
 
+	// Event families driven by other packages (see rotation/rotation_state_vectors_test.go).
+	otherPackageEvents := map[string]string{
+		"same-second-greatest-ordinal-wins":         "rotation",
+		"server-final-eligible-single-signature":    "server/rotation",
+		"server-final-cutoff-no-resign":             "server/rotation",
+		"server-final-generation-fence-no-fallback": "server/rotation",
+	}
 	seen := make(map[string]int, len(fixture.EventCases))
 	driven := 0
 	for _, event := range fixture.EventCases {
@@ -215,8 +222,11 @@ func TestRotationStateClockVectors(t *testing.T) {
 		case plans[event.ID]:
 			driven++
 			t.Run(event.ID, func(t *testing.T) { driveClockVector(t, event, binding) })
+		case otherPackageEvents[event.ID] != "":
+			// Driven and reverse-guarded by the named package runner.
+			continue
 		default:
-			t.Fatalf("event_case %q has no clock plan (it belongs to another package or is unaccounted)", event.ID)
+			t.Fatalf("event_case %q has no clock plan and is not accounted by another package", event.ID)
 		}
 	}
 	for id := range plans {

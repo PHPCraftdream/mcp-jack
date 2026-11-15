@@ -26,7 +26,7 @@ import (
 )
 
 const emissionVectorFixtureFormat = "mcp-jack-candidate-rotation-state-v1"
-const emissionVectorFixturePath = "../spec/fixtures/candidate/rotation-state-vectors.json"
+const emissionVectorFixturePath = "../../spec/fixtures/candidate/rotation-state-vectors.json"
 
 type emissionVectorFixture struct {
 	Format     string                `json:"format"`
