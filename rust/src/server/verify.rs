@@ -10,8 +10,8 @@ use crate::encoding::{decode_b64url_fixed, key_id};
 use crate::error::{codes, JackError};
 use crate::server::audit::{AuditEvent, AuditSink, AUDIT_FAILURE, AUDIT_SUCCESS};
 use crate::server::identity::VerifiedIdentity;
-use crate::server::nonce::NonceStore;
 use crate::server::native::invite_id_of;
+use crate::server::nonce::NonceStore;
 use crate::server::state::{RegistryEntry, StateStore};
 use crate::signing::{request_signing_string, DEFAULT_WINDOW_SECONDS};
 
@@ -733,7 +733,11 @@ fn scan_string(body: &[u8], start: usize, collect: bool) -> Option<(usize, Strin
                 }
                 // A high surrogate must be followed immediately by \uDC00..\uDFFF.
                 let low = low_surrogate_at(body, i + 6)?;
-                push_scalar(&mut out, collect, 0x10000 + ((v - 0xD800) << 10) + (low - 0xDC00));
+                push_scalar(
+                    &mut out,
+                    collect,
+                    0x10000 + ((v - 0xD800) << 10) + (low - 0xDC00),
+                );
                 i += 12;
             }
             _ => {
@@ -1286,10 +1290,7 @@ mod tests {
             (
                 "code is not a string",
                 Some(NOW + 60),
-                format!(
-                    r#"{{"code":7,"public_key":"{}"}}"#,
-                    carol.public_key
-                ),
+                format!(r#"{{"code":7,"public_key":"{}"}}"#, carol.public_key),
             ),
             (
                 "code absent",
