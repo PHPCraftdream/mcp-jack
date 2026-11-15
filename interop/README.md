@@ -18,6 +18,7 @@ interop/
   scenarios.json                    current request scenarios and expected outcomes
   sign-cases.json                   8 exact signing-byte oracle cases
   run.mjs                           request matrix, sign/verify phases, fake self-test
+  rotation.mjs                      rotation matrix, self-test, fake driver
   targets.json                      Go, Rust and TypeScript executable argv
   transfer.mjs                      independent credential-transfer matrix
   transfer-{checks,fixtures,matrix,public,refusals,trust,process}.mjs
@@ -25,12 +26,15 @@ interop/
   tools/gen-sign-cases.mjs           signing-vector generator/checker (not run here)
   tools/fake-{client,server}.mjs     request-harness self-test only; not SDKs
   tools/transfer-child.mjs           transfer lifecycle self-test child
+  tools/rotation-fake.mjs            rotation fake peer (page/page-tamper/old-key)
+  tools/fake-rotation-{server,client}.mjs  rotation self-test fakes; not SDKs
   go/{server,client,transfer}/       Go integration executable sources
+  go/{rotationserver,rotationclient}/  Go rotation executable sources
   ../rust/src/bin/interop*.rs        Rust integration executable sources
   ../ts/src/interop/*.ts             TypeScript integration executable sources
 ```
 
-`targets.json` currently maps Go to `interop/bin/go-{server,client,transfer}`, Rust to `rust/target/release/interop-{server,client,transfer}`, and TypeScript to `node ts/dist/interop/{server,client,transfer}.js`. These are build/output paths, not claims that binaries currently exist. On Windows, the request harness tries `.exe` for a missing binary path. Target-file relative paths resolve from the repository root; a bare command is resolved on `PATH`.
+`targets.json` currently maps Go to `interop/bin/go-{server,client,transfer}`, Rust to `rust/target/release/interop-{server,client,transfer}`, and TypeScript to `node ts/dist/interop/{server,client,transfer}.js`. The `rotation_server`/`rotation_client` roles map to the same Go, Rust and TypeScript rotation executables (`interop/bin/go-rotation-{server,client}`, the Rust `interop-server`/`interop-client` binaries with `--mode rotation-server|rotation-client` pre-args, and `ts/dist/interop/rotation-{server,client}.js`). These are build/output paths, not claims that binaries currently exist. On Windows, the request harness tries `.exe` for a missing binary path. Target-file relative paths resolve from the repository root; a bare command is resolved on `PATH`.
 
 Build instructions (not executed for this documentation update):
 
@@ -38,11 +42,13 @@ Build instructions (not executed for this documentation update):
 go build -o interop/bin/go-server ./interop/go/server
 go build -o interop/bin/go-client ./interop/go/client
 go build -o interop/bin/go-transfer ./interop/go/transfer
+go build -o interop/bin/go-rotation-server ./interop/go/rotationserver
+go build -o interop/bin/go-rotation-client ./interop/go/rotationclient
 cargo build --manifest-path rust/Cargo.toml --locked --release --features interop --bin interop-server --bin interop-client --bin interop-transfer
 npm --prefix ts run build
 ```
 
-Rust's `interop` feature enables the interop binaries/dependencies; the transfer binary is behind that feature. TypeScript output is built from `ts/src/interop/`. Go outputs must be placed where `targets.json` points (or the targets file adjusted).
+Rust's `interop` feature enables the interop binaries/dependencies; the transfer binary is behind that feature. TypeScript output is built from `ts/src/interop/`. Go outputs must be placed where `targets.json` points (or the targets file adjusted). The Rust `--features interop` build above already produces the `--mode rotation-server|rotation-client` binaries, and `npm run build` already covers `ts/dist/interop/rotation-{server,client}.js`. The rotation harness runs on Linux only: the rotation private-file stores in all three SDKs refuse other platforms.
 
 ## 3. Running
 
@@ -340,3 +346,43 @@ node interop/transfer.mjs --self-test
 The transfer self-test uses actual SDK probes for positive issuance/import/public verification before running refusal and lifecycle controls. Its expectations include exact fixture credential bytes; signature verification against independently pinned key material; wrong identity, signature, message, envelope, connection, issued bytes, and export-freshness mutations; all-accept/all-reject verifier controls; rejection-class and result-shape controls; and child truncation, extra output, invalid UTF-8, overflow, timeout, spawn failure, secret-safe diagnostics, synthetic post-exit stdout, cleanup timeout, and owned-child accounting. Lifecycle controls specifically expect success for normal and final-chunk output; classify exit-2, truncated, malformed, no-newline, extra-line, invalid-UTF-8, overflow, stderr-secret, timeout, and spawn-failure probes; reject invalid timeout options; retain stdout emitted after `exit` until `close`; and kill/reap the owned PID within bounded cleanup, including reporting `cleanup_timeout` if a synthetic child cannot close. These are specified controls, not reported outcomes; no test was run here. For the current baseline, transfer matrix and self-test acceptance were verified in GitHub CI on `444c69b` (see readiness evidence).
 
 Transfer design references: [`docs/design/user-keys.md`](../docs/design/user-keys.md) is normative for exact credential canonicalization, import ordering, trust comparison, result redaction, mutability, and language-role API obligations; `spec/fixtures/user-key-transfer.json` is the hand-maintained case source. Transfer envelope `type` is a document discriminator, not legacy user `kind`.
+
+## 12. Rotation matrix
+
+The rotation matrix proves every client language interoperates with every server language on the candidate server-key rotation bytes. [`docs/design/server-key-rotation.md`](../docs/design/server-key-rotation.md) is the sr1 proposal; the implemented candidate contract is `spec/candidate/server-key-rotation.md`, and Go is the reference implementation.
+
+Entry point (Node >= 20, no external runtime dependencies):
+
+```sh
+node interop/rotation.mjs [--targets <file>] [--servers <l,l,...>] [--clients <l,l,...>]
+                          [--list] [--self-test]
+```
+
+Exit codes have the same meaning as section 3: `0` all selected checks pass; `1` a check failure; `2` harness/usage/contract error.
+
+Executable contract, concisely. The rotation server runs with `--aud <aud> --url <url> --state <file> --server-seed-hex <64 hex> --rotation-store <path> --clock-file <file> [--port <n>] [--ring-seed <ref>=<hex>]...`; it prints the usual ready line, and the driver announces a ring reference over stdin with `{"op":"announce","reference":...,"kid":...}`. The announce result line reports `published_at` (the server's own clock sample) and `activates_at` (`published_at + 172800`). The rotation client runs with `--step call|refresh|wire|state --url <url> --aud <aud> --seed-hex <64 hex> [--anchor <b64u>] [--store <path>] --clock-file <file> [--cursor <o>:<h>] [--tool <name>]` and prints one result line `{"scenario":...,"outcome":"ok|rejected|client_error","http_status":...,"code":...,"data":...}`.
+
+Every time sample comes from the `--clock-file` integer, and the driver moves clocks forward monotonically between steps. Clock injection exists only in these interop executables (and the fake peer); it is never new SDK public API.
+
+The matrix pins 14 named checks:
+
+| Check | What it proves |
+|---|---|
+| `announce` | Fixed P is sampled once and A = P + 172800. |
+| `s1-pre-rotation` | K0 signs and verifies before rotation. |
+| `s2-refresh-overlap` | An explicit single-page refresh during overlap commits the pending key with a strict cursor. |
+| `s3-overlap-old-key` | The old key still signs during overlap. |
+| `n1-cursor-beyond-head` | A cursor beyond the head is refused with HTTP 409 `rotation_checkpoint_unavailable`. |
+| `n2-cursor-malformed` | A malformed cursor is refused with HTTP 400 `invalid_params`. |
+| `n3-ring-lacks-cursor` | A fresh independent ring refuses a foreign cursor with HTTP 409. |
+| `n4-wrong-audience` | A wrong audience is refused with HTTP 401 `bad_signature` (existing v1 error ordering). |
+| `n5-tampered-page` | The client rejects a signed-but-tampered page with `rotation_record_invalid`. |
+| `n5b-tamper-no-commit` | No state mutation follows the tamper failure. |
+| `c1-fake-page-accepted` | The driver-built canonical page is accepted; the fake is a harness producer, not an SDK. |
+| `s4-cutoff-successor` | At exactly A the successor signs and is accepted. |
+| `s5-old-key-after-cutoff` | An old-key response at or after the cutoff is refused with `rotation_key_interval`. |
+| `c2-state-stable` | Failed controls never fall back, retry, or mutate trust. |
+
+The fake peer `tools/rotation-fake.mjs` (page, page-tamper, and old-key modes) is driver-owned harness tooling like `tools/fake-server.mjs` and is never SDK evidence. The self-test fakes exercise driver logic only and are not SDKs.
+
+Limits: single-page refresh only (no pagination); no quarantine/conflict coverage; no capacity/compaction coverage; no concurrent publishers or restart/recovery; no bridge-expired refusal (the client never receives a first-seen record at or after A in this matrix); no Windows/macOS runs; no durable-nonce profile; no fuzzing. Per-language deeper coverage stays in the SDK test suites.

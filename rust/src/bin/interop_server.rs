@@ -29,12 +29,21 @@ use interop::{hex_decode_32, unix_now};
 
 /// Parsed command line (Go's flag set).
 struct Flags {
+    mode: String,
     aud: String,
     state: String,
     seed_hex: String,
     bootstrap_ttl: Option<String>,
     verify_only: bool,
+    /// Set when a rotation-mode-only flag was consumed; without --mode that
+    /// stays a usage error (default behavior unchanged).
+    rotation_flag: bool,
 }
+
+/// Flags that only --mode rotation-server consumes (parsed by
+/// interop::rotation_server); listed here so they pass the default mode's
+/// parser when --mode is present.
+const ROTATION_MODE_FLAGS: [&str; 5] = ["url", "rotation-store", "clock-file", "port", "ring-seed"];
 
 /// fail prints a startup error to stderr and exits nonzero. Startup failures
 /// must never touch stdout so the harness never sees a partial ready line.
@@ -49,11 +58,13 @@ fn fail(msg: impl std::fmt::Display) -> ! {
 fn parse_flags() -> Flags {
     let mut args = std::env::args().skip(1);
     let mut flags = Flags {
+        mode: String::new(),
         aud: String::new(),
         state: String::new(),
         seed_hex: String::new(),
         bootstrap_ttl: None,
         verify_only: false,
+        rotation_flag: false,
     };
     while let Some(arg) = args.next() {
         if !arg.starts_with("--") {
@@ -73,16 +84,28 @@ fn parse_flags() -> Flags {
             }
         };
         match name.as_str() {
+            "mode" => flags.mode = value("mode"),
             "aud" => flags.aud = value("aud"),
             "state" => flags.state = value("state"),
             "server-seed-hex" => flags.seed_hex = value("server-seed-hex"),
             "bootstrap-ttl" => flags.bootstrap_ttl = Some(value("bootstrap-ttl")),
             "verify-only" => flags.verify_only = true,
-            _ => fail(format!("unknown flag --{name}")),
+            _ => {
+                // Rotation-mode-only flags are consumed here so the rotation
+                // parser can see them; without --mode they remain unknown.
+                if !ROTATION_MODE_FLAGS.contains(&name.as_str()) {
+                    fail(format!("unknown flag --{name}"));
+                }
+                let _ = value(&name);
+                flags.rotation_flag = true;
+            }
         }
     }
     if flags.aud.is_empty() || flags.state.is_empty() || flags.seed_hex.is_empty() {
         fail("--aud, --state and --server-seed-hex are required");
+    }
+    if flags.mode.is_empty() && flags.rotation_flag {
+        fail("rotation-mode flags require --mode");
     }
     flags
 }
@@ -190,6 +213,20 @@ fn run_verify_only(aud: &str, state: &FileState) -> ! {
 }
 
 fn main() {
+    // Rotation dispatch happens before the runtime: rotation-server builds
+    // its own tokio runtime and must not run inside block_on.
+    let probe = parse_flags();
+    if !probe.mode.is_empty() {
+        #[cfg(target_os = "linux")]
+        if probe.mode == "rotation-server" {
+            interop::rotation_server::run();
+        }
+        #[cfg(not(target_os = "linux"))]
+        if probe.mode == "rotation-server" {
+            fail("rotation-server mode requires linux (private-file rotation stores)");
+        }
+        fail(format!("unknown --mode {}", probe.mode));
+    }
     // Sync setup (flags, files, verify-only) never touches the runtime.
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()

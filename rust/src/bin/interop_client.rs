@@ -7,6 +7,13 @@
 
 mod interop; // src/bin/interop/: shared helpers, net transport, scenarios
 
+// The rotation-server module (shared through interop/mod.rs) names
+// crate::mcp::TrivialService, so the client bin must declare it too; it is
+// dead code in this crate.
+#[allow(dead_code)]
+#[path = "interop/mcp.rs"]
+mod mcp;
+
 use std::collections::HashMap;
 
 use mcp_jack::client::signer::{InMemorySigner, Signer as _};
@@ -17,6 +24,7 @@ use interop::{fatal, hex_decode_32, unix_now, Outcome, SeedKey, SeedsFile, StepR
 
 /// Parsed command line (Go's flag set).
 struct Flags {
+    mode: String,
     url: String,
     seed_hex: String,
     pub_key: String,
@@ -28,7 +36,24 @@ struct Flags {
     ts: Option<i64>,
     nonce: String,
     args: HashMap<String, String>,
+    /// Set when a rotation-mode-only flag was consumed; without --mode that
+    /// stays a usage error (default behavior unchanged).
+    rotation_flag: bool,
 }
+
+/// Flags that only --mode rotation-client consumes (parsed by
+/// interop::rotation_client); listed here so they pass the default mode's
+/// parser when --mode is present.
+const ROTATION_MODE_FLAGS: [&str; 8] = [
+    "step",
+    "store",
+    "anchor",
+    "cursor",
+    "tool",
+    "window",
+    "timeout-ms",
+    "clock-file",
+];
 
 /// Hand-rolled flag parsing (Go's flag package is not a dependency). Accepts
 /// both `--flag value` and `--flag=value`; unknown flags, missing values and
@@ -36,6 +61,7 @@ struct Flags {
 fn parse_flags() -> Flags {
     let mut args = std::env::args().skip(1);
     let mut flags = Flags {
+        mode: String::new(),
         url: String::new(),
         seed_hex: String::new(),
         pub_key: String::new(),
@@ -45,6 +71,7 @@ fn parse_flags() -> Flags {
         ts: None,
         nonce: String::new(),
         args: HashMap::new(),
+        rotation_flag: false,
     };
     while let Some(arg) = args.next() {
         if !arg.starts_with("--") {
@@ -64,6 +91,7 @@ fn parse_flags() -> Flags {
             }
         };
         match name.as_str() {
+            "mode" => flags.mode = value("mode"),
             "url" => flags.url = value("url"),
             "seed-hex" => flags.seed_hex = value("seed-hex"),
             "server-public-key" => flags.pub_key = value("server-public-key"),
@@ -88,14 +116,29 @@ fn parse_flags() -> Flags {
                 };
                 flags.args.insert(k, v);
             }
-            _ => fatal(format!("unknown flag --{name}")),
+            _ => {
+                // Rotation-mode-only flags are consumed here so the rotation
+                // parser can see them; without --mode they remain unknown.
+                if !ROTATION_MODE_FLAGS.contains(&name.as_str()) {
+                    fatal(format!("unknown flag --{name}"));
+                }
+                let _ = value(&name);
+                flags.rotation_flag = true;
+            }
         }
     }
-    if flags.scenario.is_empty() {
-        fatal("--scenario is required");
-    }
-    if flags.seed_hex.is_empty() {
-        fatal("--seed-hex is required");
+    // Default-mode requirements: skipped entirely when the run dispatches to
+    // the rotation parser (which enforces its own flag set).
+    if flags.mode.is_empty() {
+        if flags.scenario.is_empty() {
+            fatal("--scenario is required");
+        }
+        if flags.seed_hex.is_empty() {
+            fatal("--seed-hex is required");
+        }
+        if flags.rotation_flag {
+            fatal("rotation-mode flags require --mode");
+        }
     }
     flags
 }
@@ -166,6 +209,18 @@ fn run_sign_only(flags: &Flags, primary: &InMemorySigner) -> ! {
 
 fn main() {
     let flags = parse_flags();
+    if !flags.mode.is_empty() {
+        // The rotation profile is linux-gated: private-file rotation stores.
+        #[cfg(target_os = "linux")]
+        if flags.mode == "rotation-client" {
+            interop::rotation_client::run();
+        }
+        #[cfg(not(target_os = "linux"))]
+        if flags.mode == "rotation-client" {
+            fatal("rotation-client mode requires linux (private-file rotation stores)");
+        }
+        fatal(format!("unknown --mode {}", flags.mode));
+    }
     let seed = match hex_decode_32(&flags.seed_hex) {
         Ok(s) => s,
         Err(_) => fatal("--seed-hex must be 64 hex chars decoding to 32 bytes"),

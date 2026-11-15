@@ -67,3 +67,15 @@ Per row, each runner exercises three entry paths:
 Go limitation: `Transport` sees only the already-parsed `req.URL`, so rows the Go parser rejects (`http.NewRequest` fails) or normalises (percent-decoded host, dropped or escaped path or fragment bytes) cannot be presented to `RoundTrip` as the raw string. The Go runner classifies each row explicitly as parser-rejected, refused-at-transport or parser-normalised, and asserts that the pre-parser policy rejects the raw string in every `allow=false` case. TypeScript `createSigningFetch` checks URL and Request inputs on their WHATWG-normalised `href` (`Request.url` or `URL.href`); a string input is checked as given. In server-side pure Fetch handling, `Request.url` is normalized and cannot recover the original target spelling. The `node:http` adapter preserves the exact received origin-form target in the exported `RAW_TARGET_SYMBOL` through verification and copies it to the reconstructed request for forwarding. This adapter metadata is separate from SDK-private identity storage in the WeakMap, which remains unaffected; pure Fetch cannot recover the original target.
 
 Fragments are never signed. In TS, the comparison of the response URL against the request URL ignores the fragment.
+
+## 10. Rotation interop matrix (candidate)
+
+The candidate server-key rotation (`spec/candidate/server-key-rotation.md`; Go reference) is exercised by `interop/rotation.mjs` over all nine (client, server) language pairs in the CI job `rotation interop matrix (3x3)`. The older statement in the "Layout and independent transfer contract" section that rotation "is not implemented" predates this harness and refers to the sr1 proposal.
+
+The executable model mirrors the request harness: a Go/Rust/TypeScript rotation server process and a rotation client process per pair, with flags, ready-line, announce control, and result-line contracts documented in `interop/README.md` section 12 rather than duplicated here. Every time sample comes from a driver-controlled `--clock-file` integer that moves forward monotonically between steps; clock injection exists only in these interop executables (and the fake peer), never as new SDK public API.
+
+The matrix pins observable cross-language guarantees: signer selection at the P and A boundaries agrees across languages; strict-cursor refresh pages produced by one language are accepted by consumers in the others; the client enforces the strict cutoff for first-seen records; the documented 400/409/401 error paths (`invalid_params`, `rotation_checkpoint_unavailable`, `bad_signature`) are produced and verified consistently; and the no-fallback/no-retry property is observable through unchanged ACKed client state after failed controls.
+
+Not covered: single-page refresh only (no pagination); no quarantine/conflict, capacity/compaction, concurrent publishers, or restart/recovery; no bridge-expired refusal; no Windows/macOS runs; no durable-nonce profile; no fuzzing. Per-language deeper coverage stays in the SDK test suites.
+
+All three rotation store backends are Linux private-file stores, so the CI job is ubuntu-only and local non-Linux runs are unsupported by design.
