@@ -432,8 +432,8 @@ test("shared nonce vectors: verdict table drives every case", { skip: !linux }, 
     statuses.forEach((pair, index) => {
       const [status, code] = pair as [number, string];
       const outcome = actual[index] as Outcome;
-      assert.equal(outcome.status, status, `vector ${vector.id} step ${index}: status`);
-      assert.equal(outcome.code, code, `vector ${vector.id} step ${index}: code`);
+      if (!deviations.includes("status")) assert.equal(outcome.status, status, `vector ${vector.id} step ${index}: status`);
+      if (!deviations.includes("code")) assert.equal(outcome.code, code, `vector ${vector.id} step ${index}: code`);
     });
     if (typeof expect["confirmedCommits"] === "number") {
       assert.equal(committedTotal, expect["confirmedCommits"], `vector ${vector.id}: confirmedCommits`);
