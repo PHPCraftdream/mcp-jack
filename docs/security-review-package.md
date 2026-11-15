@@ -68,7 +68,7 @@ covered by the shared corpus; the others are investigated, not changed.
 
 | # | Input | Go | Rust | TypeScript | Now |
 |---|---|---|---|---|---|
-| 1 | Lone surrogate `�` in method, params.name or a member name | replaced by U+FFFD, accepted | rejected only in materialized strings, accepted inside raw-captured values | accepted as is | `400 invalid_request` in all three (spec 02) |
+| 1 | Lone surrogate escape (`\ud800`) in `method`, `params.name` or a member name | replaced by U+FFFD, accepted | rejected only in materialized strings, accepted inside raw-captured values | accepted as is | `400 invalid_request` in all three (spec 02) |
 | 2 | JSON nesting depth | rejected above 10000 | raw capture unlimited, materialized values 128 | unbounded tokenizer | more than 128 levels is `400 invalid_request` in all three (spec 02) |
 | 3 | Signature with a small-order `R` | accepted | rejected | accepted | rejected in all three; vectors in the shared corpus |
 | 4 | Absolute-form request target | full URI is signed | path and query only | raw `req.url` | unchanged; unreachable for a client that signs origin-form; a spec sentence is proposed |
