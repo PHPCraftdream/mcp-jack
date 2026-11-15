@@ -130,7 +130,7 @@ fn write_file(mut file: File, bytes: &[u8]) -> Result<(), RotationError> {
     file.sync_all().map_err(|_| unknown())
 }
 
-/// Внутренний lifetime owner; Drop не удаляет marker и не подтверждает clean state.
+/// Internal lifetime owner; Drop does not remove the marker and does not confirm clean state.
 pub(super) struct FileOwner {
     parent: File,
     parent_path: PathBuf,

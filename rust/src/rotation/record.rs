@@ -20,7 +20,7 @@ fn decimal(text: &str, maximum: u64, code: &'static str) -> Result<u64, Rotation
     Ok(value)
 }
 
-/// Только codec/proof verification; не fetch, persistence, ACK или admission carrier.
+/// Only codec/proof verification; not fetch, persistence, ACK, or an admission carrier.
 pub fn parse_record(
     wire: &[u8],
     binding: Binding<'_>,
@@ -95,7 +95,7 @@ pub fn parse_record(
     if key_id(old_public) != lines[5] || validate_public_key(old_public).is_err() {
         return Err(invalid("unknown_authorizer"));
     }
-    // Array length12 проверена выше; B — exact первые10 строк без final LF.
+    // Array length12 checked above; B is exactly the first 10 lines without the final LF.
     let body = lines[..10].join("\n");
     if !verify(
         &public_key,

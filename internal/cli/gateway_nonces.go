@@ -8,11 +8,11 @@ import (
 	"github.com/PHPCraftdream/mcp-jack/server"
 )
 
-// Durable window ограничен так, чтобы rate*(2*window+1) не заполнил capacity
-// nonce до очистки; связь проверяет TestGatewayAdmissionBudget.
+// The durable window is bounded so rate*(2*window+1) does not fill nonce
+// capacity before cleanup; TestGatewayAdmissionBudget verifies the relation.
 const maxDurableWindow = 30
 
-// Профиль выбирается явно; gateway никогда не создаёт и не сбрасывает store.
+// The profile is chosen explicitly; the gateway never creates or resets the store.
 type gatewayDurableConfig struct {
 	Path         string `json:"path"`
 	DeploymentID string `json:"deployment_id"`
@@ -29,7 +29,7 @@ func (c *gatewayDurableConfig) validate(maxConcurrent int) error {
 	return nil
 }
 
-// Возвращённый owner закрывается только после остановки HTTP и drain handlers.
+// The returned owner is closed only after the HTTP server has stopped and handlers drained.
 func selectGatewayNonces(c gatewayConfig, verifier *server.Config) (func() error, error) {
 	if verifier == nil || verifier.Nonces != nil || verifier.DurableNonces != nil || c.DurableNonces.validate(c.MaxConcurrent) != nil {
 		return nil, errConfig

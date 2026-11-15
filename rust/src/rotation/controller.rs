@@ -7,8 +7,8 @@ use crate::client::rotation_auth::{verify_rotation_carrier, RotationCarrier, Rot
 use crate::error::{codes, JackError};
 use std::collections::BTreeMap;
 
-/// Caller передаёт actual status, raw auth value и signature конкретного request.
-/// Transport отвечает за TLS/destination/redirect/deadline/header/body bounds.
+/// The caller passes the actual status, raw auth value, and signature of a specific request.
+/// The transport is responsible for TLS/destination/redirect/deadline/header/body bounds.
 pub struct RotationResponse {
     pub status: i64,
     pub headers: Vec<String>,
@@ -63,7 +63,7 @@ fn known_keys(
         .collect()
 }
 
-/// Только bounded scalar/interval/capacity checks после authoritative sample.
+/// Only bounded scalar/interval/capacity checks after the authoritative sample.
 fn time_valid(
     snapshot: &TrustSnapshot,
     carrier: &RotationCarrier,
@@ -111,8 +111,8 @@ fn time_valid(
     Ok(())
 }
 
-/// Store остаётся caller-owned; mutable borrow сериализует safe operations.
-/// Нет fetch, retry, implicit refresh или изменения static credentials.
+/// The store stays caller-owned; the mutable borrow serializes safe operations.
+/// No fetch, retry, implicit refresh, or changes to static credentials.
 pub struct RotationController<'a, C: FnMut() -> Result<u64, RotationError>> {
     store: &'a mut RotationTrustStore<C>,
 }
@@ -175,14 +175,14 @@ impl<'a, C: FnMut() -> Result<u64, RotationError>> RotationController<'a, C> {
         time_valid(snapshot, carrier, &clock)
     }
 
-    /// Owned exact opaque body выдаётся только после final gate; это не refresh ACK.
+    /// The owned exact opaque body is returned only after the final gate; this is not a refresh ACK.
     pub fn verify_response(&mut self, response: RotationResponse) -> Result<Vec<u8>, JackError> {
         let owned = self.outer(response)?;
         self.final_gate(&owned.snapshot, &owned.carrier)?;
         Ok(owned.body)
     }
 
-    /// Только явно запрошенная страница. Late final error не откатывает confirmed ACK.
+    /// Only the explicitly requested page. A late final error does not roll back a confirmed ACK.
     pub fn accept_refresh(
         &mut self,
         response: RotationResponse,

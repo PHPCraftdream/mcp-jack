@@ -12,7 +12,7 @@ import (
 	"github.com/PHPCraftdream/mcp-jack/rotation"
 )
 
-// Отдельный private OOB profile; init/status не загружают private signer material.
+// Separate private OOB profile; init/status do not load private signer material.
 type serverKeyConfig struct {
 	Version         int                     `json:"version"`
 	StoreFile       string                  `json:"store_file"`
@@ -50,7 +50,7 @@ func offlineServerKeyProfile(path string) (serverKeyConfig, durable.ServerOption
 	return config, options, nil
 }
 
-// Подтверждение — заявление never-used binding, не migration/recovery proof.
+// Confirmation is an assertion of a never-used binding, not migration/recovery proof.
 func serverKeyInitializeUnused(configPath, confirmedEndpoint, confirmedAudience string) error {
 	config, options, err := offlineServerKeyProfile(configPath)
 	if err != nil || confirmedEndpoint != config.Endpoint || confirmedAudience != config.Aud {

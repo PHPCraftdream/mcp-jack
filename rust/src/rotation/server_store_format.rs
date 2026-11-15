@@ -5,10 +5,10 @@ use super::{
     SignerReference,
 };
 
-/// Domain отделяет server ring от client trust: файлы не взаимозаменяемы.
+/// Domain separates the server ring from client trust: the files are not interchangeable.
 pub(super) const SERVER_DOMAIN: &str = "mcp-jack/server-ring/private-file/v1";
 
-/// Независимый OOB profile плюс opaque handle подписанта anchor key; handle не key authority.
+/// Independent OOB profile plus an opaque signer handle for the anchor key; the handle is not key authority.
 #[derive(Clone)]
 pub struct RotationServerStoreOptions {
     pub binding: OwnedBinding,
@@ -30,7 +30,7 @@ impl RotationServerStoreOptions {
         }
     }
 
-    /// Anchor ring: один checkpoint key с его opaque reference, revision 1, clock ещё не sampled.
+    /// Anchor ring: one checkpoint key with its opaque reference, revision 1, clock not yet sampled.
     pub(super) fn anchor(&self) -> Result<ServerSnapshot, RotationError> {
         let base = self.base();
         let public = base.anchor().map_err(|_| refuse())?;
@@ -82,7 +82,7 @@ pub(super) fn unpack_server(
         base.window,
         &base.checkpoint,
     )?;
-    // Copied clock внутри snapshot не опережает authoritative guard.
+    // The copied clock inside the snapshot does not run ahead of the authoritative guard.
     if snapshot.public.clock.high_water > clock.high_water
         || snapshot.public.clock.revision > clock.revision
     {

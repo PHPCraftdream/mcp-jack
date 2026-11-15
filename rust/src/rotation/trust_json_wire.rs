@@ -32,7 +32,7 @@ impl<'de> Deserialize<'de> for Unsigned {
     }
 }
 
-// Не Option field: known_cutoff обязан присутствовать, но допускает explicit null.
+// Not an Option field: known_cutoff must be present but allows explicit null.
 #[derive(Serialize)]
 #[serde(transparent)]
 pub(super) struct Cutoff(pub(super) Option<u64>);
@@ -65,7 +65,7 @@ impl<'de, T: Deserialize<'de>, const LIMIT: usize> Deserialize<'de> for BoundedV
                 mut self,
                 mut sequence: A,
             ) -> Result<Self::Value, A::Error> {
-                // size_hint не определяет allocation; extra element не сохраняется.
+                // size_hint does not determine the allocation; an extra element is not kept.
                 while self.0.len() < LIMIT {
                     match sequence.next_element::<T>()? {
                         Some(value) => self.0.push(value),

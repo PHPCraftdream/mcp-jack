@@ -28,7 +28,7 @@ func nativeError(status int, code string) *jack.Error {
 	return &jack.Error{HTTPStatus: status, Code: code, Message: "server key request unavailable"}
 }
 
-// Call обслуживает только explicit candidate route, никогда не forwarding.
+// Call serves only the explicit candidate route, never forwarding.
 func (provider *Provider) Call(call *server.NativeCall) (server.NativeResult, *jack.Error) {
 	if provider == nil || provider.store == nil || call == nil || call.Tool != server.ToolServerKey || call.Caller == nil {
 		return server.NativeResult{}, nativeError(403, jack.CodeOperationDenied)
@@ -62,7 +62,7 @@ func (provider *Provider) Call(call *server.NativeCall) (server.NativeResult, *j
 	if cursor.Hash != expectedHash {
 		return server.NativeResult{}, nativeError(409, "rotation_checkpoint_unavailable")
 	}
-	// Все proof/hash операции завершены до authoritative sample.
+	// All proof/hash operations complete before the authoritative sample.
 	clock, err := provider.store.CheckSnapshotClock(snapshot)
 	if err != nil {
 		return server.NativeResult{}, nativeError(503, "rotation_state_unavailable")
@@ -85,7 +85,7 @@ func (provider *Provider) Call(call *server.NativeCall) (server.NativeResult, *j
 	return server.NativeResult{Structured: page}, nil
 }
 
-// Полный envelope/parity parse до signing-time clock; payload не key authority.
+// Full envelope/parity parse before the signing-time clock; the payload is not key authority.
 func decodeNativeResponse(input server.ResponseKeyRequest) (*rotation.DecodedResult, error) {
 	if input.Tool != server.ToolServerKey || input.Status != 200 {
 		return nil, nil

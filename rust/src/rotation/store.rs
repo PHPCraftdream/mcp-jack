@@ -9,8 +9,8 @@ use super::{
 use crate::encoding::{body_hash, encode_b64url};
 use std::path::Path;
 
-/// Private Linux profile; callback и синхронный I/O должны завершаться bounded.
-/// Drop сохраняет dirty epoch/marker; только explicit close подтверждает clean state.
+/// Private Linux profile; callback and synchronous I/O must complete in bounded time.
+/// Drop keeps the dirty epoch/marker; only explicit close confirms a clean state.
 pub struct RotationTrustStore<C: FnMut() -> Result<u64, RotationError>> {
     file: FileOwner,
     options: RotationStoreOptions,
@@ -24,7 +24,7 @@ pub struct RotationTrustStore<C: FnMut() -> Result<u64, RotationError>> {
 }
 
 impl<C: FnMut() -> Result<u64, RotationError>> RotationTrustStore<C> {
-    /// Explicit unused creation, не recovery или перезапись существующего состояния.
+    /// Explicit unused creation, not recovery or overwriting existing state.
     pub fn initialize_unused(
         path: &Path,
         options: RotationStoreOptions,
@@ -40,7 +40,7 @@ impl<C: FnMut() -> Result<u64, RotationError>> RotationTrustStore<C> {
         let mut bundle = Bundle::new(encode_b64url(&id), profile, &anchor, &options)?;
         let first = bundle.pack()?;
         let mut file = FileOwner::create_unused(path, &first)?;
-        // Dirty state и marker подтверждены до первого callback.
+        // Dirty state and marker confirmed before the first callback.
         let result = (|| {
             let sampled = now().map_err(|_| invalid("rotation_state_unknown"))?;
             if sampled > MAX_TIMESTAMP {
@@ -61,7 +61,7 @@ impl<C: FnMut() -> Result<u64, RotationError>> RotationTrustStore<C> {
         Ok(())
     }
 
-    /// Noncreating startup; dirty/unsafe/uncertain artifacts не исправляются автоматически.
+    /// Noncreating startup; dirty/unsafe/uncertain artifacts are not repaired automatically.
     pub fn open(path: &Path, options: RotationStoreOptions, now: C) -> Result<Self, RotationError> {
         let anchor = options.anchor()?;
         let profile = body_hash(options.encode(&anchor)?.as_bytes());
@@ -128,7 +128,7 @@ impl<C: FnMut() -> Result<u64, RotationError>> RotationTrustStore<C> {
         Ok(state)
     }
 
-    /// Preliminary sample, не durable ClockGuard authority.
+    /// Preliminary sample, not durable ClockGuard authority.
     pub fn raw_clock(&mut self) -> Result<u64, RotationError> {
         self.begin("rotation_clock_unavailable")?;
         let result = (self.now)();
@@ -142,7 +142,7 @@ impl<C: FnMut() -> Result<u64, RotationError>> RotationTrustStore<C> {
         }
     }
 
-    /// Committed read без нового time sample или trust ACK.
+    /// Committed read without a new time sample or trust ACK.
     pub fn snapshot(&mut self) -> Result<(TrustSnapshot, ClockTuple), RotationError> {
         self.begin("rotation_state_unavailable")?;
         let result = (|| {
@@ -211,7 +211,7 @@ impl<C: FnMut() -> Result<u64, RotationError>> RotationTrustStore<C> {
         }
     }
 
-    /// Exact whole-snapshot/current-guard CAS; logical clock bytes не меняются.
+    /// Exact whole-snapshot/current-guard CAS; logical clock bytes are not changed.
     pub fn compare_and_swap(
         &mut self,
         expected: &TrustSnapshot,
@@ -260,7 +260,7 @@ impl<C: FnMut() -> Result<u64, RotationError>> RotationTrustStore<C> {
         self.file.fence();
     }
 
-    /// Caller обязан отдельно завершить network/final gates; Drop не заменяет close.
+    /// The caller must separately finish network/final gates; Drop does not replace close.
     pub fn close(&mut self) -> Result<(), RotationError> {
         if self.closed {
             return Ok(());

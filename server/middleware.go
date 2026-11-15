@@ -26,9 +26,9 @@ type HandlerConfig struct {
 	Verifier *Verifier
 	// ServerKey signs responses (spec 01 section 5); clients pin its public key.
 	ServerKey ed25519.PrivateKey
-	// ResponseSigner выбирается явно вместо ServerKey, с фиксированной public identity.
+	// ResponseSigner is selected explicitly instead of ServerKey, with a fixed public identity.
 	ResponseSigner ResponseSigner
-	// ResponseKeys — отдельный opt-in authorization/final-gate profile, без fallback.
+	// ResponseKeys is a separate opt-in authorization/final-gate profile, with no fallback.
 	ResponseKeys ResponseKeyProvider
 	// MaxBodyBytes bounds the request body; zero means 1 MiB. The body must
 	// be read in full to be hashed, so the limit is a denial-of-service guard.
@@ -316,7 +316,7 @@ func (h *handler) writeSigned(w http.ResponseWriter, status int, header http.Hea
 		var err error
 		sig, err = responseSignature(h.signer, h.public, signing)
 		if err != nil {
-			// Нет unsigned success, provider detail, fallback или retry. Nonce уже consumed.
+			// No unsigned success, provider detail, fallback, or retry. Nonce is already consumed.
 			writeError(w, http.StatusServiceUnavailable, "internal_error", "response signing unavailable")
 			return
 		}

@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 const WINDOW: u64 = 30;
 
-// Именованная мутация: метка для сообщения об ошибке и in-place изменение snapshot.
+// Named mutation: a label for the error message and an in-place change to the snapshot.
 type Mutation = (&'static str, fn(&mut ServerSnapshot));
 
 #[derive(Deserialize)]
@@ -71,7 +71,7 @@ fn overlapping(corpus: &Corpus) -> Vec<Record> {
         .expect("independent valid chain")
 }
 
-/// Реально подписанная цепочка с равным P: все ключи pending; возвращает и свой anchor.
+/// A really signed chain with equal P: all keys are pending; also returns its own anchor.
 fn signed_chain(corpus: &Corpus, count: u8) -> (Checkpoint, Vec<Record>) {
     let mut old = InMemorySigner::from_seed(&[0; 32]).expect("test signer");
     let root = Checkpoint {
@@ -100,7 +100,7 @@ fn signed_chain(corpus: &Corpus, count: u8) -> (Checkpoint, Vec<Record>) {
     (root, records)
 }
 
-/// Первый key — checkpoint; каждый record добавляет следующий (P = published_at последнего).
+/// The first key is the checkpoint; each record adds the next one (P = published_at of the last).
 fn trust_from(corpus: &Corpus, root: &Checkpoint, records: &[Record]) -> TrustSnapshot {
     let owned = OwnedBinding {
         endpoint: corpus.binding.endpoint.clone(),
@@ -158,7 +158,7 @@ fn trust_from(corpus: &Corpus, root: &Checkpoint, records: &[Record]) -> TrustSn
     }
 }
 
-/// Каждому key соответствует opaque provider handle, не private-key material.
+/// Each key maps to an opaque provider handle, not private-key material.
 fn server_from(public: TrustSnapshot) -> ServerSnapshot {
     let signer_references = public
         .keys
@@ -220,7 +220,7 @@ fn protected_references_round_trip_without_entering_public_trust_or_aliasing() {
         .expect("public trust encode");
     let public = String::from_utf8(public).expect("utf8 public trust");
     assert!(!public.contains("opaque-provider") && !public.contains("signer_refs"));
-    // Reference — opaque handle: совпадение значений у разных kid не делает его key authority.
+    // A reference is an opaque handle: matching values across different kids do not make it a key authority.
     let mut shared = input.clone();
     shared.signer_references[1].reference = shared.signer_references[0].reference.clone();
     validate(&shared, &corpus, &root).expect("opaque handles are not identities");
@@ -387,13 +387,13 @@ fn server_key_arguments_accept_only_one_canonical_cursor() {
         decode(&arguments("1", &first.hash)).expect("record cursor"),
         cursor(1, &first.hash)
     );
-    // Порядок членов и whitespace не значимы; семантика не зависит от last-wins map.
+    // Member order and whitespace are insignificant; semantics does not depend on the last-wins map.
     assert_eq!(
         decode(r#" { "after_hash" : "-" ,"after_ordinal" : 0 } "#).expect("reordered"),
         cursor(0, "-")
     );
-    // JSON-литерал -0 — целое ноль; escaped member name декодируется до сравнения имён.
-    // Escapes (U+006F, U+0068) строятся без backslash-литералов в источнике.
+    // The JSON literal -0 is integer zero; an escaped member name is decoded before name comparison.
+    // The escapes (U+006F, U+0068) are built without backslash literals in the source.
     let slash = char::from(92_u8);
     let escaped_ordinal = format!("after_{slash}u006frdinal");
     let escaped_hash = format!("after_{slash}u0068ash");
@@ -412,7 +412,7 @@ fn server_key_arguments_accept_only_one_canonical_cursor() {
             .ordinal,
         rotation::MAX_ORDINAL
     );
-    // Последний символ canonical hash имеет нулевые trailing bits; "B" их нарушает.
+    // The last character of the canonical hash has zero trailing bits; "B" breaks them.
     let trailing_bits = format!("{}B", &first.hash[..42]);
     assert_ne!(trailing_bits, first.hash);
     let bad = [
@@ -537,7 +537,7 @@ fn server_key_page_is_bounded_to_16_records_and_always_advances() {
     let rest = page(&snapshot, 16, &records[15].hash, &signer).expect("remaining page");
     assert_eq!(rest.records, wires(16..20));
     assert!(rest.complete);
-    // Ровно 16 записей до head: страница complete без пустого продолжения.
+    // Exactly 16 records up to head: the page is complete with no empty continuation.
     let exact = validate(
         &server_from(trust_from(&corpus, &root, &records[..16])),
         &corpus,
@@ -579,7 +579,7 @@ fn server_key_page_refuses_cursors_outside_the_ring_and_foreign_signers() {
             "{ordinal}:{hash}"
         );
     }
-    // Подписант вне ring никогда не получает fallback на другой key.
+    // A signer outside the ring never falls back to another key.
     let mut outsider = signer;
     outsider[0] ^= 1;
     let error = page(&snapshot, 0, "-", &outsider).expect_err("foreign signer");

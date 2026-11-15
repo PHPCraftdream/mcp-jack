@@ -22,7 +22,7 @@ struct ServerDocument {
     signer_refs: BoundedVec<Object<SignerReferenceDocument>, MAX_RETAINED_KEYS>,
 }
 
-/// Private local format Go rotation/server_state.go; caller не передаёт его клиентам.
+/// Private local format like Go rotation/server_state.go; the caller does not send it to clients.
 pub fn encode_server_snapshot(
     input: &ServerSnapshot,
     binding: Binding<'_>,
@@ -54,7 +54,7 @@ pub fn encode_server_snapshot(
     Ok(encoded)
 }
 
-/// Strict map-only parse сохраняет fences/unsafe; успешный decode не является serving readiness.
+/// Strict map-only parse preserves fences/unsafe; a successful decode is not serving readiness.
 pub fn decode_server_snapshot(
     bytes: &[u8],
     binding: Binding<'_>,
