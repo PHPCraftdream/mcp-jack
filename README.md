@@ -23,7 +23,7 @@ The repository-root Go package `jack` contains shared protocol primitives only; 
 
 ## Contract
 
-Authenticated ordinary MCP requests pass through unchanged. The application authorizes them using the immutable verified caller identity `{kid, name, admin}` supplied by the server SDK; request headers and bodies cannot supply that identity. The strict-boolean `admin` flag (false by default) gates reserved `jack.admin.*` tools only. Protocol operations are audited. User `kind`, scopes, and the policy engine are removed; legacy registry/state records containing `kind` or `scopes` are rejected without migration or rewrite.
+Authenticated ordinary MCP requests pass through unchanged. The application authorizes them using the immutable verified caller identity `{kid, name, admin}` supplied by the server SDK; request headers and bodies cannot supply that identity. The strict-boolean `admin` flag (false by default) gates reserved `jack.admin.*` tools only. Protocol operations are audited by the SDKs through an optional sink; the CLI gateway does not configure one yet (see [docs/independent-review.md](docs/independent-review.md)). User `kind`, scopes, and the policy engine are removed; legacy registry/state records containing `kind` or `scopes` are rejected without migration or rewrite.
 
 User-key rotation, server response-key rotation (`spec/candidate/server-key-rotation.md`), and the optional durable nonce profile are implemented. An authenticated session channel is future v0.2 direction.
 
@@ -144,7 +144,7 @@ The server can rotate its response-signing key without re-pinning clients. One `
 | 6 | On Windows the CLI stores fail closed by design; SDKs are tested on Windows in CI, the durable private-file stores are Linux-only. |
 | 7 | Audit delivery is best effort. |
 | 8 | Rust and TypeScript are covered by deterministic property/mutation tests and a shared corpus, not coverage-guided fuzzing (Go has a bounded fuzz campaign). |
-| 9 | The release is not independently audited. An internal, non-independent pre-review exists ([docs/security-review-package.md](docs/security-review-package.md)). |
+| 9 | The release has had no human or third-party audit. It has had an internal pre-review ([docs/security-review-package.md](docs/security-review-package.md)) and an independent AI review that read the source without running it ([docs/independent-review.md](docs/independent-review.md)). |
 | 10 | Only the Go SDK and the CLI gateway have the durable nonce store; Rust and TypeScript servers keep nonces in memory. |
 | 11 | A forward clock jump latches the durable stores unsafe for good and there is no recovery command, and unauthenticated load is limited only by the gateway's global admission limits; see "Operational limits to plan for" in [docs/operations.md](docs/operations.md). |
 
@@ -157,6 +157,7 @@ See also [docs/operations.md](docs/operations.md) and [docs/threat-model.md](doc
 | [docs/operations.md](docs/operations.md) | operator guide, recovery runbook, rotation runbook |
 | [docs/threat-model.md](docs/threat-model.md) | threat model |
 | [docs/security-review-package.md](docs/security-review-package.md) | internal pre-review findings, SDK divergences and questions for an external reviewer |
+| [docs/independent-review.md](docs/independent-review.md) | result of the independent AI review: findings, coverage, dispositions |
 | [SECURITY.md](SECURITY.md) | security policy |
 | [CHANGELOG.md](CHANGELOG.md) | repository history and unreleased changes |
 | [docs/versioning.md](docs/versioning.md) | versioning policy |
