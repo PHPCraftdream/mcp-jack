@@ -203,6 +203,11 @@ const authHeaders = (headers) => headers.filter(([n]) => n.toLowerCase() === 'ja
 const hasOnly = (obj, keys) => Object.keys(obj).every((k) => keys.includes(k));
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const unknownField = (obj, allowed) => `unknown field: ${Object.keys(obj).find((k) => !allowed.includes(k))}`;
+// Integer fields are int64 in the Go reference: an exact integer above the
+// int64 range is still a representable JS number, so the range must be
+// checked explicitly (Number.isInteger alone accepts 2^63, and 2^63-1
+// rounds up to 2^63, so the upper bound is strict: v < 2^63; -2^63 is exact).
+const inInt64 = (v) => typeof v === 'number' && Number.isInteger(v) && v >= -9223372036854775808 && v < 9223372036854775808;
 
 // Per-entry validation shared by the registry and the state file. Returns null when valid, else a reason.
 const ENTRY_FIELDS = ['kid', 'public_key', 'name', 'admin', 'not_before', 'not_after'];
@@ -223,7 +228,7 @@ function validateEntry(e, kids, names) {
   kids.add(e.kid);
   names.add(e.name);
   for (const f of ['not_before', 'not_after']) {
-    if (e[f] !== undefined && e[f] !== null && (!Number.isInteger(e[f]) || e[f] < 0)) return 'validity';
+    if (e[f] !== undefined && e[f] !== null && (!inInt64(e[f]) || e[f] < 0)) return 'validity';
   }
   if (e.not_before != null && e.not_after != null && e.not_before >= e.not_after) return 'validity';
   return null;
@@ -263,10 +268,10 @@ export function validateStateFile(doc) {
     if (typeof r.created_by !== 'string' || r.created_by === '') return 'created_by';
     if ('admin' in r && r.admin !== true && r.admin !== false) return 'admin must be a strict boolean';
     for (const f of ['created_at', 'expires_at']) {
-      if (!Number.isInteger(r[f]) || r[f] < 0) return f;
+      if (!inInt64(r[f]) || r[f] < 0) return f;
     }
     if (r.created_at > r.expires_at) return 'expires_at';
-    if (r.key_ttl_seconds !== undefined && (!Number.isInteger(r.key_ttl_seconds) || r.key_ttl_seconds < 1 || r.key_ttl_seconds > 31536000)) return 'key_ttl_seconds';
+    if (r.key_ttl_seconds !== undefined && (!inInt64(r.key_ttl_seconds) || r.key_ttl_seconds < 1 || r.key_ttl_seconds > 31536000)) return 'key_ttl_seconds';
     if (inviteIds.has(r.invite_id)) return 'duplicate_invite_id';
     inviteIds.add(r.invite_id);
   }
@@ -436,6 +441,8 @@ function unacceptableBodyText(text) {
 
 function classify(body) {
   let parsed;
+  // A leading UTF-8 BOM (EF BB BF) makes the body unacceptable (spec 02 section 2).
+  if (body.length >= 3 && body[0] === 0xef && body[1] === 0xbb && body[2] === 0xbf) return null;
   try {
     const text = new TextDecoder('utf-8', { fatal: true }).decode(body);
     if (unacceptableBodyText(text)) return null;
