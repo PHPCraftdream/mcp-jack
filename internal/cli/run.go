@@ -219,7 +219,7 @@ func run(ctx context.Context, args []string, streams IO) error {
 			return err
 		}
 		if args[0] == "gateway" {
-			return gateway(ctx, f["config"])
+			return gateway(ctx, f["config"], streams.Err)
 		}
 		return bridge(ctx, f["config"], streams)
 	}

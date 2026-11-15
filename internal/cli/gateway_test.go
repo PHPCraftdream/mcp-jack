@@ -221,7 +221,7 @@ func testGatewayBootstrapEnrollNoNativeForward(t *testing.T, configure func(*gat
 	path := saveJSON(t, d, "gateway.json", cfg)
 	ctx, stop := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- gateway(ctx, path) }()
+	go func() { done <- gateway(ctx, path, io.Discard) }()
 	t.Cleanup(func() {
 		stop()
 		select {
