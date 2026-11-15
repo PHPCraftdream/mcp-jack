@@ -1502,7 +1502,7 @@ mod tests {
         none(deep(127).as_str());
         // Brackets inside string values never count toward depth.
         let in_string = format!(
-            r#"{{"jsonrpc":"2.0","id":1,"method":"ping","params":{{"x":"{}{}"}}"}}"#,
+            r#"{{"jsonrpc":"2.0","id":1,"method":"ping","params":{{"x":"{}{}"}}}}"#,
             "[[".repeat(200),
             "]]".repeat(200)
         );

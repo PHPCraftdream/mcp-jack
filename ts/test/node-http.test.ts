@@ -359,6 +359,9 @@ test("E6b forwarded request preserves raw target beside normalized URL and priva
 });
 
 test("E6c a GET with a body is verified over the exact bytes sent", { timeout: 5000 }, async () => {
+  // A GET body is framed by an explicit content-length: node:http adds neither
+  // content-length nor chunking to a GET on its own, so the bytes would reach
+  // the server unframed.
   // Pipeline: verify. undici's Request constructor refuses a GET body, so
   // WITHOUT the RAW_BODY_SYMBOL handoff the bytes never reach the hash and
   // the verifier sees an empty body -> bad_signature; with it, the GET is
@@ -367,7 +370,7 @@ test("E6c a GET with a body is verified over the exact bytes sent", { timeout: 5
   const bodyBuf = Buffer.from(pingBody, "utf-8");
   const header = signRequest(alice, fixtureAud, "GET", "/mcp", utf8(pingBody), randomNonce(), fixtureNow);
   const sig = parseRequestAuth([header]).sig;
-  const res = await rawRequest(port, "GET", "/mcp", { "jack-auth": header, "content-type": "application/json" }, bodyBuf);
+  const res = await rawRequest(port, "GET", "/mcp", { "jack-auth": header, "content-type": "application/json", "content-length": String(bodyBuf.length) }, bodyBuf);
   assert.equal(res.status, 200);
   assert.equal(res.body.toString("utf-8"), nextJson);
   assert.ok(jackAuthValues(res.headers).length > 0, "the forwarded GET answer is signed");
@@ -381,7 +384,7 @@ test("E6d a GET body covered by a signature over different bytes is bad_signatur
   const alice = seedSignerByName("alice");
   const bodyBuf = Buffer.from(pingBody, "utf-8");
   const header = signRequest(alice, fixtureAud, "GET", "/mcp", utf8('{"jsonrpc":"2.0","id":1,"method":"other"}'), randomNonce(), fixtureNow);
-  const res = await rawRequest(port, "GET", "/mcp", { "jack-auth": header, "content-type": "application/json" }, bodyBuf);
+  const res = await rawRequest(port, "GET", "/mcp", { "jack-auth": header, "content-type": "application/json", "content-length": String(bodyBuf.length) }, bodyBuf);
   assert.equal(res.status, 401);
   assert.ok(res.body.toString("utf-8").includes("bad_signature"), res.body.toString("utf-8"));
 });
