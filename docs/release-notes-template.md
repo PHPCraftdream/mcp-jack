@@ -41,14 +41,15 @@ These names and matrix dimensions are from current workflow source, not proof of
 
 | Workflow path | Source-defined job names / dimensions | Candidate run ID/attempt | Exact tested SHA | Observed result/evidence |
 |---|---|---|---|---|
-| `.github/workflows/ci.yml` | `go (ubuntu-latest)`, `go (windows-latest)`, `go race`, `fixtures are up to date`, `rust (ubuntu-latest)`, `rust (windows-latest)`, `rust 1.88 check`, `ts (ubuntu-latest, node 20)`, `ts (ubuntu-latest, node 22)`, `ts (windows-latest, node 20)`, `ts (windows-latest, node 22)`, `interop matrix (3x3)`, `credential transfer matrix (3x3)`, `consumer ts (node 20)`, `consumer ts (node 22)`, `consumer rust 1.88`, `consumer go 1.22` |  |  |  |
+| `.github/workflows/ci.yml` | `go (ubuntu-latest)`, `go (windows-latest)`, `go race`, `fixtures are up to date`, `rust (ubuntu-latest)`, `rust (windows-latest)`, `rust 1.88 check`, `ts (ubuntu-latest, node 20)`, `ts (ubuntu-latest, node 22)`, `ts (windows-latest, node 20)`, `ts (windows-latest, node 22)`, `interop matrix (3x3)`, `credential transfer matrix (3x3)`, `rotation interop matrix (3x3)`, `mcp compat e2e (official clients x official servers)`, `Go CLI binary process qualification`, `Go CLI native Darwin process qualification`, `Go CLI portable artifact qualification`, `consumer ts (node 20)`, `consumer ts (node 22)`, `consumer rust 1.88`, `consumer go 1.25` |  |  |  |
 | `.github/workflows/coverage.yml` | `go coverage`, `rust coverage`, `ts coverage` |  |  |  |
 | `.github/workflows/fuzz.yml` | `go fuzz (bounded campaign)` |  |  |  |
 | `.github/workflows/license.yml` | `go licences`, `rust licences`, `ts licences`, `dual-licence manifests` |  |  |  |
 | `.github/workflows/vulnerabilities.yml` | `Go govulncheck (module)`, `Go govulncheck (package)`, `Go govulncheck (symbol)`, `Rust advisories`, `npm audit (ts)`, `npm audit (tools/license/tooling)` |  |  |  |
-| `.github/workflows/spec-fixtures.yml` | `generate and upload fixtures` (only if this workflow ran) |  |  |  |
+| `.github/workflows/spec-fixtures.yml` | `generate and upload fixtures`, `generate and upload candidate fixtures` (only if this workflow ran) |  |  |  |
+| `.github/workflows/release-candidate.yml` | jobs as defined by the workflow once merged (manual run for one exact SHA; build, checksum, attestation, downloaded-bytes verification, Go proxy check) |  |  |  |
 
-Distinguish success from skipped, cancelled, setup-failed, scanner-failed, advisory finding, and infrastructure failure. Consumer-package lanes exercise their defined packages; they are not release-binary builds. Current workflow source has no RC binary, per-file RC checksum, or attestation job. `spec-fixtures.yml` is not a PR-triggered workflow; the PR-triggered fixture-freshness candidate is `fixtures are up to date` in `ci.yml`.
+Distinguish success from skipped, cancelled, setup-failed, scanner-failed, advisory finding, and infrastructure failure. Consumer-package lanes exercise their defined packages; they are not release-binary builds. The RC binary, per-file checksum, attestation and downloaded-bytes verification jobs belong to `release-candidate.yml`, which is started manually for one exact SHA; until a run is observed they are unobserved. `spec-fixtures.yml` is not a PR-triggered workflow; the PR-triggered fixture-freshness candidate is `fixtures are up to date` in `ci.yml`.
 
 ### Produced artifact inventory and provenance
 
@@ -91,12 +92,12 @@ Re-evaluate against the exact candidate; these are baseline limitations, not can
 - Non-loopback connections require TLS. Response signatures provide integrity/authenticity under configured key trust, not confidentiality.
 - Embedded endpoint, audience, and server-key pin values are not independent trust anchors; record independent sources and compatibility.
 - Ordinary application authorization is separate from reserved protocol admin operations.
-- Nonces are in memory and lost on restart; no restart guard is implemented. D-2 semantics are unresolved.
-- Server response-signing-key rotation is not implemented. D-3 delivery/semantics are unresolved and distinct from implemented user-key rotation.
-- Go CLI, gateway, and stdio-bridge scope is approved but not accepted delivery. PR #17 is an open candidate with runtime CI pending.
-- A single active owner per state store is assumed; there is no cross-process lock.
-- Rust migration is merged: Hickory resolver/net/proto 0.26.1, development `time` 0.3.47 / `time-core` 0.1.8, product MSRV 1.88; the current CI names are `rust 1.88 check` and `consumer rust 1.88`. Go is 1.22 compatibility; Node is 20/22. Record actual candidate toolchains.
-- Go 1.22 compatibility is not a deployment security endorsement. Record the actual build toolchain; do not infer deployment security from the separate Go 1.26.10 scan lane.
+- Durable nonces (D-2) are implemented for the Go SDK and the CLI gateway as an optional profile; Rust and TypeScript servers keep nonces in memory. After an abnormal stop the durable stores stay unsafe until the operator provisions fresh state; no recovery command ships in 0.1.0.
+- Server response-key rotation (D-3) is implemented in all three SDKs and the Go CLI (fixed publication time, 48 h activation, explicit client refresh) and is distinct from user-key rotation. The suppressed-successor behavior remains a documented limitation.
+- The Go CLI, gateway and stdio bridge are merged; accepting their delivery is part of the release decision for the exact candidate SHA.
+- A single active owner per state store is assumed; the Go durable stores and the CLI enforce it with an owner marker, and there is no cluster or HA mode.
+- Toolchains at the time of writing: Go floor 1.25 (`go.mod`), Rust MSRV 1.88 with Hickory 0.26.3, Node 20/22. Record the actual candidate toolchains.
+- A toolchain floor is not a deployment security endorsement. Record the actual build toolchain; do not infer deployment security from the separate vulnerability-scan lane toolchain.
 - No audit, security guarantee, wire freeze, or release readiness is established by this template. Record findings, infrastructure failures, missing/skipped work, and explicit non-guarantees separately.
 
 Candidate-specific evidence/limitations: `________________________________________________________________`
@@ -119,7 +120,7 @@ Legacy records with `kind` or `scopes` members, rejection behavior and no-silent
 Independent endpoint/audience/server-key pin sources and compatibility evidence: `____________________________`
 Operator action, approval, rollback, recovery, backup/restore, and retry receipts: `____________________________`
 
-No automatic retry, migration success, or rollback is promised by this form. Record exact behavior and evidence. User-key rotation is not server-key rotation. D-2/D-3 remain unresolved unless separately decided and evidenced.
+No automatic retry, migration success, or rollback is promised by this form. Record exact behavior and evidence. User-key rotation is not server-key rotation. D-2/D-3 are implemented in 0.1.0; record their exact behavior and evidence for the candidate.
 
 ### Verification decision
 
@@ -137,8 +138,6 @@ No automatic retry, migration success, or rollback is promised by this form. Rec
 
 Acceptance requires an explicit maintainer decision supported by complete, matching receipts for Task #96; missing required attestation or exact-artifact evidence is not acceptance. This checklist cannot authorize publication, tags, a GitHub Release, or an announcement. Artifact-only RC scope means no registry publication; registry publisher/trusted-publisher ownership is deferred and is not an RC prerequisite. Foundation policy acceptance under Task #54 is not conditional on Task #96 or repository-settings receipts.
 
-## Parent integration receipt — 2026-11-09
+## Historical receipt — foundation, 2026-11-09
 
-After the worker handoff, parent verified all six post-merge workflows SUCCESS on exact merge SHA `c98f7eb0dac9ad22f11f712a80a3fe9c537426ee`: CI `42710339786`, vulnerabilities `42710340244`, licenses `42710339825`, coverage `42710340223`, Go fuzz `42710339895`, and fixtures `42710339912`. Primary main was fast-forwarded and ancestry verified. Six completed foundation worktrees and their local branches, plus the remote foundation branch, were removed after byte-verified preservation of source deltas. Task #54 is complete. These are foundation receipts, not evidence for this packaging candidate or any RC/settings acceptance.
-
-PR #17 remains an unmerged CLI candidate. Its initial head `8c769b36bdb862dca9136b73ad331915d395f73b` failed the Linux raw-close test oracle; correction head `9b6778acaa474a162426cc918b9c1708d61acacc` is undergoing full CI. No CLI delivery acceptance is claimed. Repository settings remain UNVERIFIED and future RC receipt fields remain unfilled. These dated facts supersede earlier handoff timing only; recheck the exact future candidate before reliance.
+All six post-merge workflows succeeded on the foundation merge SHA `c98f7eb0dac9ad22f11f712a80a3fe9c537426ee`: CI `42710339786`, vulnerabilities `42710340244`, licenses `42710339825`, coverage `42710340223`, Go fuzz `42710339895`, and fixtures `42710339912`. These are foundation receipts, not evidence for the v0.1.0 candidate or any RC/settings acceptance. Repository settings remain UNVERIFIED and the RC receipt fields above remain unfilled until a candidate run exists. Recheck the exact future candidate before reliance.

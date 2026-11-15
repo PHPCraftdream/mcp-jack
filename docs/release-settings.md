@@ -2,7 +2,7 @@
 
 **Status: UNVERIFIED.** This is a maintainer checklist, not evidence of repository settings or an instruction to change them. No read-only settings receipt is recorded here. Do not infer that a control is enabled. Verification requires a maintainer to record the actual value and approved read-only evidence. This document does not configure settings, access accounts, handle credentials, enable publication, or authorize release actions.
 
-**Foundation boundary:** PR #16 merged as `c98f7eb0dac9ad22f11f712a80a3fe9c537426ee`; foundation policy is delivered. Task **#54** post-merge verification and cleanup are complete. Repository-settings evidence and future Task **#96** RC production/verification are not prerequisites for foundation policy acceptance. No circular dependency is intended.
+**Baseline:** the foundation policy (PR #16) and the code delivered since then are merged: the Go SDK with durable nonces, server-key rotation in all three SDKs, the Go CLI (gateway, bridge, admin and rotation commands), the 3x3 interop matrices including rotation, and the official MCP end-to-end job. This checklist covers the repository settings the owner still has to record. Settings are UNVERIFIED until a maintainer records the actual values below.
 
 ## Branch protection for `main` — proposed policy
 
@@ -18,22 +18,20 @@ Review effective branch protection/rulesets, overlapping rulesets, and bypass ac
 - [ ] Review merge method, linear-history and signed-commit requirements as explicit policy; record actual values and rationale.
 - [ ] Review tag rules separately. No tag/release creation is authorized here.
 
-### Merged-foundation source-defined check inventory
+### Source-defined check inventory
 
-These workflow source names and matrix dimensions describe the merged foundation baseline, not verified GitHub contexts, required checks, or settings. Confirm exact expanded contexts and emitting App from actual receipts. Parent-reported PR checks succeeded on tested PR head `8ee8858ec5d9802d02da1d9086e00be61e3e1d9b`; PR #16 merged at `c98f7eb0dac9ad22f11f712a80a3fe9c537426ee`. **Historical evidence recorded 2026-11-09.** The successful PR-head checks do not prove post-merge success or settings configuration. Attempts were not supplied.
+These workflow source names and matrix dimensions describe the repository at the time of the v0.1.0 release-candidate preparation (2026-11-15). They are not verified GitHub contexts, required checks or settings. Confirm exact expanded contexts and the emitting App from actual run receipts, and re-enumerate against the exact candidate SHA before relying on them.
 
-| Workflow | Merged-foundation source-defined jobs/dimensions | Parent-reported PR-head evidence | Proposed use (not configured/verified) |
-|---|---|---|---|
-| `.github/workflows/ci.yml` | `go (ubuntu-latest)`, `go (windows-latest)`, `go race`, `fixtures are up to date`, `rust (ubuntu-latest)`, `rust (windows-latest)`, `rust 1.88 check`, `ts (ubuntu-latest, node 20)`, `ts (ubuntu-latest, node 22)`, `ts (windows-latest, node 20)`, `ts (windows-latest, node 22)`, `interop matrix (3x3)`, `credential transfer matrix (3x3)`, `consumer ts (node 20)`, `consumer ts (node 22)`, `consumer rust 1.88`, `consumer go 1.22` | Main CI run `42709461708` SUCCESS; included both 3×3 matrices, Rust 1.88 MSRV, fresh consumer | Require every applicable job and matrix leg; verify exact contexts and identity. |
-| `.github/workflows/coverage.yml` | `go coverage`, `rust coverage`, `ts coverage` | Run `42709461764` SUCCESS | Require all three jobs to complete; source sets no coverage thresholds. |
-| `.github/workflows/fuzz.yml` | `go fuzz (bounded campaign)` | Run `42709461672` SUCCESS | Require bounded campaign completion; this is not proof of no defects. |
-| `.github/workflows/license.yml` | `go licences`, `rust licences`, `ts licences`, `dual-licence manifests` | Run `42709462005` SUCCESS | Require all four checks. |
-| `.github/workflows/vulnerabilities.yml` | `Go govulncheck (module)`, `Go govulncheck (package)`, `Go govulncheck (symbol)`, `Rust advisories`, `npm audit (ts)`, `npm audit (tools/license/tooling)` | Run `42709461656` SUCCESS; all six scans | Require all six scans; no skips; clean completion. Distinguish findings from setup/database/infrastructure failures. |
-| `.github/workflows/spec-fixtures.yml` | `generate and upload fixtures` | Run `42709452435` SUCCESS | Not a PR-triggered workflow (`push` and `workflow_dispatch`); do not treat as a reliable required PR check. Foundation CI's `fixtures are up to date` was the PR-triggered freshness candidate. |
+| Workflow | Source-defined jobs / dimensions | Proposed use (not configured/verified) |
+|---|---|---|
+| `.github/workflows/ci.yml` | `go (ubuntu-latest)`, `go (windows-latest)`, `go race`, `fixtures are up to date`, `rust (ubuntu-latest)`, `rust (windows-latest)`, `rust 1.88 check`, `ts (ubuntu-latest, node 20)`, `ts (ubuntu-latest, node 22)`, `ts (windows-latest, node 20)`, `ts (windows-latest, node 22)`, `interop matrix (3x3)`, `credential transfer matrix (3x3)`, `rotation interop matrix (3x3)`, `mcp compat e2e (official clients x official servers)`, `Go CLI binary process qualification`, `Go CLI native Darwin process qualification`, `Go CLI portable artifact qualification`, `consumer ts (node 20)`, `consumer ts (node 22)`, `consumer rust 1.88`, `consumer go 1.25` | Require every applicable job and matrix leg; verify exact contexts and identity. |
+| `.github/workflows/coverage.yml` | `go coverage`, `rust coverage`, `ts coverage` | Require all three jobs to complete; source sets no coverage thresholds. |
+| `.github/workflows/fuzz.yml` | `go fuzz (bounded campaign)` | Require bounded campaign completion; this is not proof of no defects. |
+| `.github/workflows/license.yml` | `go licences`, `rust licences`, `ts licences`, `dual-licence manifests` | Require all four checks. |
+| `.github/workflows/vulnerabilities.yml` | `Go govulncheck (module)`, `Go govulncheck (package)`, `Go govulncheck (symbol)`, `Rust advisories`, `npm audit (ts)`, `npm audit (tools/license/tooling)` | Require all six scans; no skips; clean completion. Distinguish findings from setup/database/infrastructure failures. |
+| `.github/workflows/spec-fixtures.yml` | `generate and upload fixtures`, `generate and upload candidate fixtures` | Triggered by `push` and `workflow_dispatch`, not by `pull_request`; its PR-head result comes from the branch push. Do not treat it as a reliable required PR check; `fixtures are up to date` in `ci.yml` is the PR-triggered freshness check. |
 
-All 32 PR checks succeeded on the same tested PR head `8ee8858ec5d9802d02da1d9086e00be61e3e1d9b`. Workflow run IDs above are historical exact-head receipts, not evidence that checks are required in branch protection, and not post-merge receipts. The foundation source-defined inventory and parent-reported success do not establish reporting App identity. Do not add guessed contexts. Successful PR-head evidence is separate from the `c98f7...` merge SHA; post-merge success is recorded in the parent integration receipt below.
-
-Before using this merged-foundation inventory for required-check or RC reliance at a future Task #96 SHA, re-enumerate actual workflow contexts, matrix legs, and toolchains against that exact candidate SHA after any changes; do not assume these baseline labels or dimensions still apply. As proposed policy, require every standing PR-triggered job listed above, including all matrix legs, completion of coverage jobs (without thresholds), bounded fuzz completion (which does not guarantee no defects), and all six vulnerability scans with no skips and clean completion. This remains an explicit maintainer policy decision and is unverified against actual repository settings.
+Workflow run results are historical receipts for the commit they ran on, not evidence that a check is required in branch protection and not evidence about repository settings. As proposed policy, require every standing PR-triggered job listed above, including all matrix legs, completion of coverage jobs (without thresholds), bounded fuzz completion, and all six vulnerability scans with no skips and clean completion. This remains an explicit maintainer policy decision and is unverified against actual repository settings.
 
 ### Merge queue and strict status behavior
 
@@ -48,11 +46,11 @@ Current `ci.yml`, `coverage.yml`, `fuzz.yml`, `license.yml`, and `vulnerabilitie
 - [ ] Verify maintainer-owned handling process and contacts through approved private procedures. Do not put private reports, personal data, secrets, tokens, or sensitive machine paths here or in public issues.
 - [ ] If the setting cannot be independently viewed, record `UNVERIFIED` and the evidence gap. Do not test with a vulnerability report or probe accounts/settings.
 
-## Artifact attestations — future workflow work, not current capability
+## Artifact attestations — release-candidate workflow
 
-Current workflows declare repository `contents: read`. Consumer-package lanes upload SDK packages and inventories; other workflows may produce diagnostic, coverage, fuzz, or fixture artifacts. No current workflow defines release-candidate binary, per-file RC checksum, or attestation generation/verification jobs. These facts establish neither settings nor artifact trust.
+The owner approved (2026-11-15) an artifact-only release-candidate workflow, `.github/workflows/release-candidate.yml`, started manually for one exact commit. It is the only workflow that may hold `id-token: write` and `attestations: write`, and only on its attestation job; it uses the single approved third-party action `actions/attest-build-provenance`, pinned by commit. Every other workflow keeps repository `contents: read`. Until that workflow is merged and a run has been observed, generation and verification of attestations stay unobserved, and none of this establishes settings or artifact trust.
 
-Future separately approved work should generate attestations only for exact final candidate artifacts, with narrowly scoped minimum permissions; document OIDC issuer/audience/subject claims if used; verify subject and digest against exact consumed bytes and repository/workflow/ref/full-SHA claims; distinguish per-file SHA-256 from upload digest and attestation; and record artifact IDs, inventories, platforms, toolchains, verification evidence, and exact-artifact consumer results as in [`release-notes-template.md`](release-notes-template.md). Keep generation/verification proposed until implemented and observed.
+Attestations are generated only for the exact final candidate artifacts. Verification subject and digest must match the exact consumed bytes and the repository, workflow, ref and full-SHA claims; a per-file SHA-256 is distinct from an upload digest and from an attestation. Record artifact IDs, inventories, platforms, toolchains, verification evidence and exact-artifact consumer results as in [`release-notes-template.md`](release-notes-template.md). The release candidate publishes nothing.
 
 ## Publication and registry ownership — deferred
 
@@ -78,8 +76,6 @@ Use approved read-only evidence only. If an item cannot be verified, leave it un
 
 No repository setting is asserted as verified here. No settings query/change, account access, test, or release action is performed or claimed.
 
-## Parent integration receipt — 2026-11-09
+## Historical receipt — foundation, 2026-11-09
 
-After the worker handoff, parent verified all six post-merge workflows SUCCESS on exact merge SHA `c98f7eb0dac9ad22f11f712a80a3fe9c537426ee`: CI `42710339786`, vulnerabilities `42710340244`, licenses `42710339825`, coverage `42710340223`, Go fuzz `42710339895`, and fixtures `42710339912`. Primary main was fast-forwarded and ancestry verified. Six completed foundation worktrees and their local branches, plus the remote foundation branch, were removed after byte-verified preservation of source deltas. Task #54 is complete. These are foundation receipts, not evidence for this packaging candidate or any RC/settings acceptance.
-
-PR #17 remains an unmerged CLI candidate. Its initial head `8c769b36bdb862dca9136b73ad331915d395f73b` failed the Linux raw-close test oracle; correction head `9b6778acaa474a162426cc918b9c1708d61acacc` is undergoing full CI. No CLI delivery acceptance is claimed. Repository settings remain UNVERIFIED and future RC receipt fields remain unfilled. These dated facts supersede earlier handoff timing only; recheck the exact future candidate before reliance.
+All six post-merge workflows succeeded on the foundation merge SHA `c98f7eb0dac9ad22f11f712a80a3fe9c537426ee` (CI `42710339786`, vulnerabilities `42710340244`, licenses `42710339825`, coverage `42710340223`, Go fuzz `42710339895`, fixtures `42710339912`). These are foundation receipts only: they are not evidence about the v0.1.0 candidate, repository settings or any release-candidate acceptance. Recheck the exact future candidate before reliance.
