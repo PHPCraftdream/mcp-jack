@@ -39,7 +39,7 @@ function setup(context: TestContext, endpoint = "https://controller.example.test
   const path = join(root, "trust");
   rotation.RotationTrustStore.initializeUnused(path, options);
   const store = rotation.RotationTrustStore.open(path, options);
-  context.after(() => { try { store.close(); } catch { /* Только test-owned cleanup. */ } rmSync(root, { recursive: true, force: true }); });
+  context.after(() => { try { store.close(); } catch { /* Test-owned cleanup only. */ } rmSync(root, { recursive: true, force: true }); });
   const controller = new RotationController(store);
   const request = client.signRequest(user, binding.aud, "POST", "/mcp", new Uint8Array(), new Uint8Array(16), 1000);
   const requestSignature = parseRequestAuth([request]).sig;
@@ -269,7 +269,7 @@ test("refresh controller: explicit overlapping pages ACK terminal only; duplicat
   assert.deepEqual(store.snapshot(), before);
   store.close();
   const reopened = rotation.RotationTrustStore.open(environment.path, environment.options);
-  context.after(() => { try { reopened.close(); } catch { /* Только test-owned cleanup. */ } });
+  context.after(() => { try { reopened.close(); } catch { /* Test-owned cleanup only. */ } });
   assert.deepEqual(reopened.snapshot().snapshot, before.snapshot);
   const restored = new RotationController(reopened);
   clock.now = first.activatesAt;

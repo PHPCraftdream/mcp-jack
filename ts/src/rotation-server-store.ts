@@ -27,9 +27,9 @@ function normalized(input: RotationServerStoreOptions): { options: NormalizedOpt
 }
 
 /**
- * Concrete private Linux server ring store: exclusive owner, независимый monotone ClockGuard,
- * exact whole-ring CAS одной fixed-P публикации. Sync callbacks/I/O должны быть bounded и не reentrant.
- * Не выбирает signer, не авторизует ответы и не восстанавливает dirty/unknown state.
+ * Concrete private Linux server ring store: exclusive owner, independent monotone ClockGuard,
+ * exact whole-ring CAS of a single fixed-P publication. Sync callbacks/I/O must be bounded and non-reentrant.
+ * Does not select signers, authorize responses, or recover dirty/unknown state.
  */
 export class RotationServerStore {
   private fenced = false;
@@ -48,7 +48,7 @@ export class RotationServerStore {
     const base: StoreBundle = { storeId: id.toString("base64url"), profile, owner: 1, dirty: true, fenced: false,
       clockBytes: clockBytes(anchor.trust.clock), snapshotBytes: encodedServer(anchor, options) };
     const first = packServer(base);
-    // Marker/dirty state подтверждены до первого clock callback.
+    // Marker/dirty state confirmed before the first clock callback.
     const file = RotationFileOwner.createUnusedOwner(path, first);
     try {
       const now = options.now();
@@ -63,7 +63,7 @@ export class RotationServerStore {
     }
   }
 
-  /** Не очищает dirty/fenced/unsafe: recovery требует отдельного supported evidence contract. */
+  /** Does not clear dirty/fenced/unsafe: recovery requires a separate supported evidence contract. */
   static open(path: string, input: RotationServerStoreOptions): RotationServerStore {
     const { options, profile } = normalized(input);
     const file = RotationFileOwner.open(path);
@@ -80,7 +80,7 @@ export class RotationServerStore {
       return store;
     } catch (error) {
       if (mutation) file.fence();
-      try { file.close(); } catch { /* Unknown/dirty marker остаётся startup gate. */ }
+      try { file.close(); } catch { /* Unknown/dirty marker remains a startup gate. */ }
       if (error instanceof RotationError) throw error;
       return invalidStore();
     }
@@ -107,7 +107,7 @@ export class RotationServerStore {
     catch { this.fence(); throw new RotationError("rotation_clock_unavailable"); }
   }
 
-  /** Только sample для outer checks, не durable time authority. */
+  /** Sample for outer checks only, not a durable time authority. */
   rawClock(): number {
     this.begin("rotation_clock_unavailable");
     try {
@@ -117,7 +117,7 @@ export class RotationServerStore {
     } finally { this.busy = false; }
   }
 
-  /** Committed read, не fresh ClockGuard operation. */
+  /** Committed read, not a fresh ClockGuard operation. */
   snapshot(): { readonly snapshot: RotationServerSnapshot; readonly clock: RotationClockTuple } {
     this.begin("rotation_state_unavailable");
     try {
@@ -130,10 +130,10 @@ export class RotationServerStore {
     } finally { this.busy = false; }
   }
 
-  /** Единственная операция, меняющая authoritative H/revision/unsafe. */
+  /** The only operation that changes authoritative H/revision/unsafe. */
   advanceAndCheck(): RotationClockTuple { return this.advance(); }
 
-  /** Exact ring плюс свежий server ClockGuard. */
+  /** Exact ring plus a fresh server ClockGuard. */
   checkSnapshotClock(expected: RotationServerSnapshot): RotationClockTuple {
     const { binding, window, checkpoint } = this.options;
     return this.advance(encodedServer(validateRotationServerSnapshot(expected, binding, window, checkpoint), this.options));
@@ -165,7 +165,7 @@ export class RotationServerStore {
     } finally { this.busy = false; }
   }
 
-  /** Exact ring/current-clock CAS одной fixed-P публикации; logical ClockGuard bytes не меняются. */
+  /** Exact ring/current-clock CAS of a single fixed-P publication; logical ClockGuard bytes are unchanged. */
   compareAndSwap(expected: RotationServerSnapshot, desired: RotationServerSnapshot, clock: RotationClockTuple): void {
     const { binding, window, checkpoint } = this.options;
     const previousValue = validateRotationServerSnapshot(expected, binding, window, checkpoint);
@@ -191,7 +191,7 @@ export class RotationServerStore {
     } finally { this.busy = false; }
   }
 
-  /** Удерживает dirty epoch до физического завершения response write; release идемпотентен. */
+  /** Holds the dirty epoch until the response write physically completes; release is idempotent. */
   acquireServingLease(): () => void {
     if (this.closed || this.closing || this.fenced) throw new RotationError("rotation_state_unavailable");
     this.leases++;
@@ -206,8 +206,8 @@ export class RotationServerStore {
   fence(): void { this.fenced = true; this.file.fence(); }
 
   /**
-   * Новые операции и final gates отказывают сразу. Пока есть serving leases, close() не завершается
-   * и не fences: caller освобождает leases и вызывает close() повторно.
+   * New operations and final gates fail immediately. While serving leases exist, close() does not complete
+   * or fence: the caller releases the leases and calls close() again.
    */
   close(): void {
     if (this.closed) return;

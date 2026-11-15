@@ -28,7 +28,7 @@ test("private file owner: exclusive unused create, exact CAS, owned reads, clean
   assert.throws(() => RotationFileOwner.initializeUnused(path, Buffer.from("replacement")), code("rotation_state_unavailable"));
   assert.equal(readFileSync(path, "utf8"), "initial public fixture");
   const owner = RotationFileOwner.open(path);
-  context.after(() => { try { owner.close(); } catch { /* Только test-owned cleanup. */ } });
+  context.after(() => { try { owner.close(); } catch { /* Test-owned cleanup only. */ } });
   assert.throws(() => RotationFileOwner.open(path), code("rotation_state_unavailable"));
   assert.throws(() => owner.replace(Buffer.from("wrong"), Buffer.from("next")), code("rotation_state_changed"));
   assert.equal(Buffer.from(owner.read()).toString(), "initial public fixture");
@@ -65,7 +65,7 @@ test("private file owner: fenced/abandoned marker never auto-breaks across proce
   const before = readFileSync(path);
   assert.throws(() => RotationFileOwner.open(path), code("rotation_state_unavailable"));
   assert.deepEqual(readFileSync(path), before);
-  // Отдельная test-owned state: fence не очищает marker или payload.
+  // Separate test-owned state: fence does not clear the marker or payload.
   const fencedPath = join(root, "fenced");
   RotationFileOwner.initializeUnused(fencedPath, Buffer.from("public fenced fixture"));
   const fenced = RotationFileOwner.open(fencedPath);

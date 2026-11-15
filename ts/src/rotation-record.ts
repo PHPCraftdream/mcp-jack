@@ -20,7 +20,7 @@ export interface RotationBinding {
   readonly aud: string;
 }
 
-// Только immutable значения: вызывающий код не получает изменяемые key/proof buffers.
+// Immutable values only: calling code never receives mutable key/proof buffers.
 export interface RotationRecord {
   readonly ordinal: number;
   readonly previousHash: string;
@@ -62,7 +62,7 @@ function decodeText(bytes: Uint8Array): string {
   }
 }
 
-/** Candidate codec: не меняет trust, не выбирает outer carrier, не выполняет fetch. */
+/** Candidate codec: does not change trust, select the outer carrier, or fetch. */
 export function parseRotationRecord(
   wire: Uint8Array,
   binding: RotationBinding,
@@ -75,7 +75,7 @@ export function parseRotationRecord(
   if (text.endsWith("\n")) reject("trailing_lf");
   const lines = text.split("\n");
   if (lines.length !== 12) reject("line_count");
-  // Проверка length выше гарантирует существование всех двенадцати строк.
+  // The length check above guarantees all twelve strings exist.
   const line = (index: number): string => lines[index] as string;
   if (line(0) !== ROTATION_DOMAIN) reject("domain");
   const ordinal = decimal(line(3), ROTATION_MAX_ORDINAL, "ordinal");

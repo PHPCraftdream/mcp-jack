@@ -12,10 +12,10 @@ function refusal(status: number, code: string): JackError {
 }
 
 /**
- * Обслуживает только явный candidate route `jack.server.key`, никогда не передаёт запрос дальше.
- * Один committed snapshot, свежий server ClockGuard и выбранный signer; поля страницы не смешиваются.
- * Ошибки: 403 operation_denied, 400 invalid_params, 409 rotation_checkpoint_unavailable,
- * 503 rotation_state_unavailable; подробности storage/signer наружу не попадают.
+ * Serves only the explicit candidate route `jack.server.key`, never forwards the request further.
+ * One committed snapshot, a fresh server ClockGuard, and the selected signer; page fields are not mixed.
+ * Errors: 403 operation_denied, 400 invalid_params, 409 rotation_checkpoint_unavailable,
+ * 503 rotation_state_unavailable; storage/signer details are never exposed.
  */
 export class ServerKeyTool implements NativeTools {
   constructor(private readonly store: RotationServerStore, private readonly provider: RotationServerProvider) {}
@@ -33,7 +33,7 @@ export class ServerKeyTool implements NativeTools {
       if (c.aud !== snapshot.trust.binding.aud) throw refusal(503, "rotation_state_unavailable");
       try { validateRotationServerKeyCursor(snapshot, cursor); }
       catch { throw refusal(409, "rotation_checkpoint_unavailable"); }
-      // Все proof/hash операции завершены до authoritative sample.
+      // All proof/hash operations complete before the authoritative sample.
       const signer = this.provider.selectSigner(snapshot, this.store.checkSnapshotClock(snapshot));
       return { structured: rotationServerKeyPage(snapshot, cursor, signer.publicKeyB64u) };
     } catch (error) {

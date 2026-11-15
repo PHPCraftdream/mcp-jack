@@ -86,7 +86,7 @@ test("rotation result: lexical numbers, wrong types, malformed current/hash and 
   rejected(envelope().replace(content, '"content":null'));
   rejected(envelope().replace(content, '"content":[]'));
   rejected(envelope().replace(`"text":${JSON.stringify(payload)}`, '"text":123'));
-  // Обе source schemas валидны; только text/structured parity запрещает эту пару.
+  // Both source schemas are valid; only text/structured parity forbids this pair.
   const first = corpus.valid_chains.overlapping[0];
   const hash = corpus.valid_chains.overlapping[1]?.split("\n")[4];
   assert.ok(first && hash);
@@ -112,7 +112,7 @@ test("rotation result: actual full-body cap is inclusive, page cap counts every 
   const recordBuffer = Uint8Array.from(raw(first)).buffer;
   const keys = new Map([[initial.current.kid, initial.current.public_key]]);
   assert.throws(() => rotation.parseRotationRecord(recordBuffer as unknown as Uint8Array, corpus.binding, keys), (error: unknown) => error instanceof rotation.RotationError && error.code === "record_size");
-  // Только schema/page count: intrinsic links/cursor проверяются позднее controller.
+  // Schema/page count only: intrinsic links/cursor are verified later by the controller.
   const page = { ...initial, records: Array.from({ length: 16 }, () => first) };
   assert.equal(rotation.decodeRotationResult(raw(envelope(JSON.stringify(page))), 1).records.length, 16);
   page.records.push(first);
@@ -141,7 +141,7 @@ test("rotation result: exhaustive escaped member spellings preserve values but n
         : `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
       const member = `"${escaped}":${value}`;
       const positive = ordinary.replace(target, member);
-      // Независимый JSON decoder подтверждает семантику escape spelling.
+      // An independent JSON decoder confirms the escape spelling semantics.
       assert.deepEqual(JSON.parse(positive), JSON.parse(ordinary), `${name}/${mask}: ${positive}`);
       assert.equal(rotation.decodeRotationResult(raw(positive), 1).current.kid, initial.current.kid, `${name}/${mask}`);
       rejected(ordinary.replace(target, `${target},${member}`));

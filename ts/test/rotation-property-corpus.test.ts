@@ -39,7 +39,7 @@ interface Corpus {
   readonly result_bodies: readonly ResultCase[];
 }
 
-// Тот же walk вверх, что в fixtures.ts: тест собирается и в dist-test/test.
+// Same upward walk as in fixtures.ts: the test also builds under dist-test/test.
 function repoRoot(): string {
   let dir = dirname(fileURLToPath(import.meta.url));
   for (;;) {
@@ -60,7 +60,7 @@ function cursor(entry: ArgumentCase): { readonly ordinal: number; readonly hash:
   return { ordinal, hash };
 }
 
-/** Строгая форма ожидания принятого result-body (DecodedRotationResult). */
+/** Strict expectation form for an accepted result body (DecodedRotationResult). */
 function expectation(entry: ResultCase): {
   readonly current: { readonly kid: string; readonly publicKeyB64u: string };
   readonly records: readonly string[];
@@ -130,7 +130,7 @@ test("rotation result decoding accepts and rejects identically to the shared cor
     if (entry.accept) {
       const decoded = rotation.decodeRotationResult(body, expectedId(entry));
       assert.deepEqual(decoded, expectation(entry), entry.id);
-      // Всё дерево результата immutable: mirror-parity не позволяет mutable просачивание.
+      // The whole result tree is immutable: mirror-parity forbids mutable leakage.
       for (const value of [decoded, decoded.current, decoded.head, decoded.records]) {
         assert.ok(Object.isFrozen(value), entry.id);
       }

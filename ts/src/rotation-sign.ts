@@ -6,7 +6,7 @@ import type { RotationCheckpoint } from "./rotation-chain.js";
 import { parseRotationRecord, RotationError, ROTATION_DOMAIN, ROTATION_GRACE_SECONDS, ROTATION_MAX_ORDINAL, ROTATION_MAX_TIMESTAMP } from "./rotation-record.js";
 import type { RotationBinding, RotationRecord } from "./rotation-record.js";
 
-/** Достаточны public key и signing capability; private export не требуется. */
+/** Public key and signing capability are sufficient; no private export required. */
 export type RotationSigner = Pick<Signer, "publicKey" | "sign">;
 
 function reject(code: string): never {
@@ -36,7 +36,7 @@ function signature(signer: RotationSigner, message: string): Uint8Array {
   }
 }
 
-/** Создаёт exact record без публикации, trust mutation, persistence или retry. */
+/** Creates the exact record without publication, trust mutation, persistence, or retry. */
 export function createRotationRecord(
   binding: RotationBinding,
   previous: RotationCheckpoint,
@@ -44,7 +44,7 @@ export function createRotationRecord(
   nextSigner: RotationSigner,
   publishedAt: number,
 ): RotationRecord {
-  // Provider callbacks не могут изменить входы после проверок.
+  // Provider callbacks cannot change inputs after the checks.
   const capturedBinding = Object.freeze({ endpoint: binding.endpoint, aud: binding.aud });
   const checkpoint = Object.freeze({ ...previous });
   const bindingError = rotationBindingError(capturedBinding);
@@ -79,7 +79,7 @@ export function createRotationRecord(
   const nextProof = signature(nextSigner, nextMessage);
   if (!verify(nextPublic, Buffer.from(nextMessage, "ascii"), nextProof)) reject("new_proof");
   const nextProofText = encodeBase64URL(nextProof);
-  // OLD вызывается только после проверки NEXT possession proof.
+  // OLD is invoked only after the NEXT possession proof is verified.
   const oldMessage = `${ROTATION_DOMAIN}/authorize\n${body}\n${nextProofText}`;
   const oldProof = signature(oldSigner, oldMessage);
   if (!verify(oldPublic, Buffer.from(oldMessage, "ascii"), oldProof)) reject("old_authorization");

@@ -32,7 +32,7 @@ function capacity(snapshot: RotationTrustSnapshot, now: number): void {
   if (pending > 128 || retired > 1024) throw requestError("rotation_state_changed");
 }
 
-/** Candidate single-attempt POST client; caller владеет store и явным refresh. */
+/** Candidate single-attempt POST client; the caller owns the store and explicit refresh. */
 export class RotationHTTPClient {
   private readonly controller: RotationController;
   private readonly endpoint: URL;
@@ -71,7 +71,7 @@ export class RotationHTTPClient {
     capacity(snapshot, clock.highWater);
     const header = signRequest(this.signer, this.profile.binding.aud, "POST", this.target, owned, randomNonce(), clock.highWater);
     const auth = parseRequestAuth([header]);
-    // Signer callback не даёт отправить request после потери store lifetime.
+    // Signer callback must not send a request after the store lifetime is lost.
     const dispatch = this.store.checkSnapshotClock(snapshot);
     capacity(snapshot, dispatch.highWater);
     if (Math.abs(dispatch.highWater - auth.ts) > this.profile.window) throw requestError("timestamp_out_of_window");
@@ -79,7 +79,7 @@ export class RotationHTTPClient {
     return exchange(this.endpoint, this.target, header, auth.sig, owned, limit, deadline);
   }
 
-  /** Ровно один POST; ordinary response не расширяет trust автоматически. */
+  /** Exactly one POST; an ordinary response does not extend trust automatically. */
   async call(body: Uint8Array, signal?: AbortSignal): Promise<RotationHTTPReply> {
     const deadline = new RotationDeadline(this.timeoutMs, signal);
     try {
@@ -92,7 +92,7 @@ export class RotationHTTPClient {
     finally { deadline.close(); }
   }
 
-  /** Одна explicit страница от ACKed cursor; никакой pagination/retry. */
+  /** One explicit page from the ACKed cursor; no pagination/retry. */
   async refresh(signal?: AbortSignal): Promise<RotationRefreshResult> {
     const deadline = new RotationDeadline(this.timeoutMs, signal);
     try {

@@ -13,7 +13,7 @@ export function requestError(code = "rotation_request_unavailable"): JackError {
   return new JackError(0, code, "rotation request refused");
 }
 
-/** Общий monotonic deadline включает signer/controller work, не только socket idle. */
+/** Shared monotonic deadline includes signer/controller work, not just socket idle. */
 export class RotationDeadline {
   readonly controller = new AbortController();
   private readonly due: number;
@@ -46,7 +46,7 @@ export class RotationDeadline {
   }
 }
 
-/** Один physical POST, fresh connection; без proxy, redirect, compression или retry. */
+/** One physical POST, fresh connection; no proxy, redirect, compression, or retry. */
 export function exchange(
   endpoint: URL, target: string, header: string, signature: string,
   body: Uint8Array, limit: number, deadline: RotationDeadline,

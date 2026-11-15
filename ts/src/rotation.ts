@@ -1,4 +1,4 @@
-/** Candidate rotation primitives; current static credentials остаются без изменений. */
+/** Candidate rotation primitives; current static credentials remain unchanged. */
 export * from "./rotation-record.js";
 export * from "./rotation-chain.js";
 export * from "./rotation-sign.js";

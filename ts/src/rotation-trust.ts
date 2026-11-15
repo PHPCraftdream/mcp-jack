@@ -5,7 +5,7 @@ import { RotationError, ROTATION_GRACE_SECONDS, ROTATION_MAX_ORDINAL, ROTATION_M
 import type { RotationBinding } from "./rotation-record.js";
 import type { RotationCursor } from "./rotation-page.js";
 
-/** Copied CAS dependency, не самостоятельная time authority. */
+/** Copied CAS dependency, not an independent time authority. */
 export interface RotationClockTuple {
   readonly binding: RotationBinding;
   readonly window: number;
@@ -22,7 +22,7 @@ export interface RotationTrustKey {
   readonly knownCutoff: number | null;
 }
 
-/** Whole value; parse/validation не выполняют persistence или ACK. */
+/** Whole value; parse/validation perform no persistence or ACK. */
 export interface RotationTrustSnapshot {
   readonly formatVersion: number;
   readonly binding: RotationBinding;
@@ -77,7 +77,7 @@ function validClock(clock: RotationClockTuple, binding: RotationBinding, window:
     ordinal(clock.revision) && typeof clock.unsafe === "boolean";
 }
 
-/** Проверяет exact OOB expectations, полный bounded chain и redundant metadata; возвращает owned frozen values. */
+/** Validates exact OOB expectations, the full bounded chain, and redundant metadata; returns owned frozen values. */
 export function validateRotationTrustSnapshot(
   input: RotationTrustSnapshot,
   expectedBinding: RotationBinding,
@@ -149,7 +149,7 @@ export function validateRotationTrustSnapshot(
   }
 }
 
-/** Требует validated snapshot; tuple check не заменяет fresh authoritative store operation. */
+/** Requires a validated snapshot; the tuple check does not replace a fresh authoritative store operation. */
 export function rotationTrustClockCompatible(snapshot: RotationTrustSnapshot, clock: RotationClockTuple): boolean {
   try {
     return snapshot.formatVersion === 1 && snapshot.fenced === false && snapshot.clock.unsafe === false && clock.unsafe === false &&

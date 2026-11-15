@@ -17,14 +17,14 @@ assert.ok(anchor);
 export const root: rotation.RotationCheckpoint = { ordinal: 0, hash: "-", kid: anchor.kid, publicKeyB64u: anchor.public_key, publishedAt: 0 };
 export const WINDOW = 30;
 
-/** Независимо подписанные records overlapping-цепочки из общего fixture corpus. */
+/** Independently signed records of an overlapping chain from the shared fixture corpus. */
 export function overlapping(): readonly rotation.RotationRecord[] {
   const wires = corpus.valid_chains["overlapping"];
   assert.ok(wires);
   return rotation.verifyRotationChain(wires.map((wire) => Buffer.from(wire, "utf8")), corpus.binding, root);
 }
 
-/** Реально подписанная цепочка с равным P (все ключи pending) и её собственный anchor checkpoint. */
+/** Actually signed chain with equal P (all keys pending) and its own anchor checkpoint. */
 export function signedChain(count: number): { readonly base: rotation.RotationCheckpoint; readonly records: rotation.RotationRecord[] } {
   const signer = (index: number): client.InMemorySigner => new client.InMemorySigner(createHash("sha256").update(`server ring fixture ${index}`).digest());
   let old = signer(0);
@@ -41,7 +41,7 @@ export function signedChain(count: number): { readonly base: rotation.RotationCh
   return { base, records };
 }
 
-/** Первый key — checkpoint base; каждый record добавляет следующий (P = publishedAt последнего). */
+/** First key is the checkpoint base; each record adds the next one (P = publishedAt of the last). */
 export function trustFrom(records: readonly rotation.RotationRecord[], base = root, revision = records.length + 1): Mutable<rotation.RotationTrustSnapshot> {
   const keys: Mutable<rotation.RotationTrustKey>[] = [{ ordinal: base.ordinal, kid: base.kid, publicKeyB64u: base.publicKeyB64u,
     notBefore: base.ordinal === 0 ? 0 : base.publishedAt + rotation.ROTATION_GRACE_SECONDS, knownCutoff: null }];
@@ -60,7 +60,7 @@ export function trustFrom(records: readonly rotation.RotationRecord[], base = ro
     clock: { binding: { ...corpus.binding }, window: WINDOW, highWater, revision: records.length + 1, unsafe: false } };
 }
 
-/** Каждому key соответствует opaque provider handle, не private-key material. */
+/** Each key has a corresponding opaque provider handle, not private-key material. */
 export function serverFrom(trust: Mutable<rotation.RotationTrustSnapshot>): Mutable<rotation.RotationServerSnapshot> {
   return { formatVersion: 1, trust, signerReferences: trust.keys.map((key) => ({ kid: key.kid, reference: `opaque-provider/${key.kid}` })) };
 }

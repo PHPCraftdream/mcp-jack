@@ -68,7 +68,7 @@ function knownKeys(snapshot: RotationTrustSnapshot): ReadonlyMap<string, Rotatio
     ...(key.knownCutoff === null ? {} : { knownCutoff: key.knownCutoff }) }]));
 }
 
-/** Reference: Go client/rotation/controller.go; store lifecycle остаётся у caller. */
+/** Reference: Go client/rotation/controller.go; store lifecycle stays with the caller. */
 export class RotationController {
   private readonly profile: Profile;
   private writer = false;
@@ -89,7 +89,7 @@ export class RotationController {
     return snapshot;
   }
 
-  /** После authoritative sample — только bounded scalar/interval arithmetic. */
+  /** After the authoritative sample — bounded scalar/interval arithmetic only. */
   private timeValid(snapshot: RotationTrustSnapshot, carrier: RotationCarrier, now: number): void {
     if (!Number.isSafeInteger(now) || now < 0 || now > ROTATION_MAX_TIMESTAMP) refuse("rotation_clock_unavailable");
     if (!Number.isSafeInteger(carrier.timestamp) || carrier.timestamp < 0 || carrier.timestamp > ROTATION_MAX_TIMESTAMP ||
@@ -124,7 +124,7 @@ export class RotationController {
     const headers = [...input.headers];
     const auth = parseResponseAuth(headers);
     const known = knownKeys(snapshot);
-    // Unknown carrier не даёт читать body или вызывать даже preliminary clock.
+    // Unknown carrier forbids reading the body or calling even a preliminary clock.
     if (!known.has(auth.kid)) refuse(Code.UNKNOWN_SERVER_KEY);
     const source = input.body;
     if (!(source instanceof Uint8Array) || source.length > 1024 * 1024) refuse("rotation_result_invalid");
@@ -138,7 +138,7 @@ export class RotationController {
     return { status, body, snapshot, carrier };
   }
 
-  /** Explicit single-page success; late final error не откатывает уже подтверждённый ACK. */
+  /** Explicit single-page success; a late final error does not roll back an already confirmed ACK. */
   acceptRefresh(input: RotationResponse, expectedId: string | number, cursor: RotationCursor): RotationRefreshResult {
     try {
       const owned = this.outer(input);
@@ -188,7 +188,7 @@ export class RotationController {
     }
   }
 
-  /** Owned exact body только после final clock/snapshot/interval gate; без fetch/retry. */
+  /** Owned exact body only after the final clock/snapshot/interval gate; no fetch/retry. */
   verifyResponse(input: RotationResponse): Uint8Array {
     try {
       const owned = this.outer(input);
