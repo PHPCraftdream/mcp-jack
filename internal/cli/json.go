@@ -4,17 +4,31 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"unicode"
 	"unicode/utf8"
 )
 
-// object rejects duplicate names at every depth, including escaped duplicates.
+// Member-name scopes of uniqueValue. The envelope (the top-level object and its
+// params object) is compared case-insensitively, because the gateway and the
+// bridge read members there by exact name while an upstream decoder may match
+// them case-insensitively: {"method":x,"Method":y} must not pass the filter.
+// Free-form values below (arguments, results, capabilities) only reject exact
+// duplicates, so legitimate data such as {"Path":1,"PATH":2} stays valid.
+const (
+	scopeEnvelope = iota
+	scopeParams
+	scopeData
+)
+
+// object rejects duplicate names at every depth, including escaped duplicates,
+// and case-variant duplicates inside the envelope.
 func object(b []byte) (map[string]json.RawMessage, error) {
 	if !utf8.Valid(b) || !json.Valid(b) {
 		return nil, errProtocol
 	}
 	d := json.NewDecoder(bytes.NewReader(b))
 	d.UseNumber()
-	if err := uniqueValue(d); err != nil || d.Decode(new(any)) != io.EOF {
+	if err := uniqueValue(d, scopeEnvelope); err != nil || d.Decode(new(any)) != io.EOF {
 		return nil, errProtocol
 	}
 	var m map[string]json.RawMessage
@@ -24,7 +38,7 @@ func object(b []byte) (map[string]json.RawMessage, error) {
 	return m, nil
 }
 
-func uniqueValue(d *json.Decoder) error {
+func uniqueValue(d *json.Decoder, scope int) error {
 	t, err := d.Token()
 	if err != nil {
 		return errProtocol
@@ -39,17 +53,28 @@ func uniqueValue(d *json.Decoder) error {
 		for d.More() {
 			t, err := d.Token()
 			name, ok := t.(string)
-			if err != nil || !ok || seen[name] {
+			if err != nil || !ok {
 				return errProtocol
 			}
-			seen[name] = true
-			if uniqueValue(d) != nil {
+			key := name
+			if scope != scopeData {
+				key = foldName(name)
+			}
+			if seen[key] {
+				return errProtocol
+			}
+			seen[key] = true
+			child := scopeData
+			if scope == scopeEnvelope && name == "params" {
+				child = scopeParams
+			}
+			if uniqueValue(d, child) != nil {
 				return errProtocol
 			}
 		}
 	case '[':
 		for d.More() {
-			if uniqueValue(d) != nil {
+			if uniqueValue(d, scopeData) != nil {
 				return errProtocol
 			}
 		}
@@ -58,6 +83,23 @@ func uniqueValue(d *json.Decoder) error {
 	}
 	_, err = d.Token()
 	return err
+}
+
+// foldName maps every rune to the smallest rune of its simple case-folding
+// orbit, so names that strings.EqualFold considers equal share one map key
+// (byte-identical names included).
+func foldName(s string) string {
+	out := make([]rune, 0, len(s))
+	for _, r := range s {
+		low := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			if f < low {
+				low = f
+			}
+		}
+		out = append(out, low)
+	}
+	return string(out)
 }
 
 func text(raw json.RawMessage) string {

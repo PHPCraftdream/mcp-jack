@@ -690,3 +690,48 @@ func TestFileStateConcurrentUpdates(t *testing.T) {
 		t.Fatalf("keys on disk = %d, want %d", got, writers)
 	}
 }
+
+// TestFileStateRejectsCaseVariantMembers checks that the raw pass rejects any
+// member whose name is not an exact known name: encoding/json matches struct
+// fields case-insensitively, so {"admin":false,"ADMIN":true} would otherwise
+// load as an administrator (spec 03 section 10).
+func TestFileStateRejectsCaseVariantMembers(t *testing.T) {
+	entry := stateTestKey("k1", "alice")
+	validEntry := fileTestDoc(entry)
+	entryCases := []struct{ variant, doc string }{
+		{"Version", strings.Replace(validEntry, `"version":1`, `"version":1,"Version":1`, 1)},
+		{"Keys", strings.Replace(validEntry, `{"version":1`, `{"version":1,"Keys":[]`, 1)},
+		{"Invites", strings.Replace(validEntry, `"invites":[]}`, `"invites":[],"Invites":[]}`, 1)},
+		{"KID", strings.Replace(validEntry, `"kid":"`+entry.Kid+`"`, `"KID":"`+entry.Kid+`"`, 1)},
+		{"Public_Key", strings.Replace(validEntry, `"public_key":`, `"Public_Key":`, 1)},
+		{"Name", strings.Replace(validEntry, `"name":`, `"Name":`, 1)},
+		{"Admin", strings.Replace(validEntry, `"admin":false`, `"Admin":true`, 1)},
+		{"ADMIN", strings.Replace(validEntry, `"admin":false`, `"admin":false,"ADMIN":true`, 1)},
+		{"Not_Before", strings.Replace(validEntry, `"not_before":`, `"Not_Before":`, 1)},
+		{"Not_After", strings.Replace(validEntry, `"not_after":`, `"Not_After":`, 1)},
+	}
+	for _, tc := range entryCases {
+		t.Run("entry "+tc.variant, func(t *testing.T) {
+			fileTestLoadNamed(t, tc.doc, tc.variant)
+		})
+	}
+	validInvite := `{"invite_id":"i1","admin":false,"created_by":"root","created_at":100,"expires_at":200}`
+	inviteCases := []struct{ variant, member string }{
+		{"Invite_ID", `"Invite_ID":"i2"`},
+		{"ADMIN", `"ADMIN":true`},
+		{"Created_By", `"Created_By":"root"`},
+		{"Created_At", `"Created_At":100`},
+		{"Expires_At", `"Expires_At":200`},
+		{"Key_Ttl_Seconds", `"Key_Ttl_Seconds":60`},
+	}
+	for _, tc := range inviteCases {
+		t.Run("invite "+tc.variant, func(t *testing.T) {
+			invite := strings.Replace(validInvite, `"expires_at":200}`, `"expires_at":200,`+tc.member+`,}`, 1)
+			fileTestLoadNamed(t, fileTestInviteDoc(invite), tc.variant)
+		})
+	}
+	t.Run("invite Admin replacement", func(t *testing.T) {
+		invite := strings.Replace(validInvite, `"admin":false`, `"Admin":true`, 1)
+		fileTestLoadNamed(t, fileTestInviteDoc(invite), "Admin")
+	})
+}

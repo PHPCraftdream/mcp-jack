@@ -90,7 +90,10 @@ func loadGateway(path string) (gatewayConfig, time.Duration, error) {
 	return c, d, nil
 }
 
-func gateway(ctx context.Context, path string) (result error) {
+func gateway(ctx context.Context, path string, audit io.Writer) (result error) {
+	if audit == nil {
+		audit = io.Discard
+	}
 	c, timeout, err := loadGateway(path)
 	if err != nil {
 		return err
@@ -133,7 +136,8 @@ func gateway(ctx context.Context, path string) (result error) {
 		native: server.NewNativeTools(server.NativeOptions{}), serverKID: signing.anchorKID,
 		serverKIDs: signing.serverKIDs, adminEnabled: bool(c.NativeAdmin),
 	}
-	verification := server.Config{Aud: c.Aud, State: boundedState{state}, Native: policy}
+	// Аудит-события пишутся строками JSON в стандартный поток ошибок процесса; ошибки записи игнорируются.
+	verification := server.Config{Aud: c.Aud, State: boundedState{state}, Native: policy, Audit: server.NewJSONLAuditSink(audit)}
 	if signing.provider != nil {
 		policy.serverKeys = signing.provider
 		verification.Native = policy
