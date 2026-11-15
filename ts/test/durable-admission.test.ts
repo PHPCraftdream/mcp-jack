@@ -45,7 +45,7 @@ const utf8 = (s: string): Uint8Array => new TextEncoder().encode(s);
 function scriptClock(...values: number[]): () => number {
   let index = 0;
   return () => {
-    const value = values[Math.min(index, values.length - 1)];
+    const value = values[Math.min(index, values.length - 1)] as number;
     index++;
     return value;
   };

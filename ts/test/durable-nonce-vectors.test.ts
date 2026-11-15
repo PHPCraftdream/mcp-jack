@@ -227,7 +227,12 @@ interface Harness {
   store: DurableNonceStore | undefined;
 }
 
-function makeHarness(path: string, fault: { intent?: "commit" | "abort"; final?: "commit" | "abort" }): Harness {
+interface Fault {
+  intent?: "commit" | "abort" | undefined;
+  final?: "commit" | "abort" | undefined;
+}
+
+function makeHarness(path: string, fault: Fault): Harness {
   const values: number[] = [];
   let last = 0;
   const config = {
@@ -256,8 +261,7 @@ function admissionFor(event: VectorEvent): {
 }
 
 /** Drives one event against the open store; returns the store-level outcome. */
-function driveEvent(harness: Harness, event: VectorEvent, fault: { intent?: "commit" | "abort";
-  final?: "commit" | "abort" }): { outcome: Outcome; committed: boolean } {
+function driveEvent(harness: Harness, event: VectorEvent, fault: Fault): { outcome: Outcome; committed: boolean } {
   const store = harness.store as DurableNonceStore;
   harness.queue(event.entryNow);
   harness.queue(event.intentNow);
@@ -380,7 +384,7 @@ test("shared nonce vectors: verdict table drives every case", { skip: !linux }, 
     }
     const path = join(root, vector.id.replace(/[^a-zA-Z0-9-]/g, "-"));
     const events = vector.sequence ?? [vector.event as VectorEvent];
-    const fault: { intent?: "commit" | "abort"; final?: "commit" | "abort" } = {};
+    const fault: Fault = {};
     const harness = makeHarness(path, fault);
     let seededHighWater: number;
     if (vector.state === undefined) {

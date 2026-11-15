@@ -107,8 +107,8 @@ function fail(): never {
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { readonly [key: string]: JsonValue };
 
-function object(value: JsonValue): Record<string, JsonValue> {
-  if (value === null || Array.isArray(value) || typeof value !== "object") fail();
+function object(value: JsonValue | undefined): Record<string, JsonValue> {
+  if (value === undefined || value === null || Array.isArray(value) || typeof value !== "object") fail();
   return value as Record<string, JsonValue>;
 }
 
@@ -193,7 +193,7 @@ function keyOf(row: DurableReceipt): string {
 }
 
 /** Sorted load of one row set: order by primary key, duplicates rejected. */
-function decodeRecordSet(value: JsonValue, meta: DurableMetadata): DurableReceipt[] {
+function decodeRecordSet(value: JsonValue | undefined, meta: DurableMetadata): DurableReceipt[] {
   if (!Array.isArray(value)) fail();
   const rows: DurableReceipt[] = [];
   let previous = "";
@@ -207,7 +207,7 @@ function decodeRecordSet(value: JsonValue, meta: DurableMetadata): DurableReceip
   return rows;
 }
 
-function decodeMeta(value: JsonValue): DurableMetadata {
+function decodeMeta(value: JsonValue | undefined): DurableMetadata {
   const obj = object(value);
   exactKeys(obj, META_KEYS);
   const deployment = text(obj["deployment"]);

@@ -33,7 +33,7 @@ function directory(): { dir: string; path: string } {
 function scriptClock(...values: number[]): () => number {
   let index = 0;
   return () => {
-    const value = values[Math.min(index, values.length - 1)];
+    const value = values[Math.min(index, values.length - 1)] as number;
     index++;
     return value;
   };
@@ -415,7 +415,8 @@ test("durable store: strict loading rejects tampered and noncanonical documents"
 
   // One flipped payload byte breaks the seal: load refuses, no repair.
   const tampered = Buffer.from(good);
-  tampered[tampered.length - 70] = tampered[tampered.length - 70] ^ 0xff;
+  const flipAt = tampered.length - 70;
+  tampered[flipAt] = (tampered[flipAt] as number) ^ 0xff;
   const tamperedPath = join(dir, "tampered");
   writeFileSync(tamperedPath, tampered, { mode: 0o600 });
   assert.throws(() => DurableNonceStore.open(tamperedPath, config), unavailable);
