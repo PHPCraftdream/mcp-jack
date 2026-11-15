@@ -389,7 +389,7 @@ expect_annotation "scenario 18: tool-failure annotation present" "execution fail
 expect_no_annotation "scenario 18: no deadline-race warning" "go-fuzz-engine-deadline"
 expect_no_annotation "scenario 18: not a target failure" "reported a target failure"
 
-# Scenario 19: a failed target does not abort the bounded campaign; all six
+# Scenario 19: a failed target does not abort the bounded campaign; all fifteen
 # current real targets are invoked and the aggregate campaign status is nonzero.
 campaign_runs="$work/campaign-runs.log"
 rm -f "$campaign_runs"
@@ -407,8 +407,10 @@ rm -f "$campaign_runs"
 case_status=$?
 expect_status "scenario 19: campaign preserves failure status" "$case_status" 1
 campaign_count=$(awk 'END { print NR + 0 }' "$campaign_runs")
-expect_status "scenario 19: all six targets run despite a failure" "$campaign_count" 6
-for target in FuzzParseRequestAuth FuzzParseResponseAuth FuzzClassifyBody FuzzLoadProfile FuzzImportEnvelopes FuzzValidateCredential; do
+expect_status "scenario 19: all fifteen targets run despite a failure" "$campaign_count" 15
+for target in FuzzParseRequestAuth FuzzParseResponseAuth FuzzClassifyBody FuzzLoadProfile FuzzImportEnvelopes FuzzValidateCredential \
+  FuzzParseRecord FuzzDecodeResult FuzzDecodeServerKeyArguments FuzzDecodeServerSnapshot FuzzDecodeTrustSnapshot FuzzVerifyChain \
+  FuzzDecodeMetadata FuzzDecodeRecord FuzzDecodeTrustGuard; do
   if ! awk -v target="$target" '$1 == target { found = 1 } END { exit !found }' "$campaign_runs"; then
     fail "scenario 19: campaign omitted $target"
   fi

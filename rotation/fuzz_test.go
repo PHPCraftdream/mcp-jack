@@ -73,7 +73,7 @@ func FuzzParseRecord(f *testing.F) {
 		f.Add(wire)
 	}
 	f.Add([]byte{})
-	f.Add([]byte(rotation.Domain+"\ntruncated"))
+	f.Add([]byte(rotation.Domain + "\ntruncated"))
 
 	f.Fuzz(func(t *testing.T, wire []byte) {
 		record, err := rotation.Parse(wire, binding, keys)
