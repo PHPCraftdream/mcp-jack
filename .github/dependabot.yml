@@ -4,6 +4,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # Ref action dtolnay/rust-toolchain и есть версия toolchain: она держит MSRV 1.88 jobs.
+      - dependency-name: dtolnay/rust-toolchain
   - package-ecosystem: gomod
     directory: /
     schedule:
