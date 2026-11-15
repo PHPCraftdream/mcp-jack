@@ -104,10 +104,13 @@ var clockVectorDeviations = map[string][]string{
 	},
 }
 
-// clockVectorAnchorKID is the deterministic anchor identity of the vector guard.
-func clockVectorAnchorKID() string {
+// clockVectorCheckpoint is the deterministic anchor checkpoint of the vector guard.
+func clockVectorCheckpoint() rotation.Checkpoint {
 	sum := sha256.Sum256([]byte("mcp-jack test key: candidate-server-anchor"))
-	return jack.KeyID(ed25519.NewKeyFromSeed(sum[:]).Public().(ed25519.PublicKey))
+	public := ed25519.NewKeyFromSeed(sum[:]).Public().(ed25519.PublicKey)
+	checkpoint := rotation.Checkpoint{Hash: "-", KID: jack.KeyID(public)}
+	copy(checkpoint.PublicKey[:], public)
+	return checkpoint
 }
 
 func loadClockVectorFixture(t *testing.T) clockVectorFixture {
@@ -156,7 +159,7 @@ func newClockVectorStore(t *testing.T, binding rotation.Binding, clock *scripted
 	if err := os.Chmod(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	options := TrustOptions{Binding: binding, Window: 30, Checkpoint: rotation.Checkpoint{Hash: "-", KID: clockVectorAnchorKID()}, Now: clock.Now}
+	options := TrustOptions{Binding: binding, Window: 30, Checkpoint: clockVectorCheckpoint(), Now: clock.Now}
 	path := filepath.Join(directory, "trust.db")
 	if err := InitializeTrustUnused(path, options); err != nil {
 		t.Fatalf("InitializeTrustUnused: %v", err)
