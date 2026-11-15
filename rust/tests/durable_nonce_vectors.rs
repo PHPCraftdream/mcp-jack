@@ -28,10 +28,9 @@ use mcp_jack::server::durable_admission::{
 };
 use mcp_jack::server::durable_recovery::{inspect_recovery, reconcile_unknown};
 use mcp_jack::server::durable_store::{DurableAdmission, DurableNonceStore, DurableStoreOptions};
-use mcp_jack::server::native::NativeTools;
 use mcp_jack::server::nonce::NonceStore;
 use mcp_jack::server::state::{MemoryState, RegistryEntry, StateStore};
-use mcp_jack::server::verify::{Clock, Config, Request, Verifier, VerifyResult};
+use mcp_jack::server::verify::{Clock, Config, NativeTools, Request, Verifier, VerifyResult};
 use mcp_jack::signing::request_signing_string;
 
 const FIXTURE_FORMAT: &str = "mcp-jack-candidate-durable-nonce-v1";
@@ -913,7 +912,7 @@ fn assert_end(harness: &Harness, case: &VectorCase, expect: &VectorExpect, skip_
 
 /// Final close must reflect the fence state (Go: fenced flag assertion).
 fn assert_close_fencing(harness: Harness, case: &VectorCase, expect: &VectorExpect) {
-    use mcp_jack::server::durable_store::DurableStoreError;
+    use mcp_jack::server::durable_format::DurableStoreError;
     let closed = harness.store.close();
     if expect.fenced {
         assert!(
@@ -934,7 +933,7 @@ fn assert_close_fencing(harness: Harness, case: &VectorCase, expect: &VectorExpe
 }
 
 fn expects_reopen_refused(harness: &Harness, case_id: &str) {
-    use mcp_jack::server::durable_store::DurableStoreError;
+    use mcp_jack::server::durable_format::DurableStoreError;
     let reopened = DurableNonceStore::open(
         &harness.path,
         &harness.options,
@@ -1327,7 +1326,7 @@ fn run_unknown_intent(case: &VectorCase, plan: Plan) {
         retain_until: event.ts + event.window,
         high_water: 0,
     };
-    use mcp_jack::server::durable_store::DurableStoreError;
+    use mcp_jack::server::durable_format::DurableStoreError;
     let reconciled = reconcile_unknown(&harness.path, &harness.options, &report.hash, &claim);
     assert!(
         matches!(reconciled, Err(DurableStoreError::RecoveryRequired)),
