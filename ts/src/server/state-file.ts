@@ -8,6 +8,7 @@ import { randomBytes } from "node:crypto";
 import { closeSync, fsyncSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { decodeBase64URL, BadBase64UrlError, keyId } from "../encoding.js";
+import { parseJsonRaw, type RawJsonNode } from "../json-raw.js";
 import { validatePublicKey } from "../ed25519.js";
 import { validName } from "../syntax.js";
 import {
@@ -76,31 +77,45 @@ function stringField(obj: Record<string, unknown>, key: string, what: string): s
   return value;
 }
 
-/** Nullable integer field: missing or null stays undefined; non-integers are corrupt. */
-function nullableIntField(obj: Record<string, unknown>, key: string, what: string): number | undefined {
-  if (!Object.hasOwn(obj, key)) {
+/** An integer ONLY on the lexical rule of spec 03 section 3: no fraction, no exponent, no leading zeros (`-0` is 0). */
+const INTEGER_TEXT = /^-?(0|[1-9][0-9]*)$/;
+
+/** True when an exact integer lexeme fits in Go's int64 range. */
+function fitsInt64(text: string): boolean {
+  const n = BigInt(text);
+  return n >= -9223372036854775808n && n <= 9223372036854775807n;
+}
+
+/** Integer rule decided on the raw lexeme, not the parsed number (`1.0` and `1e3` are not integers here). */
+function lexInteger(node: RawJsonNode): boolean {
+  return INTEGER_TEXT.test(node.text) && fitsInt64(node.text);
+}
+
+/** Nullable integer field: missing or null stays undefined; the raw lexeme must be an integer in int64 range. */
+function nullableIntField(obj: RawJsonNode, key: string, what: string): number | undefined {
+  const field = obj.members?.get(key);
+  if (field === undefined || field.value === null) {
     return undefined;
   }
-  const value = obj[key];
-  if (value === null) {
-    return undefined;
-  }
-  if (typeof value !== "number" || !Number.isInteger(value)) {
+  if (typeof field.value !== "number" || !lexInteger(field)) {
     corrupt(`${what}.${key}: not an integer`);
   }
-  return value;
+  return field.value;
 }
 
 /** Required nonnegative integer field; missing, null, non-integers and negatives are corrupt. */
-function requiredNonnegativeIntField(obj: Record<string, unknown>, key: string, what: string): number {
-  if (!Object.hasOwn(obj, key)) {
+function requiredNonnegativeIntField(obj: RawJsonNode, key: string, what: string): number {
+  const field = obj.members?.get(key);
+  if (
+    field === undefined ||
+    field.value === null ||
+    typeof field.value !== "number" ||
+    !lexInteger(field) ||
+    field.value < 0
+  ) {
     corrupt(`${what}.${key}: must be a non-negative integer`);
   }
-  const value = obj[key];
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-    corrupt(`${what}.${key}: must be a non-negative integer`);
-  }
-  return value;
+  return field.value;
 }
 
 /** Boolean field: absent decodes as false; present value must be exactly true or false. */
@@ -119,8 +134,8 @@ function boolField(obj: Record<string, unknown>, key: string, what: string): boo
 }
 
 /** Strict per-entry decode into a RegistryEntry; no optional property ever receives undefined. */
-function decodeEntry(value: unknown, what: string): RegistryEntry {
-  const obj = asObject(value, what);
+function decodeEntry(node: RawJsonNode, what: string): RegistryEntry {
+  const obj = asObject(node.value, what);
   checkKnownFields(obj, ["kid", "public_key", "name", "admin", "not_before", "not_after"], what);
   const decoded: Mutable<RegistryEntry> = {
     kid: stringField(obj, "kid", what),
@@ -131,11 +146,11 @@ function decodeEntry(value: unknown, what: string): RegistryEntry {
   if (admin) {
     decoded.admin = true;
   }
-  const notBefore = nullableIntField(obj, "not_before", what);
+  const notBefore = nullableIntField(node, "not_before", what);
   if (notBefore !== undefined) {
     decoded.notBefore = notBefore;
   }
-  const notAfter = nullableIntField(obj, "not_after", what);
+  const notAfter = nullableIntField(node, "not_after", what);
   if (notAfter !== undefined) {
     decoded.notAfter = notAfter;
   }
@@ -146,14 +161,14 @@ function decodeEntry(value: unknown, what: string): RegistryEntry {
 const MAX_KEY_TTL_SECONDS = 31536000;
 
 /** Strict per-invite decode into an InviteRecord. */
-function decodeInvite(value: unknown, what: string): InviteRecord {
-  const obj = asObject(value, what);
+function decodeInvite(node: RawJsonNode, what: string): InviteRecord {
+  const obj = asObject(node.value, what);
   checkKnownFields(obj, ["invite_id", "admin", "created_by", "created_at", "expires_at", "key_ttl_seconds"], what);
   const decoded: Mutable<InviteRecord> = {
     inviteId: stringField(obj, "invite_id", what),
     createdBy: stringField(obj, "created_by", what),
-    createdAt: requiredNonnegativeIntField(obj, "created_at", what),
-    expiresAt: requiredNonnegativeIntField(obj, "expires_at", what),
+    createdAt: requiredNonnegativeIntField(node, "created_at", what),
+    expiresAt: requiredNonnegativeIntField(node, "expires_at", what),
   };
   // Invite-record validity (spec 03 section 10): non-empty strings and
   // created_at <= expires_at; required timestamp helpers enforce nonnegative integers.
@@ -170,14 +185,15 @@ function decodeInvite(value: unknown, what: string): InviteRecord {
   if (admin) {
     decoded.admin = true;
   }
-  if (Object.hasOwn(obj, "key_ttl_seconds")) {
-    const value = obj["key_ttl_seconds"];
-    if (value === null) {
+  const ttlField = node.members?.get("key_ttl_seconds");
+  if (ttlField !== undefined) {
+    if (ttlField.value === null) {
       corrupt(`${what}.key_ttl_seconds: must be absent or an integer`);
     }
-    if (typeof value !== "number" || !Number.isInteger(value)) {
+    if (typeof ttlField.value !== "number" || !lexInteger(ttlField)) {
       corrupt(`${what}.key_ttl_seconds: must be absent or an integer`);
     }
+    const value = ttlField.value;
     if (value < 1 || value > MAX_KEY_TTL_SECONDS) {
       corrupt(`${what}.key_ttl_seconds: must be an integer in 1..${MAX_KEY_TTL_SECONDS}`);
     }
@@ -241,34 +257,36 @@ function validateKeys(keys: readonly RegistryEntry[]): void {
  * openFileState prefixes them with the file path.
  */
 function decodeState(text: string): { keys: RegistryEntry[]; invites: InviteRecord[] } {
-  let parsed: unknown;
+  let raw: { readonly value: unknown; readonly source: RawJsonNode };
   try {
-    parsed = JSON.parse(text);
+    raw = parseJsonRaw(text);
   } catch (err) {
     corrupt((err as Error).message);
   }
-  // JSON.parse already rejects trailing data after the document and accepts
-  // trailing whitespace — Go's second-decode/EOF check — and cannot produce
-  // undefined holes.
-  const doc = asObject(parsed, "state document");
+  // parseJsonRaw already rejects trailing data after the document and accepts
+  // trailing whitespace — Go's second-decode/EOF check — and keeps each
+  // number's exact lexeme so the integer rule can read it.
+  const doc = asObject(raw.value, "state document");
   checkKnownFields(doc, ["version", "keys", "invites"], "state document");
 
-  const versionValue = Object.hasOwn(doc, "version") ? doc["version"] : null;
+  const versionNode = raw.source.members?.get("version");
   const version =
-    versionValue === null
+    versionNode === undefined || versionNode.value === null
       ? 0 // absent or null decodes as 0, which then fails the version check
-      : (typeof versionValue === "number" && Number.isInteger(versionValue)
-          ? versionValue
+      : (typeof versionNode.value === "number" && lexInteger(versionNode)
+          ? versionNode.value
           : corrupt("version: not an integer"));
 
-  const keysValue = doc["keys"];
-  const keys: RegistryEntry[] = Array.isArray(keysValue)
-    ? keysValue.map((item, i) => decodeEntry(item, `keys[${i}]`))
-    : corrupt("keys: not an array");
-  const invitesValue = doc["invites"];
-  const invites: InviteRecord[] = Array.isArray(invitesValue)
-    ? invitesValue.map((item, i) => decodeInvite(item, `invites[${i}]`))
-    : corrupt("invites: not an array");
+  const keysNode = raw.source.members?.get("keys");
+  const keys: RegistryEntry[] =
+    keysNode !== undefined && Array.isArray(keysNode.value) && keysNode.items !== undefined
+      ? keysNode.items.map((item, i) => decodeEntry(item, `keys[${i}]`))
+      : corrupt("keys: not an array");
+  const invitesNode = raw.source.members?.get("invites");
+  const invites: InviteRecord[] =
+    invitesNode !== undefined && Array.isArray(invitesNode.value) && invitesNode.items !== undefined
+      ? invitesNode.items.map((item, i) => decodeInvite(item, `invites[${i}]`))
+      : corrupt("invites: not an array");
 
   // Go decodes the whole document before the version check, so element
   // decoding errors surface before version errors.

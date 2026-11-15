@@ -533,17 +533,17 @@ fn enrollment_key(req: &Request, kid: &str) -> Result<Vec<u8>, VerifyResult> {
         return Err(unknown());
     }
     // arguments absent (None) or null ("null", which fails to parse into a
-    // Map) are both shape errors -> unknown key.
+    // map) are both shape errors -> unknown key. Members decode as raw text
+    // (Go: json.RawMessage), so a number in a member the exception never
+    // reads is never parsed or range-checked.
     let Some(arguments) = &msg.arguments else {
         return Err(unknown());
     };
-    let Ok(args) =
-        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(arguments.get())
-    else {
+    let Ok(args) = serde_json::from_str::<RawMembers>(arguments.get()) else {
         return Err(unknown());
     };
     // A null/number/bool public_key is not a string -> unknown key.
-    let Some(submitted) = args.get("public_key").and_then(serde_json::Value::as_str) else {
+    let Some(submitted) = args.get("public_key").and_then(|v| raw_as_string(v)) else {
         return Err(unknown());
     };
     let key = match decode_b64url_fixed(submitted, 32) {
@@ -1083,6 +1083,34 @@ mod tests {
         let event = res.audit.expect("enroll is audited");
         assert_eq!(event.outcome, AUDIT_FAILURE);
         assert_eq!(event.code, codes::KEY_EXISTS);
+
+        // (g) Unknown kid, an out-of-range number in a member the exception
+        // never reads: the raw-member decode must not fail on it, so the
+        // request passes step 4 (Go/TS continue to the invite check) and
+        // ends at step 9 like (d); without the raw decode this is 401
+        // unknown_key.
+        let body = call_body(
+            TOOL_ENROLL,
+            Some(&format!(
+                r#"{{"public_key":"{}","x":1e999}}"#,
+                carol.public_key
+            )),
+        );
+        let req = signed(
+            "POST",
+            "/mcp",
+            body.as_bytes(),
+            &carol_key,
+            &carol.kid,
+            NOW,
+            &nonce(7),
+        );
+        let v = verifier(config(NOW, seeded_state(&[&alice]), None));
+        let res = v.verify(&req);
+        assert_eq!(res.http_status, 403);
+        assert_eq!(res.code, codes::OPERATION_DENIED);
+        assert!(res.nonce_recorded);
+        assert!(res.audit.is_none());
     }
 
     #[test]

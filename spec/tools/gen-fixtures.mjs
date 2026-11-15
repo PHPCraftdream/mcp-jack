@@ -478,6 +478,10 @@ const REQUEST_CASES = [
   ['request-invalid-json', 'signed body is not JSON', { body: '{not json' }, [], ['reject', 400, 'invalid_request']],
   ['request-invalid-json-false-suffix', 'false followed by a digit is not a JSON literal', { body: '{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":false0}}' }, [], ['reject', 400, 'invalid_request']],
   ['request-invalid-utf8', 'signed body is not UTF-8', { body: Buffer.from([0xff, 0xfe, 0x7b]) }, [], ['reject', 400, 'invalid_request']],
+  // A leading UTF-8 BOM makes the body unacceptable even though the bytes
+  // after it are valid JSON (spec 02 section 2). The BOM is part of the
+  // signed bytes; the nonce is consumed because rejection is post-auth.
+  ['request-bom-prefix', 'a UTF-8 BOM before the JSON body is invalid_request', { body: Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('{"jsonrpc":"2.0","id":1,"method":"ping"}', 'utf8')]) }, [], ['reject', 400, 'invalid_request']],
   ['request-batch', 'JSON-RPC batch is rejected', { body: `[${STATUS}]` }, [], ['reject', 400, 'invalid_request']],
   ['request-empty-post', 'POST with empty body', { body: '' }, [], ['reject', 400, 'invalid_request']],
   ['request-missing-jsonrpc', 'object without jsonrpc "2.0"', { body: JSON.stringify({ id: 1, method: 'ping' }) }, [], ['reject', 400, 'invalid_request']],
@@ -579,6 +583,9 @@ seq('enroll-code-reuse', 'an invite is single-use', init(['root'], { invites: [i
 ]);
 seq('enroll-unknown-code', 'an unknown code is invalid', init(['root'], { invites: [inv('i1')] }), [
   step('newbie', 'jack.enroll', enrollArgs('nope', 'newbie', pk('newbie')), A('reject', 403, 'invalid_invite')),
+]);
+seq('enroll-unknown-kid-unread-member', 'an unread arguments member with an out-of-range number does not block the unknown-kid enrollment exception', init(['root'], { invites: [inv('i1')] }), [
+  step('newbie', 'jack.enroll', rawArg({ code: codeOf('nope'), name: 'newbie', public_key: pk('newbie') }, 'x', '1e999'), A('reject', 403, 'invalid_invite')),
 ]);
 seq('enroll-malformed-code', 'a code that is not canonical base64url is invalid, not a parameter error', init(['root'], { invites: [inv('i1')] }), [
   step('newbie', 'jack.enroll', { code: 'not-a-code!!', name: 'newbie', public_key: pk('newbie') }, A('reject', 403, 'invalid_invite')),
@@ -999,6 +1006,7 @@ const REGISTRY_CASES = [
   ['invalid-mixed-order-key', regWith((d) => { d.keys[0].public_key = b64u(MIXED_ORDER); d.keys[0].kid = kidOf(MIXED_ORDER); }), 'public_key'],
   ['invalid-validity-order', regWith((d) => { d.keys[0].not_before = NOW + 10; d.keys[0].not_after = NOW; }), 'validity'],
   ['invalid-negative-not-before', regWith((d) => { d.keys[0].not_before = -1; }), 'validity'],
+  ['invalid-not-before-int64-overflow', regWith((d) => { d.keys[0].not_before = 9223372036854775808; }), 'validity'],
 ].map(([id, document, reason]) => {
   const got = validateRegistry(document);
   if (got !== reason) throw new Error(`registry ${id}: reference verifier says ${got}, expected ${reason}`);
@@ -1061,6 +1069,8 @@ const STATE_FILE_CASES = [
     keys: [entryOf('alice')],
     invites: [{ invite_id: inviteIdOf(codeOf('d')), created_by: K.root.kid, created_at: 100, expires_at: 200, key_ttl_seconds: 31536001 }],
   }, 'key_ttl_seconds'],
+  ['statefile-invalid-invite-created-at-int64-overflow', stateWith((d) => { d.invites[0].created_at = 9223372036854775808; }), 'created_at'],
+  ['statefile-invalid-invite-ttl-int64-overflow', stateWith((d) => { d.invites[0].key_ttl_seconds = 9223372036854775808; }), 'key_ttl_seconds'],
 ].map(([id, document, reason]) => {
   const got = validateStateFile(document);
   if (got !== reason) throw new Error(`state file ${id}: reference verifier says ${got}, expected ${reason}`);

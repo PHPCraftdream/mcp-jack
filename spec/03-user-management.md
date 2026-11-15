@@ -57,7 +57,7 @@ mcp-jack/v1/rotate
 The invite supplies the `admin` flag of the new entry. The request is signed by the **new key** and carries `kid` = `base64url(SHA-256(public_key))`; that signature is the proof of possession. This is the **only** operation for which an unknown `kid` is not rejected at step 4 of 01-authentication section 4. The server MUST process it in this order and stop at the first failure:
 
 1. Steps 1-3 of 01 (header present, well formed, version).
-2. Step 4 exception: if `kid` is not in the registry and the request is a `POST` `tools/call` of `jack.enroll` with a valid JSON-RPC body, take `public_key` from the arguments. Otherwise `401 unknown_key`.
+2. Step 4 exception: if `kid` is not in the registry and the request is a `POST` `tools/call` of `jack.enroll` with a valid JSON-RPC body, take `public_key` from the arguments; members of `arguments` the exception does not read are not validated, and their numbers are not range-checked. Otherwise `401 unknown_key`.
 3. The public key passes section 2 (`400 key_rejected`) and `kid` equals its hash (`401 unknown_key`).
 4. Steps 6-8 of 01 (time window, signature verified with the **submitted** key, nonce recording).
 5. Arguments: `code` and `name` are strings and `name` is valid, otherwise `400 invalid_params`.
