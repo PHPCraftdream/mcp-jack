@@ -133,6 +133,10 @@ fn parse_flags() -> Flags {
             }
         };
         match name.as_str() {
+            "mode" => {
+                // Consumed and already dispatched by the caller binary.
+                let _ = value("mode");
+            }
             "aud" => flags.aud = value("aud"),
             "url" => flags.url = value("url"),
             "state" => flags.state = value("state"),

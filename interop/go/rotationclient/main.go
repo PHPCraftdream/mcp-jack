@@ -44,8 +44,20 @@ type stepResult struct {
 	data    any
 }
 
+// cleanups закрывают открытые хранилища перед os.Exit: иначе dirty-метка остаётся
+// и следующий шаг сценария отказывает с "explicit recovery required".
+var cleanups []func()
+
+func runCleanups() {
+	for i := len(cleanups) - 1; i >= 0; i-- {
+		cleanups[i]()
+	}
+	cleanups = nil
+}
+
 func fatal(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "rotation-client: "+format+"\n", args...)
+	runCleanups()
 	os.Exit(1)
 }
 
@@ -65,6 +77,7 @@ func emit(step string, r stepResult) {
 		fatal("marshal result: %v", err)
 	}
 	fmt.Println(string(b))
+	runCleanups()
 	os.Exit(0)
 }
 
@@ -141,6 +154,7 @@ func openStore(storePath, urlFlag, aud string, window int64, now func() int64, a
 	if err != nil {
 		fatal("rotation store open: %v", err)
 	}
+	cleanups = append(cleanups, func() { _ = store.Close() })
 	return store
 }
 
