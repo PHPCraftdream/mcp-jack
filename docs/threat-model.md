@@ -1,6 +1,6 @@
 # mcp-jack threat model
 
-**Status and evidence boundary.** Static analysis of checked-in protocol, SDK and Go CLI source; not a runtime assessment or audit. The protocol is v0.1.x with the durable-nonce + server-key-rotation profile implemented and wire-frozen for the 0.1.x line ([protocol transition policy](protocol-transition.md)); the release is not independently audited and nothing is published.
+**Status and evidence boundary.** Static analysis of checked-in protocol, SDK and Go CLI source; not a runtime assessment or audit. The protocol is v0.1.x with the durable-nonce + server-key-rotation profile implemented; it becomes normative and wire-frozen for the 0.1.x line only when the freeze is accepted on an exact commit ([protocol transition policy](protocol-transition.md)); the release is not independently audited and nothing is published.
 
 ## Purpose and security objectives
 
@@ -80,8 +80,17 @@ Go server adapters cap request/response bodies, but byte limits are not deadline
 
 ## Release status and residual limitations
 
-The v0.1.x wire profile is frozen for the 0.1.x line; SDK/API/version decisions remain governed by [versioning](versioning.md). Nothing is published and no release has been made; the work is not independently audited.
+The v0.1.x wire profile is not yet declared frozen: that declaration is made at the freeze decision on an exact commit; SDK/API/version decisions remain governed by [versioning](versioning.md). Nothing is published and no release has been made; the work is not independently audited.
 
 Current residual limitations include: message signatures cover defined fields only and provide no confidentiality; ordinary MCP authorization belongs to the application; stolen user/admin keys inherit their registry authority; without the durable profile, nonce state is in-memory and lost on restart — with the profile, stores are durable but recovery after an abnormal stop is manual and serving stays refused until operator action; one owner of nonce/ring state per deployment, no cluster/HA; upstream SSE answers are unsupported (signed 501); Windows CLI stores fail closed; optional audit delivery is best effort; Rust/TypeScript rely on deterministic property/mutation tests plus a shared corpus rather than coverage-guided fuzzing.
+
+Further limitations found by the internal pre-review (see [security review package](security-review-package.md) for all findings and their disposition):
+
+- **Unauthenticated nonce slots.** A request that is self-signed with a key the registry does not know is accepted as far as `jack.enroll` signature verification and reserves a nonce before the invite is checked. The reservation lives until `ts + window`, so unauthenticated traffic can occupy nonce capacity, within the gateway's global admission rate (64 per second) and the 4096-slot capacity. The gateway therefore rejects a durable `window` above 30 seconds. This contradicts the sentence in `spec/01-authentication.md` that unauthenticated requests cannot fill the cache; the contradiction is open for the external review. Global limits apply before authentication, so heavy unauthenticated traffic can also deny service to everyone: run the gateway behind a rate-limited front.
+- **Bridge.** The stdio bridge answers `tools/call` for `jack.*` tools locally and never signs or forwards them, so a stdio client or a prompt-injected agent cannot reach enrollment or administration through the bridge.
+- **Clock jumps.** The nonce store, the server key ring and every client trust store keep a high-water mark of the clock. A single forward jump followed by the clock returning latches the store unsafe for good, and 0.1.0 has no recovery command (see the crash recovery runbook in [operations](operations.md)).
+- **Cost of rotation.** Each signed response in the rotation profile re-verifies the server-key chain several times, so cost grows with the ring length; rotations are at least 48 hours apart, keep the ring short. Compaction of retired keys is not implemented.
+- **Invites.** Expired invites are never removed; at 1024 stored invites `invite.create` fails.
+- **Divergence between SDKs.** Go, Rust and TypeScript give different verdicts on a few edge inputs (lone surrogates, nesting depth, GET with a body, a small-order `R` in an Ed25519 signature). Only the Go SDK has a durable nonce store.
 
 No test, build, runtime probe, scan or audit was run for this documentation portion; verification happens in the project's CI workflows.

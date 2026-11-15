@@ -20,6 +20,7 @@ MCP client (stdio)
 - One owner per state: state files are created with `O_CREATE|O_EXCL` and carry an owner marker. Exactly one gateway may serve a given state file. There is no clustering, no HA mode, no lock bypass, and no automatic stale-owner recovery.
 - Known persistence caveat (owner-accepted limitation): filesystem operations — state writes and socket checks — are synchronous and not hard-bounded in time. Deploy on a healthy local filesystem.
 - The gateway rebuilds outbound headers from scratch (only `Accept`, `Content-Type` and the protocol version are copied) and sets `X-Jack-Kid`, `X-Jack-Name` and `X-Jack-Admin` from the verified identity. `Jack-Auth` and caller headers never cross the hop.
+- The bridge answers `tools/call` for `jack.*` tools locally with a JSON-RPC error (`-32602`) and never signs or forwards them. Enrollment and administration use the dedicated `jack` commands, never the bridge.
 - Only `jack.enroll` is permitted natively by default. `native_admin: true` additionally enables the user/invite admin tools. `jack.whoami`, user-key rotation, server-key rotation and unknown `jack.*` tools are never forwarded upstream.
 
 ## Files and permissions
@@ -84,7 +85,7 @@ Gateway config (`/etc/jack/gateway.json`, minimal):
 }
 ```
 
-`listen` must be a literal loopback address with a nonzero port. `durable_nonces` and `native_admin` are optional: omitting `durable_nonces` selects the volatile in-memory store; `native_admin` defaults to `false`. `call_timeout_ms` must be in 100..30000; `max_concurrent` in 1..64, or 1..32 when `durable_nonces` is selected.
+`listen` must be a literal loopback address with a nonzero port. `durable_nonces` and `native_admin` are optional: omitting `durable_nonces` selects the volatile in-memory store; `native_admin` defaults to `false`. `durable_nonces` is an object with `path` (absolute path of the initialized nonce store), `deployment_id` and `window`; the gateway accepts a `window` of 1 to 30 seconds (30 is the default of the protocol), because a larger window would let unauthenticated enrollment attempts fill the nonce capacity at the gateway's admission rate. `call_timeout_ms` must be in 100..30000; `max_concurrent` in 1..64, or 1..32 when `durable_nonces` is selected.
 
 Client config (`/etc/jack/client.json`, written by the operator; `jack enroll` only reads it). `server_public_key` and `server_kid` are provisioned out of band from `/etc/jack/server.public.json`:
 
@@ -203,6 +204,14 @@ Procedure:
 Tombstone reconcile: `jack nonce-reconcile-terminal --config FILE --expected-hash HASH --receipt-file FILE --confirm-no-redelivery INTENT_ID` is the one offline evidence action. Run it over an already closed dirty nonce store; it converts one exact receipt (a `NonceReceipt` from `nonce-inspect` evidence) into a terminal no-redelivery tombstone. `HASH` must be the exact current logical graph hash reported by `nonce-inspect`. Limits: it never loads signer material, sends HTTP, redelivers, clears dirty/unsafe, releases serving, or resets storage; success does not undo prior handler effects and is not permission to restart.
 
 Consequences for clients: a new ring needs a checkpoint clients already trust or a new out-of-band server-key pin. Rotation records cannot bridge a discarded ring. Static clients keep their old pin and will fail closed until the operator re-pins them out of band.
+
+## Operational limits to plan for
+
+- **Time source.** The nonce store, the server key ring and every client trust store keep a high-water mark of the clock. If the clock jumps forward and then returns, the store latches unsafe permanently and every entry point refuses to serve; 0.1.0 has no command to clear it, so the only remedy is fresh state as in the crash recovery runbook, and clients must be re-pinned. Use a trusted, stable time source; never step the clock by hand, and watch for VM pauses and migrations.
+- **Unauthenticated load.** The gateway admits at most 64 calls per Unix second and 4096 nonce entries, and these limits apply before authentication. A self-signed `jack.enroll` from an unknown key reserves a nonce until `ts + window`. Put a rate-limited front or a firewall before the gateway and keep the durable `window` at 30 seconds or less.
+- **Rotation ring.** Each signed response re-verifies the key ring, so keep it short. Rotations are at least 48 hours apart; retired-key compaction is not implemented, and a ring of more than 1024 retired keys is refused.
+- **Invites.** Expired invites are never removed and an expired invite cannot be revoked. At 1024 stored invites `invite-create` fails and a gateway with more than 1024 does not start, so create invites sparingly.
+- **Rust and TypeScript servers.** Only the Go SDK and the CLI gateway have the durable nonce store. Rust and TypeScript servers keep nonces in memory.
 
 ## Monitoring and audit
 
