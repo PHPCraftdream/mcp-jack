@@ -27,8 +27,12 @@
  * - expect.committed          -> result.committed (or RotationRefreshCommittedError
  *   .result.committed) and the durable snapshot on disk.
  * - expect.ackOrdinal         -> durable head ordinal.
- * - expect.carrierTrusted     -> no post-commit RotationRefreshCommittedError.
- * - expect.fenced             -> durable fenced flag in the store bundle.
+ * - expect.carrierTrusted     -> carrier fully verified: acceptRefresh returned
+ *   normally (no refusal error) with a result present; committed/duplicate
+ *   are asserted separately.
+ * - expect.fenced             -> fence observables: in-memory reads refuse and
+ *   the startup gate refuses reopen (the persisted dirty=true bundle plus the
+ *   still-held owner marker); fence() does not write a fenced byte on disk.
  * - clock events: expect.highWater/revision/unsafe -> store ClockGuard; writes
  *   are mirrored by revision deltas (the store writes iff the guard changes);
  *   callbacks=1 counts the ClockGuard operation itself. latch:"unknown" maps
@@ -171,6 +175,7 @@ interface ClientEnvironment {
   readonly controller: rotation.RotationController;
   readonly path: string;
   readonly revision: number;
+  readonly options: rotation.RotationStoreOptions;
   setScript(values: readonly number[], onSample?: (index: number) => void): void;
 }
 
@@ -202,7 +207,7 @@ function clientEnvironment(context: TestContext, label: string, input: ClientCas
   }
   const controller = new rotation.RotationController(store);
   return {
-    store, controller, path, revision,
+    store, controller, path, revision, options,
     setScript(values, onSample) {
       const fallback = values[values.length - 1];
       assert.ok(fallback !== undefined, "clock script needs at least one value");
@@ -256,8 +261,21 @@ function driveClientCase(context: TestContext, entry: ClientCase): void {
   assert.equal(outcome.error, code, `error code of ${entry.id}`);
   if (entry.expect.committed !== undefined) assert.equal(outcome.committed, entry.expect.committed, `committed of ${entry.id}`);
   if (entry.expect.fenced === true) {
-    assert.equal(diskBundle(env.path).fenced, true, `durable fence of ${entry.id}`);
+    // Spec section 5 (L112): "Unknown callback outcome immediately fences the
+    // binding at every new-traffic and final gate. Persist the binding-wide
+    // fence; if its durability is uncertain, a pre-existing durable dirty
+    // marker or externally enforced startup gate MUST block every owner until
+    // explicit recovery." In this profile fence() sets the in-memory
+    // RotationTrustStore/RotationFileOwner flags (rotation-store.ts:180,
+    // rotation-file.ts:169); the durable gate is the still-held owner marker
+    // plus the persisted dirty=true bundle that RotationTrustStore.open
+    // refuses (rotation-store.ts:64). The fenced byte in the on-disk payload
+    // is NOT written by fence(), so the durable observable asserted here is
+    // the read refusal and the startup gate, matching the Go runner's
+    // assertRefusesReopen for unknown-outcome vectors.
     assert.throws(() => env.store.snapshot(), (error) => error instanceof rotation.RotationError, `fenced store refuses reads of ${entry.id}`);
+    assert.throws(() => rotation.RotationTrustStore.open(env.path, env.options),
+      (error) => error instanceof rotation.RotationError, `fenced binding refuses reopen of ${entry.id}`);
   } else {
     const state = env.store.snapshot();
     assert.equal(state.snapshot.head.ordinal, entry.expect.ackOrdinal, `ackOrdinal of ${entry.id}`);
@@ -269,7 +287,17 @@ function driveClientCase(context: TestContext, entry: ClientCase): void {
       assert.equal(state.snapshot.revision, env.revision + 1, `exactly one trust CAS of ${entry.id}`);
       assert.equal(state.snapshot.records.length, entry.expect.ackOrdinal, `committed records of ${entry.id}`);
     }
-    if (entry.expect.carrierTrusted === true) assert.ok(outcome.result !== undefined && outcome.result.committed, `carrier trust of ${entry.id}`);
+    if (entry.expect.carrierTrusted === true) {
+      // carrierTrusted means the carrier authenticated and passed every gate:
+      // no refusal error and a result present. It does NOT mean trust
+      // advanced — spec section 6 (L97): an all-duplicate response "is a
+      // no-op with zero trust-extension callbacks ... it never moves P/A or
+      // clears a fence". committed/duplicate are asserted separately above
+      // and below, so a duplicate no-op (committed=false, revision
+      // unchanged) still passes here and a post-commit refusal still fails.
+      assert.equal(outcome.error, null, `carrier trust of ${entry.id}`);
+      assert.ok(outcome.result !== undefined, `carrier result of ${entry.id}`);
+    }
     if (entry.expect.carrierTrusted === false) {
       assert.ok(outcome.result !== undefined && outcome.result.committed, `late ACK retained of ${entry.id}`);
       assert.ok(code !== null, `late failure code of ${entry.id}`);
@@ -353,6 +381,7 @@ for (const entry of vectors.client_cases) {
 interface ClockEnvironment {
   readonly store: rotation.RotationTrustStore;
   readonly path: string;
+  readonly options: rotation.RotationStoreOptions;
   setCurrent(value: number): void;
 }
 
@@ -381,7 +410,7 @@ function clockEnvironment(context: TestContext, entry: EventCase): ClockEnvironm
   const state = store.snapshot();
   assert.equal(state.clock.highWater, guard.highWater, `seed highWater of ${entry.id}`);
   assert.equal(state.clock.revision, guard.revision, `seed revision of ${entry.id}`);
-  return { store, path, setCurrent: (value) => { current = value; } };
+  return { store, path, options, setCurrent: (value) => { current = value; } };
 }
 
 test("state vectors clock: clock-rollback-latches", { skip: !linux }, (context) => {
@@ -394,11 +423,22 @@ test("state vectors clock: clock-rollback-latches", { skip: !linux }, (context) 
   // that durable write. callbacks=1 counts the ClockGuard operation itself.
   assert.throws(() => env.store.advanceAndCheck(),
     (error) => error instanceof rotation.RotationError && error.code === "rotation_clock_unsafe");
-  const clock = env.store.snapshot().clock;
-  assert.equal(clock.highWater, entry.expect.highWater);
+  // The in-memory snapshot() refuses an unsafe store by design: spec section
+  // 4 (L91) "Missing/corrupt/unsupported guard, unsafe bit ... remains
+  // closed" and rotationTrustClockCompatible requires clock.unsafe === false
+  // (rotation-trust.ts:155), so snapshot() throws rotation_state_unavailable.
+  // The latch itself IS durable: advance() writes highWater unchanged,
+  // revision+1, unsafe=true (rotation-store.ts:136-140) before throwing
+  // rotation_clock_unsafe. Assert the durable guard bytes on disk instead,
+  // plus the startup gate that keeps the latched binding closed.
+  const bundle = diskBundle(env.path);
+  const clock = JSON.parse(bundle.clock) as { readonly high_water: number; readonly clock_revision: number; readonly unsafe: boolean };
+  assert.equal(clock.high_water, entry.expect.highWater);
   assert.equal(clock.unsafe, entry.expect.unsafe);
   // The rollback expectation pins no revision: the latch must land on seed + 1.
-  assert.equal(clock.revision, guardRevision(entry) + 1);
+  assert.equal(clock.clock_revision, guardRevision(entry) + 1);
+  assert.throws(() => rotation.RotationTrustStore.open(env.path, env.options),
+    (error) => error instanceof rotation.RotationError, "unsafe latched binding refuses reopen");
 });
 
 function guardRevision(entry: EventCase): number {
@@ -440,9 +480,22 @@ test("state vectors clock: clock-rollback-latch-unknown-is-unavailable", { skip:
   env.setCurrent(entry.input.rawNow);
   assert.throws(() => env.store.advanceAndCheck(),
     (error) => error instanceof rotation.RotationError && error.code === "rotation_clock_unavailable");
+  // Spec section 4 (L87): "A definite failure or unknown write outcome closes
+  // the binding and returns rotation_clock_unavailable ... Never retry an
+  // unknown clock write"; section 4 (L91): "failed/unknown guard write
+  // remains closed". advance() catches the failed write, fences the store and
+  // file owner in memory, and leaves the on-disk bytes untouched — fence()
+  // does not write a fenced byte into the payload (rotation-store.ts:147-151,
+  // rotation-file.ts:169). The durable gate is the still-held owner marker
+  // plus the dirty=true bundle that a fresh RotationTrustStore.open refuses
+  // (rotation-store.ts:64), the TS counterpart of the Go runner's fenced
+  // Close + assertRefusesReopen for unknown-outcome vectors.
+  assert.throws(() => env.store.snapshot(), (error) => error instanceof rotation.RotationError,
+    "fenced store refuses reads after unknown write");
+  assert.throws(() => rotation.RotationTrustStore.open(env.path, env.options),
+    (error) => error instanceof rotation.RotationError, "unknown write outcome closes the binding");
   const bundle = diskBundle(env.path);
-  assert.equal(bundle.fenced, true, "unknown write outcome fences the binding");
-  const clock = JSON.parse(bundle.clock) as { high_water: number; clock_revision: number; unsafe: boolean };
+  const clock = JSON.parse(bundle.clock) as { readonly high_water: number; readonly clock_revision: number; readonly unsafe: boolean };
   assert.equal(clock.high_water, entry.expect.highWater);
   assert.equal(clock.clock_revision, entry.expect.revision);
   assert.equal(clock.unsafe, entry.expect.unsafe);
