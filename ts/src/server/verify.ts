@@ -25,6 +25,8 @@ import { requestSigningString } from "../signing.js";
 import type { AuditEvent, AuditSink } from "./audit.js";
 import { AUDIT_FAILURE, AUDIT_SUCCESS } from "./audit.js";
 import type { NonceStore } from "./nonce.js";
+import type { DurableAdmission } from "./durable-admission.js";
+import { rememberResultFinish } from "./durable-admission.js";
 import type { RegistryEntry, StateStore } from "./state.js";
 import { inviteIdOf } from "./state.js";
 import { parseJsonRaw } from "../json-raw.js";
@@ -426,6 +428,14 @@ export interface VerifierConfig {
   readonly aud: string;
   readonly state: StateStore;
   readonly nonces: NonceStore;
+  /**
+   * Candidate durable admission seam (Go Config.DurableNonces; spec
+   * candidate durable-nonces.md sections 1, 2, 5). When set, the nonce is
+   * reserved durably AFTER the signature verifies and BEFORE any
+   * authorization, state change or dispatch; the volatile `nonces` store is
+   * NOT used for that request. Absent => the default path is identical.
+   */
+  readonly durable?: DurableAdmission;
   /** Optional sink. */
   readonly audit?: AuditSink;
   /** When undefined every jack.* tool is 403 operation_denied. */
@@ -485,7 +495,8 @@ function validAudience(aud: string): boolean {
 export class Verifier {
   private readonly aud: string;
   private readonly state: StateStore;
-  private readonly nonces: NonceStore;
+  private readonly nonces: NonceStore | undefined;
+  private readonly durable: DurableAdmission | undefined;
   private readonly audit: AuditSink | undefined;
   private readonly native: NativeTools | undefined;
   private readonly serverKeys: NativeTools | undefined;
@@ -498,11 +509,14 @@ export class Verifier {
   constructor(cfg: VerifierConfig) {
     if (!validAudience(cfg.aud)) throw new Error("server: VerifierConfig.aud must be non-empty and contain no control characters");
     if (cfg.state === undefined) throw new Error("server: VerifierConfig.state must be set");
-    if (cfg.nonces === undefined) throw new Error("server: VerifierConfig.nonces must be set");
+    if (cfg.nonces === undefined && cfg.durable === undefined) {
+      throw new Error("server: VerifierConfig.nonces must be set");
+    }
     if (cfg.now === undefined) throw new Error("server: VerifierConfig.now must be set");
     this.aud = cfg.aud;
     this.state = cfg.state;
     this.nonces = cfg.nonces;
+    this.durable = cfg.durable;
     this.audit = cfg.audit;
     this.native = cfg.native;
     this.serverKeys = cfg.serverKeys;
@@ -613,8 +627,67 @@ export class Verifier {
       return rejected(401, Code.BAD_SIGNATURE, "signature does not verify");
     }
 
+    // Step 5 (candidate durable profile): reserve durably after the signature
+    // verified and BEFORE any authorization, state change or dispatch (spec
+    // candidate durable-nonces.md section 2). The volatile store is untouched.
+    if (this.durable !== undefined) {
+      const outcome = this.durable.reserveForVerify({
+        kid: auth.kid,
+        nonce: auth.nonce,
+        signature: auth.sig,
+        signingBytes: signing,
+        timestamp: auth.ts,
+        window: this.window,
+        caller,
+      });
+      if (!outcome.accepted) {
+        const res: VerifyResult = {
+          ...rejected(outcome.httpStatus, outcome.code, outcome.message),
+          kid: auth.kid,
+          nonceRecorded: outcome.nonceRecorded,
+          requestSig: auth.sig,
+        };
+        rememberResultFinish(res, outcome.finish);
+        return res;
+      }
+      const b: ResultBuilder = {
+        accepted: false,
+        httpStatus: 0,
+        code: "",
+        message: "",
+        rpcId: undefined,
+        tool: "",
+        native: false,
+        structured: undefined,
+        identity: undefined,
+        audit: undefined,
+      };
+      const done = this.authorize(req, auth, outcome.finalNow, caller, b);
+      const res: VerifyResult = {
+        accepted: done.accepted,
+        kid: auth.kid,
+        httpStatus: done.httpStatus,
+        code: done.code,
+        message: done.message,
+        nonceRecorded: true,
+        requestSig: auth.sig,
+        rpcId: done.rpcId,
+        tool: done.tool,
+        native: done.native,
+        structured: done.structured,
+        identity: done.identity,
+        audit: done.audit,
+      };
+      rememberResultFinish(res, outcome.finish);
+      return res;
+    }
+
     // Step 5: nonce, only after the signature verified, so
     // requests that fail verification cannot fill the cache (spec 01 section 4). True = live replay.
+    if (this.nonces === undefined) {
+      // Unreachable: the constructor requires nonces unless the durable seam is set.
+      return rejected(500, "internal_error", "internal error");
+    }
     if (this.nonces.checkAndRecord(auth.kid, auth.nonce, effective, auth.ts + this.window)) {
       return rejected(401, Code.REPLAYED_NONCE, "nonce was already used");
     }
