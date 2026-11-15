@@ -1464,8 +1464,9 @@ mod tests {
         assert_eq!(err.http_status, 409);
         assert_eq!(err.code, codes::NAME_TAKEN);
         assert_eq!(before, state.view());
-        // view() does not filter: the seeded expired invite plus the bootstrap one.
-        assert_eq!(state.view().invites.len(), 2);
+        // bootstrap_admin purged the seeded expired invite in its own edit, so
+        // only the bootstrap invite is stored (the failed enroll rolled back).
+        assert_eq!(state.view().invites.len(), 1);
         assert!(state.lookup(&fresh.kid).is_none());
 
         // 2. rotate: valid proof but the new kid is already registered ->
