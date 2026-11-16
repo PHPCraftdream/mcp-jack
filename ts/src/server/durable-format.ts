@@ -10,6 +10,8 @@
 import { createHash } from "node:crypto";
 import { bodyHash, decodeBase64URLFixed, encodeBase64URL } from "../encoding.js";
 import { JackError } from "../errors.js";
+import { parseCandidateJsonRaw } from "../json-raw.js";
+import type { RawJsonNode } from "../json-raw.js";
 
 export const DURABLE_FORMAT_VERSION = 1;
 export const DURABLE_MAX_TIMESTAMP = 999999999999;
@@ -272,12 +274,18 @@ export function encodeDocument(doc: DurableDocument): Uint8Array {
   return bytes;
 }
 
-/** Strict load: unknown/missing fields, wrong types, checksum, caps, duplicates, cross-set conflicts. */
+/** Strict load: unknown/missing fields, wrong types, checksum, caps, duplicates, cross-set conflicts.
+ * Spec section 3 canonical bytes: the strict raw parser rejects duplicate members at every nesting
+ * level and trailing content after the document (Go refuses trailing bytes the same way via exact
+ * stream consumption, durable/metadata.go and durable/record.go); the final re-encode comparison
+ * rejects whitespace and noncanonical number spellings, mirroring Go's exact-length binary layout. */
 export function decodeDocument(bytes: Uint8Array): DurableDocument {
   if (bytes.length === 0 || bytes.length > DURABLE_MAX_FILE_BYTES) fail();
+  const input = Buffer.from(bytes);
   let outer: JsonValue;
   try {
-    outer = JSON.parse(Buffer.from(bytes).toString("utf8")) as JsonValue;
+    const raw: RawJsonNode = parseCandidateJsonRaw(input.toString("utf8"));
+    outer = raw.value;
   } catch {
     fail();
   }
@@ -288,7 +296,7 @@ export function decodeDocument(bytes: Uint8Array): DurableDocument {
   if (bodyHash(Buffer.from(payload, "utf8")) !== text(sealed["checksum"])) fail();
   let doc: JsonValue;
   try {
-    doc = JSON.parse(payload) as JsonValue;
+    doc = parseCandidateJsonRaw(payload).value;
   } catch {
     fail();
   }
@@ -313,7 +321,10 @@ export function decodeDocument(bytes: Uint8Array): DurableDocument {
       seenOperations.add(row.operationId);
     }
   }
-  return { meta, live, intents, tombstones };
+  const decoded: DurableDocument = { meta, live, intents, tombstones };
+  // Canonical-bytes gate: only byte-identical re-encoding of the decoded document may load.
+  if (Buffer.compare(input, Buffer.from(encodeDocument(decoded))) !== 0) fail();
+  return decoded;
 }
 
 /** Sorted-array key used by every row mutation. */

@@ -10,18 +10,29 @@
  * retried; an unknown commit outcome fences the owner.
  */
 import { createHash, randomBytes } from "node:crypto";
-import { closeSync, constants, existsSync, fsyncSync, openSync, readFileSync, renameSync, statSync, unlinkSync,
+import { closeSync, constants, fsyncSync, openSync, renameSync, statSync, unlinkSync,
   writeSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { RotationFileOwner } from "../rotation-file.js";
 import { bodyHash, decodeBase64URLFixed } from "../encoding.js";
 import { JackError } from "../errors.js";
+import { RotationError } from "../rotation-record.js";
 import {
   DURABLE_MAX_COMBINED, DURABLE_MAX_PURGE, DURABLE_MAX_TIMESTAMP, DURABLE_MAX_TOMBSTONES, DURABLE_FORMAT_VERSION,
   decodeDocument, durableAdmissionError, durableUnavailable, encodeDocument, findSorted, insertSorted, intentIdOf,
   pairKeyOf, removeSorted, sortKeyOf, validateReceipt,
 } from "./durable-format.js";
 import type { DurableDocument, DurableMetadata, DurableReceipt, DurableRecordKind } from "./durable-format.js";
+
+/** Go ErrRecoveryRequired: explicit recovery required; a restart never clears it. */
+function recoveryRequired(): JackError {
+  return new JackError(503, "durability_unavailable", "durable: recovery required");
+}
+
+/** Go ErrInvalidStore: the file does not match the given deployment/window options. */
+function invalidStore(): Error {
+  return new Error("durable: invalid store");
+}
 
 /** Deployment binding and injected clock; invalid options refuse initialization. */
 export interface DurableStoreOptions {
@@ -36,6 +47,8 @@ export interface DurableStoreOptions {
    * unknown without committing. Returning undefined commits normally.
    */
   readonly injectTransactionFailure?: (phase: "intent" | "final") => "commit" | "abort" | undefined;
+  /** Test-only seam: operation id to allocate; Go retries a collision once (durable/admit.go). */
+  readonly injectOperationId?: () => string;
 }
 
 /** One authenticated admission (post-signature; spec section 2 ordering). */
@@ -83,14 +96,16 @@ const GROUPS: readonly { readonly name: "live" | "intents" | "tombstones"; reado
   [{ name: "live", kind: "live" }, { name: "intents", kind: "intent" }, { name: "tombstones", kind: "tombstone" }];
 
 function normalized(options: DurableStoreOptions): { deploymentId: string; window: number; now: () => number;
-  injectTransactionFailure: DurableStoreOptions["injectTransactionFailure"] } {
+  injectTransactionFailure: DurableStoreOptions["injectTransactionFailure"];
+  injectOperationId: DurableStoreOptions["injectOperationId"] } {
   const bytes = Buffer.byteLength(options.deploymentId ?? "", "utf8");
   if (bytes === 0 || bytes > 1024 || !Number.isSafeInteger(options.window) || options.window < 1 || options.window > 120) {
     throw durableUnavailable();
   }
   const now = options.now ?? (() => Math.floor(Date.now() / 1000));
   return { deploymentId: options.deploymentId, window: options.window, now,
-    injectTransactionFailure: options.injectTransactionFailure };
+    injectTransactionFailure: options.injectTransactionFailure,
+    injectOperationId: options.injectOperationId };
 }
 
 /** Snapshot hash: length-framed fields over the full logical graph. */
@@ -191,7 +206,8 @@ export class DurableNonceStore {
 
   private constructor(private readonly file: RotationFileOwner, private readonly path: string,
     private readonly options: { deploymentId: string; window: number; now: () => number;
-      injectTransactionFailure: DurableStoreOptions["injectTransactionFailure"] },
+      injectTransactionFailure: DurableStoreOptions["injectTransactionFailure"];
+      injectOperationId: DurableStoreOptions["injectOperationId"] },
     private doc: DurableDocument, private bytes: Uint8Array) {}
 
   /** Clock samples taken since open (test instrumentation). */
@@ -252,6 +268,12 @@ export class DurableNonceStore {
       if (loaded.meta.deployment !== options.deploymentId || loaded.meta.window !== options.window ||
         loaded.meta.dirty || loaded.meta.unsafe) {
         throw durableUnavailable();
+      }
+      // Go readStoreSnapshot (durable/snapshot.go): a CLEAN store that still
+      // holds unresolved intents or sits at the tombstone cap refuses with
+      // ErrRecoveryRequired; only recovery inspect/reconcile may load it.
+      if (loaded.meta.intents !== 0 || loaded.meta.tombstones >= DURABLE_MAX_TOMBSTONES) {
+        throw recoveryRequired();
       }
       const marked: DurableDocument = {
         meta: { ...loaded.meta, owner: loaded.meta.owner + 1, dirty: true },
@@ -406,11 +428,30 @@ export class DurableNonceStore {
   }
 
   /**
+   * The reservation wrapper (Go Reserve, durable/admit.go:33-46): ANY
+   * unexpected non-JackError failure inside the transaction (a throwing
+   * injected clock, a plain Error from validation/purge/insertion) fences the
+   * store BEFORE reporting, and surfaces as the same durability_unavailable
+   * the adapter maps unknown failures to. Definite rejections (JackError)
+   * keep today's behaviour: only their unavailable/clock_unsafe codes fence
+   * in place, so the committed state stays consistent with the fence.
+   */
+  reserve(request: DurableNonceAdmission): DurableNonceReservation {
+    try {
+      return this.reserveLocked(request);
+    } catch (error) {
+      if (error instanceof JackError) throw error;
+      this.fenced = true;
+      throw durableUnavailable();
+    }
+  }
+
+  /**
    * The reservation path (Go reserveLocked): entry sample, replay lookup,
    * intent transaction, final sample and final transaction. Exactly three
    * clock samples per admission. Unresolved commit outcomes fence the store.
    */
-  reserve(request: DurableNonceAdmission): DurableNonceReservation {
+  private reserveLocked(request: DurableNonceAdmission): DurableNonceReservation {
     if (this.fenced || this.closing || this.closed) throw durableUnavailable();
     if (request.window !== this.doc.meta.window) throw durableAdmissionError(503, "state_changed");
     if (!Number.isSafeInteger(request.timestamp) || request.timestamp < 0 ||
@@ -437,8 +478,19 @@ export class DurableNonceStore {
       if (replay.code === "durability_unavailable") this.fenced = true;
       throw replay;
     }
-    const operationId = randomBytes(16).toString("base64url");
-    if (this.operationTaken(operationId)) {
+    // Go retries a colliding operation id once (durable/admit.go: two rand
+    // attempts) before fencing: spec section 1 says allocate a new id on
+    // collision, before any intent commit. A second collision still fences.
+    let operationId = "";
+    let unique = false;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      operationId = this.options.injectOperationId !== undefined
+        ? this.options.injectOperationId()
+        : randomBytes(16).toString("base64url");
+      unique = !this.operationTaken(operationId);
+      if (unique) break;
+    }
+    if (!unique) {
       this.fenced = true;
       throw durableUnavailable();
     }
@@ -558,19 +610,54 @@ export class DurableNonceStore {
     replaceClosed(path, encodeDocument(doc));
   }
 
-  /** Read-only recovery inspection of a closed store (no owner marker, no
-   * clock callbacks, no metadata change). Serving admission is not opened.
+  /**
+   * TEST-ONLY seam (mirrors Go seedVectorState / Rust seed_records): writes
+   * one exact abstract document (live, intent and tombstone rows) into an
+   * ALREADY-OPEN store as a single atomic owner-checked rewrite. Go seeds rows
+   * after Open through package-internal transactions; never call from
+   * production code paths.
+   */
+  seedRecordsForTest(doc: DurableDocument): void {
+    const nextBytes = encodeDocument(doc);
+    this.file.replace(this.bytes, nextBytes);
+    this.writes++;
+    this.doc = doc;
+    this.bytes = nextBytes;
+  }
+
+  /** Read-only recovery inspection of a closed store. The exclusive owner
+   * marker is taken even for inspection (Go InspectRecovery: "the exclusive
+   * owner lock is required even for inspection") and the file is read through
+   * the same private-file checks the open path uses. No clock callbacks and no
+   * metadata change; serving admission is not opened.
    */
   static inspectRecovery(path: string, input: DurableStoreOptions): DurableRecoverySnapshot {
-    normalized(input);
-    if (existsSync(path + ".owner")) throw durableUnavailable();
-    const doc = decodeDocument(readFileSync(path));
-    return {
-      deployment: doc.meta.deployment, storeId: doc.meta.storeId, generation: doc.meta.generation,
-      owner: doc.meta.owner, window: doc.meta.window, highWater: doc.meta.highWater,
-      dirty: doc.meta.dirty, unsafe: doc.meta.unsafe,
-      live: doc.live, intents: doc.intents, tombstones: doc.tombstones, hash: snapshotHash(doc),
-    };
+    const options = normalized(input);
+    let file: RotationFileOwner;
+    try {
+      file = RotationFileOwner.open(path);
+    } catch {
+      // A live owner or an unusable private path reports unavailable (Go ErrUnavailable).
+      throw durableUnavailable();
+    }
+    try {
+      const doc = decodeDocument(file.read());
+      // Go loadRecoverySnapshot: a deployment or window mismatch is ErrInvalidStore.
+      if (doc.meta.deployment !== options.deploymentId || doc.meta.window !== options.window) {
+        throw invalidStore();
+      }
+      const snapshot: DurableRecoverySnapshot = {
+        deployment: doc.meta.deployment, storeId: doc.meta.storeId, generation: doc.meta.generation,
+        owner: doc.meta.owner, window: doc.meta.window, highWater: doc.meta.highWater,
+        dirty: doc.meta.dirty, unsafe: doc.meta.unsafe,
+        live: doc.live, intents: doc.intents, tombstones: doc.tombstones, hash: snapshotHash(doc),
+      };
+      file.close();
+      return snapshot;
+    } catch (error) {
+      try { file.close(); } catch { /* Close failure leaves the marker: mirrors Go ErrUnavailable. */ }
+      throw error;
+    }
   }
 
   /**
@@ -581,43 +668,62 @@ export class DurableNonceStore {
    */
   static reconcileUnknown(path: string, input: DurableStoreOptions, expectedHash: string,
     receipt: DurableReceipt): void {
-    normalized(input);
-    if (existsSync(path + ".owner")) throw durableUnavailable();
-    const doc = decodeDocument(readFileSync(path));
-    if (!doc.meta.dirty || snapshotHash(doc) !== expectedHash) {
-      throw new JackError(503, "durability_unavailable", "durable: recovery required");
-    }
-    const key = pairKeyOf(decodeBase64URLFixed(receipt.kid, 32), decodeBase64URLFixed(receipt.nonce, 16))
-      .toString("latin1");
-    const work = cloneDoc(doc);
-    let found = false;
-    for (const group of GROUPS) {
-      const row = findSorted(work[group.name], key);
-      if (row === undefined) continue;
-      found = true;
-      if (!receiptsEqual(row, receipt)) {
-        throw new JackError(503, "durability_unavailable", "durable: recovery required");
-      }
-      if (group.kind === "tombstone") break; // already terminal
-      if (work.meta.tombstones >= DURABLE_MAX_TOMBSTONES) {
-        throw new JackError(503, "durability_unavailable", "durable: recovery required");
-      }
-      work[group.name] = removeSorted(work[group.name], key);
-      work.tombstones = insertSorted(work.tombstones, row);
-      withMeta(work, { tombstones: work.meta.tombstones + 1,
-        live: group.kind === "live" ? work.meta.live - 1 : work.meta.live,
-        intents: group.kind === "intent" ? work.meta.intents - 1 : work.meta.intents });
-      break;
-    }
-    if (!found) {
-      // A missing record is not proof of abort.
-      throw new JackError(503, "durability_unavailable", "durable: recovery required");
+    const options = normalized(input);
+    let file: RotationFileOwner;
+    try {
+      file = RotationFileOwner.open(path);
+    } catch {
+      // A live owner or an unusable private path reports unavailable (Go ErrUnavailable).
+      throw durableUnavailable();
     }
     try {
-      replaceClosed(path, encodeDocument({ meta: work.meta, live: work.live, intents: work.intents,
-        tombstones: work.tombstones }));
-    } catch {
-      throw durableUnavailable();
+      const bytes = file.read();
+      const doc = decodeDocument(bytes);
+      // Go loadRecoverySnapshot: a deployment or window mismatch is ErrInvalidStore.
+      if (doc.meta.deployment !== options.deploymentId || doc.meta.window !== options.window) {
+        throw invalidStore();
+      }
+      if (!doc.meta.dirty || snapshotHash(doc) !== expectedHash) {
+        throw recoveryRequired();
+      }
+      const key = pairKeyOf(decodeBase64URLFixed(receipt.kid, 32), decodeBase64URLFixed(receipt.nonce, 16))
+        .toString("latin1");
+      const work = cloneDoc(doc);
+      let found = false;
+      for (const group of GROUPS) {
+        const row = findSorted(work[group.name], key);
+        if (row === undefined) continue;
+        found = true;
+        if (!receiptsEqual(row, receipt)) {
+          throw recoveryRequired();
+        }
+        if (group.kind === "tombstone") break; // already terminal
+        if (work.meta.tombstones >= DURABLE_MAX_TOMBSTONES) {
+          throw recoveryRequired();
+        }
+        work[group.name] = removeSorted(work[group.name], key);
+        work.tombstones = insertSorted(work.tombstones, row);
+        withMeta(work, { tombstones: work.meta.tombstones + 1,
+          live: group.kind === "live" ? work.meta.live - 1 : work.meta.live,
+          intents: group.kind === "intent" ? work.meta.intents - 1 : work.meta.intents });
+        break;
+      }
+      if (!found) {
+        // A missing record is not proof of abort.
+        throw recoveryRequired();
+      }
+      // Atomic replace under the held exclusive owner (byte-CAS against the
+      // bytes just read); rotation I/O failure reports unavailable.
+      try {
+        file.replace(bytes, encodeDocument({ meta: work.meta, live: work.live, intents: work.intents,
+          tombstones: work.tombstones }));
+      } catch (error) {
+        throw error instanceof RotationError ? durableUnavailable() : error;
+      }
+      file.close();
+    } catch (error) {
+      try { file.close(); } catch { /* Close failure leaves the marker: mirrors Go ErrUnavailable. */ }
+      throw error;
     }
   }
 }

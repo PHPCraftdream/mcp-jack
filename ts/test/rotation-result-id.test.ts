@@ -55,3 +55,32 @@ test("rotation result id: canonical response matches non-canonical expected nume
   assert.equal(rotation.decodeRotationResult(raw(envelope("0")), -0).complete, true);
   rejected(envelope("-0"), -0);
 });
+
+test("rotation result id: expected 1e21 matches the exact decimal lexeme, not the exponent form", () => {
+  // Go/Rust parity: the canonical form of the expected value has no exponent,
+  // so the response must carry the exact decimal 1000000000000000000000.
+  assert.equal(rotation.decodeRotationResult(raw(envelope("1000000000000000000000")), 1e21).complete, true);
+  for (const lexeme of ["1e+21", "1e21", "1.0e21", "1000000000000000000001", "10000000000000000000000"]) {
+    rejected(envelope(lexeme), 1e21);
+  }
+});
+
+test("rotation result id: the largest finite double matches the canonical text of its shortest decimal form", () => {
+  // JSON.stringify renders it as 1.7976931348623157e+308; the canonical text (no
+  // exponent, computed without float arithmetic) is the 17 digits followed by 292 zeros.
+  const canonicalText = `17976931348623157${"0".repeat(292)}`;
+  const expected = Number.MAX_VALUE;
+  assert.equal(rotation.decodeRotationResult(raw(envelope(canonicalText)), expected).complete, true);
+  // The exponent spelling is refused: only the exact canonical text matches.
+  rejected(envelope("1.7976931348623157e308"), expected);
+  // Near-miss: it parses to the same double, so only the exact text comparison refuses it.
+  rejected(envelope(`${canonicalText.slice(0, -1)}4`), expected);
+});
+
+test("rotation result id: garbage or out-of-range numeric ids are refused", () => {
+  // 1e999 parses to Infinity on the wire: out of the f64 range, refused.
+  rejected(envelope("1e999"), 7);
+  rejected(envelope("1e999"), 1e21);
+  // A string response id never matches a numeric expected id.
+  rejected(envelope('"1000000000000000000000"'), 1e21);
+});

@@ -2,6 +2,7 @@ import { validatePublicKey } from "./ed25519.js";
 import { decodeBase64URLFixed, keyId } from "./encoding.js";
 import { parseCandidateJsonRaw } from "./json-raw.js";
 import type { RawJsonNode } from "./json-raw.js";
+import { canonicalNumber } from "./rotation-id.js";
 import { RotationError, ROTATION_MAX_ORDINAL } from "./rotation-record.js";
 
 export const ROTATION_MAX_BODY_BYTES = 256 * 1024;
@@ -90,7 +91,8 @@ function same(left: RawJsonNode, right: RawJsonNode): boolean {
  * Call only AFTER outer authentication, known-key interval, and ClockGuard gates.
  * Checks schema/parity/limits only; not records/proofs/cursor/gaps/current binding,
  * not carrier trust, persistence, ACK, fetch, or refresh. The caller handles signed errors.
- * Numeric request ID is matched against the exact JSON.stringify lexeme of the SDK request.
+ * Numeric request ID is matched by exact decimal canonicalisation without float
+ * (Go/Rust parity; see rotation-id.ts).
  */
 export function decodeRotationResult(body: Uint8Array, expectedId: string | number | bigint): DecodedRotationResult {
   try {
@@ -101,10 +103,15 @@ export function decodeRotationResult(body: Uint8Array, expectedId: string | numb
     // A bigint carries an integer beyond 2^53 exactly: only the exact decimal text matches.
     if (typeof expectedId === "bigint") {
       if (typeof id.value !== "number" || id.text !== expectedId.toString()) invalid();
-    } else {
+    } else if (typeof expectedId === "number") {
+      // Numeric id: exact decimal canonicalisation without float, identical to Go and
+      // Rust (canonicalNumber). The canonical form has no exponent: expected 1e21
+      // requires the lexeme 1000000000000000000000, not JSON.stringify's "1e+21". The
+      // expected id is canonicalised from its shortest decimal form (what the SDK sent).
       if (id.value !== expectedId) invalid();
-      if (typeof expectedId === "number" && id.text !== JSON.stringify(expectedId)) invalid();
-    }
+      const canonical = canonicalNumber(JSON.stringify(expectedId));
+      if (canonical === undefined || id.text !== canonical) invalid();
+    } else if (typeof id.value !== "string" || id.value !== expectedId) invalid();
     const result = object(field(root, "result"), ["content", "structuredContent", "isError"]);
     if (field(result, "isError").value !== false) invalid();
     const content = field(result, "content").items;
