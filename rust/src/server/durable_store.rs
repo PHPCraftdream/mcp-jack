@@ -866,9 +866,12 @@ impl<C: FnMut() -> i64> DurableNonceStore<C> {
         request: &DurableAdmission<'_>,
     ) -> Result<(DurableReceipt, DurableLease), DurableAdmissionError> {
         let result = self.lock().reserve_locked(request);
-        // Any 503-class outcome fences: unknown outcome never dispatches or retries.
+        // Only a non-definite outcome fences (Go definiteStorageRefusal): a 401, a
+        // state_changed or a capacity_exhausted refusal leaves the store serving.
         if let Err(error) = &result {
-            if error.status == 503 {
+            let definite =
+                error.status != 503 || matches!(error.code, "state_changed" | "capacity_exhausted");
+            if !definite {
                 self.shared.fenced.store(true, Ordering::SeqCst);
             }
         }

@@ -255,19 +255,6 @@ fn deviations() -> HashMap<&'static str, Vec<&'static str>> {
             ],
         ),
         (
-            "window-decrease-refused",
-            vec![
-                "Rust divergence from Go: the Rust store fences on every 503-class refusal, \
-                 including state_changed, so the close after the refusal reports the recovery \
-                 gate (expect.fenced=false in the fixture). Go leaves a definite refusal \
-                 unfenced. The status/code/writes behavior is asserted exactly.",
-            ],
-        ),
-        (
-            "window-increase-refused",
-            vec!["Same state_changed fencing divergence as window-decrease-refused."],
-        ),
-        (
             "key-snapshot-change-zero-commit",
             vec![
                 "Same state_changed fencing divergence as window-decrease-refused, on the \
@@ -948,8 +935,7 @@ fn expects_reopen_refused(harness: &Harness, case_id: &str) {
 #[derive(Clone, Copy, PartialEq)]
 enum Plan {
     /// Full path through the real verifier; `recorded` pins nonce_recorded;
-    /// `fenced` overrides expect.fenced where the Rust store deliberately
-    /// fences on every 503-class refusal (see DEVIATIONS).
+    /// `fenced` overrides expect.fenced where a vector needs it (none today).
     Single {
         recorded: Option<bool>,
         assert_unsafe: bool,
@@ -1004,12 +990,10 @@ fn plan_of(id: &str) -> Option<Plan> {
             assert_unsafe: true,
             fenced: None,
         },
-        // The Rust store fences on every 503-class refusal, including
-        // state_changed; see the window-refusal deviation entry.
         "window-decrease-refused" | "window-increase-refused" => Single {
             recorded: Some(false),
             assert_unsafe: false,
-            fenced: Some(true),
+            fenced: None,
         },
         "key-snapshot-change-zero-commit" | "enrollment-snapshot-change-zero-commit" => StoreDirect,
         "bad-signature-zero-writes" => Single {
@@ -1064,6 +1048,8 @@ fn run_single(case: &VectorCase, plan: Plan) {
     if let Some(fenced) = fenced {
         expect.fenced = fenced;
     }
+    // A committed request still holds its serving lease; close drains leases.
+    drop(result);
     assert_close_fencing(harness, case, &expect);
 }
 
@@ -1160,11 +1146,11 @@ fn run_store_direct(case: &VectorCase, plan: Plan) {
     let validate_calls = VALIDATE_CALLS.with(|calls| calls.get());
     assert_eq!(validate_calls, 2, "case {}: validateCalls", case.id);
     assert_end(&harness, case, &case.expect, false);
-    // Deviation: the Rust store fences on every 503-class refusal, including
-    // state_changed (Go leaves a definite refusal unfenced).
+    // state_changed is a definite refusal: the store stays unfenced and the
+    // cleaned-up intent leaves nothing for recovery.
     assert!(
-        harness.store.close().is_err(),
-        "case {}: state_changed refusal must fence the store",
+        harness.store.close().is_ok(),
+        "case {}: state_changed refusal must not fence the store",
         case.id
     );
     drop(harness);
@@ -1358,6 +1344,8 @@ fn run_crash(case: &VectorCase, plan: Plan) {
         "case {}: highWater",
         case.id
     );
+    // The committed request holds its serving lease until the response is finished.
+    drop(result);
     assert!(
         harness.store.close().is_ok(),
         "case {}: clean close after commit",
@@ -1434,11 +1422,12 @@ fn run_capacity(case: &VectorCase, plan: Plan) {
             case.id
         );
     }
-    // Deviation: the Rust store fences on every 503-class refusal, including
-    // capacity_exhausted (Go leaves a definite refusal unfenced).
+    // capacity_exhausted is definite and does not fence; the close still
+    // refuses because the seeded state holds an unresolved intent or the
+    // tombstone cap, which need recovery.
     assert!(
         harness.store.close().is_err(),
-        "case {}: capacity refusal must fence the store",
+        "case {}: close must report the unresolved seeded state",
         case.id
     );
     drop(harness);

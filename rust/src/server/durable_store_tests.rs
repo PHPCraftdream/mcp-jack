@@ -373,11 +373,9 @@ fn changed_snapshot_between_intent_and_final_refuses() {
     assert_eq!(error.status, 503);
     assert_eq!(error.code, "state_changed");
     assert!(decoded(&sandbox).intents.is_empty());
-    // A 503-class refusal fences: the close cannot clear the dirty epoch.
-    assert_eq!(
-        store.close().unwrap_err(),
-        DurableStoreError::RecoveryRequired
-    );
+    // A definite refusal leaves the store serving: the intent was cleaned up,
+    // so the close clears the dirty epoch.
+    store.close().unwrap();
 }
 
 #[test]
@@ -627,10 +625,8 @@ fn capacity_4096_refuses_without_eviction() {
     assert_eq!(error.code, "capacity_exhausted");
     assert_eq!(sandbox.bytes(), before);
     assert_eq!(decoded(&sandbox).live.len(), 4096);
-    assert_eq!(
-        store.close().unwrap_err(),
-        DurableStoreError::RecoveryRequired
-    );
+    // capacity_exhausted is definite: no fence, so the close is clean.
+    store.close().unwrap();
 }
 
 #[test]
@@ -645,6 +641,8 @@ fn tombstone_capacity_64_refuses() {
         .unwrap_err();
     assert_eq!(error.code, "capacity_exhausted");
     assert_eq!(decoded(&sandbox).tombstones.len(), 64);
+    // The close refuses because the tombstone cap needs recovery, not because
+    // the refusal fenced the store.
     assert_eq!(
         store.close().unwrap_err(),
         DurableStoreError::RecoveryRequired
