@@ -197,6 +197,8 @@ fn replay_after_restart_is_refused() {
     let result = verifier(&store, &state, &clock).verify(&request);
     assert!(result.accepted, "code: {}", result.code);
     assert!(result.nonce_recorded);
+    // The accepted request holds its serving lease; close drains leases.
+    std::mem::drop(result);
     store.close().unwrap();
 
     // Restart: the same pair replays and is refused, still unsigned.
