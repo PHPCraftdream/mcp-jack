@@ -1,6 +1,6 @@
 # Versioning and release policy
 
-**Status: versioning and release policy for v0.1.0 (unreleased).** The durable-nonce + server-key-rotation profile is implemented; it becomes normative and wire-frozen for the 0.1.x line only when the freeze is accepted on an exact commit, and is candidate text until then (see [`docs/protocol-transition.md`](protocol-transition.md)). Nothing is published; no release is authorized. This policy does not claim tests ran here.
+**Status: versioning and release policy for v0.1.0 (unreleased).** The durable-nonce + server-key-rotation profile is implemented; it is normative and wire-frozen for the 0.1.x line: the repository owner accepted the freeze on 2026-11-16 at commit `c8ea1a0b37e68ab6dcdfb19fd0e427668cf1f343` (see [`docs/protocol-transition.md`](protocol-transition.md)). Nothing is published; no release is authorized. This policy does not claim tests ran here.
 
 | Decision | Recorded decision | Status |
 |---|---|---|
@@ -39,7 +39,7 @@ Rust's checked-in manifest already declares 1.88. The earlier approved security 
 
 Compatibility includes wire semantics, SDK/API surfaces, persisted state, static profiles and credentials, and operator workflows. Wire compatibility covers signing bytes and domains, canonicalization, parsing/validation and error precedence, identity/admin semantics, and restart/replay/rotation behavior. A break in any area requires explicit review and an approved migration or rejection plan. A profile change is not automatically a signing-domain or wire change. Never silently reinterpret existing `mcp-jack/v1` signatures or bytes. Static pins, credentials, profiles and user-key rotation remain unchanged unless an explicitly approved transition says otherwise.
 
-The durable nonce and server-key rotation profile is implemented; its normative, wire-frozen status within the 0.1.x line is declared at the freeze decision, not before. In particular:
+The durable nonce and server-key rotation profile is implemented; its normative, wire-frozen status within the 0.1.x line was declared at the freeze decision of 2026-11-16 on commit `c8ea1a0b37e68ab6dcdfb19fd0e427668cf1f343`; the evidence reviewed for that exact SHA is listed below. In particular:
 
 - D2 is implemented: durable authenticated nonce reservation before dispatch with bbolt v1.5.0 as the backend, fail-closed unknown outcomes and no automatic retry. Residual limits: one nonce owner per deployment; the private-file stores are Linux-only (Windows CLI stores fail closed); recovery after an abnormal stop is a manual operator procedure; no timestamp-startup floor exists (that remedy was rejected).
 - D3 is implemented: fixed publication time P, activation A = P + 172800 seconds (48 hours), both keys valid during the overlap and a strict cutoff at the successor activation; explicit single-page client refresh with no automatic connect-time/periodic refresh, no hidden retry or reset; the durable client ClockGuard fences trust. Residual limit: the suppressed-successor (suppressed-suffix) behavior remains a documented limitation; static pins, credentials, profiles and user-key rotation are unchanged for static clients. See [`spec/candidate/server-key-rotation.md`](../spec/candidate/server-key-rotation.md), [`docs/design/restart-replay.md`](design/restart-replay.md), [`docs/design/minimal-server-rotation.md`](design/minimal-server-rotation.md), and [`docs/design/durable-nonce-backend.md`](design/durable-nonce-backend.md).
@@ -52,7 +52,7 @@ Acceptance and freeze require review of evidence for the **same exact full SHA**
 - Applicable Go CLI gateway/bridge end-to-end and consumer checks; actual artifact/consumer receipts; and security-blocker disposition.
 - Negative/boundary cases for strict Ed25519, restart replay, durable-store failures, key rotation and cutoffs, unknown keys, credential/profile migration or rejection, and any documented MCP compatibility profile.
 
-Evidence must report observed results, not just test names, workflow wiring or green-status claims. The 0.1.x wire profile is not frozen until the freeze is accepted as described above; SDK versions, publication, tags and release actions remain unauthorized and require separate explicit approval. There is no blanket compatibility guarantee across 0.x lines.
+Evidence must report observed results, not just test names, workflow wiring or green-status claims. The 0.1.x wire profile is frozen at `c8ea1a0b37e68ab6dcdfb19fd0e427668cf1f343`; any later wire change is a new profile decision, not a 0.1.x change. SDK versions, publication, tags and release actions remain unauthorized and require separate explicit approval. There is no blanket compatibility guarantee across 0.x lines.
 
 ## RC artifacts and release authorization
 

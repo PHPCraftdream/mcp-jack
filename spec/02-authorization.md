@@ -1,6 +1,6 @@
 # 02. Authorization
 
-Status: draft v0.1. Normative unless marked *informative*.
+Status: v0.1, frozen on the wire for the 0.1.x line at commit `c8ea1a0b37e68ab6dcdfb19fd0e427668cf1f343`. Normative unless marked *informative*.
 
 mcp-jack wraps unmodified MCP, so it cannot know which tools a service exposes. After authentication has succeeded (step 9 of [01-authentication.md](01-authentication.md)) the protocol classifies the body, dispatches the reserved `jack.` tools, hands the verified caller identity to the wrapped MCP handler (section 3) and forwards everything else unchanged. There is no policy engine: what a caller may do inside MCP is decided by the consumers of the SDK from the verified identity (section 3). Authorization inside the protocol is only the `admin` flag (section 1, [03-user-management.md](03-user-management.md)).
 

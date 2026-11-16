@@ -1,6 +1,6 @@
 # Candidate profile: durable authenticated nonces
 
-**Status:** candidate normative for a future explicitly selected durable profile only; not current SDK behavior, a current durable guarantee, freeze, or Task 57 acceptance. The owner-selected mechanism is a durable authenticated nonce commit before any authorization/state mutation or wrapped-handler dispatch. A timestamp startup floor is rejected and MUST NOT be used as an alternative or fallback. This text makes concrete candidate technical semantics; it does not approve an implementation or platform durability claim.
+**Status:** normative for the explicitly selected durable-nonce profile of the v0.1.x line, frozen on the wire at commit `c8ea1a0b37e68ab6dcdfb19fd0e427668cf1f343` (no wire changes within 0.1.x). It is implemented in the Go, Rust and TypeScript SDKs (the file-backed stores are Linux-only) and exercised by the shared vectors and the 3x3 durable interop; selecting it stays an explicit per-deployment choice. The owner-selected mechanism is a durable authenticated nonce commit before any authorization/state mutation or wrapped-handler dispatch. A timestamp startup floor is rejected and MUST NOT be used as an alternative or fallback. This text makes the technical semantics concrete; it does not make a platform durability claim beyond the documented stores.
 
 ## 1. Scope and unchanged v1 behavior
 
