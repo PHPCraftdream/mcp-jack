@@ -44,6 +44,16 @@ function isPresent(v: JsonValue | undefined): boolean {
   return v !== undefined && v !== null;
 }
 
+/** Whether aud is non-empty and free of C0 control characters and DEL (bytes < 0x20 and 0x7f on the wire; UTF-8 multibyte sequences are all >= 0x80, so a code-unit check is exact). */
+function validAudience(aud: string): boolean {
+  if (aud === "") return false;
+  for (let i = 0; i < aud.length; i++) {
+    const c = aud.charCodeAt(i);
+    if (c < 0x20 || c === 0x7f) return false;
+  }
+  return true;
+}
+
 /** Client performs signed, response-verified MCP tool calls over JSON-RPC. */
 export class Client {
   /** Audience bound into the signing string; needed by the typed-call helpers in tools.ts. */
@@ -66,8 +76,8 @@ export class Client {
     if ((base.protocol !== "http:" && base.protocol !== "https:") || base.hostname === "") {
       throw new Error("jack client: base url must be an absolute http/https URL with a host");
     }
-    if (config.aud === "") {
-      throw new Error("jack client: aud must be non-empty");
+    if (!validAudience(config.aud)) {
+      throw new Error("jack client: aud must be non-empty and contain no control characters");
     }
     if (config.serverKey.length !== 32) {
       throw new Error(`jack client: server key must be exactly 32 bytes, got ${config.serverKey.length}`);

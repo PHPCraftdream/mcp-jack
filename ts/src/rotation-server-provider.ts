@@ -16,27 +16,30 @@ import type { DecodedRotationResult } from "./rotation-result.js";
 import { TOOL_SERVER_KEY } from "./server/verify.js";
 
 const MAX_PENDING = 128;
-const MAX_RETIRED = 1024;
+/** @internal Test only. */
+export const MAX_RETIRED = 1024;
+/** @internal Test only. Every key but the newest eventually retires; serving refuses above MAX_RETIRED retired keys. */
+export const MAX_ANNOUNCE_RING_KEYS = MAX_RETIRED + 1;
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
-/** Заранее настроенный handle подписанта: reference не заменяет проверку публичного ключа. */
+/** Preconfigured signer handle: the reference does not replace public key verification. */
 export interface RotationServerKey {
   readonly reference: string;
   readonly signer: RotationSigner;
 }
 
-/** Только после exact durable ACK; это не HTTP delivery. */
+/** Only after the exact durable ACK; this is not HTTP delivery. */
 export interface RotationPublication {
   readonly record: RotationRecord;
   readonly revision: number;
 }
 
-/** Pinned identity подписанта: публичный ключ скопирован и не меняется вместе с callback. */
+/** Pinned signer identity: the public key is copied and does not change with the callback. */
 export interface PinnedRotationSigner extends RotationSigner {
   readonly publicKeyB64u: string;
 }
 
-/** Owned copy тела ответа; payload не является источником key authority (Go server.ResponseKeyRequest). */
+/** Owned copy of the response body; the payload is not a source of key authority (Go server.ResponseKeyRequest). */
 export interface RotationResponseKeyRequest {
   readonly status: number;
   readonly tool: string;
@@ -44,13 +47,13 @@ export interface RotationResponseKeyRequest {
   readonly body: Uint8Array;
 }
 
-/** identity/time/lease закреплены до построения ответа; final однократен (Go server.ResponseKeyAuthorization). */
+/** identity/time/lease are pinned before building the response; final is single-shot (Go server.ResponseKeyAuthorization). */
 export interface RotationResponseAuthorization {
   readonly signer: PinnedRotationSigner;
   readonly timestamp: number;
-  /** Одноразовый final gate: свежий completion sample и re-selection; отказ бросает RotationError. */
+  /** Single-shot final gate: fresh completion sample and re-selection; failure throws RotationError. */
   readonly final: () => void;
-  /** Идемпотентный release; caller вызывает после построения или отказа ответа. */
+  /** Idempotent release; the caller invokes it after building or rejecting the response. */
   readonly release: () => void;
 }
 
@@ -78,16 +81,17 @@ function pin(input: RotationServerKey): PinnedRotationSigner {
 }
 
 /**
- * Связывает concrete server store с заранее настроенным inventory подписанием: выбор подписанта,
- * явная публикация одного next key. Inventory задаётся только out-of-band; custody и lifecycle
- * signer handles принадлежат caller. Signer callbacks должны быть bounded и не reentrant.
- * authorizeResponse — выбор signer + final gate для подписи ответа (Go ResponseKeyProvider), без fallback.
+ * Binds the concrete server store to a preconfigured signing inventory: signer selection,
+ * explicit publication of one next key. Inventory is set only out-of-band; custody and lifecycle
+ * of signer handles belong to the caller. Signer callbacks must be bounded and non-reentrant.
+ * authorizeResponse — signer selection + final gate for response signing (Go ResponseKeyProvider), no fallback.
  */
 export class RotationServerProvider {
   private readonly keys = new Map<string, PinnedRotationSigner>();
   private publishing = false;
+  private announceRingKeys = MAX_ANNOUNCE_RING_KEYS;
 
-  /** Не создаёт state и не разрешает publication; отказывает, если ring не готов к serving. */
+  /** Does not create state or authorize publication; fails if the ring is not ready to serve. */
   constructor(private readonly store: RotationServerStore, keys: readonly RotationServerKey[]) {
     if (!Array.isArray(keys) || keys.length === 0 || keys.length > ROTATION_MAX_RETAINED_KEYS) unavailable();
     for (const key of keys) {
@@ -99,7 +103,7 @@ export class RotationServerProvider {
     this.ready();
   }
 
-  /** Readiness: committed ring, свежий ClockGuard и все pending/current handles доступны. */
+  /** Readiness: committed ring, fresh ClockGuard, and all pending/current handles available. */
   ready(): void {
     const release = this.store.acquireServingLease();
     try {
@@ -110,10 +114,16 @@ export class RotationServerProvider {
     }
   }
 
+  /** @internal Test only: lowers the announce bound so a test need not build a real 1025-key ring. */
+  setAnnounceRingKeysForTests(bound: number): void {
+    if (typeof bound !== "number" || !Number.isSafeInteger(bound) || bound < 2 || bound > MAX_ANNOUNCE_RING_KEYS) unavailable();
+    this.announceRingKeys = bound;
+  }
+
   /**
-   * Требует handles всех pending keys и текущего signer; retired handles необязательны. Выбирает
-   * eligible key с наибольшим ordinal и не делает fallback. Snapshot уже полностью проверен;
-   * после fresh clock sample остаётся только interval arithmetic.
+   * Requires handles of all pending keys and the current signer; retired handles are optional. Selects
+   * the eligible key with the highest ordinal and does not fall back. The snapshot is already fully verified;
+   * after a fresh clock sample only interval arithmetic remains.
    */
   selectSigner(snapshot: RotationServerSnapshot, clock: RotationClockTuple): PinnedRotationSigner {
     let selected: PinnedRotationSigner | undefined;
@@ -136,8 +146,8 @@ export class RotationServerProvider {
   }
 
   /**
-   * Одна explicit authorization для заранее настроенного next handle. P фиксируется одним fresh
-   * sample; отказ, конфликт или unknown не повторяются автоматически.
+   * One explicit authorization for the preconfigured next handle. P is pinned by a single fresh
+   * sample; failure, conflict, or unknown is not retried automatically.
    */
   announce(reference: string, kid: string): RotationPublication {
     if (this.publishing) return unavailable();
@@ -157,10 +167,10 @@ export class RotationServerProvider {
   }
 
   /**
-   * Выбор signer и fresh clock sample до вычисления подписи ответа; serving lease удерживается
-   * до release и никакой network I/O под ним не выполняется. Final однократен: второй свежий
-   * sample обязан выбрать того же signer, иначе подпись отбрасывается (Go writeAuthorized).
-   * Никакого fallback, retry или подписанного ответа при отказе.
+   * Signer selection and fresh clock sample happen before computing the response signature; the serving lease is held
+   * until release and no network I/O runs under it. Final is single-shot: a second fresh
+   * sample must select the same signer, otherwise the signature is discarded (Go writeAuthorized).
+   * No fallback, retry, or signed response on failure.
    */
   authorizeResponse(input: RotationResponseKeyRequest): RotationResponseAuthorization {
     const page = this.decodeNativeResponse(input);
@@ -196,7 +206,7 @@ export class RotationServerProvider {
     }
   }
 
-  /** Полный envelope/parity parse до signing-time clock; payload не key authority (Go decodeNativeResponse). */
+  /** Full envelope/parity parse before the signing-time clock; payload is not key authority (Go decodeNativeResponse). */
   private decodeNativeResponse(input: RotationResponseKeyRequest): DecodedRotationResult | undefined {
     if (input.tool !== TOOL_SERVER_KEY || input.status !== 200) return undefined;
     if (!(input.body instanceof Uint8Array) || input.body.length > ROTATION_MAX_BODY_BYTES) return unavailable();
@@ -212,7 +222,7 @@ export class RotationServerProvider {
     }
   }
 
-  /** Страница wire-ответа обязана описывать exactly этот snapshot и выбранного signer (Go matchesNativeResponse). */
+  /** The wire-response page must describe exactly this snapshot and the selected signer (Go matchesNativeResponse). */
   private matchesNativeResponse(page: DecodedRotationResult | undefined, snapshot: RotationServerSnapshot, signer: PinnedRotationSigner): boolean {
     if (page === undefined) return true;
     const trust = snapshot.trust;
@@ -243,7 +253,7 @@ export class RotationServerProvider {
     const last = trust.keys[trust.keys.length - 1];
     const tail = snapshot.signerReferences[snapshot.signerReferences.length - 1];
     if (last === undefined || tail === undefined || trust.head.ordinal === ROTATION_MAX_ORDINAL || trust.revision === ROTATION_MAX_ORDINAL ||
-      trust.keys.length >= ROTATION_MAX_RETAINED_KEYS) unavailable();
+      trust.keys.length >= ROTATION_MAX_RETAINED_KEYS || trust.keys.length >= this.announceRingKeys) unavailable();
     if (trust.keys.some((key) => key.kid === kid || key.publicKeyB64u === next.publicKeyB64u)) unavailable();
     const old = this.keys.get(identity(tail.reference, last.kid));
     if (old === undefined || old.publicKeyB64u !== last.publicKeyB64u) unavailable();

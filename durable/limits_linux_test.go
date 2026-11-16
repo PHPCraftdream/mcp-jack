@@ -14,7 +14,7 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-// История создаётся одной транзакцией; каждая запись имеет настоящий signed request.
+// History is created in a single transaction; each record has a real signed request.
 func seedLiveHistory(t *testing.T, owner *Store, count int, timestamp func(int) int64) []nonceRecord {
 	t.Helper()
 	seed := sha256.Sum256([]byte("mcp-jack public capacity history"))

@@ -480,3 +480,27 @@ pub struct UrlPolicyFile {
 pub fn load_client_url_policy() -> Result<UrlPolicyFile, FixtureError> {
     read_strict("client-url-policy.json")
 }
+
+/// StreamingRefusalCase is one case of client-streaming-refusal.json; the
+/// list holds the raw Content-Type header values in order, empty when the
+/// header is absent.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StreamingRefusalCase {
+    pub name: String,
+    pub content_type: Vec<String>,
+    pub refused: bool,
+}
+
+/// StreamingRefusalFile is client-streaming-refusal.json.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StreamingRefusalFile {
+    pub description: String,
+    pub policy: String,
+    pub cases: Vec<StreamingRefusalCase>,
+}
+
+pub fn load_client_streaming_refusal() -> Result<StreamingRefusalFile, FixtureError> {
+    read_strict("client-streaming-refusal.json")
+}

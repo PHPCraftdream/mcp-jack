@@ -77,6 +77,13 @@ func decodeState(data []byte) (*stateDocument, error) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrStateCorrupt, err)
 	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrStateCorrupt, err)
+	}
+	if name, unknown := firstUnknownMember(top, documentMembers); unknown {
+		return nil, fmt.Errorf("%w: unknown field %q in the state document", ErrStateCorrupt, name)
+	}
 	if raw.Keys == nil {
 		return nil, fmt.Errorf("%w: keys must be an array", ErrStateCorrupt)
 	}
@@ -124,6 +131,34 @@ func decodeState(data []byte) (*stateDocument, error) {
 	return &doc, nil
 }
 
+// Exact member names of every state-document level the loader decodes. The
+// typed decode matches names case-insensitively, so a case-variant spelling
+// such as ADMIN would otherwise load; the Rust and TypeScript loaders match
+// exact names only (spec 02 section 1, 03 section 10).
+var (
+	documentMembers = []string{"version", "keys", "invites"}
+	entryMembers    = []string{"kid", "public_key", "name", "admin", "not_before", "not_after"}
+	inviteMembers   = []string{"invite_id", "admin", "created_by", "created_at", "expires_at", "key_ttl_seconds"}
+)
+
+// firstUnknownMember returns the first member name that is not exactly one
+// of the known names.
+func firstUnknownMember(m map[string]json.RawMessage, known []string) (string, bool) {
+	for name := range m {
+		knownName := false
+		for _, k := range known {
+			if name == k {
+				knownName = true
+				break
+			}
+		}
+		if !knownName {
+			return name, true
+		}
+	}
+	return "", false
+}
+
 // validateRawKeys enforces the raw-JSON rules of 02-authorization.md section
 // 1: no legacy kind/scopes fields, and admin present only as a strict JSON
 // boolean (absent decodes false).
@@ -140,6 +175,9 @@ func validateRawKeys(keys []map[string]json.RawMessage) error {
 			if !bytes.Equal(trimmed, []byte("true")) && !bytes.Equal(trimmed, []byte("false")) {
 				return fmt.Errorf("%w: key %s: admin must be a strict JSON boolean", ErrStateCorrupt, kid)
 			}
+		}
+		if name, unknown := firstUnknownMember(m, entryMembers); unknown {
+			return fmt.Errorf("%w: unknown field %q in a registry entry (key %s)", ErrStateCorrupt, name, kid)
 		}
 	}
 	return nil
@@ -200,6 +238,9 @@ func validateRawInvites(invites []map[string]json.RawMessage) error {
 				return fmt.Errorf("%w: invite %s: key_ttl_seconds must be in 1..31536000", ErrStateCorrupt, inviteID)
 			}
 		}
+		if name, unknown := firstUnknownMember(m, inviteMembers); unknown {
+			return fmt.Errorf("%w: unknown field %q in an invite record (invite %s)", ErrStateCorrupt, name, inviteID)
+		}
 	}
 	return nil
 }
@@ -259,6 +300,13 @@ func (s *FileState) Lookup(kid string) (RegistryEntry, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return lookupKey(s.keys, kid)
+}
+
+// LookupInvite returns a copy of the invite with the given id, if present.
+func (s *FileState) LookupInvite(inviteID string) (InviteRecord, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return lookupInvite(s.invites, inviteID)
 }
 
 // Update runs update on a deep copy of the state; on error nothing is

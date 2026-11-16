@@ -4,7 +4,14 @@ import (
 	"github.com/PHPCraftdream/mcp-jack/rotation"
 )
 
-// Publication возвращается только после exact durable ACK; не является HTTP delivery.
+// Serving limit on retired keys; the announce bound below derives from it.
+const servedRetiredKeys = 1024
+
+// Most keys the ring may hold before an announce: every key but the newest eventually retires,
+// and serving refuses more than servedRetiredKeys retired keys, so the ring holds at most that + 1.
+var maxAnnounceRingKeys = servedRetiredKeys + 1
+
+// Publication is returned only after the exact durable ACK; it is not HTTP delivery.
 type Publication struct {
 	Record   rotation.Record
 	Revision uint64
@@ -23,8 +30,8 @@ func createPublication(binding rotation.Binding, previous rotation.Checkpoint, o
 	return record, result
 }
 
-// Announce — одна explicit authorization для заранее настроенного next handle.
-// P фиксируется одним fresh sample; отказ/конфликт/unknown не повторяются автоматически.
+// Announce is a single explicit authorization for the pre-configured next handle.
+// The fence is fixed by one fresh sample; failure/conflict/unknown are not retried automatically.
 func (provider *Provider) Announce(reference, kid string) (Publication, error) {
 	if provider == nil || provider.store == nil || !provider.publication.CompareAndSwap(false, true) {
 		return Publication{}, ErrUnavailable
@@ -43,7 +50,7 @@ func (provider *Provider) Announce(reference, kid string) (Publication, error) {
 	if err != nil {
 		return Publication{}, err
 	}
-	if snapshot.Public.Head.Ordinal == rotation.MaxOrdinal || snapshot.Public.Revision == rotation.MaxOrdinal || len(snapshot.Public.Keys) >= rotation.MaxRetainedKeys {
+	if snapshot.Public.Head.Ordinal == rotation.MaxOrdinal || snapshot.Public.Revision == rotation.MaxOrdinal || len(snapshot.Public.Keys) >= rotation.MaxRetainedKeys || len(snapshot.Public.Keys) >= maxAnnounceRingKeys {
 		return Publication{}, ErrUnavailable
 	}
 	for _, retained := range snapshot.Public.Keys {

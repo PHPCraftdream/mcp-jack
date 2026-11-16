@@ -6,7 +6,7 @@ import { RotationError } from "./rotation-record.js";
 import { ROTATION_MAX_PAGE_RECORDS } from "./rotation-result.js";
 import type { RotationServerSnapshot } from "./rotation-server-state.js";
 
-/** Structured content успешного `jack.server.key`; поля описывают один immutable snapshot. */
+/** Structured content of a successful `jack.server.key`; fields describe one immutable snapshot. */
 export interface RotationServerKeyPage {
   readonly current: { readonly kid: string; readonly public_key: string };
   readonly records: readonly string[];
@@ -15,15 +15,15 @@ export interface RotationServerKeyPage {
 }
 
 /**
- * Candidate-strict `params.arguments`: ровно after_ordinal и after_hash, без duplicate/null/float.
- * Результат — только cursor запроса, не checkpoint authority. Любой отказ -> invalid_params.
+ * Candidate-strict `params.arguments`: exactly after_ordinal and after_hash, no duplicate/null/float.
+ * The result is only a request cursor, not checkpoint authority. Any failure -> invalid_params.
  */
 export function decodeRotationServerKeyArguments(text: string | undefined): RotationCursor {
   try {
     if (text === undefined) throw new RotationError("invalid_params");
     const root = nodeObject(parseCandidateJsonRaw(text), ["after_ordinal", "after_hash"]);
     const ordinalNode = nodeField(root, "after_ordinal");
-    // Literal -0 — JSON-целое ноль (Go reference parity); остальные формы canonical decimal.
+    // Literal -0 is the JSON integer zero (Go reference parity); other forms are canonical decimal.
     const ordinal = ordinalNode.text === "-0" ? 0 : nodeNumber(ordinalNode);
     const hash = nodeText(nodeField(root, "after_hash"));
     if (ordinal === 0) {
@@ -37,7 +37,7 @@ export function decodeRotationServerKeyArguments(text: string | undefined): Rota
   }
 }
 
-/** Offset курсора в retained ring; вне ring или с неверным hash -> rotation_checkpoint_unavailable. */
+/** Cursor offset into the retained ring; outside the ring or with a wrong hash -> rotation_checkpoint_unavailable. */
 function cursorOffset(snapshot: RotationServerSnapshot, cursor: RotationCursor): number {
   const trust = snapshot.trust;
   const records = trust.records;
@@ -52,15 +52,15 @@ function cursorOffset(snapshot: RotationServerSnapshot, cursor: RotationCursor):
   return offset;
 }
 
-/** Проверяет только cursor против retained ring; clock и signer остаются отдельными gates caller. */
+/** Checks the cursor against the retained ring only; clock and signer remain separate caller gates. */
 export function validateRotationServerKeyCursor(snapshot: RotationServerSnapshot, cursor: RotationCursor): void {
   cursorOffset(snapshot, cursor);
 }
 
 /**
- * Строит страницу из уже validated snapshot и выбранного response-signer; повторных чтений нет.
- * Caller обязан выполнить authoritative clock check и signer-eligibility до вызова и final guard после.
- * cursor вне ring или с неверным hash -> rotation_checkpoint_unavailable; signer вне ring -> rotation_state_unavailable.
+ * Builds a page from an already validated snapshot and the selected response-signer; no re-reads.
+ * The caller must perform the authoritative clock check and signer-eligibility before the call, and the final guard after.
+ * cursor outside the ring or with a wrong hash -> rotation_checkpoint_unavailable; signer outside the ring -> rotation_state_unavailable.
  */
 export function rotationServerKeyPage(
   snapshot: RotationServerSnapshot,

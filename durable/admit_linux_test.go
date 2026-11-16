@@ -386,3 +386,22 @@ func TestUnknownFinalOutcomeNeverRetriesOrAuthorizes(t *testing.T) {
 		})
 	}
 }
+
+// A store that was fenced while it drained (for example by a request that
+// arrived during Close) stays dirty, so Close must say so and the next open
+// must be refused.
+func TestCloseOfFencedStoreReportsRecoveryRequired(t *testing.T) {
+	now := int64(100)
+	owner, path, opts := testOwner(t, &now)
+	owner.Fence()
+	if err := owner.Close(); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("close of a fenced store: %v", err)
+	}
+	if reopened, err := Open(path, opts); !errors.Is(err, ErrRecoveryRequired) {
+		if reopened != nil {
+			reopened.Fence()
+			_ = reopened.Close()
+		}
+		t.Fatalf("open after a fenced close: %v", err)
+	}
+}

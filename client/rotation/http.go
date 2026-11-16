@@ -20,7 +20,7 @@ import (
 
 var ErrRequestUnavailable = errors.New("rotation client: request outcome unavailable; no retry performed")
 
-// HTTPClient не владеет store; transport создаётся заново для каждой попытки.
+// HTTPClient does not own the store; the transport is created anew for each attempt.
 type HTTPClient struct {
 	controller *Controller
 	signer     client.Signer
@@ -28,7 +28,7 @@ type HTTPClient struct {
 	timeout    time.Duration
 }
 
-// Reply содержит только authenticated status/body после final gate.
+// Reply contains only the authenticated status/body after the final gate.
 type Reply struct {
 	Status int
 	Body   []byte
@@ -138,7 +138,7 @@ func (sender *HTTPClient) exchange(ctx context.Context, body []byte, limit int, 
 	return Response{Status: response.StatusCode, Headers: append([]string(nil), response.Header.Values("Jack-Auth")...), RequestSignature: auth.Sig, Body: reply}, nil
 }
 
-// Call отправляет ровно один POST; response никогда не расширяет trust автоматически.
+// Call sends exactly one POST; a response never extends trust automatically.
 func (sender *HTTPClient) Call(ctx context.Context, body []byte) (Reply, error) {
 	if ctx == nil {
 		return Reply{}, localError("rotation_state_unknown")
@@ -162,7 +162,7 @@ func (sender *HTTPClient) Call(ctx context.Context, body []byte) (Reply, error) 
 	return Reply{Status: response.Status, Body: verified}, nil
 }
 
-// Refresh явно запрашивает одну страницу от текущего ACKed cursor, без retries/pagination.
+// Refresh explicitly requests one page from the current ACKed cursor, without retries/pagination.
 func (sender *HTTPClient) Refresh(ctx context.Context) (RefreshResult, error) {
 	if ctx == nil {
 		return RefreshResult{}, localError("rotation_state_unknown")

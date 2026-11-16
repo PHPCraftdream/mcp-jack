@@ -10,14 +10,14 @@ import assert from "node:assert/strict";
 import { createPrivateKey, createPublicKey, randomBytes, sign as nodeSign } from "node:crypto";
 import type { KeyObject } from "node:crypto";
 import { test } from "node:test";
-import { formatRequestAuth } from "../src/auth-header.js";
+import { formatRequestAuth, parseRequestAuth } from "../src/auth-header.js";
 import { encodeBase64URL, keyId } from "../src/encoding.js";
 import { Code, JackError } from "../src/errors.js";
 import { requestSigningString } from "../src/signing.js";
 import { MemoryAuditSink, AUDIT_FAILURE } from "../src/server/audit.js";
 import { Native } from "../src/server/native.js";
 import { NonceStore } from "../src/server/nonce.js";
-import { MemoryState } from "../src/server/state.js";
+import { MemoryState, inviteIdOf } from "../src/server/state.js";
 import type { RegistryEntry } from "../src/server/state.js";
 import {
   Verifier,
@@ -196,6 +196,41 @@ class RecordingNative implements NativeTools {
 const ALICE = "alice";
 const ROOT = "root";
 
+/** Fixed raw invite code; the harness stores only its hash, like the real tools. */
+const ENROLL_CODE_RAW = new Uint8Array(32).fill(7);
+
+/** Stores an invite for ENROLL_CODE_RAW and returns the code string a client would send. */
+function seedInvite(h: Harness, expiresAt: number = NOW + 60): string {
+  h.state.update((edit) => {
+    edit.putInvite({ inviteId: inviteIdOf(ENROLL_CODE_RAW), createdBy: ROOT, createdAt: NOW - 1, expiresAt });
+  });
+  return encodeBase64URL(ENROLL_CODE_RAW);
+}
+
+/** A signed jack.enroll request body for key k carrying the given code member (omitted when undefined). */
+function enrollBody(k: KeyMaterial, code: unknown): Uint8Array {
+  const args: Record<string, unknown> = { public_key: encodeBase64URL(k.pub) };
+  if (code !== undefined) args["code"] = code;
+  return encoder.encode(
+    JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: TOOL_ENROLL, arguments: args } }),
+  );
+}
+
+/** Asserts the ordinary unsigned unknown_key rejection with no nonce and no audit event. */
+function assertUnknownKey(h: Harness, req: VerifyRequest, kid: string, label: string): void {
+  const res = h.verifier.verify(req);
+  assert.equal(res.accepted, false, `${label}: accepted`);
+  assert.equal(res.httpStatus, 401, `${label}: status`);
+  assert.equal(res.code, Code.UNKNOWN_KEY, `${label}: code`);
+  assert.equal(res.nonceRecorded, false, `${label}: nonceRecorded`);
+  assert.equal(res.kid, "", `${label}: unsigned kid`);
+  assert.equal(res.requestSig, "", `${label}: unsigned requestSig`);
+  assert.equal(res.audit, undefined, `${label}: audit`);
+  // The request's own nonce was never recorded: recording it now is not a replay.
+  const { nonce } = parseRequestAuth(req.authValues);
+  assert.equal(h.nonces.checkAndRecord(kid, nonce, NOW, NOW + 30), false, `${label}: nonce untouched`);
+}
+
 // ---------------------------------------------------------------------------
 // 1. Scheme before parameters.
 // ---------------------------------------------------------------------------
@@ -247,7 +282,7 @@ test("enrollment exception passes authentication (steps 5-8 skipped for the regi
     const h = harness();
     const k = randomKey();
     const body = encoder.encode(
-      `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${TOOL_ENROLL}","arguments":{"public_key":"${encodeBase64URL(k.pub)}"}}}`,
+      `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${TOOL_ENROLL}","arguments":{"code":"${seedInvite(h)}","public_key":"${encodeBase64URL(k.pub)}"}}}`,
     );
     const { req } = signed(k, { body });
     const res = h.verifier.verify(req);
@@ -265,7 +300,7 @@ test("enrollment exception passes authentication (steps 5-8 skipped for the regi
     const k = randomKey();
     const k2 = randomKey();
     const body = encoder.encode(
-      `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${TOOL_ENROLL}","arguments":{"public_key":"${encodeBase64URL(k2.pub)}"}}}`,
+      `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${TOOL_ENROLL}","arguments":{"code":"${seedInvite(h)}","public_key":"${encodeBase64URL(k2.pub)}"}}}`,
     );
     const { req } = signed(k, { body });
     const res = h.verifier.verify(req);
@@ -277,7 +312,7 @@ test("enrollment exception passes authentication (steps 5-8 skipped for the regi
     const h = harness();
     const k = randomKey();
     const body = encoder.encode(
-      `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${TOOL_ENROLL}","arguments":{"public_key":"${encodeBase64URL(new Uint8Array(32))}"}}}`,
+      `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${TOOL_ENROLL}","arguments":{"code":"${seedInvite(h)}","public_key":"${encodeBase64URL(new Uint8Array(32))}"}}}`,
     );
     const { req } = signed(k, { body });
     const res = h.verifier.verify(req);
@@ -289,7 +324,7 @@ test("enrollment exception passes authentication (steps 5-8 skipped for the regi
     const h = harness();
     const k = randomKey();
     const body = encoder.encode(
-      `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${TOOL_ENROLL}","arguments":{"public_key":"not-base64url!!"}}}`,
+      `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${TOOL_ENROLL}","arguments":{"code":"${seedInvite(h)}","public_key":"not-base64url!!"}}}`,
     );
     const { req } = signed(k, { body });
     const res = h.verifier.verify(req);
@@ -322,6 +357,69 @@ test("enrollment exception passes authentication (steps 5-8 skipped for the regi
     assert.equal(res.code, Code.OPERATION_DENIED, "f: code");
     assert.equal(res.nonceRecorded, true, "f: nonceRecorded");
   }
+});
+
+// ---------------------------------------------------------------------------
+// 3b. The enrollment exception requires a live invite (read-only gate).
+// ---------------------------------------------------------------------------
+
+test("enrollment exception: unknown kid without any invite is unknown_key, nothing recorded", () => {
+  const h = harness({ withAudit: true });
+  const k = randomKey();
+  const { req } = signed(k, { body: enrollBody(k, encodeBase64URL(ENROLL_CODE_RAW)), nonce: NONCE });
+  assertUnknownKey(h, req, k.kid, "no invite");
+  assert.equal(h.audit?.events().length, 0, "no audit event");
+});
+
+test("enrollment exception: an invite expiring exactly now is not live", () => {
+  const h = harness({ withAudit: true });
+  const k = randomKey();
+  const code = seedInvite(h, NOW);
+  const { req } = signed(k, { body: enrollBody(k, code) });
+  assertUnknownKey(h, req, k.kid, "now == expiresAt");
+  assert.equal(h.audit?.events().length, 0, "no audit event");
+});
+
+test("enrollment exception: code must be a canonical 32-byte base64url string", () => {
+  const h = harness();
+  seedInvite(h);
+  const k = randomKey();
+  const canonical = encodeBase64URL(ENROLL_CODE_RAW);
+  const cases: [string, unknown][] = [
+    ["padded", `${canonical}=`],
+    ["short", canonical.slice(0, 40)],
+    ["standard alphabet", `${canonical.slice(0, 10)}+${canonical.slice(11)}`],
+    ["non-canonical trailing bits", `${canonical.slice(0, 42)}d`],
+    ["not a string", 7],
+    ["absent", undefined],
+  ];
+  for (const [label, code] of cases) {
+    const { req } = signed(k, { body: enrollBody(k, code) });
+    assertUnknownKey(h, req, k.kid, label);
+  }
+});
+
+test("enrollment exception: the invite gate runs before public key validation", () => {
+  const h = harness();
+  const k = randomKey();
+  const body = encoder.encode(
+    `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${TOOL_ENROLL}","arguments":{"code":"${encodeBase64URL(ENROLL_CODE_RAW)}","public_key":"not-base64url!!"}}}`,
+  );
+  const { req } = signed(k, { body });
+  assertUnknownKey(h, req, k.kid, "bad key without invite is unknown_key, not key_rejected");
+});
+
+test("enrollment exception: a live invite is accepted and the verifier does not consume it", () => {
+  const h = harness();
+  const k = randomKey();
+  const code = seedInvite(h, NOW + 1);
+  const { req } = signed(k, { body: enrollBody(k, code) });
+  const res = h.verifier.verify(req);
+  // No native handler configured: authentication succeeded, the tool gate says 403.
+  assert.equal(res.httpStatus, 403, "status");
+  assert.equal(res.code, Code.OPERATION_DENIED, "code");
+  assert.equal(res.nonceRecorded, true, "nonceRecorded");
+  assert.ok(h.state.lookupInvite(inviteIdOf(ENROLL_CODE_RAW)) !== undefined, "invite still stored");
 });
 
 // ---------------------------------------------------------------------------
@@ -502,6 +600,54 @@ test("classifyBody table (Go TestClassifyBody)", () => {
   }
   // Invalid UTF-8: checked before any JSON parse.
   assert.equal(classifyBody(new Uint8Array([0x7b, 0xff, 0x7d])), undefined, "invalid UTF-8 bytes");
+});
+
+test("classifyBody: surrogate escapes and the 128-level depth cap (spec 02 section 4)", () => {
+  const ok = (body: string) => assert.ok(classifyBody(encoder.encode(body)) !== undefined, body);
+  const bad = (body: string) => assert.equal(classifyBody(encoder.encode(body)), undefined, body);
+  bad('{"jsonrpc":"2.0","id":1,"method":"pi\\ud800ng"}');
+  bad('{"jsonrpc":"2.0","id":1,"m\\ud800":1,"method":"ping"}');
+  bad('{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"stat\\udc00us"}}');
+  bad('{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"\\ud83d\\ude00\\ud800"}}');
+  ok('{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"\\ud83d\\ude00"}}');
+  ok('{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"a\\\\ud800b"}}');
+  const deep = (levels: number): string =>
+    `{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":${"[".repeat(levels)}${"]".repeat(levels)}}}`;
+  ok(deep(126));
+  bad(deep(127));
+  // Brackets inside string values never count toward the depth.
+  ok(
+    `{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"${"[".repeat(200)}${"]".repeat(200)}"}}`,
+  );
+});
+
+test("classifyBody: duplicate member names make the body unacceptable at any depth", () => {
+  const ok = (body: string) => assert.ok(classifyBody(encoder.encode(body)) !== undefined, body);
+  const bad = (body: string) => assert.equal(classifyBody(encoder.encode(body)), undefined, body);
+  bad('{"jsonrpc":"2.0","id":1,"method":"ping","method":"pong"}'); // top level
+  bad('{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"a","name":"b"}}'); // nested in params
+  bad('{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":[1,{"k":1,"k":2}]}}'); // object inside an array
+  bad('{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.x","arguments":{"a":{"b":1,"b":1}}}}'); // free-form arguments
+  bad('{"jsonrpc":"2.0","id":1,"meth\\u006fd":"ping","method":"ping"}'); // escaped spelling of the same name
+  bad('{"jsonrpc":"2.0","id":1,"method":"ping","params":{"\\u00e9":1,"\u00e9":2}}'); // escaped vs raw non-ASCII
+  bad('{"jsonrpc":"2.0","id":1,"method":"ping","params":{"__proto__":1,"__proto__":2}}'); // prototype key
+  // Same name in different objects, and a value equal to a name, are fine.
+  ok('{"jsonrpc":"2.0","id":1,"method":"ping","params":{"a":{"x":1},"b":{"x":2},"c":[{"x":1},{"x":2}]}}');
+  ok('{"jsonrpc":"2.0","id":1,"method":"ping","params":{"constructor":1,"__proto__":2,"id":"method"}}');
+  // Names differing only in case are different names.
+  ok('{"jsonrpc":"2.0","id":1,"method":"ping","params":{"A":1,"a":2}}');
+});
+
+test("a duplicate member is 400 invalid_request after authentication; the nonce stays consumed", () => {
+  const h = harness();
+  const alice = materialFor(ALICE);
+  const body = encoder.encode('{"jsonrpc":"2.0","id":1,"method":"ping","method":"ping"}');
+  const { req } = signed(alice, { body });
+  const res = h.verifier.verify(req);
+  assert.equal(res.accepted, false, "accepted");
+  assert.equal(res.httpStatus, 400, "status");
+  assert.equal(res.code, Code.INVALID_REQUEST, "code");
+  assert.equal(res.nonceRecorded, true, "nonceRecorded");
 });
 
 // ---------------------------------------------------------------------------
@@ -777,4 +923,149 @@ test("verifier config", () => {
   const { req: req30 } = signed(alice, { body: encoder.encode(PING), ts: NOW - 30 });
   assert.equal(verifier0.verify(req30).accepted, true, "window 0: 30 accepted (DEFAULT_WINDOW)");
   assert.equal(verifier0.verify(req31).code, Code.TIMESTAMP_OUT_OF_WINDOW, "window 0: 31 rejected (DEFAULT_WINDOW)");
+});
+
+// ---------------------------------------------------------------------------
+// 17. Fail-closed on a broken injected clock (review L-2) and aud validation.
+// ---------------------------------------------------------------------------
+
+/** A verifier over a fresh seeded registry with an arbitrary clock. */
+function clockHarness(now: () => number, native?: NativeTools): { verifier: Verifier; nonces: NonceStore } {
+  const state = new MemoryState();
+  state.update((edit) => {
+    for (const f of loadRegistry().keys) {
+      const entry: { -readonly [K in keyof RegistryEntry]: RegistryEntry[K] } = {
+        kid: f.kid,
+        publicKey: f.publicKey,
+        name: f.name,
+      };
+      if (f.admin !== undefined) entry.admin = f.admin;
+      if (f.notBefore !== undefined) entry.notBefore = f.notBefore;
+      if (f.notAfter !== undefined) entry.notAfter = f.notAfter;
+      edit.putKey(entry);
+    }
+  });
+  const nonces = new NonceStore();
+  const verifier = new Verifier({
+    aud: loadRegistry().aud,
+    state,
+    nonces,
+    now,
+    ...(native !== undefined ? { native } : {}),
+  });
+  return { verifier, nonces };
+}
+
+test("a broken injected clock fails closed with 500 and records no nonce", () => {
+  const alice = materialFor(ALICE);
+  for (const bad of [Number.NaN, undefined as unknown as number, -1, Number.POSITIVE_INFINITY]) {
+    const native = new RecordingNative();
+    const { verifier, nonces } = clockHarness(() => bad, native);
+    // A request that is otherwise perfectly valid: signed for ts=NOW.
+    const { req } = signed(alice, { body: encoder.encode(PING) });
+    const res = verifier.verify(req);
+    assert.equal(res.accepted, false, `${bad}: accepted`);
+    assert.equal(res.httpStatus, 500, `${bad}: status`);
+    assert.equal(res.code, "internal_error", `${bad}: code`);
+    assert.equal(res.nonceRecorded, false, `${bad}: nonceRecorded`);
+    assert.equal(res.requestSig, "", `${bad}: requestSig`);
+    assert.equal(nonces.len(), 0, `${bad}: no nonce recorded`);
+    assert.equal(native.calls.length, 0, `${bad}: nothing dispatched`);
+  }
+});
+
+test("verifier constructor rejects a non-finite window", () => {
+  const base = (): VerifierConfig => ({
+    aud: loadRegistry().aud,
+    state: new MemoryState(),
+    nonces: new NonceStore(),
+    now: () => NOW,
+  });
+  assert.throws(() => new Verifier({ ...base(), window: Number.NaN }), /window must be a finite number/);
+  assert.throws(() => new Verifier({ ...base(), window: Number.POSITIVE_INFINITY }), /window must be a finite number/);
+});
+
+test("verifier constructor rejects aud control characters; ordinary aud accepted", () => {
+  const base = (): VerifierConfig => ({
+    aud: loadRegistry().aud,
+    state: new MemoryState(),
+    nonces: new NonceStore(),
+    now: () => NOW,
+  });
+  for (const bad of ["a\nb", "a\rb", "a\u0000b", "a\tb", "a\u007fb"]) {
+    assert.throws(() => new Verifier({ ...base(), aud: bad }), /aud must be non-empty and contain no control characters/);
+  }
+  assert.doesNotThrow(() => new Verifier(base()), "ordinary aud accepted");
+});
+
+// ---------------------------------------------------------------------------
+// Monotonic request clock (high-water mark).
+// ---------------------------------------------------------------------------
+
+/** An accepted POST needs a valid JSON-RPC body (an empty body is invalid_request). */
+const ping = encoder.encode(PING);
+
+/** Harness whose injected clock is steered by the test through the returned setter. */
+function steppedHarness(): { verifier: Verifier; setClock: (t: number) => void } {
+  const base = harness();
+  let clock = NOW;
+  const verifier = new Verifier({ aud: base.aud, state: base.state, nonces: base.nonces, now: () => clock });
+  return { verifier, setClock: (t) => void (clock = t) };
+}
+
+test("clock step forward then back: the replay is refused and old timestamps are out of window", () => {
+  const { verifier, setClock } = steppedHarness();
+  const alice = materialFor(ALICE);
+  const jump = NOW + 1000;
+
+  setClock(jump);
+  const first = signed(alice, { ts: jump, nonce: NONCE, body: ping });
+  assert.equal(verifier.verify(first.req).accepted, true, "request at the stepped-forward time");
+
+  setClock(NOW);
+  const replay = verifier.verify(first.req);
+  assert.equal(replay.accepted, false, "replay after the step back");
+  assert.equal(replay.code, Code.REPLAYED_NONCE);
+
+  const old = verifier.verify(signed(alice, { ts: NOW, body: ping }).req);
+  assert.equal(old.accepted, false, "ts=T judged against the high-water mark");
+  assert.equal(old.code, Code.TIMESTAMP_OUT_OF_WINDOW);
+});
+
+test("clock high-water mark: a request ahead of the raw clock is judged against the mark", () => {
+  const { verifier, setClock } = steppedHarness();
+  const alice = materialFor(ALICE);
+  const jump = NOW + 1000;
+
+  // Without a prior step the same request is out of window.
+  const early = verifier.verify(signed(alice, { ts: jump, body: ping }).req);
+  assert.equal(early.code, Code.TIMESTAMP_OUT_OF_WINDOW, "no high-water mark yet");
+
+  setClock(jump);
+  assert.equal(verifier.verify(signed(alice, { ts: jump, body: ping }).req).accepted, true, "forward movement");
+  setClock(NOW);
+  assert.equal(verifier.verify(signed(alice, { ts: jump, body: ping }).req).accepted, true, "ts=T+1000 at raw T");
+  setClock(jump + 5);
+  assert.equal(verifier.verify(signed(alice, { ts: jump + 5, body: ping }).req).accepted, true, "moving on");
+});
+
+test("invalid clock sample stays fail-closed and does not corrupt the high-water mark", () => {
+  const { verifier, setClock } = steppedHarness();
+  const alice = materialFor(ALICE);
+  const jump = NOW + 1000;
+
+  setClock(jump);
+  assert.equal(verifier.verify(signed(alice, { ts: jump, body: ping }).req).accepted, true);
+
+  setClock(Number.NaN);
+  const broken = verifier.verify(signed(alice, { ts: jump, body: ping }).req);
+  assert.equal(broken.accepted, false);
+  assert.equal(broken.httpStatus, 500);
+  assert.equal(broken.code, "internal_error");
+
+  // A NaN mark would make every window compare false; the mark must still be jump.
+  setClock(NOW);
+  const old = verifier.verify(signed(alice, { ts: NOW, body: ping }).req);
+  assert.equal(old.code, Code.TIMESTAMP_OUT_OF_WINDOW);
+  assert.equal(verifier.verify(signed(alice, { ts: jump, body: ping }).req).accepted, true);
 });

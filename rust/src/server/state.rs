@@ -178,6 +178,9 @@ pub trait StateStore: Send + Sync {
     /// calls it once per request, so it must not copy the whole registry the
     /// way `view` does.
     fn lookup(&self, kid: &str) -> Option<RegistryEntry>;
+    /// Read-only copy of the invite with the given id, expired or not. The
+    /// verifier uses it before authentication, so it must never modify state.
+    fn lookup_invite(&self, invite_id: &str) -> Option<InviteRecord>;
     /// Runs the callback on a deep copy of the state; commits only if it
     /// returns `Ok`, otherwise nothing is applied (atomic with rollback).
     fn update(
@@ -216,6 +219,14 @@ impl StateData {
     /// lookup runs once per verification request.
     pub(crate) fn lookup(&self, kid: &str) -> Option<RegistryEntry> {
         self.keys.iter().find(|e| e.kid == kid).cloned()
+    }
+
+    /// Single-invite deep copy, same rationale as [`StateData::lookup`].
+    pub(crate) fn lookup_invite(&self, invite_id: &str) -> Option<InviteRecord> {
+        self.invites
+            .iter()
+            .find(|i| i.invite_id == invite_id)
+            .cloned()
     }
 
     /// Deep copy handed to an update callback.
@@ -276,6 +287,10 @@ impl StateStore for MemoryState {
 
     fn lookup(&self, kid: &str) -> Option<RegistryEntry> {
         self.lock_data().lookup(kid)
+    }
+
+    fn lookup_invite(&self, invite_id: &str) -> Option<InviteRecord> {
+        self.lock_data().lookup_invite(invite_id)
     }
 
     fn update(

@@ -7,7 +7,7 @@ import (
 	"github.com/PHPCraftdream/mcp-jack/durable"
 )
 
-// Проверяется именно staged package, а не исходный checkout.
+// It is the staged package that is verified, not the source checkout.
 func verifyDurableArtifact() error {
 	directory, err := os.MkdirTemp("", "jack-consumer-durable-")
 	if err != nil {

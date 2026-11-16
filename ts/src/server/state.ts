@@ -2,6 +2,13 @@
  * In-memory registry and invite state with atomic update closures; the
  * last-admin rule depends on the atomicity. Ported from Go's state.go.
  */
+import { createHash } from "node:crypto";
+import { encodeBase64URL } from "../encoding.js";
+
+/** base64url(SHA-256(raw invite-code bytes)); lives here so verify.ts and native.ts share it without an import cycle. */
+export function inviteIdOf(rawCode: Uint8Array): string {
+  return encodeBase64URL(createHash("sha256").update(Buffer.from(rawCode)).digest());
+}
 
 /** One registered key in the server state (spec 02 section 1, admin-only); field shapes match ts/test/fixtures.ts. */
 export interface RegistryEntry {
@@ -84,6 +91,8 @@ export interface StateStore {
   view(): StateView;
   /** Copy of the entry with the given kid, or undefined. Must not copy the whole registry. */
   lookup(kid: string): RegistryEntry | undefined;
+  /** Read-only deep copy of the invite with the given id, or undefined; never consumes it. */
+  lookupInvite(inviteId: string): InviteRecord | undefined;
   /** Runs fn on a deep copy of the state and swaps it in only if fn returned normally; if fn throws, nothing is applied and the error propagates unchanged. */
   update(fn: (edit: StateEdit) => void): void;
 }
@@ -151,6 +160,16 @@ export function lookupKey(keys: readonly RegistryEntry[], kid: string): Registry
   for (const entry of keys) {
     if (entry.kid === kid) {
       return cloneEntry(entry);
+    }
+  }
+  return undefined;
+}
+
+/** Deep copy of the invite with the given id, or undefined. */
+export function lookupInviteRecord(invites: readonly InviteRecord[], inviteId: string): InviteRecord | undefined {
+  for (const invite of invites) {
+    if (invite.inviteId === inviteId) {
+      return cloneInvite(invite);
     }
   }
   return undefined;
@@ -269,6 +288,11 @@ export class MemoryState implements StateStore {
   /** Deep copy of the entry with the given kid, without copying the whole registry. */
   lookup(kid: string): RegistryEntry | undefined {
     return lookupKey(this.keys, kid);
+  }
+
+  /** Deep copy of the invite with the given id, without copying all invites. */
+  lookupInvite(inviteId: string): InviteRecord | undefined {
+    return lookupInviteRecord(this.invites, inviteId);
   }
 
   /**

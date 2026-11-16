@@ -1,7 +1,8 @@
 /** node:http adapter serving a Fetch-standard handler. */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { AUTH_VALUES_SYMBOL, RAW_TARGET_SYMBOL } from "./fetch.js";
+import { AUTH_VALUES_SYMBOL, RAW_BODY_SYMBOL, RAW_TARGET_SYMBOL, dropFragment, isOriginFormTarget } from "./fetch.js";
 import type { JackRequest } from "./fetch.js";
+import { finishResponseAdmission } from "./durable-admission.js";
 
 /** Go defaultMaxBodyBytes (mirrors fetch.ts). */
 const DEFAULT_MAX_BODY_BYTES = 1 << 20;
@@ -119,7 +120,16 @@ export function serveNode(
     }
     const body = read.body;
 
-    const rawTarget = typeof req.url === "string" && req.url !== "" ? req.url : "/";
+    const wireUrl = typeof req.url === "string" && req.url !== "" ? req.url : "/";
+    // Spec 01 section 3.1: only an origin-form target of the bytes 0x21 to 0x7E
+    // is signed; refuse the rest (absolute-, authority-, asterisk-form, raw
+    // non-ASCII bytes) before verification. node:http's own parser already
+    // answers a bare 400 to some of them. A fragment is dropped.
+    if (!isOriginFormTarget(wireUrl)) {
+      writeError(res, 400, "invalid_request", "malformed request target");
+      return;
+    }
+    const rawTarget = dropFragment(wireUrl);
     // The URL object only satisfies the Request constructor; the RAW target
     // travels to the fetch handler on RAW_TARGET_SYMBOL because `new URL`
     // RESOLVES `..`/`.` dot segments and would otherwise change the bytes
@@ -162,6 +172,12 @@ export function serveNode(
     });
     (fetchReq as JackRequest)[RAW_TARGET_SYMBOL] = rawTarget;
     (fetchReq as JackRequest)[AUTH_VALUES_SYMBOL] = jackAuthValues;
+    // undici refuses a GET/HEAD body, but the signature covers the bytes
+    // exactly as sent (spec 01 section 3.1): the raw bytes travel to the
+    // handler on the symbol, like the raw target and the Jack-Auth values.
+    if ((method === "GET" || method === "HEAD") && body.length > 0) {
+      (fetchReq as JackRequest)[RAW_BODY_SYMBOL] = body;
+    }
 
     let resp: Response;
     try {
@@ -193,5 +209,10 @@ export function serveNode(
     } catch {
       // The socket may have died between the guard and the write.
     }
+    // Durable admission finishes AFTER the response is written (Go defer
+    // res.Done() in the middleware). Idempotent: the fetch handler that
+    // produced this Response already released the lease; a Response without a
+    // durable association (default path) is a no-op.
+    finishResponseAdmission(resp);
   }
 }

@@ -23,7 +23,7 @@ function normalized(input: RotationStoreOptions): { options: NormalizedOptions; 
   }
 }
 
-/** Concrete private Linux profile; sync callbacks/I/O должны быть bounded и не reentrant. */
+/** Concrete private Linux profile; sync callbacks/I/O must be bounded and non-reentrant. */
 export class RotationTrustStore {
   private fenced = false;
   private closed = false;
@@ -39,7 +39,7 @@ export class RotationTrustStore {
     const base: StoreBundle = { storeId: id.toString("base64url"), profile, owner: 1, dirty: true, fenced: false,
       clockBytes: clockBytes(anchor.clock), snapshotBytes: encodedSnapshot(anchor, options) };
     const first = pack(base);
-    // Marker/dirty state подтверждены до первого clock callback.
+    // Marker/dirty state confirmed before the first clock callback.
     const file = RotationFileOwner.createUnusedOwner(path, first);
     try {
       const now = options.now();
@@ -70,7 +70,7 @@ export class RotationTrustStore {
       return store;
     } catch (error) {
       if (mutation) file.fence();
-      try { file.close(); } catch { /* Unknown/dirty marker остаётся startup gate. */ }
+      try { file.close(); } catch { /* Unknown/dirty marker remains a startup gate. */ }
       if (error instanceof RotationError) throw error;
       return invalidStore();
     }
@@ -106,7 +106,7 @@ export class RotationTrustStore {
     } finally { this.busy = false; }
   }
 
-  /** Committed read, не fresh ClockGuard operation или ACK. */
+  /** Committed read, not a fresh ClockGuard operation or ACK. */
   snapshot(): { readonly snapshot: RotationTrustSnapshot; readonly clock: RotationClockTuple } {
     this.begin("rotation_state_unavailable");
     try {
@@ -151,7 +151,7 @@ export class RotationTrustStore {
     } finally { this.busy = false; }
   }
 
-  /** Exact snapshot/current-clock CAS; logical ClockGuard bytes не меняются. */
+  /** Exact snapshot/current-clock CAS; logical ClockGuard bytes are unchanged. */
   compareAndSwap(expected: RotationTrustSnapshot, desired: RotationTrustSnapshot, clock: RotationClockTuple): void {
     const previousValue = validateRotationTrustSnapshot(expected, this.options.binding, this.options.window, this.options.checkpoint);
     const nextValue = validateRotationTrustSnapshot(desired, this.options.binding, this.options.window, this.options.checkpoint);
@@ -179,7 +179,7 @@ export class RotationTrustStore {
 
   fence(): void { this.fenced = true; this.file.fence(); }
 
-  /** Sync storage ops уже завершены; сетевые callers должны пройти final gate отдельно. */
+  /** Sync storage ops are already complete; network callers must pass the final gate separately. */
   close(): void {
     if (this.closed) return;
     if (this.busy || this.fenced) { this.fence(); return invalidStore(); }

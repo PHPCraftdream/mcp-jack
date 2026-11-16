@@ -7,10 +7,10 @@ import (
 	jack "github.com/PHPCraftdream/mcp-jack"
 )
 
-// ResponseSigner удерживает server signing capability без private export.
-// PublicKey возвращает фиксированную identity этого handle, не key-selection policy.
-// Provider обязан ограничивать длительность методов: SDK ждёт синхронно
-// и не может принудительно прервать зависший callback.
+// ResponseSigner holds the server signing capability without private-key export.
+// PublicKey returns the fixed identity of this handle, not a key-selection policy.
+// The provider must bound method duration: the SDK waits synchronously
+// and cannot forcibly interrupt a stuck callback.
 type ResponseSigner interface {
 	PublicKey() []byte
 	Sign([]byte) ([]byte, error)
@@ -54,7 +54,7 @@ func responseSignature(signer ResponseSigner, public []byte, message string) (si
 		return nil, errResponseSigner
 	}
 	signature = append([]byte(nil), provided...)
-	// Provider не может изменить expected message или подтвердить другую identity.
+	// The provider cannot alter the expected message or attest a different identity.
 	if !jack.Verify(public, []byte(message), signature) {
 		complete = true
 		return nil, errResponseSigner

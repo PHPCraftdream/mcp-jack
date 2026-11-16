@@ -13,6 +13,11 @@ mod interop;
 #[path = "interop/mcp.rs"]
 mod mcp;
 
+// Durable nonce store helpers are linux-only, mirroring the SDK modules.
+#[cfg(target_os = "linux")]
+#[path = "interop/durable.rs"]
+mod durable;
+
 use std::sync::Arc;
 
 use mcp_jack::encoding::{decode_b64url, decode_b64url_fixed, encode_b64url, key_id};
@@ -35,6 +40,15 @@ struct Flags {
     seed_hex: String,
     bootstrap_ttl: Option<String>,
     verify_only: bool,
+    /// Optional durable nonce store directory; serve-mode admission goes
+    /// through the SDK durable store when set (linux only).
+    durable_dir: Option<String>,
+    /// Optional durable store window in seconds (default "30"); consumed
+    /// only on linux, hence the non-linux dead-code allowance.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    durable_window: Option<String>,
+    /// Explicit out-of-band durable store initialization.
+    durable_init: bool,
     /// Set when a rotation-mode-only flag was consumed; without --mode that
     /// stays a usage error (default behavior unchanged).
     rotation_flag: bool,
@@ -64,6 +78,9 @@ fn parse_flags() -> Flags {
         seed_hex: String::new(),
         bootstrap_ttl: None,
         verify_only: false,
+        durable_dir: None,
+        durable_window: None,
+        durable_init: false,
         rotation_flag: false,
     };
     while let Some(arg) = args.next() {
@@ -90,6 +107,9 @@ fn parse_flags() -> Flags {
             "server-seed-hex" => flags.seed_hex = value("server-seed-hex"),
             "bootstrap-ttl" => flags.bootstrap_ttl = Some(value("bootstrap-ttl")),
             "verify-only" => flags.verify_only = true,
+            "durable-dir" => flags.durable_dir = Some(value("durable-dir")),
+            "durable-window" => flags.durable_window = Some(value("durable-window")),
+            "durable-init" => flags.durable_init = true,
             _ => {
                 // Rotation-mode-only flags are consumed here so the rotation
                 // parser can see them; without --mode they remain unknown.
@@ -268,6 +288,21 @@ struct BootstrapLine {
 async fn run() -> Result<(), String> {
     // Order of operations mirrors Go main().
     let flags = parse_flags();
+    // Durable initialization happens before any other file access and exits.
+    #[cfg(target_os = "linux")]
+    if flags.durable_init {
+        let Some(dir) = &flags.durable_dir else {
+            fail("--durable-init requires --durable-dir");
+        };
+        if flags.verify_only {
+            fail("--durable-init cannot be combined with --verify-only");
+        }
+        durable::init_and_print(dir, flags.durable_window.as_deref(), &flags.aud);
+    }
+    #[cfg(not(target_os = "linux"))]
+    if flags.durable_init || flags.durable_dir.is_some() {
+        fail("--durable-dir requires linux (durable nonce stores)");
+    }
     let seed = match hex_decode_32(&flags.seed_hex) {
         Ok(seed) => seed,
         Err(_) => fail("--server-seed-hex must be 64 hex chars (32 bytes)"),
@@ -305,19 +340,27 @@ async fn run() -> Result<(), String> {
     }
 
     let clock: Clock = Arc::new(unix_now);
-    let verifier = match Verifier::new(Config {
-        aud: flags.aud.clone(),
-        // window 0: the spec default 30 s (interop README section 4).
-        state: Arc::new(state),
-        nonces: Arc::new(NonceStore::new()),
-        audit: None,
-        native: Some(Arc::new(Native::new(NativeOptions::default()))),
-        window_seconds: 0,
-        now: clock,
-    }) {
-        Ok(v) => v,
-        Err(e) => fail(format!("verifier: {e}")),
-    };
+    // Durable store open is synchronous file I/O and happens before the
+    // listener so a RecoveryRequired refusal stays a clean startup failure.
+    #[cfg(target_os = "linux")]
+    let durable = flags
+        .durable_dir
+        .as_deref()
+        .map(|dir| durable::setup(dir, flags.durable_window.as_deref(), &flags.aud));
+    #[cfg(target_os = "linux")]
+    let window_seconds = durable.as_ref().map_or(0, |s| s.window);
+    #[cfg(not(target_os = "linux"))]
+    let window_seconds = 0_i64;
+    #[cfg(target_os = "linux")]
+    let verifier = build_verifier(
+        &flags.aud,
+        state,
+        Arc::clone(&clock),
+        window_seconds,
+        durable.as_ref().map(|s| Arc::clone(&s.store)),
+    );
+    #[cfg(not(target_os = "linux"))]
+    let verifier = build_verifier(&flags.aud, state, Arc::clone(&clock), window_seconds);
     let layer = JackLayer::new(HandlerConfig {
         verifier: Arc::new(verifier),
         server_key,
@@ -351,34 +394,45 @@ async fn run() -> Result<(), String> {
     let semaphore = Arc::new(tokio::sync::Semaphore::new(64));
     // Serve failures reach the select below via this channel.
     let (serve_err_tx, mut serve_err_rx) = tokio::sync::oneshot::channel::<String>();
-    tokio::task::spawn(async move {
-        loop {
-            let (stream, _) = match listener.accept().await {
-                Ok(accepted) => accepted,
-                Err(e) => {
-                    let _ = serve_err_tx.send(format!("accept: {e}"));
-                    return;
-                }
-            };
-            // Acquired BEFORE spawning; the permit moves into the task and is
-            // dropped at its end.
-            let permit = match semaphore.clone().acquire_owned().await {
-                Ok(p) => p,
-                Err(_) => return, // semaphore closed: never happens here
-            };
-            let service = service.clone();
-            // Fire-and-forget by design: the harness kills the process to stop
-            // us; connection errors are logged to stderr only, never stdout.
-            let _join = tokio::task::spawn(async move {
-                let _permit = permit;
-                let hyper_service = hyper_util::service::TowerToHyperService::new(service);
-                if let Err(e) = hyper::server::conn::http1::Builder::new()
-                    .serve_connection(hyper_util::rt::TokioIo::new(stream), hyper_service)
-                    .await
+    // In-flight connection tasks, tracked so shutdown can drain them (each
+    // entry bounded by the semaphore above). Finished entries are pruned on
+    // push so the list never grows past the live connection count.
+    let inflight: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>> = Arc::default();
+    let accept_task = tokio::task::spawn({
+        let inflight = Arc::clone(&inflight);
+        async move {
+            loop {
+                let (stream, _) = match listener.accept().await {
+                    Ok(accepted) => accepted,
+                    Err(e) => {
+                        let _ = serve_err_tx.send(format!("accept: {e}"));
+                        return;
+                    }
+                };
+                // Acquired BEFORE spawning; the permit moves into the task and is
+                // dropped at its end.
+                let permit = match semaphore.clone().acquire_owned().await {
+                    Ok(p) => p,
+                    Err(_) => return, // semaphore closed: never happens here
+                };
+                let service = service.clone();
+                let inflight = Arc::clone(&inflight);
+                let join = tokio::task::spawn(async move {
+                    let _permit = permit;
+                    let hyper_service = hyper_util::service::TowerToHyperService::new(service);
+                    if let Err(e) = hyper::server::conn::http1::Builder::new()
+                        .serve_connection(hyper_util::rt::TokioIo::new(stream), hyper_service)
+                        .await
+                    {
+                        eprintln!("interop-server: connection: {e}");
+                    }
+                });
                 {
-                    eprintln!("interop-server: connection: {e}");
+                    let mut live = inflight.lock().unwrap_or_else(|e| e.into_inner());
+                    live.retain(|handle| !handle.is_finished());
+                    live.push(join);
                 }
-            });
+            }
         }
     });
 
@@ -428,6 +482,57 @@ async fn run() -> Result<(), String> {
             }
         }
     }
-    // No graceful drain required; the process exits 0.
+    // Shutdown order: stop accepting, drain in-flight connections (bounded),
+    // then close the durable store so no request ever hits a closed store.
+    accept_task.abort();
+    let _ = accept_task.await;
+    let draining: Vec<tokio::task::JoinHandle<()>> = {
+        let mut live = inflight.lock().unwrap_or_else(|e| e.into_inner());
+        live.drain(..).collect()
+    };
+    for handle in draining {
+        // Bounded per-connection drain: a stuck connection must not delay
+        // the store close (and process exit) indefinitely.
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(500), handle).await;
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(setup) = &durable {
+        // A close error is logged but the process still exits 0.
+        if let Err(e) = setup.store.close() {
+            eprintln!("interop-server: durable store close: {e:?}");
+        }
+    }
     Ok(())
+}
+
+/// Builds the verifier; `durable` attaches the SDK durable nonce store and
+/// `window_seconds` is W there, 0 (spec default 30 s) otherwise.
+fn build_verifier(
+    aud: &str,
+    state: FileState,
+    now: Clock,
+    window_seconds: i64,
+    #[cfg(target_os = "linux")] durable: Option<
+        Arc<mcp_jack::server::durable_admission::SharedDurableNonceStore>,
+    >,
+) -> Verifier {
+    let verifier = match Verifier::new(Config {
+        aud: aud.to_owned(),
+        state: Arc::new(state),
+        // Kept alongside the durable store; the Rust verifier allows both.
+        nonces: Arc::new(NonceStore::new()),
+        audit: None,
+        native: Some(Arc::new(Native::new(NativeOptions::default()))),
+        window_seconds,
+        now,
+    }) {
+        Ok(v) => v,
+        Err(e) => fail(format!("verifier: {e}")),
+    };
+    #[cfg(target_os = "linux")]
+    let verifier = match durable {
+        Some(store) => verifier.with_durable_nonces(store),
+        None => verifier,
+    };
+    verifier
 }

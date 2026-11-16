@@ -1,5 +1,7 @@
 //! Request verifier: authentication + authorization (Go: server/verify.go).
 
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 
 use serde_json::value::RawValue;
@@ -8,7 +10,12 @@ use crate::auth_header::{parse_request_auth, RequestAuth};
 use crate::encoding::{decode_b64url_fixed, key_id};
 use crate::error::{codes, JackError};
 use crate::server::audit::{AuditEvent, AuditSink, AUDIT_FAILURE, AUDIT_SUCCESS};
+#[cfg(target_os = "linux")]
+use crate::server::durable_admission::{
+    reserve_durable, AdmissionFinish, CallerSnapshot, SharedDurableNonceStore,
+};
 use crate::server::identity::VerifiedIdentity;
+use crate::server::native::invite_id_of;
 use crate::server::nonce::NonceStore;
 use crate::server::state::{RegistryEntry, StateStore};
 use crate::signing::{request_signing_string, DEFAULT_WINDOW_SECONDS};
@@ -132,7 +139,10 @@ pub struct Config {
     /// Timestamp window seconds; <= 0 means DEFAULT_WINDOW_SECONDS (Go: zero
     /// means DefaultWindow).
     pub window_seconds: i64,
-    /// Verifier clock, Unix seconds.
+    /// Verifier clock, Unix seconds. The verifier never lets its request time
+    /// go backwards: freshness and the volatile nonce store use the highest
+    /// sample seen so far, so a clock step back cannot revive a purged nonce.
+    /// Response timestamps use the raw sample.
     pub now: Clock,
 }
 
@@ -144,6 +154,17 @@ pub struct Verifier {
     /// denies the route. Deliberately NOT a Config field: adding a field
     /// would break every existing struct literal of the static public API.
     server_keys: Option<Arc<dyn NativeTools>>,
+    /// Candidate durable nonce store (Go: Config.DurableNonces); None uses
+    /// the volatile store. Builder-only for the same static-API reason.
+    #[cfg(target_os = "linux")]
+    durable: Option<Arc<SharedDurableNonceStore>>,
+    /// Latched construction refusal (Go: NewVerifier rejects a durable window
+    /// below 0 or above 120). The durable profile is attached by an infallible
+    /// builder, so the refusal fails every later request closed.
+    #[cfg(target_os = "linux")]
+    durable_window_invalid: bool,
+    /// Highest clock sample seen; request time is monotonic within a process.
+    high_water: AtomicI64,
 }
 
 impl Verifier {
@@ -153,9 +174,17 @@ impl Verifier {
         if cfg.aud.is_empty() {
             return Err("server: Config.Aud must be non-empty".to_owned());
         }
+        if crate::client::auth::has_control(&cfg.aud) {
+            return Err("server: Config.Aud must not contain control characters".to_owned());
+        }
         Ok(Self {
             cfg,
             server_keys: None,
+            #[cfg(target_os = "linux")]
+            durable: None,
+            #[cfg(target_os = "linux")]
+            durable_window_invalid: false,
+            high_water: AtomicI64::new(i64::MIN),
         })
     }
 
@@ -165,6 +194,20 @@ impl Verifier {
     /// infallible static constructor.
     pub fn with_server_keys(mut self, server_keys: Arc<dyn NativeTools>) -> Self {
         self.server_keys = Some(server_keys);
+        self
+    }
+
+    /// Selects the candidate durable nonce profile (Go: Config.DurableNonces).
+    /// The volatile nonce store is not used while one is configured; every
+    /// refusal maps to the candidate storage statuses and codes (spec section
+    /// 5). Linux-gated together with the durable store.
+    #[cfg(target_os = "linux")]
+    pub fn with_durable_nonces(mut self, durable: Arc<SharedDurableNonceStore>) -> Self {
+        // Go rejects a durable window below 0 or above 120 at construction
+        // (server: durable window must be between 1 and 120 seconds); this
+        // builder is infallible, so the refusal latches here.
+        self.durable_window_invalid = self.cfg.window_seconds < 0 || self.cfg.window_seconds > 120;
+        self.durable = Some(durable);
         self
     }
 
@@ -184,11 +227,19 @@ impl Verifier {
         (self.cfg.now)()
     }
 
+    /// Request time that never goes backwards: max(sample, highest seen).
+    fn effective_now(&self, sample: i64) -> i64 {
+        self.high_water
+            .fetch_max(sample, Ordering::SeqCst)
+            .max(sample)
+    }
+
     /// Runs the pipeline of spec 01 section 4 and spec 02 section 4 on one
     /// request. Stops at the first failing step; a rejection never reveals
     /// more than its code.
     pub fn verify(&self, req: &Request) -> VerifyResult {
         let now = (self.cfg.now)();
+        let effective = self.effective_now(now);
         let auth_values: Vec<&str> = req.auth_values.iter().map(String::as_str).collect();
 
         let auth = match parse_request_auth(&auth_values) {
@@ -223,7 +274,7 @@ impl Verifier {
                     }
                 }
             }
-            None => match enrollment_key(req, &auth.kid) {
+            None => match enrollment_key(req, &auth.kid, self.cfg.state.as_ref(), now) {
                 Ok(key) => key,
                 Err(rej) => return rej,
             },
@@ -231,7 +282,7 @@ impl Verifier {
 
         // Step 6: window. abs_diff cannot overflow where `now - ts` would.
         let window = self.window();
-        if now.abs_diff(auth.ts) > window.unsigned_abs() {
+        if effective.abs_diff(auth.ts) > window.unsigned_abs() {
             return fail(
                 VerifyResult::default(),
                 401,
@@ -271,13 +322,49 @@ impl Verifier {
             );
         }
 
+        // Candidate durable profile: reserve AFTER signature verification and
+        // BEFORE any authorization/state change/dispatch (spec section 2); the
+        // volatile store below is skipped. The committed lease is finished by
+        // the HTTP adapter after the response is produced.
+        #[cfg(target_os = "linux")]
+        if let Some(store) = self.durable.as_ref() {
+            if self.durable_window_invalid {
+                return fail(
+                    VerifyResult::default(),
+                    500,
+                    "internal_error",
+                    "server: durable window must be between 1 and 120 seconds",
+                );
+            }
+            let snapshot = match caller.as_ref() {
+                Some(entry) => CallerSnapshot::registered(entry.clone()),
+                None => CallerSnapshot::enrolled(auth.kid.clone()),
+            };
+            let window = self.window();
+            let outcome = reserve_durable(
+                store,
+                &auth,
+                &signing,
+                window,
+                snapshot,
+                Arc::clone(&self.cfg.state),
+                &self.cfg.now,
+            );
+            return match outcome.final_now {
+                Some(final_now) => {
+                    self.authorize(req, &auth, final_now, caller.as_ref(), outcome.result)
+                }
+                None => outcome.result,
+            };
+        }
+
         // Step 8: the nonce is recorded only after the signature verified, so
-        // unauthenticated requests cannot fill the cache (spec 01 section 4).
+        // requests that fail verification cannot fill the cache (spec 01 section 4).
         // Store polarity: true means a live REPLAY.
         if self
             .cfg
             .nonces
-            .check_and_record(&auth.kid, &auth.nonce, now, auth.ts + window)
+            .check_and_record(&auth.kid, &auth.nonce, effective, auth.ts + window)
         {
             return fail(
                 VerifyResult::default(),
@@ -472,6 +559,10 @@ pub struct VerifyResult {
     /// handler; None for rejections and protocol-native calls (spec 02
     /// section 3).
     pub identity: Option<VerifiedIdentity>,
+    /// Committed durable admission lease; finished after the response is
+    /// produced (Go: Result.admission + Done). Linux-gated with the store.
+    #[cfg(target_os = "linux")]
+    pub admission: AdmissionFinish,
 }
 
 /// Builds the rejection form of a result: only status, code and message.
@@ -511,7 +602,12 @@ pub(crate) fn entry_active(entry: &RegistryEntry, now: i64) -> bool {
 // allow(result_large_err): the Err arm is the rare rejection path; boxing it
 // would obscure the Go shape it mirrors for no real gain.
 #[allow(clippy::result_large_err)]
-fn enrollment_key(req: &Request, kid: &str) -> Result<Vec<u8>, VerifyResult> {
+fn enrollment_key(
+    req: &Request,
+    kid: &str,
+    state: &dyn StateStore,
+    now: i64,
+) -> Result<Vec<u8>, VerifyResult> {
     let unknown = || {
         fail(
             VerifyResult::default(),
@@ -533,20 +629,25 @@ fn enrollment_key(req: &Request, kid: &str) -> Result<Vec<u8>, VerifyResult> {
         return Err(unknown());
     }
     // arguments absent (None) or null ("null", which fails to parse into a
-    // Map) are both shape errors -> unknown key.
+    // map) are both shape errors -> unknown key. Members decode as raw text
+    // (Go: json.RawMessage), so a number in a member the exception never
+    // reads is never parsed or range-checked.
     let Some(arguments) = &msg.arguments else {
         return Err(unknown());
     };
-    let Ok(args) =
-        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(arguments.get())
-    else {
+    let Ok(args) = serde_json::from_str::<RawMembers>(arguments.get()) else {
         return Err(unknown());
     };
+    // Invite gate before any key handling, so a caller without a live invite
+    // learns nothing about key validity.
+    if !live_invite(state, &args, now) {
+        return Err(unknown());
+    }
     // A null/number/bool public_key is not a string -> unknown key.
-    let Some(submitted) = args.get("public_key").and_then(serde_json::Value::as_str) else {
+    let Some(submitted) = args.get("public_key").and_then(|v| raw_as_string(v)) else {
         return Err(unknown());
     };
-    let key = match decode_b64url_fixed(submitted, 32) {
+    let key = match decode_b64url_fixed(&submitted, 32) {
         Ok(key) => key,
         Err(_) => {
             return Err(fail(
@@ -571,6 +672,20 @@ fn enrollment_key(req: &Request, kid: &str) -> Result<Vec<u8>, VerifyResult> {
         return Err(unknown());
     }
     Ok(key)
+}
+
+/// Reports whether `code` names an invite that exists and is unexpired at
+/// `now`. Read-only: the tool still consumes the invite atomically later.
+fn live_invite(state: &dyn StateStore, args: &RawMembers, now: i64) -> bool {
+    let Some(code) = args.get("code").and_then(|v| raw_as_string(v)) else {
+        return false;
+    };
+    let Ok(raw_code) = decode_b64url_fixed(&code, 32) else {
+        return false;
+    };
+    state
+        .lookup_invite(&invite_id_of(&raw_code))
+        .is_some_and(|invite| now < invite.expires_at)
 }
 
 /// Request or client answer (Go: kindRequest / kindResponse).
@@ -599,9 +714,8 @@ struct RpcMessage {
 /// Body members as sent: a map type only accepts a JSON object (spec 02
 /// section 4: the body "MUST be a single UTF-8 JSON-RPC 2.0 object"; arrays,
 /// including batch arrays and positional representations, and scalars are
-/// invalid) and keeps the LAST value of a duplicated key (spec 02 section 4, README D13).
-/// A derived struct would instead also deserialize from arrays positionally
-/// and reject duplicates with `duplicate_field`.
+/// invalid). Duplicate names never reach it: `unacceptable_body` rejects them
+/// first. A derived struct would also deserialize from arrays positionally.
 type RawMembers = std::collections::HashMap<String, Box<RawValue>>;
 
 /// Returns Some only when the raw JSON text parses to a JSON string
@@ -610,6 +724,168 @@ fn raw_as_string(value: &RawValue) -> Option<String> {
     serde_json::from_str::<serde_json::Value>(value.get())
         .ok()
         .and_then(|v| v.as_str().map(|s| s.to_owned()))
+}
+
+/// The maximum nesting depth of arrays and objects the body may reach
+/// (spec 02 section 4 step 2).
+const MAX_BODY_DEPTH: usize = 128;
+
+/// Reports whether the body text is unacceptable before parsing (spec 02
+/// section 4 step 2): a \uXXXX string escape that does not form a Unicode
+/// scalar value (a lone or unpaired surrogate), or nesting deeper than
+/// MAX_BODY_DEPTH levels of arrays and objects, or an object with two members
+/// of the same name (compared after unescaping, exact). One byte pass, no
+/// recursion, memory bounded by the names of the open objects, so the verdict
+/// never depends on the JSON library's own limits (RawValue capture scanning
+/// bypasses serde_json's recursion limit and a lone surrogate would otherwise
+/// only fail where serde_json materializes a value).
+fn unacceptable_body(body: &[u8]) -> bool {
+    // One frame per open container; Some(names) for an object.
+    let mut stack: Vec<Option<HashSet<String>>> = Vec::new();
+    let mut expect_key = false;
+    let mut i = 0;
+    while i < body.len() {
+        match body[i] {
+            b'"' => {
+                let collect = expect_key && matches!(stack.last(), Some(Some(_)));
+                let Some((end, name)) = scan_string(body, i + 1, collect) else {
+                    return true;
+                };
+                i = end;
+                if collect {
+                    expect_key = false;
+                    if let Some(Some(names)) = stack.last_mut() {
+                        if !names.insert(name) {
+                            return true; // duplicate member name
+                        }
+                    }
+                }
+                continue;
+            }
+            b'{' | b'[' => {
+                if stack.len() >= MAX_BODY_DEPTH {
+                    return true;
+                }
+                let is_object = body[i] == b'{';
+                stack.push(is_object.then(HashSet::new));
+                expect_key = is_object;
+            }
+            b'}' | b']' => {
+                stack.pop();
+                expect_key = false;
+            }
+            b',' => expect_key = matches!(stack.last(), Some(Some(_))),
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Scans one string body starting after its opening quote. Returns the index
+/// after the closing quote and, when `collect` is set, the unescaped text;
+/// None when a \uXXXX escape is not a Unicode scalar value (lone surrogate)
+/// or the text ends inside an escape.
+fn scan_string(body: &[u8], start: usize, collect: bool) -> Option<(usize, String)> {
+    let mut out: Vec<u8> = Vec::new();
+    let mut i = start;
+    while i < body.len() {
+        let c = body[i];
+        match c {
+            b'"' => return Some((i + 1, String::from_utf8_lossy(&out).into_owned())),
+            b'\\' => {
+                let esc = *body.get(i + 1)?;
+                if esc != b'u' {
+                    if collect {
+                        out.push(simple_escape(esc));
+                    }
+                    i += 2; // two-byte escape; an escaped backslash keeps the string going
+                    continue;
+                }
+                if i + 6 > body.len() {
+                    return None;
+                }
+                let Some(v) = hex4(&body[i + 2..i + 6]) else {
+                    i += 2; // not a \uXXXX escape: invalid JSON, the parser rejects it
+                    continue;
+                };
+                if (0xDC00..=0xDFFF).contains(&v) {
+                    return None; // lone low surrogate
+                }
+                if !(0xD800..=0xDBFF).contains(&v) {
+                    push_scalar(&mut out, collect, v);
+                    i += 6; // ordinary \uXXXX escape
+                    continue;
+                }
+                // A high surrogate must be followed immediately by \uDC00..\uDFFF.
+                let low = low_surrogate_at(body, i + 6)?;
+                push_scalar(
+                    &mut out,
+                    collect,
+                    0x10000 + ((v - 0xD800) << 10) + (low - 0xDC00),
+                );
+                i += 12;
+            }
+            _ => {
+                if collect {
+                    out.push(c);
+                }
+                i += 1;
+            }
+        }
+    }
+    None // unterminated string: invalid JSON, the parser rejects it anyway
+}
+
+/// Reads a `\uDC00..\uDFFF` escape starting exactly at `at`, or None.
+fn low_surrogate_at(body: &[u8], at: usize) -> Option<u32> {
+    let escape = body.get(at..at + 6)?;
+    if escape[0] != b'\\' || escape[1] != b'u' {
+        return None;
+    }
+    hex4(&escape[2..]).filter(|low| (0xDC00..=0xDFFF).contains(low))
+}
+
+/// Maps the character after a backslash to the byte it stands for; an
+/// invalid escape is kept as is (the parser rejects the body later).
+fn simple_escape(esc: u8) -> u8 {
+    match esc {
+        b'n' => b'\n',
+        b'r' => b'\r',
+        b't' => b'\t',
+        b'b' => 0x08,
+        b'f' => 0x0C,
+        other => other,
+    }
+}
+
+/// Appends the UTF-8 form of a scalar value when names are being collected.
+fn push_scalar(out: &mut Vec<u8>, collect: bool, scalar: u32) {
+    if !collect {
+        return;
+    }
+    if let Some(ch) = char::from_u32(scalar) {
+        let mut buf = [0u8; 4];
+        out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+    }
+}
+
+/// Parses exactly four ASCII hex digits, or None.
+fn hex4(b: &[u8]) -> Option<u32> {
+    if b.len() != 4 {
+        return None;
+    }
+    let mut v: u32 = 0;
+    for &c in b {
+        let d = match c {
+            b'0'..=b'9' => u32::from(c - b'0'),
+            b'a'..=b'f' => u32::from(c - b'a') + 10,
+            b'A'..=b'F' => u32::from(c - b'A') + 10,
+            _ => return None,
+        };
+        v = v << 4 | d;
+    }
+    Some(v)
 }
 
 /// Implements the body rules of spec 02 section 4: the body must be a single
@@ -633,6 +909,9 @@ fn raw_as_string(value: &RawValue) -> Option<String> {
 ///   integer arguments on their JSON text (spec 03 section 3).
 fn classify_body(body: &[u8]) -> Option<RpcMessage> {
     let text = std::str::from_utf8(body).ok()?;
+    if unacceptable_body(body) {
+        return None;
+    }
     let members: RawMembers = serde_json::from_str(text).ok()?;
     if members
         .get("jsonrpc")
@@ -682,7 +961,7 @@ mod tests {
     use super::*;
     use crate::encoding::encode_b64url;
     use crate::server::native::{Native, NativeOptions};
-    use crate::server::state::{MemoryState, StateEdit};
+    use crate::server::state::{InviteRecord, MemoryState, StateEdit};
     use ed25519_dalek::Signer;
     use ed25519_dalek::SigningKey;
     use sha2::{Digest, Sha256};
@@ -730,6 +1009,38 @@ mod tests {
         Arc::new(state)
     }
 
+    const INVITE_CODE_RAW: [u8; 32] = [7u8; 32];
+
+    /// Canonical wire form of the test invite code.
+    fn invite_code() -> String {
+        encode_b64url(&INVITE_CODE_RAW)
+    }
+
+    /// Stores the invite for `invite_code()` expiring at `expires_at`.
+    fn add_invite(state: &Arc<dyn StateStore>, expires_at: i64) {
+        state
+            .update(&mut |edit: &mut StateEdit| {
+                edit.put_invite(InviteRecord {
+                    invite_id: invite_id_of(&INVITE_CODE_RAW),
+                    admin: false,
+                    created_by: "root".to_owned(),
+                    created_at: NOW - 10,
+                    expires_at,
+                    key_ttl_seconds: None,
+                });
+                Ok(())
+            })
+            .expect("seeding must succeed");
+    }
+
+    /// Arguments of an enrollment carrying the test invite code.
+    fn enroll_args(public_key: &str) -> String {
+        format!(
+            r#"{{"code":"{}","public_key":"{public_key}"}}"#,
+            invite_code()
+        )
+    }
+
     fn config(
         now: i64,
         state: Arc<dyn StateStore>,
@@ -748,6 +1059,29 @@ mod tests {
 
     fn verifier(cfg: Config) -> Verifier {
         Verifier::new(cfg).expect("test config is valid")
+    }
+
+    #[test]
+    fn new_rejects_control_characters_in_aud() {
+        // The signing string is LF-joined lines including the audience, so an
+        // aud with control characters would make it ambiguous (Go:
+        // audHasControl in NewVerifier).
+        for bad in ["a\nb", "a\rb", "a\0b", "a\tb", "a\u{7f}b"] {
+            let mut cfg = config(NOW, Arc::new(MemoryState::new()), None);
+            cfg.aud = bad.to_owned();
+            let err = match Verifier::new(cfg) {
+                Err(err) => err,
+                Ok(_) => panic!("control-character aud must be rejected: {bad:?}"),
+            };
+            assert_eq!(
+                err, "server: Config.Aud must not contain control characters",
+                "aud {bad:?}"
+            );
+        }
+        // An ordinary value is still accepted.
+        let mut cfg = config(NOW, Arc::new(MemoryState::new()), None);
+        cfg.aud = "https://svc.example.test".to_owned();
+        Verifier::new(cfg).expect("ordinary aud must be accepted");
     }
 
     fn call_body(tool: &str, arguments: Option<&str>) -> String {
@@ -801,6 +1135,58 @@ mod tests {
 
     fn get(key: &SigningKey, kid: &str, ts: i64, nonce: &str) -> Request {
         signed("GET", "/mcp", b"", key, kid, ts, nonce)
+    }
+
+    /// Config whose clock is the shared atomic, so tests can step it.
+    fn stepping_config(clock: &Arc<AtomicI64>, state: Arc<dyn StateStore>) -> Config {
+        let mut cfg = config(NOW, state, None);
+        let clock = Arc::clone(clock);
+        cfg.now = Arc::new(move || clock.load(Ordering::SeqCst));
+        cfg
+    }
+
+    #[test]
+    fn clock_step_back_cannot_revive_a_nonce() {
+        let (key, entry) = test_key("alice");
+        let clock = Arc::new(AtomicI64::new(NOW + 1000));
+        let v = verifier(stepping_config(&clock, seeded_state(&[&entry])));
+
+        let req = get(&key, &entry.kid, NOW + 1000, &nonce(1));
+        assert!(v.verify(&req).accepted);
+
+        // Wall clock steps back to NOW: the replay is still a live nonce.
+        clock.store(NOW, Ordering::SeqCst);
+        let res = v.verify(&req);
+        assert_eq!(res.http_status, 401);
+        assert_eq!(res.code, codes::REPLAYED_NONCE);
+
+        // A request stamped at the stepped-back time is outside the window
+        // measured from the high-water mark (window is 30 s).
+        let stale = get(&key, &entry.kid, NOW, &nonce(2));
+        let res = v.verify(&stale);
+        assert_eq!(res.http_status, 401);
+        assert_eq!(res.code, codes::TIMESTAMP_OUT_OF_WINDOW);
+        // The response clock stays raw.
+        assert_eq!(v.now(), NOW);
+    }
+
+    #[test]
+    fn freshness_is_judged_against_the_high_water_mark() {
+        let (key, entry) = test_key("alice");
+        let clock = Arc::new(AtomicI64::new(NOW + 1000));
+        let v = verifier(stepping_config(&clock, seeded_state(&[&entry])));
+        let first = v.verify(&get(&key, &entry.kid, NOW + 1000, &nonce(1)));
+        assert!(first.accepted);
+
+        // Raw time NOW alone would reject ts NOW + 1000 (1000 s > window).
+        clock.store(NOW, Ordering::SeqCst);
+        let res = v.verify(&get(&key, &entry.kid, NOW + 1000, &nonce(2)));
+        assert!(res.accepted, "got {} {}", res.http_status, res.code);
+
+        // Normal forward movement keeps working.
+        clock.store(NOW + 1010, Ordering::SeqCst);
+        let res = v.verify(&get(&key, &entry.kid, NOW + 1010, &nonce(3)));
+        assert!(res.accepted, "got {} {}", res.http_status, res.code);
     }
 
     struct StubNative;
@@ -866,6 +1252,7 @@ mod tests {
         let (alice_key, alice) = test_key("alice");
         let (mallory_key, mallory) = test_key("mallory");
         let state = seeded_state(&[&alice]);
+        add_invite(&state, NOW + 60);
         let v = verifier(config(NOW, Arc::clone(&state), None));
 
         // (a) Unregistered kid, plain call: ends at step 4 unknown_key.
@@ -878,10 +1265,7 @@ mod tests {
         // (b) Enrollment whose submitted key does not hash to kid: ends at
         // step 4 unknown_key (enrollment shape matches, the submitted key is
         // valid, but key_id(submitted) != kid).
-        let body = call_body(
-            TOOL_ENROLL,
-            Some(&format!(r#"{{"public_key":"{}"}}"#, alice.public_key)),
-        );
+        let body = call_body(TOOL_ENROLL, Some(&enroll_args(&alice.public_key)));
         let req = signed(
             "POST",
             "/mcp",
@@ -897,10 +1281,7 @@ mod tests {
         // Ends at spec 03 section 3.2 step 3: validity precedes the hash
         // comparison.
         let bad_pub = encode_b64url(&[1u8; 32]);
-        let body = call_body(
-            TOOL_ENROLL,
-            Some(&format!(r#"{{"public_key":"{bad_pub}"}}"#)),
-        );
+        let body = call_body(TOOL_ENROLL, Some(&enroll_args(&bad_pub)));
         let req = signed(
             "POST",
             "/mcp",
@@ -919,11 +1300,9 @@ mod tests {
         // operation_denied, nonce consumed, no audit event.
         let (carol_key, carol) = test_key("carol");
         let state = seeded_state(&[&alice]);
+        add_invite(&state, NOW + 60);
         let v = verifier(config(NOW, state, None));
-        let body = call_body(
-            TOOL_ENROLL,
-            Some(&format!(r#"{{"public_key":"{}"}}"#, carol.public_key)),
-        );
+        let body = call_body(TOOL_ENROLL, Some(&enroll_args(&carol.public_key)));
         let req = signed(
             "POST",
             "/mcp",
@@ -942,11 +1321,9 @@ mod tests {
 
         // (e) Same with a handler: accepted, audit success.
         let state = seeded_state(&[&alice]);
+        add_invite(&state, NOW + 60);
         let v = verifier(config(NOW, state, Some(stub())));
-        let body = call_body(
-            TOOL_ENROLL,
-            Some(&format!(r#"{{"public_key":"{}"}}"#, carol.public_key)),
-        );
+        let body = call_body(TOOL_ENROLL, Some(&enroll_args(&carol.public_key)));
         let req = signed(
             "POST",
             "/mcp",
@@ -984,6 +1361,129 @@ mod tests {
         let event = res.audit.expect("enroll is audited");
         assert_eq!(event.outcome, AUDIT_FAILURE);
         assert_eq!(event.code, codes::KEY_EXISTS);
+
+        // (g) Unknown kid, an out-of-range number in a member the exception
+        // never reads: the raw-member decode must not fail on it, so the
+        // request passes step 4 (Go/TS continue to the invite check) and
+        // ends at step 9 like (d); without the raw decode this is 401
+        // unknown_key.
+        let body = call_body(
+            TOOL_ENROLL,
+            Some(&format!(
+                r#"{{"code":"{}","public_key":"{}","x":1e999}}"#,
+                invite_code(),
+                carol.public_key
+            )),
+        );
+        let req = signed(
+            "POST",
+            "/mcp",
+            body.as_bytes(),
+            &carol_key,
+            &carol.kid,
+            NOW,
+            &nonce(7),
+        );
+        let state = seeded_state(&[&alice]);
+        add_invite(&state, NOW + 60);
+        let v = verifier(config(NOW, state, None));
+        let res = v.verify(&req);
+        assert_eq!(res.http_status, 403);
+        assert_eq!(res.code, codes::OPERATION_DENIED);
+        assert!(res.nonce_recorded);
+        assert!(res.audit.is_none());
+    }
+
+    /// Enrollment request of a fresh key with the given arguments.
+    fn enroll_request(arguments: &str, n: u64) -> (Request, String) {
+        let (key, entry) = test_key("carol");
+        let body = call_body(TOOL_ENROLL, Some(arguments));
+        let req = signed(
+            "POST",
+            "/mcp",
+            body.as_bytes(),
+            &key,
+            &entry.kid,
+            NOW,
+            &nonce(n),
+        );
+        (req, entry.public_key)
+    }
+
+    #[test]
+    fn enrollment_exception_requires_live_invite() {
+        let (_, carol) = test_key("carol");
+        let bad_code = format!("{}=", invite_code());
+        let cases: [(&str, Option<i64>, String); 5] = [
+            ("no invite in state", None, enroll_args(&carol.public_key)),
+            ("expired at now", Some(NOW), enroll_args(&carol.public_key)),
+            (
+                "non-canonical code",
+                Some(NOW + 60),
+                format!(
+                    r#"{{"code":"{bad_code}","public_key":"{}"}}"#,
+                    carol.public_key
+                ),
+            ),
+            (
+                "code is not a string",
+                Some(NOW + 60),
+                format!(r#"{{"code":7,"public_key":"{}"}}"#, carol.public_key),
+            ),
+            (
+                "code absent",
+                Some(NOW + 60),
+                format!(r#"{{"public_key":"{}"}}"#, carol.public_key),
+            ),
+        ];
+        for (label, expires_at, args) in cases {
+            let state = seeded_state(&[]);
+            if let Some(expires_at) = expires_at {
+                add_invite(&state, expires_at);
+            }
+            let cfg = config(NOW, state, Some(stub()));
+            let nonces = Arc::clone(&cfg.nonces);
+            let (req, _) = enroll_request(&args, 1);
+            let res = verifier(cfg).verify(&req);
+            assert_eq!(res.http_status, 401, "{label}");
+            assert_eq!(res.code, codes::UNKNOWN_KEY, "{label}");
+            assert!(!res.nonce_recorded, "{label}");
+            assert!(res.audit.is_none(), "{label}");
+            // The nonce is still unused: the rejection never touched the store.
+            let (kid, n) = (test_key("carol").1.kid, nonce(1));
+            assert!(!nonces.check_and_record(&kid, &n, NOW, NOW + 60), "{label}");
+        }
+    }
+
+    #[test]
+    fn enrollment_exception_accepts_live_invite() {
+        let state = seeded_state(&[]);
+        add_invite(&state, NOW + 1);
+        let v = verifier(config(NOW, state, Some(stub())));
+        let (_, carol) = test_key("carol");
+        let (req, _) = enroll_request(&enroll_args(&carol.public_key), 1);
+        let res = v.verify(&req);
+        assert!(res.accepted, "code: {}", res.code);
+        assert!(res.nonce_recorded);
+    }
+
+    #[test]
+    fn enrollment_with_duplicate_members_is_unknown_key() {
+        let state = seeded_state(&[]);
+        add_invite(&state, NOW + 60);
+        let v = verifier(config(NOW, state, Some(stub())));
+        let (_, carol) = test_key("carol");
+        let args = format!(
+            r#"{{"code":"{}","public_key":"{}","public_key":"{}"}}"#,
+            invite_code(),
+            carol.public_key,
+            carol.public_key
+        );
+        let (req, _) = enroll_request(&args, 1);
+        let res = v.verify(&req);
+        assert_eq!(res.http_status, 401);
+        assert_eq!(res.code, codes::UNKNOWN_KEY);
+        assert!(!res.nonce_recorded);
     }
 
     #[test]
@@ -1359,18 +1859,54 @@ mod tests {
         none("5");
         none(r#""hi""#);
 
-        // Duplicate members keep the LAST value (spec 02 section 4, README D13); a derived
-        // struct would instead reject them with duplicate_field.
-        let dup = classify_body(
-            r#"{"jsonrpc":"2.0","id":1,"method":"ping","method":"resources/read"}"#.as_bytes(),
-        )
-        .expect("duplicate members keep the last value");
-        assert_eq!(dup.method, "resources/read");
-        let dup = classify_body(
-            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"svc.status","name":"svc.reload"}}"#.as_bytes(),
-        )
-        .expect("duplicate params.name keeps the last value");
-        assert_eq!(dup.tool.as_deref(), Some("svc.reload"));
+        // Duplicate member names make the body unacceptable, compared after
+        // unescaping and at any depth.
+        none(r#"{"jsonrpc":"2.0","id":1,"method":"ping","method":"resources/read"}"#);
+        none(r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"a","name":"b"}}"#);
+        none(r#"{"jsonrpc":"2.0","id":1,"meth\u006fd":"ping","method":"ping"}"#);
+        none(r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":[{"a":1,"a":2}]}}"#);
+        none(r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":{"a":{"b":1,"b":1}}}}"#);
+        // Same name in different objects, case differences and a value equal
+        // to a name are fine.
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{"a":1,"A":2,"b":{"a":"a"},"c":[{"a":1},{"a":2}]}}"#;
+        assert!(classify_body(body.as_bytes()).is_some());
+    }
+
+    // spec 02 section 4 step 2: lone surrogate escapes and over-deep nesting
+    // are rejected before parsing; valid pairs and escaped backslashes are not.
+    #[test]
+    fn body_text_rules() {
+        let none = |body: &str| assert!(classify_body(body.as_bytes()).is_none(), "body: {body}");
+        let kind_of = |body: &str| classify_body(body.as_bytes()).map(|m| m.kind);
+
+        none(r#"{"jsonrpc":"2.0","id":1,"method":"pi\ud800ng"}"#);
+        none(r#"{"jsonrpc":"2.0","id":1,"m\ud800":1,"method":"ping"}"#);
+        none(r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"stat\udc00us"}}"#);
+        none(r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"\ud83d\ude00\ud800"}}"#);
+        assert_eq!(
+            kind_of(r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"\ud83d\ude00"}}"#),
+            Some(MessageKind::Request)
+        );
+        assert_eq!(
+            kind_of(r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"a\\ud800b"}}"#),
+            Some(MessageKind::Request)
+        );
+        let deep = |levels: usize| {
+            format!(
+                r#"{{"jsonrpc":"2.0","id":1,"method":"ping","params":{{"x":{}{}}}}}"#,
+                "[".repeat(levels),
+                "]".repeat(levels)
+            )
+        };
+        assert_eq!(kind_of(deep(126).as_str()), Some(MessageKind::Request));
+        none(deep(127).as_str());
+        // Brackets inside string values never count toward depth.
+        let in_string = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"ping","params":{{"x":"{}{}"}}}}"#,
+            "[[".repeat(200),
+            "]]".repeat(200)
+        );
+        assert_eq!(kind_of(in_string.as_str()), Some(MessageKind::Request));
     }
 
     // spec 02 section 4: "the body MUST be a single UTF-8 JSON-RPC 2.0 object"
@@ -1471,16 +2007,43 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_members_last_value_wins() {
+    fn duplicate_members_rejected_after_authentication() {
         let (alice_key, alice) = test_key("alice");
         let state = seeded_state(&[&alice]);
         let v = verifier(config(NOW, Arc::clone(&state), Some(stub())));
 
-        // Duplicate params.name: if the FIRST value won, the native admin
-        // tool would be dispatched and rejected with admin_required (alice is
-        // not an admin); the call is ACCEPTED instead, proving the LAST value
-        // (an ordinary forwarded tool) reached dispatch.
-        let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.admin.user.list","name":"svc.status"}}"#;
+        let bodies = [
+            // Nested in params.
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"svc.status","name":"jack.nope"}}"#,
+            // Top level, escaped spelling of the same name.
+            r#"{"jsonrpc":"2.0","id":1,"meth\u006fd":"ping","method":"ping"}"#,
+            // Object inside an array.
+            r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":[{"a":1,"a":2}]}}"#,
+            // Free-form tool arguments.
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"svc.status","arguments":{"k":1,"k":2}}}"#,
+        ];
+        for (i, body) in bodies.iter().enumerate() {
+            let req = signed(
+                "POST",
+                "/mcp",
+                body.as_bytes(),
+                &alice_key,
+                &alice.kid,
+                NOW,
+                &nonce(34 + i as u64),
+            );
+            let res = v.verify(&req);
+            assert_eq!(res.http_status, 400, "body: {body}");
+            assert_eq!(res.code, codes::INVALID_REQUEST, "body: {body}");
+            assert!(res.nonce_recorded, "body: {body}");
+        }
+    }
+
+    #[test]
+    fn same_member_name_in_different_objects_is_accepted() {
+        let (alice_key, alice) = test_key("alice");
+        let v = verifier(config(NOW, seeded_state(&[&alice]), Some(stub())));
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"svc.status","arguments":{"id":1,"x":[{"id":2},{"id":3}],"y":{"id":4}}}}"#;
         let req = signed(
             "POST",
             "/mcp",
@@ -1488,28 +2051,10 @@ mod tests {
             &alice_key,
             &alice.kid,
             NOW,
-            &nonce(34),
+            &nonce(40),
         );
         let res = v.verify(&req);
         assert!(res.accepted, "code: {}", res.code);
-        assert!(!res.native);
-        assert!(res.identity.is_some());
-
-        // Reverse: first ordinary, last an unknown jack.* tool -> 403
-        // operation_denied proves the LAST value won, not the first.
-        let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"svc.status","name":"jack.nope"}}"#;
-        let req = signed(
-            "POST",
-            "/mcp",
-            body.as_bytes(),
-            &alice_key,
-            &alice.kid,
-            NOW,
-            &nonce(35),
-        );
-        let res = v.verify(&req);
-        assert_eq!(res.http_status, 403);
-        assert_eq!(res.code, codes::OPERATION_DENIED);
     }
 
     #[test]

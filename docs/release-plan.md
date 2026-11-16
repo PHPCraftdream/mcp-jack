@@ -1,5 +1,7 @@
 # Release plan: v0.1.0 (historical plan; not release authorization)
 
+> Historical document: this was the original release plan; the current status is in [CHANGELOG.md](../CHANGELOG.md) and [operations.md](operations.md).
+
 **Current status: planning record, last updated 2026-11-10.** Preserve the historical 2026-11-09 statements and task IDs below as provenance, not as a current claim that all work remains unimplemented. The original plan is commit `777771fed0a53011898e55d959b6f8576675fd89`, atop main baseline `e681f07`. Its recommendations are explicitly superseded where noted. No wire freeze, version change, tag, publication, RC or release is approved.
 
 PR #22 delivered the design baseline as `c098cf5678716b36d1bff5012f864e2e0d105286` after 32 successful checks on reviewed head `f00fc2e42e935f6632e48d224be3c76581aa6ec5`. All six post-merge workflows succeeded; main ancestry and source-preserving cleanup were verified. This establishes design delivery, not D2/D3 runtime implementation or candidate acceptance.

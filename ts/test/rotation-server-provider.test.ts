@@ -6,6 +6,7 @@ import { join } from "node:path";
 import type { TestContext } from "node:test";
 import { test } from "node:test";
 import { client, Code, encodeBase64URL, JackError, keyId, rotation, ServerKeyTool, TOOL_SERVER_KEY } from "../src/index.js";
+import { MAX_ANNOUNCE_RING_KEYS, MAX_RETIRED } from "../src/rotation-server-provider.js";
 import type { NativeCall } from "../src/index.js";
 import { corpus, denies, WINDOW } from "./rotation-server-fixtures.js";
 
@@ -27,7 +28,7 @@ function seed(index: number): client.InMemorySigner {
   return new client.InMemorySigner(createHash("sha256").update(`server provider fixture ${index}`).digest());
 }
 
-/** Store с anchor-ключом signer 0 и provider с pinned handles `ref-<i>` для перечисленных индексов. */
+/** Store with an anchor key for signer 0 and a provider with pinned handles `ref-<i>` for the listed indexes. */
 function environment(context: TestContext, pinned: readonly number[] = [0, 1, 2], start = 1000): Environment {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "mcp-jack-server-provider-")));
   chmodSync(dir, 0o700);
@@ -91,7 +92,7 @@ test("server provider: announce refusals never retry or change the committed rin
   const before = env.store.snapshot().snapshot;
   assert.throws(() => env.provider.announce("ref-1", kid(1)), unavailable);
   assert.deepEqual(env.store.snapshot().snapshot, before);
-  // Reentrant announce из signer callback того же provider отклоняется, внешняя публикация завершается.
+  // A reentrant announce from the same provider's signer callback is rejected; external publication completes.
   const nestedEnv = environment(context, [0]);
   const next = nestedEnv.signers[1] as client.InMemorySigner;
   let provider: rotation.RotationServerProvider | undefined;
@@ -112,10 +113,10 @@ test("server provider: announce refusals never retry or change the committed rin
 test("server provider: handles, readiness and retired keys", { skip: !linux }, (context) => {
   const env = environment(context);
   env.provider.announce("ref-1", env.kids[1] as string);
-  // Pending handle обязателен: provider без него не готов к serving.
+  // A pending handle is required: the provider is not ready to serve without it.
   assert.throws(() => new rotation.RotationServerProvider(env.store, [env.keys[0] as rotation.RotationServerKey]), unavailable);
   assert.doesNotThrow(() => new rotation.RotationServerProvider(env.store, [env.keys[0] as rotation.RotationServerKey, env.keys[1] as rotation.RotationServerKey]));
-  // После cutoff retired handle необязателен, но current signer обязателен.
+  // After the cutoff a retired handle is optional, but the current signer is required.
   env.setNow(1000 + GRACE + 1);
   assert.doesNotThrow(() => new rotation.RotationServerProvider(env.store, [env.keys[1] as rotation.RotationServerKey]));
   assert.throws(() => new rotation.RotationServerProvider(env.store, [env.keys[0] as rotation.RotationServerKey]), unavailable);
@@ -137,7 +138,7 @@ test("server provider: configured handles are validated and copied", { skip: !li
     ["anchor handle absent", [env.keys[1] as rotation.RotationServerKey]],
   ];
   for (const [label, keys] of bad) assert.throws(() => new rotation.RotationServerProvider(env.store, keys), unavailable, label);
-  // Pinned public key не меняется вместе с callback после конструктора.
+  // The pinned public key does not change with the callback after construction.
   let advertised = signer.publicKey();
   const mutable = { reference: "ref-0", signer: { publicKey: () => advertised, sign: (m: Uint8Array) => signer.sign(m) } };
   const provider = new rotation.RotationServerProvider(env.store, [mutable]);
@@ -183,7 +184,7 @@ test("jack.server.key tool: one ring view, selected signer and exact refusal map
   ];
   for (const [label, overrides, expected] of cases) assert.throws(() => tool.call(call(overrides)), expected, label);
 
-  // Clock rollback latches unsafe: нет подписанного ответа, без fallback на старый key.
+  // Clock rollback latches unsafe: no signed response, no fallback to the old key.
   env.setNow(1);
   assert.throws(() => tool.call(call()), refusal(503, "rotation_state_unavailable"));
   assert.throws(() => tool.call(call()), refusal(503, "rotation_state_unavailable"));
@@ -198,4 +199,36 @@ test("jack.server.key tool: leases are released on every path so the store can c
   assert.throws(() => tool.call(call({ aud: "other" })), refusal(503, "rotation_state_unavailable"));
   env.store.close();
   assert.throws(() => tool.call(call()), refusal(503, "rotation_state_unavailable"));
+});
+
+test("server provider: announce refuses a ring that would grow beyond the servable key bound", { skip: !linux }, (context) => {
+  // Invariant: the announce limit is derived from the retired limit, the literal 1024 is not repeated.
+  assert.equal(MAX_ANNOUNCE_RING_KEYS, MAX_RETIRED + 1);
+  const count = 5; // 1 anchor key + 4 announce candidates.
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "mcp-jack-server-provider-capacity-")));
+  chmodSync(dir, 0o700);
+  context.after(() => rmSync(dir, { recursive: true, force: true }));
+  const signers = Array.from({ length: count }, (_, index) => seed(index));
+  const first = signers[0];
+  assert.ok(first);
+  const root: rotation.RotationCheckpoint = { ordinal: 0, hash: "-", kid: keyId(first.publicKey()), publicKeyB64u: encodeBase64URL(first.publicKey()), publishedAt: 0 };
+  let current = 1000;
+  const config: rotation.RotationServerStoreOptions = { binding: corpus.binding, checkpoint: root, window: WINDOW, anchorReference: "ref-0", now: () => current };
+  const path = join(dir, "ring");
+  rotation.RotationServerStore.initializeUnused(path, config);
+  const store = rotation.RotationServerStore.open(path, config);
+  const keys = signers.map((signer, index) => ({ reference: `ref-${index}`, signer }));
+  const provider = new rotation.RotationServerProvider(store, keys);
+  const kids = signers.map((signer) => keyId(signer.publicKey()));
+  provider.setAnnounceRingKeysForTests(4);
+  for (let index = 1; index <= 3; index++) {
+    const publication = provider.announce(`ref-${index}`, kids[index] as string);
+    assert.equal(publication.record.ordinal, index, `announce ${index} succeeds below the lowered bound`);
+    assert.equal(publication.revision, index + 1);
+  }
+  const before = store.snapshot().snapshot;
+  assert.equal(before.trust.keys.length, 4, "ring holds 3 announces + anchor, exactly at the lowered bound");
+  // The 4th announce would exceed the lowered limit (retired=0, pending=3 < MAX_PENDING), so the failure comes purely from the bound check.
+  assert.throws(() => provider.announce("ref-4", kids[4] as string), unavailable);
+  assert.deepEqual(store.snapshot().snapshot, before, "trust state is unchanged after the refusal");
 });

@@ -5,7 +5,7 @@
  * 03 section 3), and every state change is one StateStore.update, so it is
  * atomic (spec 03 section 9).
  */
-import { createHash, randomBytes as nodeRandomBytes } from "node:crypto";
+import { randomBytes as nodeRandomBytes } from "node:crypto";
 import {
   BadBase64UrlError,
   decodeBase64URLFixed,
@@ -36,6 +36,7 @@ import type {
   NativeTools,
   RawJsonNode,
 } from "./verify.js";
+import { inviteIdOf } from "./state.js";
 import type {
   InviteRecord,
   RegistryEntry,
@@ -238,9 +239,13 @@ export function activeAdmins(keys: readonly RegistryEntry[], now: number): numbe
   return n;
 }
 
-/** base64url(SHA-256(raw invite-code bytes)). */
-function inviteIdOf(rawCode: Uint8Array): string {
-  return encodeBase64URL(createHash("sha256").update(Buffer.from(rawCode)).digest());
+/** Removes every invite no longer valid at now from the pending edit, so an invite-editing update never keeps dead records (spec 03: expired invites are not listed and need not be stored). Runs inside the same atomic update; a later failure rolls it back with the whole edit (Go purgeExpiredInvites). */
+function purgeExpiredInvites(edit: StateEdit, now: number): void {
+  for (const invite of edit.invites()) {
+    if (now >= invite.expiresAt) {
+      edit.removeInvite(invite.inviteId);
+    }
+  }
 }
 
 /** Re-reads the calling administrator inside the transaction (spec 03 section 9). */
@@ -342,6 +347,7 @@ export class Native implements NativeTools {
     // A holder object, not a let, so the closure assignment is visible after update returns.
     const out: { entry: RegistryEntry | undefined } = { entry: undefined };
     runUpdate(c.state, (edit) => {
+      purgeExpiredInvites(edit, c.now);
       const invite = edit.invite(inviteId);
       if (invite === undefined || c.now >= invite.expiresAt) {
         throw new JackError(403, Code.INVALID_INVITE, "the invite is not valid");
@@ -626,6 +632,7 @@ export class Native implements NativeTools {
 
     runUpdate(c.state, (edit) => {
       const caller = currentAdmin(edit, c);
+      purgeExpiredInvites(edit, c.now);
       const invite: Mutable<InviteRecord> = {
         inviteId,
         createdBy: caller.kid,
@@ -668,6 +675,7 @@ export class Native implements NativeTools {
 
     runUpdate(c.state, (edit) => {
       currentAdmin(edit, c);
+      purgeExpiredInvites(edit, c.now);
       const invite = edit.invite(inviteId);
       if (invite === undefined || c.now >= invite.expiresAt) {
         throw new JackError(404, Code.UNKNOWN_TARGET, "no such invite");
@@ -699,6 +707,7 @@ export function bootstrapAdmin(
     expiresAt: now + ttlSeconds,
   };
   state.update((edit) => {
+    purgeExpiredInvites(edit, now);
     edit.putInvite(invite);
   });
   return drawn.code;

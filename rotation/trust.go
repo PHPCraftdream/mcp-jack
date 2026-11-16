@@ -1,6 +1,6 @@
 package rotation
 
-// ClockTuple — copied CAS dependency, не самостоятельная time authority.
+// ClockTuple is a copied CAS dependency, not a standalone time authority.
 type ClockTuple struct {
 	Binding   Binding
 	Window    int64
@@ -9,7 +9,7 @@ type ClockTuple struct {
 	Unsafe    bool
 }
 
-// TrustKey содержит только подтверждённые публичные metadata.
+// TrustKey holds only confirmed public metadata.
 type TrustKey struct {
 	Ordinal     uint64
 	KID         string
@@ -18,8 +18,8 @@ type TrustKey struct {
 	KnownCutoff *int64
 }
 
-// TrustSnapshot — целое значение для будущего transactional store, не ACK.
-// History начинается от независимо provisioned checkpoint; auto-compaction нет.
+// TrustSnapshot is a whole value for a future transactional store, not an ACK.
+// History starts from an independently provisioned checkpoint; there is no auto-compaction.
 type TrustSnapshot struct {
 	FormatVersion uint32
 	Binding       Binding
@@ -38,8 +38,8 @@ func validClockTuple(clock ClockTuple, binding Binding, window int64) bool {
 		clock.HighWater >= 0 && clock.HighWater <= MaxTimestamp && clock.Revision <= MaxOrdinal
 }
 
-// ValidateTrustSnapshot проверяет все redundant metadata и возвращает owned copy.
-// Не открывает store, не читает clock, не снимает fence и не подтверждает persistence.
+// ValidateTrustSnapshot checks all redundant metadata and returns an owned copy.
+// It does not open the store, read the clock, clear a fence or confirm persistence.
 func ValidateTrustSnapshot(input TrustSnapshot, binding Binding, window int64, checkpoint Checkpoint) (TrustSnapshot, error) {
 	refuse := func() (TrustSnapshot, error) { return TrustSnapshot{}, invalid("rotation_state_unknown") }
 	if input.FormatVersion != 1 || !validBinding(binding) || input.Binding != binding ||
@@ -108,7 +108,7 @@ func ValidateTrustSnapshot(input TrustSnapshot, binding Binding, window int64, c
 	return output, nil
 }
 
-// TrustClockCompatible требует validated snapshot; это tuple check, не readiness/ACK.
+// TrustClockCompatible requires a validated snapshot; this is a tuple check, not readiness/ACK.
 func TrustClockCompatible(snapshot TrustSnapshot, clock ClockTuple) bool {
 	return snapshot.FormatVersion == 1 && !snapshot.Fenced && !snapshot.Clock.Unsafe && !clock.Unsafe &&
 		validClockTuple(snapshot.Clock, snapshot.Binding, snapshot.Window) &&

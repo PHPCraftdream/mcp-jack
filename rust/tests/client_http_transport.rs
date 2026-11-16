@@ -3262,3 +3262,66 @@ async fn tls_handshake_fragment_deadline_is_absolute() {
         "peer did not observe client closure"
     );
 }
+
+/// Contract: the streaming-refusal decision is byte-based across every
+/// Content-Type field line (spec/fixtures/client-streaming-refusal.json):
+/// a line whose media type is `text/event-stream` refuses the response as
+/// `TransportError::Streaming` EVEN when the header value is not valid
+/// UTF-8 (raw 0xFF bytes alongside the media type). Go and TypeScript refuse
+/// such a response; the adapter must lossily decode each line rather than
+/// skipping it. Counterfactual caught: a check that filters lines through
+/// `HeaderValue::to_str().ok()` drops this line entirely, so the response is
+/// buffered and then fails as Err(Transport) ("non-UTF-8 response header")
+/// instead of the exact Streaming refusal.
+///
+/// The hyper test harness cannot express non-UTF-8 header values, so this
+/// test answers over a raw TCP socket with hand-written response bytes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn non_utf8_content_type_with_sse_media_type_refused_as_streaming() {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let oracle = oracle();
+    let (listener, addr) = bind_loopback().await;
+    let responder = tokio::spawn(async move {
+        let (mut sock, _) = listener.accept().await.expect("raw peer accept");
+        let mut buf = vec![0u8; 8192];
+        let mut seen = 0usize;
+        loop {
+            let n = sock
+                .read(&mut buf[seen..])
+                .await
+                .expect("raw peer read request");
+            assert!(n > 0, "client closed before sending a full request");
+            seen += n;
+            if buf[..seen].windows(4).any(|w| w == b"\r\n\r\n") {
+                break;
+            }
+            assert!(seen < buf.len(), "request larger than the read buffer");
+        }
+        // Hand-written head: the Content-Type value carries a raw 0xFF byte
+        // (obs-text, legal in a header value) next to the SSE media type, so
+        // `to_str()` fails on that line.
+        let mut head = Vec::new();
+        head.extend_from_slice(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; x=");
+        head.push(0xFF);
+        head.extend_from_slice(b"\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+        sock.write_all(&head).await.expect("raw peer write");
+        let _ = sock.shutdown().await;
+    });
+
+    let transport = make_transport(Duration::from_secs(1), None);
+    let st = signing_transport(transport, &oracle);
+    let err = st
+        .round_trip(post(&format!("http://{addr}/mcp"), br#"{"ping":1}"#))
+        .expect_err("a non-UTF-8 SSE Content-Type must still be refused");
+    assert_eq!(
+        TransportError::Streaming,
+        err,
+        "the refusal must be the exact Streaming error (got {err:?}); \
+         skipping the non-UTF-8 Content-Type line buffers the body and \
+         surfaces Err(Transport) instead"
+    );
+
+    responder.abort();
+    let _ = responder.await;
+}

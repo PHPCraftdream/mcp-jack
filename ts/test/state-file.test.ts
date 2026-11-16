@@ -401,6 +401,28 @@ test("invite timestamps are required nonnegative integers", (t) => {
   assertInviteRejectedUnchanged(t, { ...rawValidInvite, created_at: 201, expires_at: 200 }, "created_at");
 });
 
+/** Raw state document with one invite whose timestamps are spliced as raw JSON lexemes. */
+function rawInviteDoc(createdLexeme: string, expiresLexeme = "200"): string {
+  const invite = JSON.stringify(rawValidInvite)
+    .replace(/"created_at":\d+/, `"created_at":${createdLexeme}`)
+    .replace(/"expires_at":\d+/, `"expires_at":${expiresLexeme}`);
+  return `{"version":1,"keys":[],"invites":[${invite}]}`;
+}
+
+test("integer fields are decided on the raw lexeme, in Go's int64 range", (t) => {
+  // 1.0 and 1e3 are integral JS numbers but Go's typed decode rejects the lexemes.
+  assertLoadCorrupt(tempDir(t), `{"version":1.0,"keys":[],"invites":[]}`);
+  assertLoadCorrupt(tempDir(t), rawInviteDoc("1e3"));
+  assertLoadCorrupt(tempDir(t), rawInviteDoc("1E3"));
+  // An exact integer lexeme above the int64 range (2^63) is a representable JS number.
+  assertLoadCorrupt(tempDir(t), rawInviteDoc("9223372036854775808"));
+  // int64 max is exactly representable and must still load.
+  const path = writeDoc(tempDir(t), rawInviteDoc("9223372036854775807", "9223372036854775807"));
+  const invite = openFileState(path).view().invites[0];
+  assert.ok(invite, "invite expected");
+  assert.equal(invite.createdAt, 9223372036854775807);
+});
+
 test("valid raw invites accept zero/equal and 100/200 timestamps", (t) => {
   const dir = tempDir(t);
   for (const [createdAt, expiresAt] of [[0, 0], [100, 200]] as const) {

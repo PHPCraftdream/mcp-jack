@@ -8,6 +8,11 @@
     "identity-forward",
     "identity-get",
     "identity-dot-target",
+    "target-percent-utf8-post",
+    "target-percent-utf8-get",
+    "target-raw-utf8",
+    "target-absolute-form",
+    "target-fragment",
     "app-permission-denied",
     "app-permission-allowed",
     "admin-required",
@@ -28,6 +33,7 @@
     "unknown-native-tool",
     "enroll",
     "enroll-used-invite",
+    "bootstrap-admin",
     "rotate",
     "admin-create",
     "revoke-key",
@@ -218,6 +224,107 @@
         }
       },
       "source": "spec/02-authorization.md:verified application identity and exact request forwarding"
+    },
+    "target-percent-utf8-post": {
+      "identity": "alice",
+      "fresh": false,
+      "server_public_key": "server",
+      "args": {},
+      "raw_request": {
+        "method": "POST",
+        "target": "/mcp?q=%C3%A9",
+        "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"
+      },
+      "steps": [
+        "The client signing tool signs a percent-encoded non-ASCII query target; the harness sends it over a raw request line. The server must verify it over the target bytes as received, without percent-decoding."
+      ],
+      "expected": {
+        "outcome": "ok",
+        "http_status": 200,
+        "code": null
+      },
+      "source": "spec/01-authentication.md:3.1 target as received, before any decoding"
+    },
+    "target-percent-utf8-get": {
+      "identity": "alice",
+      "fresh": false,
+      "server_public_key": "server",
+      "args": {},
+      "raw_request": {
+        "method": "GET",
+        "target": "/identity?q=%C3%A9"
+      },
+      "steps": [
+        "Same as target-percent-utf8-post for an authenticated GET with an empty body and the identity handler path."
+      ],
+      "expected": {
+        "outcome": "ok",
+        "http_status": 200,
+        "code": null
+      },
+      "source": "spec/01-authentication.md:3.1 target as received, before any decoding"
+    },
+    "target-raw-utf8": {
+      "identity": "alice",
+      "fresh": false,
+      "server_public_key": "server",
+      "args": {},
+      "raw_request": {
+        "method": "POST",
+        "target": "/mcp?q=é",
+        "sign_target": "/mcp",
+        "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"
+      },
+      "steps": [
+        "The request line carries the raw UTF-8 bytes C3 A9 in the query (not percent-encoded) and the signature is made over /mcp. A target consists only of the bytes 0x21 to 0x7E, so every server must refuse the request before verification with an unsigned 400, not a 401 bad_signature. Some servers answer from their HTTP library with a bare 400 (no code), so the code is not compared."
+      ],
+      "expected": {
+        "outcome": "rejected",
+        "http_status": 400
+      },
+      "source": "spec/01-authentication.md:3.1 a target consists only of the bytes 0x21 to 0x7E"
+    },
+    "target-absolute-form": {
+      "identity": "alice",
+      "fresh": false,
+      "server_public_key": "server",
+      "args": {},
+      "raw_request": {
+        "method": "POST",
+        "target": "http://svc.example.test/mcp",
+        "sign_target": "/mcp",
+        "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"
+      },
+      "steps": [
+        "Send an absolute-form request target on the raw request line. The server must refuse it before verification with an unsigned 400 invalid_request, not a 401 bad_signature."
+      ],
+      "expected": {
+        "outcome": "rejected",
+        "http_status": 400,
+        "code": "invalid_request"
+      },
+      "source": "spec/01-authentication.md:3.1 only origin-form targets are accepted"
+    },
+    "target-fragment": {
+      "identity": "alice",
+      "fresh": false,
+      "server_public_key": "server",
+      "args": {},
+      "raw_request": {
+        "method": "POST",
+        "target": "/mcp#frag",
+        "sign_target": "/mcp",
+        "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"
+      },
+      "steps": [
+        "Send /mcp#frag on the raw request line with the signature made over /mcp. The first '#' and everything after it is not part of the target, so every server drops it and verifies over /mcp (a server that signed or compared the fragment would answer 401 bad_signature)."
+      ],
+      "expected": {
+        "outcome": "ok",
+        "http_status": 200,
+        "code": null
+      },
+      "source": "spec/01-authentication.md:3.1 the fragment is not part of the target"
     },
     "app-permission-denied": {
       "identity": "root",
@@ -568,6 +675,34 @@
       },
       "source": "spec/03-user-management.md:default invite admin=false"
     },
+    "bootstrap-admin": {
+      "identity": "newbie",
+      "fresh": true,
+      "server_public_key": "server",
+      "args": {},
+      "bootstrap": {
+        "ttl_seconds": 3600,
+        "code_arg": "code"
+      },
+      "steps": [
+        "The dedicated server is started with --bootstrap-ttl 3600 and prints one {\"bootstrap_invite\":...} line on stderr (spec 03 section 5). The client enrolls newbie with that code (admin true, single use), re-enrolls with the consumed code (the kid is now registered: the normal path answers 409 key_exists, spec 03 section 3.2), and reports whoami with admin true."
+      ],
+      "expected": {
+        "outcome": "ok",
+        "http_status": 200,
+        "code": null,
+        "data": {
+          "structuredContent": {
+            "kid": {
+              "$kid": "newbie"
+            },
+            "name": "newbie",
+            "admin": true
+          }
+        }
+      },
+      "source": "spec/03-user-management.md section 5 (bootstrap) and section 3.2 closing paragraph"
+    },
     "enroll-used-invite": {
       "identity": "newbie2",
       "fresh": true,
@@ -578,12 +713,11 @@
       ],
       "expected": {
         "outcome": "rejected",
-        "http_status": 403,
-        "code": "invalid_invite",
+        "http_status": 401,
+        "code": "unknown_key",
         "data": null
       },
-      "source": "spec/03-user-management.md:single-use invite",
-      "response_signature": "required"
+      "source": "spec/03-user-management.md:single-use invite; a consumed invite is no longer live, so the unknown kid gets the ordinary unsigned unknown_key"
     },
     "rotate": {
       "identity": "alice",

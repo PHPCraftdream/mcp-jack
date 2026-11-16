@@ -6,8 +6,8 @@ in JSON-response mode, exercised as the full chain official stdio client →
 `jack bridge` → signed `jack gateway` → official Streamable HTTP server; 3
 clients × 3 servers = 9 cells (Go go-sdk v1.8.0, TS client+server 2.4.0 with
 @modelcontextprotocol/node 2.1.2, Rust rmcp 3.9.0), plus one response-tamper
-cell per client and per-cell GET recording (G4). That document is the source
-for every expectation below.
+cell per client × server pair and per-cell GET recording (G4). That document is
+the source for every expectation below.
 
 ## Layout
 
@@ -43,15 +43,31 @@ fail clearly while they are missing; never hand-write lockfile contents.
 The `mcp-compat-e2e` job in `.github/workflows/ci.yml` runs on `ubuntu-latest`
 only (jack's private-file storage is Unix-only; `docs/design/cli.md` says Windows fails closed). Steps:
 
-- Install Go 1.25.0 (the fixture toolchain; the root module floor stays 1.22), Node 22, and stable Rust, with `Swatinem/rust-cache` scoped to `tools/mcp-e2e/rust`.
+- Install Go 1.25.0 (the fixture toolchain; the root module floor is 1.25.0), Node 22, and stable Rust, with `Swatinem/rust-cache` scoped to `tools/mcp-e2e/rust`.
 - Fail clearly if any fixture lockfile (`go/go.sum`, `ts/package-lock.json`, `rust/Cargo.lock`) is missing.
 - Frozen installs: `go mod download` in `go/`, `npm ci` in `ts/`; then `cargo build --locked --release` in `rust/`.
 - Build the shipping CLI (`CGO_ENABLED=0`, `go build -trimpath -o "$RUNNER_TEMP/jack" ./cmd/jack`, mirroring `go-cli-process`).
 - Run `node tools/mcp-e2e/run.mjs` with `JACK_BIN` pointing at it.
 
 Local runs need the three fixture toolchains provisioned, then
-`node tools/mcp-e2e/run.mjs` (`--clients`, `--servers`, `--list`, `--keep`); override builds per artifact with
+`node tools/mcp-e2e/run.mjs` (`--clients`, `--servers`, `--list`, `--keep`,
+`--allow-skip-ts-server`); override builds per artifact with
 `JACK_BIN`, `GO_CLIENT_BIN`, `GO_SERVER_BIN`, `RUST_CLIENT_BIN`, `RUST_SERVER_BIN`.
+
+## Exit codes and skips
+
+- `2` — usage error or artifact-resolution failure (missing committed lockfile,
+  failed fixture/CLI build, or a `*_BIN` override pointing at a missing file).
+- `1` — any cell FAILED.
+- `0` — only when every required cell ran.
+
+A TS-server cell that cannot run (the known TS server 2.4.0
+initialize→SSE→gateway 501 `streaming_unsupported` limitation) FAILS the run by
+default; exiting 0 with SKIPs is no longer possible. Passing
+`--allow-skip-ts-server` permits skipping exactly those cells: every skipped
+cell is listed by name (`SKIP <client>-client x ts-server`) in the summary.
+Nothing else may be skipped — artifact unavailability or any failure on a
+non-TS-server cell FAILS with or without the flag.
 
 ## What is asserted per cell
 
@@ -61,8 +77,8 @@ Local runs need the three fixture toolchains provisioned, then
 - Protocol version `2025-11-25` is preserved in both directions.
 - `Accept` always contains both `application/json` and `text/event-stream`; `Jack-Auth` is present.
 - Bridge stdout purity: driver-side framing probe over raw stdio sees exactly the expected JSON-RPC frames, empty stderr, exit 0.
-- Tamper cell: one flipped response byte at the proxy — upstream still answers 200, but the bridge exits 1 with zero stdout bytes and stderr exactly `jack: remote call failed; no retry performed`.
-- GET probes recorded per cell (see G4 below); SKIP cells reported explicitly; exit 0 iff no cell FAILED.
+- Tamper cells (one per client × server pair): one flipped response byte at the proxy — upstream still answers 200, but the bridge exits 1 with zero stdout bytes and stderr exactly `jack: remote call failed; no retry performed`. TS-server tamper cells hit the same known SSE limitation and follow the fail-by-default / `--allow-skip-ts-server` rule.
+- GET probes recorded per cell (see G4 below); exit 0 only when every required cell ran — skipped TS-server cells only via `--allow-skip-ts-server`, each listed by name.
 
 ## G4: recorded vs asserted vs source-derived
 
@@ -82,7 +98,7 @@ inputs and keeps the conclusion explicit rather than claiming a runtime pass.
 
 - Bounded profile only: no SSE, no sessions, no cancellation, no batches, no modern `2026-07-28`.
 - Official clients never exercise their own HTTP transports against the gateway (that is the separate proposed `mcp-http-client-transports` job).
-- TS server GET status recorded, not asserted; Rust server-side capture logs only the initialize request parts (go/ts log more); bridge stderr capture through the SDK clients is best-effort; the tamper cell flips exactly one response byte at the proxy.
+- TS server GET status recorded, not asserted; Rust server-side capture logs only the initialize request parts (go/ts log more); bridge stderr capture through the SDK clients is best-effort; each tamper cell flips exactly one response byte at the proxy.
 
 ## Product bugs
 

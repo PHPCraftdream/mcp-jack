@@ -341,7 +341,7 @@ test("trust store: abandoned child dirty epoch independently blocks startup with
   assert.equal(disk(path).dirty, true);
   const before = readFileSync(path);
   const marker = readFileSync(path + ".owner");
-  // Только test-owned evidence: убираем marker как причину отказа, не восстанавливаем store.
+  // Test-owned evidence only: remove the marker as a failure cause, do not restore the store.
   const archived = join(root, "abandoned-owner-evidence");
   renameSync(path + ".owner", archived);
   let calls = 0;

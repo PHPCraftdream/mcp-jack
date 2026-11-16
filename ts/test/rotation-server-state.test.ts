@@ -29,7 +29,7 @@ test("server snapshot keeps protected references out of public trust and owns fr
   assert.equal(loaded.trust.records[0], wire);
   const publicText = Buffer.from(rotation.encodeRotationTrustSnapshot(loaded.trust, corpus.binding, WINDOW, root)).toString("utf8");
   assert.ok(!publicText.includes("opaque-provider") && !publicText.includes("signer_refs"));
-  // Reference — opaque handle: совпадение значений у разных kid не делает его key authority.
+  // The reference is an opaque handle: value equality across different kids does not make it key authority.
   const shared = serverFrom(trustFrom(overlapping()));
   const target = shared.signerReferences[1];
   assert.ok(target);

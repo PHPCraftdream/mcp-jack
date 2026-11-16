@@ -19,7 +19,7 @@ test("known carrier: unknown key precedes stale/bad signature and body inspectio
   const other = signer("unknown");
   const user = signer("user");
   const request = client.signRequest(user, "public-aud", "POST", "/mcp", new Uint8Array(), new Uint8Array(16), 100);
-  // Response binds the actual request signature, не request ID или response body guess.
+  // Response binds the actual request signature, not a request ID or response body guess.
   const signature = parseRequestAuth([request]).sig;
   const known = new Map<string, client.RotationResponseKey>([[key.kid(), { publicKeyB64u: encodeBase64URL(key.publicKey()), notBefore: 0, knownCutoff: 110 }]]);
   const body = Buffer.from("{not-json");

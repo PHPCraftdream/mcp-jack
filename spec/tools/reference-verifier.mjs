@@ -150,16 +150,47 @@ export function parseAuth(values, allowed) {
   return { ...raw, ts: Number(raw.ts) };
 }
 
+// Strict verification: S must be below L, and R must not be a small-order point
+// (spec 01 section 2). The encodings of the eight small-order points:
+const SMALL_ORDER_R = [
+  `01${'00'.repeat(31)}`, // identity
+  '00'.repeat(32), // y = 0, sign 0
+  `${'00'.repeat(31)}80`, // y = 0, sign 1
+  `ec${'ff'.repeat(30)}7f`, // order 2
+  '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05', // order 8
+  '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85', // order 8, sign set
+  'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a', // order 8
+  'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa', // order 8, sign set
+];
+
 // Strict verification: S must be below L (spec 01 section 2).
 export function verifySig(publicKeyB64u, message, sigB64u) {
   const sig = Buffer.from(sigB64u, 'base64url');
   if (sig.length !== 64 || toBig(sig.subarray(32)) >= L) return false;
+  // A signature whose R is a small-order point is invalid even if the
+  // verification equation holds (spec 01 section 2).
+  if (SMALL_ORDER_R.includes(sig.subarray(0, 32).toString('hex'))) return false;
   const key = createPublicKey({
     key: Buffer.concat([SPKI_PREFIX, Buffer.from(publicKeyB64u, 'base64url')]),
     format: 'der',
     type: 'spki',
   });
   return verify(null, Buffer.from(message, 'utf8'), key, sig);
+}
+
+// A forged signature with R set to the identity encoding (RFC 8032): with R
+// the identity, [S]B = R + [k]A holds because [S]B = [k*a]B = [k]A, so only
+// the small-order-R rule can reject it.
+export function forgeSmallOrderRSig(seed, publicKey, message) {
+  const h = createHash('sha512').update(seed).digest();
+  h[0] &= 248;
+  h[31] &= 127;
+  h[31] |= 64;
+  const a = toBig(h.subarray(0, 32));
+  const r = Buffer.from(`01${'00'.repeat(31)}`, 'hex');
+  const k = mod(toBig(createHash('sha512').update(Buffer.concat([r, Buffer.from(publicKey), Buffer.from(message)])).digest()), L);
+  const s = mod(k * a, L);
+  return Buffer.concat([r, fromBig(s, 32)]);
 }
 
 // Same signature with S replaced by S + L: it satisfies the verification equation but is non-canonical.
@@ -172,6 +203,11 @@ const authHeaders = (headers) => headers.filter(([n]) => n.toLowerCase() === 'ja
 const hasOnly = (obj, keys) => Object.keys(obj).every((k) => keys.includes(k));
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const unknownField = (obj, allowed) => `unknown field: ${Object.keys(obj).find((k) => !allowed.includes(k))}`;
+// Integer fields are int64 in the Go reference: an exact integer above the
+// int64 range is still a representable JS number, so the range must be
+// checked explicitly (Number.isInteger alone accepts 2^63, and 2^63-1
+// rounds up to 2^63, so the upper bound is strict: v < 2^63; -2^63 is exact).
+const inInt64 = (v) => typeof v === 'number' && Number.isInteger(v) && v >= -9223372036854775808 && v < 9223372036854775808;
 
 // Per-entry validation shared by the registry and the state file. Returns null when valid, else a reason.
 const ENTRY_FIELDS = ['kid', 'public_key', 'name', 'admin', 'not_before', 'not_after'];
@@ -192,7 +228,7 @@ function validateEntry(e, kids, names) {
   kids.add(e.kid);
   names.add(e.name);
   for (const f of ['not_before', 'not_after']) {
-    if (e[f] !== undefined && e[f] !== null && (!Number.isInteger(e[f]) || e[f] < 0)) return 'validity';
+    if (e[f] !== undefined && e[f] !== null && (!inInt64(e[f]) || e[f] < 0)) return 'validity';
   }
   if (e.not_before != null && e.not_after != null && e.not_before >= e.not_after) return 'validity';
   return null;
@@ -232,10 +268,10 @@ export function validateStateFile(doc) {
     if (typeof r.created_by !== 'string' || r.created_by === '') return 'created_by';
     if ('admin' in r && r.admin !== true && r.admin !== false) return 'admin must be a strict boolean';
     for (const f of ['created_at', 'expires_at']) {
-      if (!Number.isInteger(r[f]) || r[f] < 0) return f;
+      if (!inInt64(r[f]) || r[f] < 0) return f;
     }
     if (r.created_at > r.expires_at) return 'expires_at';
-    if (r.key_ttl_seconds !== undefined && (!Number.isInteger(r.key_ttl_seconds) || r.key_ttl_seconds < 1 || r.key_ttl_seconds > 31536000)) return 'key_ttl_seconds';
+    if (r.key_ttl_seconds !== undefined && (!inInt64(r.key_ttl_seconds) || r.key_ttl_seconds < 1 || r.key_ttl_seconds > 31536000)) return 'key_ttl_seconds';
     if (inviteIds.has(r.invite_id)) return 'duplicate_invite_id';
     inviteIds.add(r.invite_id);
   }
@@ -247,7 +283,8 @@ export function validateStateFile(doc) {
 // integer rule of spec 03 section 3 reads the JSON text, which JSON.parse
 // cannot recover. `sources` mirrors the parsed tree with one node per value; a
 // number's node carries its source text in `.text`. Keys are exact member
-// names, so no member name can alias another member's path.
+// names, so no member name can alias another member's path. An object with two
+// members of the same (unescaped) name is a parse failure (spec 02 section 2).
 function parseJSONRaw(src) {
   let i = 0;
   const fail = () => { throw new Error('invalid JSON'); };
@@ -317,10 +354,13 @@ function parseJSONRaw(src) {
       i += 1;
       ws();
       const obj = {};
+      const seen = new Set();
       if (src[i] === '}') { i += 1; return obj; }
       for (;;) {
         if (src[i] !== '"') fail();
         const key = string();
+        if (seen.has(key)) fail(); // duplicate member name: body unacceptable
+        seen.add(key);
         ws();
         if (src[i] !== ':') fail();
         i += 1;
@@ -361,10 +401,64 @@ function parseJSONRaw(src) {
   return { value: v, sources: root };
 }
 
+const MAX_BODY_DEPTH = 128;
+
+// Normative body-text rules (spec 02 section 4 step 2): a \uXXXX escape that
+// does not form a Unicode scalar value (a lone or unpaired surrogate) or
+// nesting deeper than 128 levels of arrays and objects makes the body
+// unacceptable. Single pass, constant extra space, no recursion.
+function unacceptableBodyText(text) {
+  let inString = false;
+  let depth = 0;
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (!inString) {
+      if (c === '"') inString = true;
+      else if (c === '{' || c === '[') {
+        depth++;
+        if (depth > MAX_BODY_DEPTH) return true;
+      } else if (c === '}' || c === ']') depth = Math.max(0, depth - 1);
+      i++;
+      continue;
+    }
+    if (c === '"') { inString = false; i++; continue; }
+    if (c !== '\\') { i++; continue; }
+    if (i + 1 >= text.length) return true; // truncated escape
+    if (text[i + 1] !== 'u') { i += 2; continue; }
+    const hex = text.slice(i + 2, i + 6);
+    if (!/^[0-9a-fA-F]{4}$/.test(hex)) { i += 2; continue; }
+    const v = parseInt(hex, 16);
+    if (v >= 0xdc00 && v <= 0xdfff) return true; // lone low surrogate
+    if (v >= 0xd800 && v <= 0xdbff) {
+      // A low-surrogate escape must follow immediately.
+      const low = text.slice(i + 8, i + 12);
+      if (text[i + 6] === '\\' && text[i + 7] === 'u' && /^[0-9a-fA-F]{4}$/.test(low)
+        && parseInt(low, 16) >= 0xdc00 && parseInt(low, 16) <= 0xdfff) i += 12;
+      else return true; // unpaired high surrogate
+      continue;
+    }
+    i += 6;
+  }
+  return false;
+}
+
+// A live invite for a submitted code: canonical 32-byte base64url string, the invite
+// exists and now < expires_at (spec 03 section 3.2). Read-only.
+function liveInvite(state, code) {
+  const raw = strictB64u(code, 32);
+  if (!raw) return null;
+  const id = b64u(sha256(raw));
+  return state.invites.find((i) => i.invite_id === id && state.now < i.expires_at) ?? null;
+}
+
 function classify(body) {
   let parsed;
+  // A leading UTF-8 BOM (EF BB BF) makes the body unacceptable (spec 02 section 2).
+  if (body.length >= 3 && body[0] === 0xef && body[1] === 0xbb && body[2] === 0xbf) return null;
   try {
     const text = new TextDecoder('utf-8', { fatal: true }).decode(body);
+    if (unacceptableBodyText(text)) return null;
     parsed = parseJSONRaw(text);
   } catch {
     return null;
@@ -466,9 +560,8 @@ function nativeCall(tool, rawArgs, ctx) {
     if (caller) throw new Rej(409, 'key_exists');
     const args = argObject(rawArgs);
     if (typeof args.code !== 'string' || typeof args.name !== 'string' || !NAME_RE.test(args.name)) throw bad();
-    const rawCode = strictB64u(args.code, 32);
-    const inviteId = rawCode ? b64u(sha256(rawCode)) : null;
-    const invite = state.invites.find((i) => i.invite_id === inviteId && state.now < i.expires_at);
+    // Re-check and consume atomically; a race after the pre-auth check ends here.
+    const invite = liveInvite(state, args.code);
     if (!invite) throw new Rej(403, 'invalid_invite');
     if (entries.some((e) => e.name === args.name)) throw new Rej(409, 'name_taken');
     const entry = {
@@ -610,11 +703,16 @@ export function verifyRequest(req, state, hooks = defaultHooks) {
     if (!isActive(caller, state.now)) return reject(401, 'key_inactive');
     verifyKey = caller.public_key;
   } else {
-    // Enrollment exception: the submitted key must hash to kid and be a valid key.
+    // Enrollment exception (spec 01 section 4, 03 section 3.2). Order: POST, acceptable
+    // jack.enroll tools/call with object arguments, live invite for `code`, public_key
+    // string, valid key (400), hash == kid. Everything else is the ordinary unknown_key.
     const parsed = req.method === 'POST' ? classify(body) : null;
-    const submitted = parsed?.kind === 'request' && parsed.msg.method === 'tools/call' && parsed.msg.params?.name === 'jack.enroll'
-      ? parsed.msg.params.arguments?.public_key
+    const args = parsed?.kind === 'request' && parsed.msg.method === 'tools/call' && parsed.msg.params?.name === 'jack.enroll'
+      ? parsed.msg.params.arguments
       : undefined;
+    if (!isObj(args)) return reject(401, 'unknown_key');
+    if (!liveInvite(state, args.code)) return reject(401, 'unknown_key');
+    const submitted = args.public_key;
     if (typeof submitted !== 'string') return reject(401, 'unknown_key');
     const raw = strictB64u(submitted, 32);
     if (!raw || validatePublicKey(raw)) return reject(400, 'key_rejected');

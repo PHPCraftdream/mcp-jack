@@ -31,7 +31,7 @@ type gatewaySigning struct {
 	close      func() error
 }
 
-// Ни один profile не создаёт store и не переключается на другой при отказе.
+// No profile creates a store or falls back to another one on failure.
 func selectGatewaySigning(config gatewayConfig) (*gatewaySigning, error) {
 	if (config.ServerSeedFile == "") == (config.ServerRotationFile == "") {
 		return nil, errConfig

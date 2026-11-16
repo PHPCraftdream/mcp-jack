@@ -358,6 +358,37 @@ test("E6b forwarded request preserves raw target beside normalized URL and priva
   });
 });
 
+test("E6c a GET with a body is verified over the exact bytes sent", { timeout: 5000 }, async () => {
+  // A GET body is framed by an explicit content-length: node:http adds neither
+  // content-length nor chunking to a GET on its own, so the bytes would reach
+  // the server unframed.
+  // Pipeline: verify. undici's Request constructor refuses a GET body, so
+  // WITHOUT the RAW_BODY_SYMBOL handoff the bytes never reach the hash and
+  // the verifier sees an empty body -> bad_signature; with it, the GET is
+  // forwarded and the answer is signed (spec 01 section 3.1).
+  const alice = seedSignerByName("alice");
+  const bodyBuf = Buffer.from(pingBody, "utf-8");
+  const header = signRequest(alice, fixtureAud, "GET", "/mcp", utf8(pingBody), randomNonce(), fixtureNow);
+  const sig = parseRequestAuth([header]).sig;
+  const res = await rawRequest(port, "GET", "/mcp", { "jack-auth": header, "content-type": "application/json", "content-length": String(bodyBuf.length) }, bodyBuf);
+  assert.equal(res.status, 200);
+  assert.equal(res.body.toString("utf-8"), nextJson);
+  assert.ok(jackAuthValues(res.headers).length > 0, "the forwarded GET answer is signed");
+  verifyResponse(serverPub, res.status, jackAuthValues(res.headers), sig, new Uint8Array(res.body), fixtureNow, 30);
+});
+
+test("E6d a GET body covered by a signature over different bytes is bad_signature", { timeout: 5000 }, async () => {
+  // Pins that the GET body bytes really enter the hash: signing over other
+  // bytes while sending bodyBuf must fail; it would also fail if the bytes
+  // were dropped (different failure mode), so E6c is the discriminating test.
+  const alice = seedSignerByName("alice");
+  const bodyBuf = Buffer.from(pingBody, "utf-8");
+  const header = signRequest(alice, fixtureAud, "GET", "/mcp", utf8('{"jsonrpc":"2.0","id":1,"method":"other"}'), randomNonce(), fixtureNow);
+  const res = await rawRequest(port, "GET", "/mcp", { "jack-auth": header, "content-type": "application/json", "content-length": String(bodyBuf.length) }, bodyBuf);
+  assert.equal(res.status, 401);
+  assert.ok(res.body.toString("utf-8").includes("bad_signature"), res.body.toString("utf-8"));
+});
+
 test("E7 event-stream endpoint refused with 501", { timeout: 5000 }, async () => {
   // Pipeline: GET authorized by authentication alone -> forward -> next
   // answers text/event-stream -> adapter buffers and answers SIGNED 501
@@ -406,3 +437,44 @@ test("E10 repeated Set-Cookie headers preserved", { timeout: 5000 }, async () =>
   assert.equal(resp.status, 200);
   assert.deepEqual(resp.headers.getSetCookie(), ["a=1", "b=2"]);
 });
+
+// -- Request target: origin-form, exact wire bytes (spec 01 section 3.1). --
+
+test("E10 refused targets answer unsigned 400 invalid_request", { timeout: 10000 }, async () => {
+  const refused = ["http://example.com/mcp", "*"];
+  for (const target of refused) {
+    const res = await rawRequest(port, "GET", target, {}, Buffer.alloc(0));
+    assert.equal(res.status, 400, `status for ${JSON.stringify(target)}`);
+    const parsed = JSON.parse(res.body.toString("utf-8")) as { error: { code: string } };
+    assert.equal(parsed.error.code, "invalid_request", `code for ${JSON.stringify(target)}`);
+    assert.deepEqual(jackAuthValues(res.headers), [], `unsigned for ${JSON.stringify(target)}`);
+  }
+});
+
+test("E10b targets with bytes outside 0x21-0x7E or in authority form are refused with an unsigned 400", { timeout: 10000 }, async () => {
+  // node:http's own parser may answer these with a bare 400 before the adapter
+  // runs, so only the status and the absence of a signature are asserted.
+  // The two non-ASCII targets are the latin1 byte E9 and the UTF-8 bytes C3 A9 of "\u00e9".
+  const refused = ["example.com:80", "/mcp?q=\u00e9", "/mcp?q=\u00c3\u00a9", "/a\u007fb"];
+  for (const target of refused) {
+    const res = await rawRequest(port, "GET", target, {}, Buffer.alloc(0));
+    assert.equal(res.status, 400, `status for ${JSON.stringify(target)}`);
+    assert.deepEqual(jackAuthValues(res.headers), [], `unsigned for ${JSON.stringify(target)}`);
+  }
+});
+
+test("E10c a fragment is dropped and the request verifies over the target before it", { timeout: 5000 }, async () => {
+  const alice = seedSignerByName("alice");
+  const header = signRequest(alice, fixtureAud, "GET", "/mcp", new Uint8Array(0), randomNonce(), fixtureNow);
+  const res = await rawRequest(port, "GET", "/mcp#frag", { "jack-auth": header }, Buffer.alloc(0));
+  assert.equal(res.status, 200);
+});
+
+test("E11 percent-encoded non-ASCII target verifies over the exact bytes", { timeout: 5000 }, async () => {
+  const alice = seedSignerByName("alice");
+  const target = "/mcp?q=%C3%A9";
+  const header = signRequest(alice, fixtureAud, "GET", target, new Uint8Array(0), randomNonce(), fixtureNow);
+  const res = await rawRequest(port, "GET", target, { "jack-auth": header }, Buffer.alloc(0));
+  assert.equal(res.status, 200);
+});
+

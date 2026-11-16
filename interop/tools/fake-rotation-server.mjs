@@ -7,7 +7,7 @@
 //     [--ring-seed <ref>=<hex>]...   (ring seeds are accepted, never used)
 import net from 'node:net';
 import { createHash, createPrivateKey, createPublicKey } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 const PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
 const b64u = (b) => Buffer.from(b).toString('base64url');
@@ -54,6 +54,12 @@ function main() {
     }
   }
   const { pubB64u, kid } = deriveKeys(a['server-seed-hex']);
+  // G9 r3 contract: a latched store never becomes ready (fail-closed startup).
+  const modeEnv = process.env.JACK_ROTATION_MODE_FILE;
+  if (modeEnv && existsSync(modeEnv) && readFileSync(modeEnv, 'utf8').trim() === 'clock-latched') {
+    process.stderr.write('rotation store: rotation_clock_unsafe (latched)\n');
+    return process.exit(1);
+  }
   const server = net.createServer(() => { /* contract fake: no HTTP protocol */ });
   const wantPort = a.port ? parseInt(a.port, 10) : 0;
   server.listen(wantPort, '127.0.0.1', () => {

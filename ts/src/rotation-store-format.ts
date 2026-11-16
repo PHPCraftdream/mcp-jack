@@ -71,7 +71,7 @@ export function readClock(bytes: string, options: RotationStoreOptions): Rotatio
 
 const CLIENT_DOMAIN = "mcp-jack/client-trust/private-file/v1";
 
-/** Seal — accidental corruption check, не MAC/backup rollback oracle; domain разделяет client/server profiles. */
+/** Seal — accidental corruption check, not a MAC/backup rollback oracle; domain separates client/server profiles. */
 export function packBundle(bundle: StoreBundle, domain: string): Uint8Array {
   const payload = JSON.stringify({ domain, format_version: 1, store_id: bundle.storeId, profile: bundle.profile, owner: bundle.owner,
     dirty: bundle.dirty, fenced: bundle.fenced, clock: bundle.clockBytes, snapshot: bundle.snapshotBytes });
@@ -80,7 +80,7 @@ export function packBundle(bundle: StoreBundle, domain: string): Uint8Array {
   return bytes;
 }
 
-/** Envelope без snapshot decode: caller проверяет snapshot своего типа против clock. */
+/** Envelope without snapshot decode: the caller validates its own snapshot type against the clock. */
 export function unpackBundle(bytes: Uint8Array, options: RotationStoreOptions, profile: string, domain: string): { readonly bundle: StoreBundle; readonly clock: RotationClockTuple } {
   if (bytes.length === 0 || bytes.length > ROTATION_MAX_TRUST_SNAPSHOT_BYTES) invalidStore();
   const outer = fields(parseCandidateJsonRaw(utf8.decode(bytes)), ["payload", "checksum"]);

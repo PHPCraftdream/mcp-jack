@@ -5,14 +5,14 @@ import { Code, JackError } from "../errors.js";
 import { RotationError, ROTATION_MAX_TIMESTAMP } from "../rotation-record.js";
 import { verifyResponse } from "./auth.js";
 
-/** Только independently trusted/ACKed snapshot, не данные response payload. */
+/** Only independently trusted/ACKed snapshot, not response payload data. */
 export interface RotationResponseKey {
   readonly publicKeyB64u: string;
   readonly notBefore: number;
   readonly knownCutoff?: number;
 }
 
-/** Crypto/interval metadata, не durable ClockGuard readiness или trust ACK. */
+/** Crypto/interval metadata, not durable ClockGuard readiness or trust ACK. */
 export interface RotationCarrier {
   readonly kid: string;
   readonly timestamp: number;
@@ -23,10 +23,10 @@ function timestamp(value: number): boolean {
 }
 
 /**
- * Unknown kid → freshness → signature → known interval; body не парсится.
- * Transport обязан ограничить/удерживать exact bytes. Caller затем выполняет
- * durable ClockGuard до decode и final interval/bridge/revision/whole-state CAS.
- * Нет fetch, retry, discovery или изменения static credentials.
+ * Unknown kid → freshness → signature → known interval; body is not parsed.
+ * Transport must limit/retain the exact bytes. The caller then performs
+ * durable ClockGuard before decode and the final interval/bridge/revision/whole-state CAS.
+ * No fetch, retry, discovery, or static credential changes.
  */
 export function verifyRotationCarrier(
   known: ReadonlyMap<string, RotationResponseKey>,
@@ -56,7 +56,7 @@ export function verifyRotationCarrier(
   const lower = key.notBefore;
   const upper = key.knownCutoff;
   if (keyId(publicKey) !== auth.kid || validatePublicKey(publicKey) !== null || !timestamp(lower) || (upper !== undefined && (!timestamp(upper) || upper < lower))) throw new RotationError("rotation_state_unknown");
-  // Invalid local clock не превращается в NaN freshness bypass; caller обязан latch/fence.
+  // Invalid local clock does not become a NaN freshness bypass; caller must latch/fence.
   if (!timestamp(now)) throw new RotationError("rotation_clock_unavailable");
   verifyResponse(publicKey, status, headers, requestSig, body, now, windowSeconds);
   if (auth.ts < lower || (upper !== undefined && (auth.ts >= upper || now >= upper))) throw new RotationError("rotation_key_interval");

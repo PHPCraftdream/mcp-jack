@@ -1,9 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -95,30 +98,63 @@ type Config struct {
 	State StateStore
 	// Nonces records seen (kid, nonce) pairs.
 	Nonces *NonceStore
-	// DurableNonces выбирается явно вместо volatile Nonces.
+	// DurableNonces is selected explicitly instead of the volatile Nonces.
 	DurableNonces DurableNonceStore
 	// Audit receives audit events for protocol-native admin calls; optional.
 	Audit AuditSink
-	// Native — current-v1 tools; nil запрещает их, ServerKeys выбирается отдельно.
+	// Native serves current-v1 tools; nil forbids them, ServerKeys is selected separately.
 	Native NativeTools
-	// ServerKeys включает только candidate jack.server.key; default native allowlist неизменен.
+	// ServerKeys serves only the candidate jack.server.key; the default native allowlist is unchanged.
 	ServerKeys NativeTools
 	// Window is the timestamp window in seconds; zero means DefaultWindow.
 	Window int64
 	// Now returns the current Unix time in seconds; nil means the wall clock.
-	// Tests inject a fixed clock.
+	// Tests inject a fixed clock. The Verifier never lets its request time go
+	// backwards: a sample below the highest one seen is raised to it.
+	// Response timestamps use the raw sample.
 	Now func() int64
 }
 
+// audHasControl reports whether aud contains a byte below 0x20 or the byte
+// 0x7f (spec 01 section 3.1 aud rules).
+func audHasControl(aud string) bool {
+	for i := 0; i < len(aud); i++ {
+		if aud[i] < 0x20 || aud[i] == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
 // Verifier authenticates and authorizes requests (spec 01 section 4, spec 02
-// section 4).
-type Verifier struct{ cfg Config }
+// section 4). Freshness and the volatile nonce store use a request time that
+// is monotonic within the process, so a wall-clock step back cannot revive a
+// purged nonce.
+type Verifier struct {
+	cfg Config
+	mu  sync.Mutex
+	// high is the highest clock sample seen; it starts at the minimum so the
+	// first sample is used unchanged.
+	high int64
+}
+
+// effectiveNow returns max(sample, highest sample seen) and records it.
+func (v *Verifier) effectiveNow(sample int64) int64 {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if sample > v.high {
+		v.high = sample
+	}
+	return v.high
+}
 
 // NewVerifier validates cfg and returns a Verifier.
 func NewVerifier(cfg Config) (*Verifier, error) {
 	switch {
 	case cfg.Aud == "":
 		return nil, errors.New("server: Config.Aud must be non-empty")
+	case audHasControl(cfg.Aud):
+		return nil, errors.New("server: Config.Aud must not contain control characters")
 	case cfg.State == nil:
 		return nil, errors.New("server: Config.State must be set")
 	case cfg.Nonces == nil && cfg.DurableNonces == nil:
@@ -140,7 +176,7 @@ func NewVerifier(cfg Config) (*Verifier, error) {
 	if cfg.Now == nil {
 		cfg.Now = func() int64 { return time.Now().Unix() }
 	}
-	return &Verifier{cfg: cfg}, nil
+	return &Verifier{cfg: cfg, high: math.MinInt64}, nil
 }
 
 // Request is one HTTP request reduced to what verification needs.
@@ -212,6 +248,7 @@ func entryActive(e RegistryEntry, now int64) bool {
 // than its code.
 func (v *Verifier) Verify(req Request) Result {
 	now := v.cfg.Now()
+	effective := v.effectiveNow(now)
 
 	auth, err := jack.ParseRequestAuth(req.AuthValues)
 	if err != nil {
@@ -230,7 +267,7 @@ func (v *Verifier) Verify(req Request) Result {
 		}
 		verifyKey = key
 	} else {
-		key, rej, ok := enrollmentKey(req, auth.Kid)
+		key, rej, ok := enrollmentKey(req, auth.Kid, v.cfg.State, now)
 		if !ok {
 			return rej
 		}
@@ -238,10 +275,10 @@ func (v *Verifier) Verify(req Request) Result {
 	}
 
 	var distance uint64
-	if now < auth.TS {
-		distance = uint64(auth.TS) - uint64(now)
+	if effective < auth.TS {
+		distance = uint64(auth.TS) - uint64(effective)
 	} else {
-		distance = uint64(now) - uint64(auth.TS)
+		distance = uint64(effective) - uint64(auth.TS)
 	}
 	if distance > uint64(v.cfg.Window) {
 		return rejection(401, jack.CodeTimestampOutOfWindow, "timestamp is outside the acceptance window")
@@ -278,8 +315,8 @@ func (v *Verifier) Verify(req Request) Result {
 	}
 
 	// The nonce is recorded only after the signature verified, so
-	// unauthenticated requests cannot fill the cache (spec 01 section 4).
-	if v.cfg.Nonces.CheckAndRecord(auth.Kid, auth.Nonce, now, auth.TS+v.cfg.Window) {
+	// requests that fail verification cannot fill the cache (spec 01 section 4).
+	if v.cfg.Nonces.CheckAndRecord(auth.Kid, auth.Nonce, effective, auth.TS+v.cfg.Window) {
 		return rejection(401, jack.CodeReplayedNonce, "nonce was already used")
 	}
 
@@ -370,8 +407,10 @@ func (v *Verifier) authorize(req Request, auth jack.RequestAuth, now int64, call
 // enrollmentKey implements the one exception to "unknown key is rejected"
 // (spec 01 section 4, spec 03 section 3.2): an unregistered kid is accepted
 // for a POST tools/call of jack.enroll whose submitted public key is valid and
-// hashes to kid. The request is then verified against that submitted key.
-func enrollmentKey(req Request, kid string) ([]byte, Result, bool) {
+// hashes to kid and whose code names a live invite. The request is then
+// verified against that submitted key. The invite lookup is read-only and runs
+// before any nonce is recorded; a dead invite looks like any unknown kid.
+func enrollmentKey(req Request, kid string, state StateStore, now int64) ([]byte, Result, bool) {
 	unknown := rejection(401, jack.CodeUnknownKey, "unknown key")
 	if req.Method != "POST" {
 		return nil, unknown, false
@@ -382,6 +421,9 @@ func enrollmentKey(req Request, kid string) ([]byte, Result, bool) {
 	}
 	var args map[string]json.RawMessage
 	if err := json.Unmarshal(msg.arguments, &args); err != nil || args == nil {
+		return nil, unknown, false
+	}
+	if !liveInvite(state, args["code"], now) {
 		return nil, unknown, false
 	}
 	submitted, ok := jsonString(args["public_key"])
@@ -396,6 +438,22 @@ func enrollmentKey(req Request, kid string) ([]byte, Result, bool) {
 		return nil, unknown, false
 	}
 	return key, Result{}, true
+}
+
+// liveInvite reports whether rawCode is a JSON string holding a canonical
+// invite code that names a stored invite not yet expired at now. The jack.enroll
+// tool re-checks and consumes the invite atomically.
+func liveInvite(state StateStore, rawCode json.RawMessage, now int64) bool {
+	code, ok := jsonString(rawCode)
+	if !ok {
+		return false
+	}
+	codeBytes, err := jack.DecodeBase64URLFixed(code, 32)
+	if err != nil {
+		return false
+	}
+	invite, found := state.LookupInvite(inviteIDOf(codeBytes))
+	return found && now < invite.ExpiresAt
 }
 
 const (
@@ -416,9 +474,15 @@ type rpcMessage struct {
 // classifyBody implements the body rules of spec 02 section 4. UTF-8 is
 // validated before decoding because encoding/json silently replaces invalid
 // bytes, and members are looked up through a map because encoding/json would
-// match struct fields case-insensitively.
+// match struct fields case-insensitively. unacceptableBody rejects lone
+// surrogate escapes and over-deep nesting before decoding (spec 02 section 4
+// step 2); hasDuplicateMember rejects repeated member names so no member is
+// silently dropped by the map decoding.
 func classifyBody(body []byte) (rpcMessage, bool) {
 	if !utf8.Valid(body) {
+		return rpcMessage{}, false
+	}
+	if unacceptableBody(body) || hasDuplicateMember(body) {
 		return rpcMessage{}, false
 	}
 	var m map[string]json.RawMessage
@@ -456,4 +520,149 @@ func classifyBody(body []byte) (rpcMessage, bool) {
 		msg.tool, msg.hasTool, msg.arguments = name, true, params["arguments"]
 	}
 	return msg, true
+}
+
+// maxBodyDepth is the maximum nesting depth of arrays and objects the body
+// may reach (spec 02 section 4 step 2).
+const maxBodyDepth = 128
+
+// unacceptableBody reports whether the body text is unacceptable before
+// parsing (spec 02 section 4 step 2): a \uXXXX string escape that does not
+// form a Unicode scalar value (a lone or unpaired surrogate), or nesting
+// deeper than maxBodyDepth levels of arrays and objects. One byte pass,
+// constant extra space, no recursion: encoding/json would silently replace a
+// lone surrogate with U+FFFD, and Go's decoder otherwise accepts any depth up
+// to its own internal limit.
+func unacceptableBody(body []byte) bool {
+	inString, depth := false, 0
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		if !inString {
+			switch c {
+			case '"':
+				inString = true
+			case '{', '[':
+				depth++
+				if depth > maxBodyDepth {
+					return true
+				}
+			case '}', ']':
+				if depth > 0 {
+					depth--
+				}
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = false
+		case '\\':
+			if i+1 >= len(body) {
+				return true
+			}
+			if body[i+1] != 'u' {
+				i++ // two-char escape; an escaped backslash keeps the string going
+				continue
+			}
+			if i+6 > len(body) {
+				return true
+			}
+			v := hex4(body[i+2 : i+6])
+			if v < 0 {
+				i++ // not a \uXXXX escape: invalid JSON, the parser rejects it
+				continue
+			}
+			if v >= 0xdc00 && v <= 0xdfff {
+				return true // lone low surrogate
+			}
+			if v < 0xd800 || v > 0xdbff {
+				i += 5 // ordinary \uXXXX escape
+				continue
+			}
+			// A high surrogate must be followed immediately by \uDC00..\uDFFF.
+			if i+12 <= len(body) && body[i+6] == '\\' && body[i+7] == 'u' {
+				if low := hex4(body[i+8 : i+12]); low >= 0xdc00 && low <= 0xdfff {
+					i += 11 // consume both escapes
+					continue
+				}
+			}
+			return true // unpaired high surrogate
+		}
+	}
+	return false
+}
+
+// memberFrame tracks one open container of the duplicate-name scan.
+type memberFrame struct {
+	names    map[string]struct{} // nil for an array
+	wantName bool
+}
+
+// hasDuplicateMember reports whether any object, at any depth, repeats a
+// member name after unescaping. Memory is one name set per open object; the
+// token decoder does the unescaping. Malformed JSON returns false: the parser
+// rejects it afterwards.
+func hasDuplicateMember(body []byte) bool {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber() // huge literals like 1e999 must not error the token scan and hide later duplicates
+	var stack []*memberFrame
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return false
+		}
+		var top *memberFrame
+		if len(stack) > 0 {
+			top = stack[len(stack)-1]
+		}
+		if d, isDelim := tok.(json.Delim); isDelim {
+			switch d {
+			case '{':
+				stack = append(stack, &memberFrame{names: map[string]struct{}{}, wantName: true})
+			case '[':
+				stack = append(stack, &memberFrame{})
+			default:
+				stack = stack[:len(stack)-1]
+				if len(stack) > 0 && stack[len(stack)-1].names != nil {
+					stack[len(stack)-1].wantName = true
+				}
+			}
+			continue
+		}
+		if top == nil || top.names == nil {
+			continue
+		}
+		if name, isString := tok.(string); isString && top.wantName {
+			if _, dup := top.names[name]; dup {
+				return true
+			}
+			top.names[name] = struct{}{}
+			top.wantName = false
+			continue
+		}
+		top.wantName = true
+	}
+}
+
+// hex4 parses exactly four ASCII hex digits, or -1.
+func hex4(b []byte) int {
+	if len(b) != 4 {
+		return -1
+	}
+	v := 0
+	for _, c := range b {
+		var d int
+		switch {
+		case c >= '0' && c <= '9':
+			d = int(c - '0')
+		case c >= 'a' && c <= 'f':
+			d = int(c-'a') + 10
+		case c >= 'A' && c <= 'F':
+			d = int(c-'A') + 10
+		default:
+			return -1
+		}
+		v = v<<4 | d
+	}
+	return v
 }

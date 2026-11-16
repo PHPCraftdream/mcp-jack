@@ -99,7 +99,7 @@ test("candidate rotation mutation: every single-byte change is rejected", { time
   let exercised = 0;
   for (let index = 0; index < original.length; index++) {
     const mutated = Uint8Array.from(original);
-    // ASCII mutation: многие варианты доходят до crypto, а не только non_ascii guard.
+    // ASCII mutation: many variants reach crypto, not just the non_ascii guard.
     mutated[index] = (mutated[index] as number) ^ 1;
     assert.throws(() => rotation.parseRotationRecord(mutated, corpus.binding, allKeys), rotation.RotationError, `byte ${index}`);
     exercised++;

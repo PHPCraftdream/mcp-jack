@@ -44,8 +44,8 @@ type stepResult struct {
 	data    any
 }
 
-// cleanups закрывают открытые хранилища перед os.Exit: иначе dirty-метка остаётся
-// и следующий шаг сценария отказывает с "explicit recovery required".
+// cleanups close open stores before os.Exit: otherwise the dirty mark remains
+// and the next scenario step fails with "explicit recovery required".
 var cleanups []func()
 
 func runCleanups() {

@@ -664,7 +664,8 @@ async fn head_cursor_yields_empty_complete_page() {
 
 /// Go strict-arguments half: every undecodable arguments form is a signed 400
 /// invalid_params (the nonce was consumed), including a tools/call whose
-/// params lack the `arguments` member entirely.
+/// params lack the `arguments` member entirely. A duplicate member name makes
+/// the whole body unacceptable (spec 02 section 2): a signed 400 invalid_request.
 #[tokio::test]
 async fn strict_argument_refusals_are_signed_400() {
     let h = new_harness(FixtureOptions {
@@ -679,8 +680,6 @@ async fn strict_argument_refusals_are_signed_400() {
         "null",
         "{}",
         r#"{"after_ordinal":0,"after_hash":"-","extra":true}"#,
-        r#"{"after_ordinal":7,"after_ordinal":0,"after_hash":"-"}"#,
-        r#"{"after_ordinal":0,"after_hash":"-","after_hash":"-"}"#,
     ];
     for arguments in strict {
         let got = h.candidate(arguments).await.got;
@@ -691,6 +690,20 @@ async fn strict_argument_refusals_are_signed_400() {
             "the nonce was consumed, so the refusal is signed"
         );
         assert_eq!(error_code(&got.body), "invalid_params");
+    }
+    let duplicates = [
+        r#"{"after_ordinal":7,"after_ordinal":0,"after_hash":"-"}"#,
+        r#"{"after_ordinal":0,"after_hash":"-","after_hash":"-"}"#,
+    ];
+    for arguments in duplicates {
+        let got = h.candidate(arguments).await.got;
+        assert_eq!(got.status, 400, "arguments {arguments} must be refused");
+        assert_eq!(
+            got.jack_auth.len(),
+            1,
+            "the nonce was consumed, so the refusal is signed"
+        );
+        assert_eq!(error_code(&got.body), "invalid_request");
     }
     // A tools/call WITHOUT the arguments member is invalid_params too
     // (Go: server decodes a missing member the same way).

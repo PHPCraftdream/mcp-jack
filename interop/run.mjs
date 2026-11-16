@@ -3,7 +3,8 @@
 //   node interop/run.mjs [--targets <file>] [--servers go,rust] [--clients ...]
 //                        [--scenario <id>] [--list] [--self-test]
 import { spawn } from 'node:child_process';
-import { createHash, createPrivateKey, createPublicKey, sign, verify } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey, randomBytes, sign, verify } from 'node:crypto';
+import { connect } from 'node:net';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -264,15 +265,15 @@ async function runMatrix(opts) {
   const baseStatePath = join(tmp, 'state.json');
   writeFileSync(baseStatePath, JSON.stringify(buildStateDoc(registry, null), null, 2) + '\n');
 
-  const resolveServerArgv = (lang, statePath) => {
+  const resolveServerArgv = (lang, statePath, extraArgs = []) => {
     const t = resolveTarget(targets[lang].server, 'server', `server=${lang}`);
-    return { cmd: t.cmd, args: [...t.args, '--aud', registry.aud, '--state', statePath, '--server-seed-hex', keys.svc.seed_hex], display: t.display };
+    return { cmd: t.cmd, args: [...t.args, ...extraArgs, '--aud', registry.aud, '--state', statePath, '--server-seed-hex', keys.svc.seed_hex], display: t.display };
   };
 
   const pinFor = (sc, readyKey) => (keys[sc.server_public_key] ? keys[sc.server_public_key].public_key : readyKey);
 
-  async function spawnServer(statePath, label) {
-    const argv = resolveServerArgv(label.lang, statePath);
+  async function spawnServer(statePath, label, extraArgs = []) {
+    const argv = resolveServerArgv(label.lang, statePath, extraArgs);
     let child;
     try {
       child = makeChild(argv.cmd, argv.args);
@@ -294,6 +295,22 @@ async function runMatrix(opts) {
     }
     return { child, port: ready.port, pin: ready.server_public_key };
   }
+
+// Scan captured server stderr for the bootstrap invite line of interop
+// README section 4: {"bootstrap_invite":"<code>"} on a single line. A server
+// without --bootstrap-ttl support prints none, so a missing line must fail
+// the scenario (no silent skips).
+function bootstrapInviteFromStderr(child) {
+  for (const line of child._stderrTail().split('\n')) {
+    const t = line.trim();
+    if (!t.startsWith('{')) continue;
+    try {
+      const o = JSON.parse(t);
+      if (o && typeof o.bootstrap_invite === 'string' && o.bootstrap_invite !== '') return o.bootstrap_invite;
+    } catch { /* not JSON: skip */ }
+  }
+  return null;
+}
 
   function clientArgv(lang, sc, pin, port, extraArgs) {
     const t = resolveTarget(targets[lang].client, 'client', `client=${lang}`);
@@ -363,7 +380,8 @@ async function runMatrix(opts) {
     };
     const okOut = run.result.outcome === expected.outcome;
     const okStatus = run.result.http_status === expected.http_status;
-    const okCode = run.result.code === expected.code;
+    // A scenario that omits `code` does not compare it (an HTTP library may answer a bare 400).
+    const okCode = expected.code === undefined || run.result.code === expected.code;
     const okData = expected.data === undefined || (expected.data === null ? run.result.data === null : subsetMatches(expected.data, run.result.data));
     if (okOut && okStatus && okCode && okData) return true;
     recordFailure(sc.id, pairLabel, sc.expected, {
@@ -371,6 +389,52 @@ async function runMatrix(opts) {
       reason: `mismatch: outcome ${run.result.outcome} vs ${expected.outcome}, http_status ${run.result.http_status} vs ${expected.http_status}, code ${run.result.code} vs ${expected.code}${okData ? '' : ', data mismatch'}`,
     });
     return false;
+  }
+
+  // Raw-request scenarios (`raw_request`, see interop/README.md): the client
+  // binary only signs (sign-only mode); the harness writes the request line
+  // itself over a TCP socket so no HTTP library can normalise the target.
+  function sendRaw(port, method, targetStr, authHeader, bodyBytes) {
+    return new Promise((res) => {
+      const head = Buffer.concat([
+        Buffer.from(`${method} `, 'latin1'),
+        Buffer.from(targetStr, 'utf8'),
+        Buffer.from(` HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nJack-Auth: ${authHeader}\r\nContent-Type: application/json\r\nAccept: application/json, text/event-stream\r\nContent-Length: ${bodyBytes.length}\r\nConnection: close\r\n\r\n`, 'latin1'),
+      ]);
+      const chunks = [];
+      let settled = false;
+      const finish = (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        sock.destroy();
+        res({ err, text: Buffer.concat(chunks).toString('utf8') });
+      };
+      const timer = setTimeout(() => finish('timeout'), 10000);
+      const sock = connect({ host: '127.0.0.1', port }, () => { sock.write(Buffer.concat([head, bodyBytes])); });
+      sock.on('data', (d) => chunks.push(d));
+      sock.on('end', () => finish(null));
+      sock.on('close', () => finish(null));
+      sock.on('error', (e) => finish(e.message));
+    });
+  }
+
+  async function runRawScenario(client, sc, srv, pairLabel) {
+    const rr = sc.raw_request;
+    const body = Buffer.from(rr.body ?? '', 'utf8');
+    const signTarget = rr.sign_target ?? rr.target;
+    const nonce = b64u(randomBytes(16));
+    const argv = clientArgv(client, { id: 'sign-only', identity: sc.identity, args: {} }, keys.svc.public_key, 0, ['--ts', String(Math.floor(Date.now() / 1000)), '--nonce', nonce, '--arg', `method=${rr.method}`, '--arg', `target=${signTarget}`, '--arg', `body-b64u=${b64u(body)}`]);
+    const signed = await runClient(client, argv, `${pairLabel} ${sc.id} (sign)`, pairLabel);
+    if (signed.failed || signed.result.outcome !== 'ok' || typeof signed.result.data?.jack_auth !== 'string') {
+      return { failed: true, reason: signed.failed ? signed.reason : 'sign-only did not return jack_auth', exitCode: signed.exitCode, stderr: signed.stderr, result: signed.result ?? null };
+    }
+    const raw = await sendRaw(srv.port, rr.method, rr.target, signed.result.data.jack_auth, body);
+    const m = /^HTTP\/1\.[01] (\d{3})/.exec(raw.text);
+    if (!m) return { failed: true, reason: `no HTTP response (${raw.err ?? 'empty'})`, exitCode: 0, stderr: '', result: null };
+    const status = parseInt(m[1], 10);
+    const c = /"code"\s*:\s*"([a-z_]+)"/.exec(raw.text.slice(raw.text.indexOf('\r\n\r\n')));
+    return { failed: false, exitCode: 0, stderr: '', result: { outcome: status === 200 ? 'ok' : 'rejected', http_status: status, code: status === 200 ? null : (c ? c[1] : null), data: null } };
   }
 
   const scenarioIds = Object.keys(scenarios.scenarios).filter((id) => !scenarioFilter || scenarioFilter.includes(id));
@@ -452,7 +516,11 @@ async function runMatrix(opts) {
         // a state change) or when it carries registry_overrides (the override
         // must be baked into the server's state file).
         const dedicated = sc.fresh || sc.registry_overrides != null;
-        if (!dedicated) {
+        if (sc.raw_request) {
+          if (!shared) shared = await spawnServer(baseStatePath, { lang: server, name: `${pairId}-shared` });
+          const run = await runRawScenario(client, sc, shared, pairLabel);
+          if (check({ ...sc, expected: { ...sc.expected, data: undefined } }, run, pairLabel)) { passed++; process.stdout.write(`PASS ${id}\n`); }
+        } else if (!dedicated) {
           if (!shared) shared = await spawnServer(baseStatePath, { lang: server, name: `${pairId}-shared` });
           const argv = clientArgv(client, sc, pinFor(sc, shared.pin), shared.port);
           const run = await runClient(client, argv, `${pairLabel} ${id}`, pairLabel);
@@ -461,8 +529,22 @@ async function runMatrix(opts) {
           const statePath = join(tmp, `state-${pairId}-${id}.json`);
           const stateBytes = JSON.stringify(buildStateDoc(registry, sc.registry_overrides), null, 2) + '\n';
           writeFileSync(statePath, stateBytes);
-          const srv = await spawnServer(statePath, { lang: server, name: `${pairId}-${id}` });
+          // Bootstrap scenarios (spec 03 section 5): the dedicated server is
+          // started with --bootstrap-ttl; its stderr invite becomes the
+          // `code` argument of the client.
+          const boot = sc.bootstrap;
+          const srv = await spawnServer(statePath, { lang: server, name: `${pairId}-${id}` }, boot ? ['--bootstrap-ttl', String(boot.ttl_seconds)] : []);
           const argv = clientArgv(client, sc, pinFor(sc, srv.pin), srv.port);
+          if (boot) {
+            const invite = bootstrapInviteFromStderr(srv.child);
+            if (invite === null) {
+              killTree(srv.child);
+              allChildren.delete(srv.child);
+              recordFailure(id, pairLabel, sc.expected, { failed: true, reason: `server (${server}) printed no {"bootstrap_invite":...} line on stderr (--bootstrap-ttl missing or failed)`, exitCode: null, stderr: srv.child._stderrTail(), result: null });
+              continue;
+            }
+            argv.args.push('--arg', `${boot.code_arg ?? 'code'}=${invite}`);
+          }
           const run = await runClient(client, argv, `${pairLabel} ${id}`, pairLabel);
           killTree(srv.child);
           allChildren.delete(srv.child);

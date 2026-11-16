@@ -26,9 +26,9 @@ type HandlerConfig struct {
 	Verifier *Verifier
 	// ServerKey signs responses (spec 01 section 5); clients pin its public key.
 	ServerKey ed25519.PrivateKey
-	// ResponseSigner выбирается явно вместо ServerKey, с фиксированной public identity.
+	// ResponseSigner is selected explicitly instead of ServerKey, with a fixed public identity.
 	ResponseSigner ResponseSigner
-	// ResponseKeys — отдельный opt-in authorization/final-gate profile, без fallback.
+	// ResponseKeys is a separate opt-in authorization/final-gate profile, with no fallback.
 	ResponseKeys ResponseKeyProvider
 	// MaxBodyBytes bounds the request body; zero means 1 MiB. The body must
 	// be read in full to be hashed, so the limit is a denial-of-service guard.
@@ -137,6 +137,15 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "only GET and POST are defined")
 		return
 	}
+	target := r.RequestURI
+	if target == "" {
+		target = r.URL.RequestURI()
+	}
+	if !originFormTarget(target) {
+		writeError(w, http.StatusBadRequest, jack.CodeInvalidRequest, "request target must be origin-form")
+		return
+	}
+	target = signedTarget(target)
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, h.limit))
 	if err != nil {
 		var tooBig *http.MaxBytesError
@@ -148,10 +157,6 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	target := r.RequestURI
-	if target == "" {
-		target = r.URL.RequestURI()
-	}
 	res := h.v.Verify(Request{Method: r.Method, Target: target, AuthValues: r.Header.Values("Jack-Auth"), Body: body})
 	defer res.Done()
 	switch {
@@ -162,6 +167,32 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		h.forward(w, r, body, res)
 	}
+}
+
+// originFormTarget reports whether the raw request target is origin-form: it
+// starts with '/' and consists only of the bytes 0x21 to 0x7E. Absolute-,
+// authority- and asterisk-form targets, spaces, controls and non-ASCII bytes
+// would make the signed bytes ambiguous (spec 01 section 3.1).
+func originFormTarget(raw string) bool {
+	if !strings.HasPrefix(raw, "/") {
+		return false
+	}
+	for i := 0; i < len(raw); i++ {
+		if c := raw[i]; c < 0x21 || c > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+// signedTarget drops the fragment: the first '#' and everything after it is
+// not part of the target (a conforming client never sends one, and an HTTP
+// stack such as the Rust one drops it before the handler sees the request).
+func signedTarget(raw string) string {
+	if i := strings.IndexByte(raw, '#'); i >= 0 {
+		return raw[:i]
+	}
+	return raw
 }
 
 // reject answers a failed request. Once authentication has succeeded the
@@ -285,7 +316,7 @@ func (h *handler) writeSigned(w http.ResponseWriter, status int, header http.Hea
 		var err error
 		sig, err = responseSignature(h.signer, h.public, signing)
 		if err != nil {
-			// Нет unsigned success, provider detail, fallback или retry. Nonce уже consumed.
+			// No unsigned success, provider detail, fallback, or retry. Nonce is already consumed.
 			writeError(w, http.StatusServiceUnavailable, "internal_error", "response signing unavailable")
 			return
 		}

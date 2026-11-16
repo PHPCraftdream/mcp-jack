@@ -73,6 +73,16 @@ function main() {
 
   if (step === 'call') {
     const mode = readMode();
+    // G9 r1/r2 contract: the server store is latched; the call is refused.
+    if (mode === 'clock-rollback') {
+      return emit({ scenario: 'call', outcome: 'rejected', http_status: 503, code: 'rotation_state_unavailable', data: null });
+    }
+    // G9 r4 contract: the client store is latched at open; SDK clients exit
+    // nonzero with stderr only, never a JSON line.
+    if (mode === 'clock-client-latch') {
+      process.stderr.write('rotation store: rotation_clock_unsafe\n');
+      process.exit(1);
+    }
     // Old-key peer response after the cutoff: must be refused.
     if (mode === 'old-key') {
       if (DEV === 's5-old-key-after-cutoff') {
@@ -129,6 +139,12 @@ function main() {
   }
 
   if (step === 'state') {
+    // G9 r5 contract: a restart on a latched store fails closed even with the
+    // clock moved forward (no catch-up recovery).
+    if (readMode() === 'clock-client-latch') {
+      process.stderr.write('rotation store: rotation_clock_unsafe\n');
+      process.exit(1);
+    }
     const st = loadStore();
     return emit({
       scenario: 'state', outcome: 'ok', http_status: null, code: null,

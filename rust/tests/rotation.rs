@@ -134,7 +134,7 @@ fn positive_exact_bytes_proofs_overlap_and_tie() {
             assert_eq!(record.wire, chain[index]);
             assert_eq!(record.hash, body_hash(chain[index].as_bytes()));
             let lines: Vec<&str> = record.wire.split('\n').collect();
-            // Только публичный deterministic fixture seed, не production secret.
+            // Only a public deterministic fixture seed, not a production secret.
             let seed: [u8; 32] = Sha256::digest(
                 format!("mcp-jack test key: candidate-server-next{}", index + 1).as_bytes(),
             )
@@ -217,7 +217,7 @@ fn bounds_unknown_authorizer_and_retained_reuse() {
 }
 
 fn fixture_signer(name: &str) -> InMemorySigner {
-    // Публичный fixture seed; production key material здесь не используется.
+    // Public fixture seed; production key material is not used here.
     let seed = Sha256::digest(format!("mcp-jack test key: candidate-server-{name}").as_bytes());
     InMemorySigner::from_seed(&seed).expect("fixture seed")
 }
@@ -458,7 +458,7 @@ fn strict_result_shape_parity_and_scalar_request_ids() {
         assert_eq!(result.current_kid, corpus().keys["anchor"].kid);
     }
     let body = result_body(&payload, &payload, "7");
-    assert!(rotation::decode_result(&body, b"7e0").is_err());
+    assert!(rotation::decode_result(&body, b"7e0").is_ok());
 }
 
 #[test]

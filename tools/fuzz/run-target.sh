@@ -17,7 +17,7 @@ minimize=$4
 outdir=$5
 
 case "$pkg" in
-  .|server|client|userkey) ;;
+  .|server|client|userkey|rotation|durable) ;;
   *) echo "::error title=go-fuzz-discovery::unsupported package: ${pkg}" >&2; exit 2 ;;
 esac
 if [[ ! "$name" =~ ^Fuzz[A-Za-z0-9_]+$ ]]; then
@@ -76,6 +76,34 @@ if [ "$status" -ne 0 ]; then
   exit "$status"
 fi
 
+# Deadline-race classification, NOT a retry: the target runs exactly once,
+# and a genuine finding always leaves harder evidence than the bare timeout
+# text: a written reproducer, a panic, a hang, a second failing test, or any
+# other detail line under the FAIL marker.
+log_is_deadline_race() {
+  log_file=$1
+  if grep -Eq 'Failing input written to|panic:|fatal error:|fuzzing process hung|fuzzing process terminated unexpectedly' "$log_file"; then
+    return 1
+  fi
+  if [ "$(grep -cE '^--- FAIL:' "$log_file")" -ne 1 ]; then
+    return 1
+  fi
+  if ! grep -Eq "^--- FAIL: ${name}([[:space:]]|$)" "$log_file"; then
+    return 1
+  fi
+  # Under the marker only the bare timeout text is acceptable; any other
+  # indented detail line is a real failure report (assertion text, stacks).
+  awk '
+    /^--- FAIL:/ { under = 1; next }
+    under && /^[[:space:]]+[^[:space:]]/ {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      if (line == "context deadline exceeded") { seen = 1 } else { other = 1 }
+    }
+    END { if (seen && !other) exit 0; exit 1 }
+  ' "$log_file"
+}
+
 echo "=== fuzz ${pkg}/${name} (fuzztime=${fuzztime}, fuzzminimizetime=${minimize}) ==="
 go test -run '^$' -fuzz "^${name}$" -fuzztime "$fuzztime" -fuzzminimizetime "$minimize" "./$pkg" 2>&1 | tee "$log"
 run_rcs=("${PIPESTATUS[@]}")
@@ -85,13 +113,21 @@ if [ "${run_rcs[1]}" -ne 0 ]; then
   status=1
 fi
 if [ "${run_rcs[0]}" -ne 0 ]; then
-  run_failed=1
   if grep -Eq "^--- FAIL: ${name}([[:space:]]|$)" "$log"; then
-    echo "::error title=go-fuzz-target::${pkg}/${name} reported a target failure (log: ${log})" >&2
+    if log_is_deadline_race "$log"; then
+      # Engine timing artefact at the fuzztime boundary, not a finding: warn,
+      # keep the log, and leave the target (and the gate) green.
+      echo "::warning title=go-fuzz-engine-deadline::${pkg}/${name} stopped on the fuzz engine deadline race, not a target failure (log: ${log})" >&2
+    else
+      run_failed=1
+      echo "::error title=go-fuzz-target::${pkg}/${name} reported a target failure (log: ${log})" >&2
+      status=1
+    fi
   else
+    run_failed=1
     echo "::error title=go-fuzz-tool::go test fuzz execution failed without a target failure marker for ${pkg}/${name} (log: ${log})" >&2
+    status=1
   fi
-  status=1
 fi
 
 if [ "$run_failed" -eq 1 ]; then

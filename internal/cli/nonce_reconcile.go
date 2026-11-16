@@ -9,8 +9,8 @@ import (
 	"github.com/PHPCraftdream/mcp-jack/server"
 )
 
-// Receipt file использует точные public поля NonceReceipt из nonce-inspect.
-// Null/missing/unknown/extra array entries не превращаются в zero-value evidence.
+// The receipt file uses the exact public fields of NonceReceipt from nonce-inspect.
+// Null/missing/unknown/extra array entries must not become zero-value evidence.
 func readNonceRecoveryReceipt(path string) (server.NonceReceipt, error) {
 	data, err := readPrivate(path, 16384)
 	if err != nil {
@@ -43,7 +43,7 @@ func readNonceRecoveryReceipt(path string) (server.NonceReceipt, error) {
 	return receipt, nil
 }
 
-// Только явный terminal no-redelivery; startup/unsafe gate остаётся закрытым.
+// Only an explicit terminal no-redelivery; the startup/unsafe gate stays closed.
 func nonceReconcileTerminal(configPath, expectedHash, receiptPath, confirmedIntent string) error {
 	if _, err := jack.DecodeBase64URLFixed(expectedHash, 32); err != nil {
 		return errConfig

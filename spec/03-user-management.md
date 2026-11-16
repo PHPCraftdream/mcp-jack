@@ -21,9 +21,9 @@ Before a public key is stored (enrollment, `jack.admin.user.create`, `jack.key.r
 
 All arguments are in `params.arguments`. A tool result is an MCP `CallToolResult` whose `structuredContent` holds the object described below and `isError` is `false`. An argument that is missing, of the wrong type, or outside its stated range is `400 invalid_params`. In particular: `name` matches the pattern in section 1; `admin` MUST be a strict JSON boolean when present; `not_before` and `not_after` are non-negative integers or `null`, at most 999999999999 (12 digits, like `ts`), and `not_before` is below `not_after` when both are set; `kid` and `invite_id` are strings. An integer argument is read from its JSON text: it is an integer only when that text has no fractional part and no exponent, so `1` and `-0` are integers while `1.0` and `1e3` are not, and a JSON string or boolean is never a number. Errors use the rejection body from 01-authentication section 4, with the codes in section 7.
 
-Unknown argument members have no effect: the arguments object is parsed with last-occurrence-wins semantics (02 section 2) and then read by exact name, so a stale `scopes` or `kind` member is silently inert and cannot escalate anything. Known members of the wrong type fail closed (`400 invalid_params`) — in particular a mistyped `admin`.
+Unknown argument members have no effect: the arguments object is read by exact member name (a body with duplicate member names never gets this far, 02 section 2), so a stale `scopes` or `kind` member is silently inert and cannot escalate anything. Known members of the wrong type fail closed (`400 invalid_params`) — in particular a mistyped `admin`.
 
-Duplicate argument names follow 02 section 2: the last occurrence wins and the occurrences are not merged, so an argument smuggled in by an earlier occurrence cannot survive into the call. The integer rule above reads the JSON text of that last occurrence.
+A duplicate argument name makes the body unacceptable (`400 invalid_request`, 02 section 2), so there is no last-wins or merged argument. The integer rule above reads the JSON text of the one occurrence.
 
 ### 3.1 Self-service (any active key)
 
@@ -57,11 +57,11 @@ mcp-jack/v1/rotate
 The invite supplies the `admin` flag of the new entry. The request is signed by the **new key** and carries `kid` = `base64url(SHA-256(public_key))`; that signature is the proof of possession. This is the **only** operation for which an unknown `kid` is not rejected at step 4 of 01-authentication section 4. The server MUST process it in this order and stop at the first failure:
 
 1. Steps 1-3 of 01 (header present, well formed, version).
-2. Step 4 exception: if `kid` is not in the registry and the request is a `POST` `tools/call` of `jack.enroll` with a valid JSON-RPC body, take `public_key` from the arguments. Otherwise `401 unknown_key`.
-3. The public key passes section 2 (`400 key_rejected`) and `kid` equals its hash (`401 unknown_key`).
+2. Step 4 exception: if `kid` is not in the registry, the request is a `POST` `tools/call` of `jack.enroll` with an acceptable JSON-RPC body (02 section 2, so no duplicate member names) and object `arguments`, and `code` names a **live invite**, continue; otherwise the ordinary unsigned `401 unknown_key` (no signature headers, no nonce recorded, no audit event), exactly as for any unknown `kid`. A live invite: `code` is a JSON string, a canonical base64url encoding of 32 bytes, the invite whose `invite_id` is `base64url(SHA-256(code bytes))` exists, and `now < expires_at`. This lookup is read-only and runs before signature verification and before any nonce is recorded. Members of `arguments` that the exception does not read are not validated, and their numbers are not range-checked.
+3. `public_key` is present and a string (otherwise `401 unknown_key`), passes section 2 (`400 key_rejected`), and `kid` equals its hash (`401 unknown_key`). Without a live invite step 2 already answered `401 unknown_key`, even for an invalid key.
 4. Steps 6-8 of 01 (time window, signature verified with the **submitted** key, nonce recording).
 5. Arguments: `code` and `name` are strings and `name` is valid, otherwise `400 invalid_params`.
-6. The invite exists, has not expired (`now < expires_at`), has not been used and has not been revoked: otherwise `403 invalid_invite`. All of these cases, and a `code` that is not a canonical base64url encoding of 32 bytes, return the same code, so a caller cannot tell them apart.
+6. The invite is checked again and consumed atomically with step 8: if it was used, revoked or expired between step 2 and now, `403 invalid_invite` (signed, audited). Only this race, and the tool-level checks, produce `invalid_invite`; a caller without a live invite never gets past step 2.
 7. `name` is unused: otherwise `409 name_taken`. A failure here does not consume the invite.
 8. Atomically: mark the invite used, add the entry with the invite's `admin` flag, `not_before` null and `not_after` from the invite's `key_ttl_seconds`. Result: `{kid, name, admin}`.
 
@@ -130,7 +130,7 @@ An agent that reads untrusted content (logs, web pages, documents) can be steere
 | 400 | `invalid_params` | Missing, mistyped or out-of-range tool arguments. |
 | 400 | `key_rejected` | Public key fails section 2. |
 | 400 | `invalid_proof` | `jack.key.rotate` proof does not verify. |
-| 403 | `invalid_invite` | The invite is unknown, expired, used or revoked. |
+| 403 | `invalid_invite` | The invite is unknown, expired, used or revoked. For an unregistered key this is only the race between the read-only live-invite check and the atomic consumption: without a live invite the answer is the unsigned `401 unknown_key` (section 3.2). |
 | 403 | `admin_required` | The caller is not an administrator. |
 | 404 | `unknown_target` | `kid` or `invite_id` is not registered. |
 | 409 | `name_taken` | The name is already used. |

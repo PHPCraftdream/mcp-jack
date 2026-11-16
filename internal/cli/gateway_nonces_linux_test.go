@@ -30,7 +30,7 @@ func testGatewayDurableNativeHTTP(t *testing.T, admin bool) {
 			t.Fatal(err)
 		}
 		config.DurableNonces = &gatewayDurableConfig{Path: path, DeploymentID: opts.DeploymentID, Window: opts.Window}
-		// Cleanup helper останавливает gateway раньше этой проверки.
+		// The cleanup helper stops the gateway before this check.
 		t.Cleanup(func() {
 			owner, err := durable.Open(path, opts)
 			if err != nil {
@@ -60,7 +60,7 @@ func TestGatewaySelectsExistingDurableOwnerWithoutFallback(t *testing.T) {
 	}
 	for _, wrong := range []gatewayDurableConfig{
 		{Path: path, DeploymentID: "wrong-deployment", Window: 30},
-		{Path: path, DeploymentID: profile.DeploymentID, Window: 31},
+		{Path: path, DeploymentID: profile.DeploymentID, Window: 29},
 	} {
 		candidate := verification
 		closeStore, err := selectGatewayNonces(gatewayConfig{DurableNonces: &wrong, MaxConcurrent: 32}, &candidate)

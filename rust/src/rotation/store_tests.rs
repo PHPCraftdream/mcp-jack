@@ -439,7 +439,7 @@ fn real_child_pre_and_post_rename_unknown_outcomes_preserve_artifacts() {
                 RotationTrustStore::open(&path, options(), || panic!("uncertain startup")).is_err()
             );
             if payload["dirty"] == true {
-                // Только test-owned evidence: отдельно доказываем dirty gate без marker.
+                // Only test-owned evidence: we separately prove the dirty gate without the marker.
                 fs::rename(
                     sandbox.0.join("trust.owner"),
                     sandbox.0.join("archived-owner-evidence"),

@@ -62,6 +62,9 @@ func validateProfile(p Profile) error {
 	if p.Aud == "" {
 		return fmt.Errorf("jack client: profile aud must be non-empty")
 	}
+	if audHasControl(p.Aud) {
+		return fmt.Errorf("jack client: profile aud must not contain control characters")
+	}
 	serverKey, err := jack.DecodeBase64URLFixed(p.ServerPublicKey, 32)
 	if err != nil {
 		return fmt.Errorf("jack client: profile server_public_key: %w", jack.ErrBadBase64URL)

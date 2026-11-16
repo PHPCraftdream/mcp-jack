@@ -258,6 +258,10 @@ impl StateStore for FileState {
         self.lock_data().lookup(kid)
     }
 
+    fn lookup_invite(&self, invite_id: &str) -> Option<InviteRecord> {
+        self.lock_data().lookup_invite(invite_id)
+    }
+
     fn update(
         &self,
         f: &mut dyn FnMut(&mut StateEdit) -> Result<(), JackError>,

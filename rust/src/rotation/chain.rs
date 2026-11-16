@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 pub const MAX_RETAINED_KEYS: usize = 1024 + 128 + 1;
 
-/// Только independently trusted или ранее ACKed checkpoint.
+/// Only an independently trusted or previously ACKed checkpoint.
 #[derive(Debug, Clone)]
 pub struct Checkpoint {
     pub ordinal: u64,
@@ -15,7 +15,7 @@ pub struct Checkpoint {
     pub published_at: u64,
 }
 
-/// Возвращает owned contiguous extension, без изменения caller trust/persistence.
+/// Returns an owned contiguous extension, without changing caller trust/persistence.
 pub fn verify_chain(
     wires: &[&[u8]],
     binding: Binding<'_>,
@@ -86,7 +86,7 @@ pub fn verify_chain(
     Ok(records)
 }
 
-/// Records уже должны быть проверены; greatest eligible ordinal разрешает ties.
+/// Records must already be verified; the greatest eligible ordinal wins ties.
 pub fn selected_ordinal(records: &[Record], now: u64) -> Result<u64, RotationError> {
     if now > MAX_TIMESTAMP {
         return Err(invalid("timestamp"));
@@ -99,7 +99,7 @@ pub fn selected_ordinal(records: &[Record], now: u64) -> Result<u64, RotationErr
         .unwrap_or(0))
 }
 
-/// Проверяет lower ts bound и strict known cutoff по ts и final_now.
+/// Checks the lower ts bound and the strict known cutoff against ts and final_now.
 pub fn assignment_valid(records: &[Record], ordinal: u64, ts: u64, final_now: u64) -> bool {
     if ordinal > MAX_ORDINAL || ts > MAX_TIMESTAMP || final_now > MAX_TIMESTAMP {
         return false;

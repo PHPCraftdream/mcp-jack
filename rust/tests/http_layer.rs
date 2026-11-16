@@ -449,6 +449,72 @@ async fn unauthenticated_rejected_unsigned() {
     assert_eq!(h.inner.calls(), 0);
 }
 
+/// A v2 scheme with obs-text parameters is unsupported_version: the scheme is
+/// examined on the raw bytes before the value is converted to UTF-8 (spec 01
+/// section 3).
+///
+/// Pipeline: stops before the UTF-8 conversion gate; the nonce is never
+/// recorded, so the 401 is unsigned and carries WWW-Authenticate.
+#[tokio::test]
+async fn v2_scheme_with_obs_text_is_unsupported_version() {
+    let h = new_harness(0, InnerResponse::ok_json(INNER_OK_BODY));
+    let mut raw = b"v2 ".to_vec();
+    raw.extend_from_slice(&[0xC3, 0xA9, 0x80]); // obs-text parameters
+    let value = http::HeaderValue::from_bytes(&raw).expect("obs-text is a valid header value");
+    let req = http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("Jack-Auth", value)
+        .body(Full::new(Bytes::copy_from_slice(STATUS_BODY)))
+        .expect("static request parts");
+    let got = inspect(send(&h.service, req).await.expect("no inner error")).await;
+    assert_eq!(got.status, 401);
+    assert_eq!(error_code(&got.body), "unsupported_version");
+    assert_eq!(
+        got.jack_auth,
+        Vec::<String>::new(),
+        "unsigned 401 has no Jack-Auth"
+    );
+    assert_eq!(
+        got.www_authenticate.as_deref(),
+        Some("Jack-Auth"),
+        "401 carries WWW-Authenticate (Go parity)"
+    );
+    assert_eq!(got.content_type.as_deref(), Some("application/json"));
+    assert_eq!(h.inner.calls(), 0);
+}
+
+/// A non-version scheme with obs-text is still malformed_auth (unchanged): the
+/// rejection happens at the UTF-8 conversion gate, not the scheme check.
+#[tokio::test]
+async fn obs_text_with_plain_scheme_is_malformed_auth() {
+    let h = new_harness(0, InnerResponse::ok_json(INNER_OK_BODY));
+    let mut raw = b"Bearer ".to_vec();
+    raw.extend_from_slice(&[0xC3, 0xA9]); // obs-text parameters
+    let value = http::HeaderValue::from_bytes(&raw).expect("obs-text is a valid header value");
+    let req = http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("Jack-Auth", value)
+        .body(Full::new(Bytes::copy_from_slice(STATUS_BODY)))
+        .expect("static request parts");
+    let got = inspect(send(&h.service, req).await.expect("no inner error")).await;
+    assert_eq!(got.status, 401);
+    assert_eq!(error_code(&got.body), "malformed_auth");
+    assert_eq!(
+        got.jack_auth,
+        Vec::<String>::new(),
+        "unsigned 401 has no Jack-Auth"
+    );
+    assert_eq!(
+        got.www_authenticate.as_deref(),
+        Some("Jack-Auth"),
+        "401 carries WWW-Authenticate (Go parity)"
+    );
+    assert_eq!(got.content_type.as_deref(), Some("application/json"));
+    assert_eq!(h.inner.calls(), 0);
+}
+
 /// Go TestMiddlewareSignsAuthorizationRejection, reworked for the
 /// admin-only wrapper: the admin flag gates only jack.admin.*, so alice's
 /// svc.restart call is now ACCEPTED and forwarded; the answer is signed and
@@ -761,6 +827,62 @@ async fn request_target_not_normalized() {
     assert_eq!(got.status, 200);
     assert_signed(&got, &signed.request_sig, &h.server_pub);
     assert_eq!(h.inner.calls(), 1);
+    assert_eq!(h.inner.seen_targets(), vec![target.to_string()]);
+}
+
+/// Non-origin-form targets are refused 400 invalid_request, unsigned, before
+/// verification: the request carries a valid signature over "/mcp", so any
+/// verifier involvement would answer 200 or 401 instead.
+#[tokio::test]
+async fn non_origin_form_targets_refused_before_verification() {
+    let h = new_harness(0, InnerResponse::ok_json(INNER_OK_BODY));
+    let alice = harness::signer_by_name("alice");
+    let signed = signed_request(&alice, "GET", "/mcp", b"");
+    for target in ["http://svc.example.test/mcp", "*", "svc.example.test:443"] {
+        let got = inspect(
+            send(&h.service, build_request(&signed, "GET", target, b""))
+                .await
+                .expect("no inner error"),
+        )
+        .await;
+        assert_eq!(got.status, 400, "target {target:?}");
+        assert_eq!(
+            error_code(&got.body),
+            "invalid_request",
+            "target {target:?}"
+        );
+        assert!(got.jack_auth.is_empty(), "unsigned: {target:?}");
+        assert!(got.www_authenticate.is_none(), "not a 401: {target:?}");
+    }
+    assert_eq!(h.inner.calls(), 0);
+    assert!(h.sink.events().is_empty());
+
+    // The same signature is still good for the origin-form target: the nonce
+    // was never consumed by the refusals.
+    let got = inspect(
+        send(&h.service, build_request(&signed, "GET", "/mcp", b""))
+            .await
+            .expect("no inner error"),
+    )
+    .await;
+    assert_eq!(got.status, 200);
+}
+
+/// A non-ASCII percent-encoded target is signed and verified over the exact
+/// received bytes (no decoding).
+#[tokio::test]
+async fn percent_encoded_non_ascii_target_verified_exactly() {
+    let h = new_harness(0, InnerResponse::ok_json(INNER_OK_BODY));
+    let alice = harness::signer_by_name("alice");
+    let target = "/mcp?q=%C3%A9";
+    let signed = signed_request(&alice, "GET", target, b"");
+    let got = inspect(
+        send(&h.service, build_request(&signed, "GET", target, b""))
+            .await
+            .expect("no inner error"),
+    )
+    .await;
+    assert_eq!(got.status, 200);
     assert_eq!(h.inner.seen_targets(), vec![target.to_string()]);
 }
 

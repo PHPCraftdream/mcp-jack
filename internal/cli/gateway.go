@@ -16,6 +16,13 @@ import (
 	"github.com/PHPCraftdream/mcp-jack/server"
 )
 
+// Pre-auth admission bounds. TestGatewayAdmissionBudget verifies the
+// relation with maxDurableWindow: rate*(2*W+1) must stay below capacity.
+const (
+	gatewayAdmissionRate = 64
+	gatewayNonceCapacity = 4096
+)
+
 type gatewayConfig struct {
 	Version            int                   `json:"version"`
 	Aud                string                `json:"aud"`
@@ -83,7 +90,10 @@ func loadGateway(path string) (gatewayConfig, time.Duration, error) {
 	return c, d, nil
 }
 
-func gateway(ctx context.Context, path string) (result error) {
+func gateway(ctx context.Context, path string, audit io.Writer) (result error) {
+	if audit == nil {
+		audit = io.Discard
+	}
 	c, timeout, err := loadGateway(path)
 	if err != nil {
 		return err
@@ -126,7 +136,8 @@ func gateway(ctx context.Context, path string) (result error) {
 		native: server.NewNativeTools(server.NativeOptions{}), serverKID: signing.anchorKID,
 		serverKIDs: signing.serverKIDs, adminEnabled: bool(c.NativeAdmin),
 	}
-	verification := server.Config{Aud: c.Aud, State: boundedState{state}, Native: policy}
+	// Audit events are written as JSON lines to the process stderr; write errors are ignored.
+	verification := server.Config{Aud: c.Aud, State: boundedState{state}, Native: policy, Audit: server.NewJSONLAuditSink(audit)}
 	if signing.provider != nil {
 		policy.serverKeys = signing.provider
 		verification.Native = policy
@@ -157,7 +168,7 @@ func gateway(ctx context.Context, path string) (result error) {
 	}
 	var connections sync.WaitGroup
 	slots := make(chan struct{}, c.MaxConcurrent)
-	// Общий transport limit действует до auth; durable capacity проверяет backend.
+	// General transport limit applies before auth; the backend enforces durable capacity.
 	var rateMu sync.Mutex
 	var second int64
 	var admitted int
@@ -175,7 +186,7 @@ func gateway(ctx context.Context, path string) (result error) {
 			second, admitted = now, 0
 		}
 		admitted++
-		allowed := admitted <= 64
+		allowed := admitted <= gatewayAdmissionRate
 		rateMu.Unlock()
 		if !allowed {
 			http.Error(w, "busy", 503)
@@ -183,7 +194,7 @@ func gateway(ctx context.Context, path string) (result error) {
 		}
 		if nonces != nil {
 			nonces.Purge(now)
-			if nonces.Len() >= 4096 {
+			if nonces.Len() >= gatewayNonceCapacity {
 				http.Error(w, "busy", 503)
 				return
 			}

@@ -340,17 +340,33 @@ where
         };
 
         // Never normalized: the signing string binds the target as received.
-        let target = match parts.uri.path_and_query() {
-            Some(pq) => pq.as_str().to_owned(),
-            // Asterisk/authority forms have no path_and_query.
-            None => parts.uri.path().to_owned(),
+        // Only origin-form targets are signable (spec 01 section 3.1).
+        let Some(target) = origin_form_target(&parts.uri) else {
+            return Ok(plain_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "request target must be origin-form",
+            ));
         };
         let method = parts.method.as_str().to_owned();
 
         // A non-UTF-8 header value cannot reach the verifier (Request.auth_values
         // holds Strings), so it gets the same rejection a grammar violation gets.
+        // The scheme is examined first, on the raw bytes (spec 01 section 3):
+        // a v2 scheme is unsupported_version even when the rest of the value
+        // is obs-text that to_str below would reject.
+        // Only a single header value qualifies: more than one is malformed_auth
+        // first (spec 01 section 4 step 2), exactly as in the Go and TS parsers.
         let mut auth_values = Vec::new();
+        let single = parts.headers.get_all("Jack-Auth").iter().count() == 1;
         for value in parts.headers.get_all("Jack-Auth") {
+            if single && crate::auth_header::scheme_is_unsupported_version(value.as_bytes()) {
+                let mut res =
+                    unsigned_rejection(401, "unsupported_version", "unsupported Jack-Auth version");
+                res.headers_mut()
+                    .insert("WWW-Authenticate", HeaderValue::from_static("Jack-Auth"));
+                return Ok(res);
+            }
             match value.to_str() {
                 Ok(v) => auth_values.push(v.to_owned()),
                 Err(_) => {
@@ -373,13 +389,18 @@ where
             body: buffered.to_vec(),
         };
         let res = self.verifier.verify(&vreq);
-        if !res.accepted {
-            return Ok(self.reject(&res));
-        }
-        if res.native {
-            return Ok(self.native(&res));
-        }
-        self.forward(parts, buffered, &res).await
+        let response = if !res.accepted {
+            self.reject(&res)
+        } else if res.native {
+            self.native(&res)
+        } else {
+            self.forward(parts, buffered, &res).await?
+        };
+        // The durable admission is finished only after the response is
+        // produced, on every path (Go middleware: `defer res.Done()`).
+        #[cfg(target_os = "linux")]
+        drop(res.admission);
+        Ok(response)
     }
 
     /// Reads the whole body into memory enforcing `limit` on the fly
@@ -729,6 +750,25 @@ enum BodyReadError {
     Read,
 }
 
+/// The origin-form target exactly as received, or None for absolute-form,
+/// authority-form or asterisk-form. The http crate drops a fragment while
+/// parsing the request line, so it never reaches this check (spec 01 section 3.1).
+fn origin_form_target(uri: &http::Uri) -> Option<String> {
+    // Absolute-form has a scheme; authority-form has an authority and no
+    // path. A genuine origin-form target has neither.
+    if uri.scheme().is_some() || uri.authority().is_some() {
+        return None;
+    }
+    let target = uri.path_and_query()?.as_str();
+    is_origin_form_target(target).then(|| target.to_owned())
+}
+
+/// Origin-form starts with '/' and consists only of the bytes 0x21 to 0x7E
+/// (spec 01 section 3.1).
+fn is_origin_form_target(target: &str) -> bool {
+    target.starts_with('/') && target.bytes().all(|b| (0x21..=0x7e).contains(&b))
+}
+
 /// Unsigned JSON error for requests that never reached authentication
 /// (Go: writeError): Content-Type only, no WWW-Authenticate, no signature.
 fn plain_error(status: StatusCode, code: &str, message: &str) -> http::Response<Full<Bytes>> {
@@ -789,4 +829,37 @@ struct RpcResponse<'a> {
     /// None serializes as null, matching Go's nil json.RawMessage.
     id: Option<Box<RawValue>>,
     result: CallToolResult<'a>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn origin_form_decision_on_target_text() {
+        assert!(is_origin_form_target("/mcp"));
+        assert!(is_origin_form_target("/mcp?q=%C3%A9"));
+        for bad in [
+            "*",
+            "host:80",
+            "http://h/mcp",
+            "mcp",
+            "",
+            "/mcp?q=é",
+            "/a b",
+            "/ab",
+        ] {
+            assert!(!is_origin_form_target(bad), "target {bad:?}");
+        }
+    }
+
+    #[test]
+    fn non_origin_uris_have_no_target() {
+        for bad in ["http://h/mcp", "https://h", "h:80", "*"] {
+            let uri: http::Uri = bad.parse().expect("uri parses");
+            assert_eq!(origin_form_target(&uri), None, "uri {bad:?}");
+        }
+        let uri: http::Uri = "/mcp?q=%C3%A9".parse().expect("uri parses");
+        assert_eq!(origin_form_target(&uri).as_deref(), Some("/mcp?q=%C3%A9"));
+    }
 }

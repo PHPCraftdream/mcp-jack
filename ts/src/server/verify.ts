@@ -25,7 +25,10 @@ import { requestSigningString } from "../signing.js";
 import type { AuditEvent, AuditSink } from "./audit.js";
 import { AUDIT_FAILURE, AUDIT_SUCCESS } from "./audit.js";
 import type { NonceStore } from "./nonce.js";
+import type { DurableAdmission } from "./durable-admission.js";
+import { rememberResultFinish } from "./durable-admission.js";
 import type { RegistryEntry, StateStore } from "./state.js";
+import { inviteIdOf } from "./state.js";
 import { parseJsonRaw } from "../json-raw.js";
 import type { JsonValue, RawJsonNode } from "../json-raw.js";
 export { parseJsonRaw } from "../json-raw.js";
@@ -69,6 +72,138 @@ function isPlainObject(v: JsonValue): boolean {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+// The maximum nesting depth of arrays and objects the body may reach
+// (spec 02 section 4 step 2).
+const MAX_BODY_DEPTH = 128;
+
+/** Member names of one open object; expectKey is true while the next string is a name. */
+interface ObjectScope {
+  readonly names: Set<string>;
+  expectKey: boolean;
+}
+
+/** One-character escapes of JSON strings; anything else maps to itself (the parser rejects it later). */
+const SIMPLE_ESCAPES: ReadonlyMap<number, number> = new Map([
+  [0x62, 0x08],
+  [0x66, 0x0c],
+  [0x6e, 0x0a],
+  [0x72, 0x0d],
+  [0x74, 0x09],
+]);
+
+/** UTF-8 bytes of a scalar value as a Latin-1 string, so escaped and raw spellings of a name compare equal. */
+function utf8Latin1(cp: number): string {
+  if (cp < 0x80) return String.fromCharCode(cp);
+  if (cp < 0x800) return String.fromCharCode(0xc0 | (cp >> 6), 0x80 | (cp & 0x3f));
+  if (cp < 0x10000) {
+    return String.fromCharCode(0xe0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
+  }
+  return String.fromCharCode(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
+}
+
+/**
+ * The body-text rules of spec 02 section 4 step 2, checked on the raw bytes
+ * before decoding: a \uXXXX string escape that does not form a Unicode scalar
+ * value (a lone or unpaired surrogate), nesting deeper than MAX_BODY_DEPTH
+ * levels of arrays and objects, or an object with two members of the same
+ * name (compared after unescaping, exact). One byte pass, no recursion, extra
+ * space bounded by the depth and the member names of the open objects:
+ * JSON.parse-family parsing would keep a lone surrogate and silently keep the
+ * last duplicate, and the recursive tokenizer dies on the stack long after
+ * the limit.
+ */
+function unacceptableBody(body: Uint8Array): boolean {
+  let inString = false;
+  // Set only while inside a member NAME; undefined for every other string.
+  let name: string | undefined;
+  const scopes: (ObjectScope | null)[] = [];
+  let i = 0;
+  while (i < body.length) {
+    const c = body[i] as number;
+    const top = scopes[scopes.length - 1];
+    if (!inString) {
+      if (c === 0x22) {
+        inString = true;
+        name = top?.expectKey === true ? "" : undefined;
+      } else if (c === 0x7b || c === 0x5b) {
+        scopes.push(c === 0x7b ? { names: new Set<string>(), expectKey: true } : null);
+        if (scopes.length > MAX_BODY_DEPTH) return true;
+      } else if (c === 0x7d || c === 0x5d) {
+        scopes.pop();
+      } else if (c === 0x3a && top) {
+        top.expectKey = false;
+      } else if (c === 0x2c && top) {
+        top.expectKey = true;
+      }
+      i += 1;
+      continue;
+    }
+    if (c === 0x22) {
+      inString = false;
+      if (name !== undefined && top) {
+        if (top.names.has(name)) return true;
+        top.names.add(name);
+      }
+      name = undefined;
+      i += 1;
+      continue;
+    }
+    if (c !== 0x5c) {
+      if (name !== undefined) name += String.fromCharCode(c);
+      i += 1;
+      continue;
+    }
+    // Escape handling mirrors the Go/Rust helpers byte for byte.
+    if (i + 1 >= body.length) return true;
+    if (body[i + 1] !== 0x75) {
+      const e = body[i + 1] as number;
+      if (name !== undefined) name += String.fromCharCode(SIMPLE_ESCAPES.get(e) ?? e);
+      i += 2; // two-byte escape; an escaped backslash keeps the string going
+      continue;
+    }
+    if (i + 6 > body.length) return true;
+    const v = hex4(body, i + 2);
+    if (v < 0) {
+      i += 2; // not a \uXXXX escape: invalid JSON, the parser rejects it
+      continue;
+    }
+    if (v >= 0xdc00 && v <= 0xdfff) return true; // lone low surrogate
+    if (v < 0xd800 || v > 0xdbff) {
+      if (name !== undefined) name += utf8Latin1(v);
+      i += 6; // ordinary \uXXXX escape
+      continue;
+    }
+    // A high surrogate must be followed immediately by \uDC00..\uDFFF.
+    const low =
+      i + 12 <= body.length && body[i + 6] === 0x5c && body[i + 7] === 0x75
+        ? hex4(body, i + 8)
+        : -1;
+    if (low >= 0xdc00 && low <= 0xdfff) {
+      if (name !== undefined) name += utf8Latin1(0x10000 + ((v - 0xd800) << 10) + (low - 0xdc00));
+      i += 12; // consume both escapes
+      continue;
+    }
+    return true; // unpaired high surrogate
+  }
+  return false;
+}
+
+/** Parses the four ASCII hex digits at body[at], or -1. */
+function hex4(body: Uint8Array, at: number): number {
+  let v = 0;
+  for (let k = 0; k < 4; k++) {
+    const c = body[at + k] as number | undefined;
+    if (c === undefined) return -1;
+    let d: number;
+    if (c >= 0x30 && c <= 0x39) d = c - 0x30;
+    else if (c >= 0x61 && c <= 0x66) d = c - 0x61 + 10;
+    else if (c >= 0x41 && c <= 0x46) d = c - 0x41 + 10;
+    else return -1;
+    v = (v << 4) | d;
+  }
+  return v;
+}
+
 /**
  * The body rules of spec 02 section 4. Order matters: strict UTF-8 validation
  * of the EXACT bytes happens BEFORE any JSON parse (JSON.parse would silently
@@ -80,6 +215,7 @@ function isPlainObject(v: JsonValue): boolean {
  * jsonrpc member and is rejected here.
  */
 export function classifyBody(body: Uint8Array): RpcMessage | undefined {
+  if (unacceptableBody(body)) return undefined;
   let text: string;
   let parsed: { value: JsonValue; source: RawJsonNode };
   try {
@@ -291,7 +427,16 @@ export interface VerifyResult {
 export interface VerifierConfig {
   readonly aud: string;
   readonly state: StateStore;
-  readonly nonces: NonceStore;
+  /** Volatile nonce store; required unless `durable` is set, and never both. */
+  readonly nonces?: NonceStore;
+  /**
+   * Candidate durable admission seam (Go Config.DurableNonces; spec
+   * candidate durable-nonces.md sections 1, 2, 5). When set, the nonce is
+   * reserved durably AFTER the signature verifies and BEFORE any
+   * authorization, state change or dispatch; the volatile `nonces` store is
+   * NOT used for that request. Absent => the default path is identical.
+   */
+  readonly durable?: DurableAdmission;
   /** Optional sink. */
   readonly audit?: AuditSink;
   /** When undefined every jack.* tool is 403 operation_denied. */
@@ -334,28 +479,61 @@ function entryActive(e: RegistryEntry, now: number): boolean {
   );
 }
 
+/**
+ * aud rule shared by the verifier and the client constructors: non-empty and
+ * free of C0 control characters and DEL (bytes < 0x20 and 0x7f on the wire;
+ * UTF-8 multibyte sequences are all >= 0x80, so a code-unit check is exact).
+ */
+function validAudience(aud: string): boolean {
+  if (aud === "") return false;
+  for (let i = 0; i < aud.length; i++) {
+    const c = aud.charCodeAt(i);
+    if (c < 0x20 || c === 0x7f) return false;
+  }
+  return true;
+}
+
 export class Verifier {
   private readonly aud: string;
   private readonly state: StateStore;
-  private readonly nonces: NonceStore;
+  private readonly nonces: NonceStore | undefined;
+  private readonly durable: DurableAdmission | undefined;
   private readonly audit: AuditSink | undefined;
   private readonly native: NativeTools | undefined;
   private readonly serverKeys: NativeTools | undefined;
   private readonly window: number;
   private readonly now: () => number;
+  // Highest valid clock sample seen by this instance (see effectiveNow).
+  private highWater = 0;
 
-  /** Throws when aud is "" or state/nonces/now are missing (Go NewVerifier parity). */
+  /** Throws when aud is "", contains control characters, or state/nonces/now are missing (Go NewVerifier parity). */
   constructor(cfg: VerifierConfig) {
-    if (cfg.aud === "") throw new Error("server: VerifierConfig.aud must be non-empty");
+    if (!validAudience(cfg.aud)) throw new Error("server: VerifierConfig.aud must be non-empty and contain no control characters");
     if (cfg.state === undefined) throw new Error("server: VerifierConfig.state must be set");
-    if (cfg.nonces === undefined) throw new Error("server: VerifierConfig.nonces must be set");
+    if (cfg.nonces === undefined && cfg.durable === undefined) {
+      throw new Error("server: VerifierConfig.nonces must be set");
+    }
     if (cfg.now === undefined) throw new Error("server: VerifierConfig.now must be set");
+    // Go NewVerifier parity: exactly one nonce profile, and the durable
+    // profile bounds the window (server/verify.go: durable window <= 120).
+    if (cfg.nonces !== undefined && cfg.durable !== undefined) {
+      throw new Error("server: VerifierConfig: select exactly one nonce profile");
+    }
+    if (cfg.durable !== undefined && cfg.window !== undefined && (cfg.window < 0 || cfg.window > 120)) {
+      throw new Error("server: VerifierConfig.durable window must be between 1 and 120 seconds");
+    }
     this.aud = cfg.aud;
     this.state = cfg.state;
     this.nonces = cfg.nonces;
+    this.durable = cfg.durable;
     this.audit = cfg.audit;
     this.native = cfg.native;
     this.serverKeys = cfg.serverKeys;
+    if (cfg.window !== undefined && !Number.isFinite(cfg.window)) {
+      throw new Error("server: VerifierConfig.window must be a finite number of seconds");
+    }
+    // NaN would slip the old `<= 0` default and poison the timestamp compare;
+    // non-finite windows are rejected outright, <= 0 keeps the DEFAULT_WINDOW fallback.
     this.window = cfg.window === undefined || cfg.window <= 0 ? DEFAULT_WINDOW : cfg.window;
     this.now = cfg.now;
   }
@@ -363,6 +541,18 @@ export class Verifier {
   /** The injected clock (Go cfg.Now): adapters sign responses with the same injected clock that verified the request, never the wall clock. */
   get clock(): () => number {
     return this.now;
+  }
+
+  /**
+   * Request time that never goes backwards within this verifier: max(sample,
+   * highest valid sample so far). A wall-clock step back therefore cannot
+   * purge a volatile nonce and then accept its replay; a request whose
+   * ts + window is below the high-water mark is out of window. Only valid
+   * samples reach here, so a broken clock cannot poison the mark.
+   */
+  private effectiveNow(sample: number): number {
+    if (sample > this.highWater) this.highWater = sample;
+    return this.highWater;
   }
 
   /** Whether candidate jack.server.key routing is configured (Go cfg.ServerKeys != nil); the fetch adapter requires a rotation profile when it is. */
@@ -373,6 +563,17 @@ export class Verifier {
   /** Runs the pipeline of spec 01 section 4 / spec 02 section 4; stops at the first failing step. */
   verify(req: VerifyRequest): VerifyResult {
     const now = this.now();
+    // Fail closed on a broken injected clock: NaN/undefined makes every
+    // window compare false (fail-open). No nonce is recorded and nothing is
+    // dispatched; the clock is a programming error, not a caller fault.
+    if (!Number.isSafeInteger(now) || now < 0) {
+      return rejected(500, "internal_error", "internal error");
+    }
+    // Defense in depth: the constructor already rejects a non-finite window.
+    if (!Number.isFinite(this.window) || this.window <= 0) {
+      return rejected(500, "internal_error", "internal error");
+    }
+    const effective = this.effectiveNow(now);
 
     // Step 1: header grammar. JackError carries its own status/code; any
     // other error is a programming error reported as 500 internal_error.
@@ -406,7 +607,7 @@ export class Verifier {
       }
       caller = entry;
     } else {
-      const enrolled = this.enrollmentKey(req, auth.kid);
+      const enrolled = this.enrollmentKey(req, auth.kid, now);
       if ("rejection" in enrolled) {
         return enrolled.rejection;
       }
@@ -414,7 +615,7 @@ export class Verifier {
     }
 
     // Step 3: timestamp window.
-    if (Math.abs(now - auth.ts) > this.window) {
+    if (Math.abs(effective - auth.ts) > this.window) {
       return rejected(401, Code.TIMESTAMP_OUT_OF_WINDOW, "timestamp is outside the acceptance window");
     }
 
@@ -435,9 +636,68 @@ export class Verifier {
       return rejected(401, Code.BAD_SIGNATURE, "signature does not verify");
     }
 
-    // Step 5: nonce, only after the signature verified, so unauthenticated
-    // requests cannot fill the cache (spec 01 section 4). True = live replay.
-    if (this.nonces.checkAndRecord(auth.kid, auth.nonce, now, auth.ts + this.window)) {
+    // Step 5 (candidate durable profile): reserve durably after the signature
+    // verified and BEFORE any authorization, state change or dispatch (spec
+    // candidate durable-nonces.md section 2). The volatile store is untouched.
+    if (this.durable !== undefined) {
+      const outcome = this.durable.reserveForVerify({
+        kid: auth.kid,
+        nonce: auth.nonce,
+        signature: auth.sig,
+        signingBytes: signing,
+        timestamp: auth.ts,
+        window: this.window,
+        caller,
+      });
+      if (!outcome.accepted) {
+        const res: VerifyResult = {
+          ...rejected(outcome.httpStatus, outcome.code, outcome.message),
+          kid: auth.kid,
+          nonceRecorded: outcome.nonceRecorded,
+          requestSig: auth.sig,
+        };
+        rememberResultFinish(res, outcome.finish);
+        return res;
+      }
+      const b: ResultBuilder = {
+        accepted: false,
+        httpStatus: 0,
+        code: "",
+        message: "",
+        rpcId: undefined,
+        tool: "",
+        native: false,
+        structured: undefined,
+        identity: undefined,
+        audit: undefined,
+      };
+      const done = this.authorize(req, auth, outcome.finalNow, caller, b);
+      const res: VerifyResult = {
+        accepted: done.accepted,
+        kid: auth.kid,
+        httpStatus: done.httpStatus,
+        code: done.code,
+        message: done.message,
+        nonceRecorded: true,
+        requestSig: auth.sig,
+        rpcId: done.rpcId,
+        tool: done.tool,
+        native: done.native,
+        structured: done.structured,
+        identity: done.identity,
+        audit: done.audit,
+      };
+      rememberResultFinish(res, outcome.finish);
+      return res;
+    }
+
+    // Step 5: nonce, only after the signature verified, so
+    // requests that fail verification cannot fill the cache (spec 01 section 4). True = live replay.
+    if (this.nonces === undefined) {
+      // Unreachable: the constructor requires nonces unless the durable seam is set.
+      return rejected(500, "internal_error", "internal error");
+    }
+    if (this.nonces.checkAndRecord(auth.kid, auth.nonce, effective, auth.ts + this.window)) {
       return rejected(401, Code.REPLAYED_NONCE, "nonce was already used");
     }
 
@@ -614,10 +874,11 @@ export class Verifier {
    * The one exception to "unknown key is rejected" (spec 01 section 4, spec
    * 03 section 3.2): an unregistered kid is accepted only for a POST
    * tools/call of jack.enroll whose submitted public key is valid and hashes
-   * to kid. Returns the SUBMITTED key to verify against, or a rejection
-   * Result (never throws JackError).
+   * to kid and whose `code` names a live invite (read-only check, before any
+   * signature or nonce work). Returns the SUBMITTED key to verify against, or
+   * a rejection Result (never throws JackError).
    */
-  private enrollmentKey(req: VerifyRequest, kid: string): { key: Uint8Array } | { rejection: VerifyResult } {
+  private enrollmentKey(req: VerifyRequest, kid: string, now: number): { key: Uint8Array } | { rejection: VerifyResult } {
     const unknown = { rejection: rejected(401, Code.UNKNOWN_KEY, "unknown key") };
     if (req.method !== "POST") return unknown;
     const msg = classifyBody(req.body);
@@ -634,6 +895,8 @@ export class Verifier {
       return unknown;
     }
     if (!isPlainObject(argsNode.value) || argsNode.members === undefined) return unknown;
+    // Gate before any key handling: an unknown kid must not probe key validity without an invite.
+    if (!liveInvite(this.state, argsNode.members.get("code")?.value, now)) return unknown;
     const pkNode = argsNode.members.get("public_key");
     if (pkNode === undefined || typeof pkNode.value !== "string") return unknown;
     const submitted = pkNode.value;
@@ -653,6 +916,20 @@ export class Verifier {
     if (keyId(key) !== kid) return unknown;
     return { key };
   }
+}
+
+/** Whether `code` is a canonical invite code naming a stored invite that is still valid at now (read-only). */
+function liveInvite(state: StateStore, code: unknown, now: number): boolean {
+  if (typeof code !== "string") return false;
+  let raw: Uint8Array;
+  try {
+    raw = decodeBase64URLFixed(code, 32);
+  } catch (err) {
+    if (err instanceof BadBase64UrlError) return false;
+    throw err;
+  }
+  const invite = state.lookupInvite(inviteIdOf(raw));
+  return invite !== undefined && now < invite.expiresAt;
 }
 
 /** Builds a rejection result (kid "" because authentication never completed). */

@@ -1,6 +1,6 @@
 # mcp-jack interop harness
 
-**Baseline `b13b972`: SDK contract migrated; shared interop matrix acceptance was verified in GitHub CI on `444c69b`.** This document describes the current harness contract and test obligations; actual CI results for integrated `444c69b` are recorded in readiness. The current scenario oracle is [`scenarios.json`](scenarios.json); the independent credential-transfer oracle is `spec/fixtures/user-key-transfer.json`.
+**This document describes the current harness contract and test obligations.** The request, rotation and credential-transfer matrices run in CI; historical acceptance receipts for earlier baselines are recorded in [`docs/readiness.md`](../docs/readiness.md) and CHANGELOG.md. The current scenario oracle is [`scenarios.json`](scenarios.json); the independent credential-transfer oracle is `spec/fixtures/user-key-transfer.json`.
 
 Current protocol contract: authenticate the exact request, then forward authenticated ordinary MCP traffic unchanged with the immutable verified identity `{kid, name, admin}` available to the application handler. Protocol `admin` gates reserved `jack.admin.*` tools only; ordinary MCP authorization belongs to the application. Legacy user/state `kind` and `scopes` fields are rejected without migration or rewrite. There is no policy engine or policy-file input. Do not use retired policy/scopes examples as current behavior.
 
@@ -105,7 +105,7 @@ The server binds plain HTTP to `127.0.0.1` on an available port. It prints exact
 
 The server public key and kid are derived from the supplied seed. The harness accepts a complete non-empty JSON line, tolerates preceding blank lines, and waits up to 10 seconds. Stderr may carry diagnostics. In serve mode, SIGTERM/SIGINT or stdin EOF stops the server; normal stop exits 0. A malformed flag, seed, state file, verifier setup, or bind failure is a startup error.
 
-Optional `--bootstrap-ttl` asks the SDK's local `BootstrapAdmin` operation to create an administrator invite; the invite is printed as `{"bootstrap_invite":"<code>"}` to stderr. The harness does not use bootstrap mode; scenario setup and protocol-native invite creation are used instead.
+Optional `--bootstrap-ttl` asks the SDK's local `BootstrapAdmin` operation to create an administrator invite; the invite is printed as `{"bootstrap_invite":"<code>"}` to stderr. The `bootstrap-admin` scenario starts its dedicated server with this flag, reads the stderr invite line, and passes the code to the client as `--arg code=<invite>`; other scenarios use protocol-native invite creation instead.
 
 ### State file
 
@@ -187,7 +187,7 @@ The focused TypeScript raw-path integration controls are in `ts/test/interop-cli
 
 ## 6. Scenarios
 
-[`scenarios.json`](scenarios.json) is the current scenario source of truth (33 ordered scenario IDs). Expected objects are recursively matched subsets; arrays are exact; `$kid` resolves from `spec/fixtures/keys.json`, and `$base64url` resolves the exact UTF-8 string bytes. The table below reports the current expected outcome/status/code; identity forwarding, application decisions, and administrative controls are distinct:
+[`scenarios.json`](scenarios.json) is the current scenario source of truth (39 ordered scenario IDs). Expected objects are recursively matched subsets; arrays are exact; `$kid` resolves from `spec/fixtures/keys.json`, and `$base64url` resolves the exact UTF-8 string bytes. The table below reports the current expected outcome/status/code; identity forwarding, application decisions, and administrative controls are distinct:
 
 | Current scenario IDs | Expected result |
 |---|---|
@@ -198,6 +198,10 @@ The focused TypeScript raw-path integration controls are in `ts/test/interop-cli
 | `identity-forward` | `app.identity` returns Alice's verified identity, exact POST `/mcp`, and exact noncanonical body bytes as base64url; forged identity arguments do not override it |
 | `identity-get` | `GET /identity?x=%2F` returns Alice identity, empty body, method and target |
 | `identity-dot-target` | `GET /a/../identity?x=%2F` returns Alice identity, empty body, method and exact raw target |
+| `target-percent-utf8-post`, `target-percent-utf8-get` | raw-request cases (below): `/mcp?q=%C3%A9` and `/identity?q=%C3%A9` are signed by each client and accepted by each server: `ok`, HTTP 200 |
+| `target-raw-utf8` | raw-request case: `/mcp?q=` followed by the raw UTF-8 bytes C3 A9 is refused before verification: `rejected`, HTTP 400 (unsigned; the code is not compared because an HTTP library may answer a bare 400) |
+| `target-absolute-form` | raw-request case: `http://svc.example.test/mcp` is refused before verification: `rejected`, HTTP 400 `invalid_request` (unsigned; the response signature is not checked) |
+| `target-fragment` | raw-request case: `/mcp#frag` signed over `/mcp`: every server drops the fragment and verifies over `/mcp`: `ok`, HTTP 200 |
 | `app-permission-allowed` | `ok`, HTTP 200; app result contains text `ok` |
 | `app-permission-denied` | `rejected`, HTTP 403 `application_permission_denied` (signed) |
 | `admin-required` | `rejected`, HTTP 403 `admin_required` (signed) |
@@ -213,7 +217,8 @@ The focused TypeScript raw-path integration controls are in `ts/test/interop-cli
 | `invalid-request` | `rejected`, HTTP 400 `invalid_request` (signed) |
 | `unknown-native-tool` | `rejected`, HTTP 403 `operation_denied` (signed) |
 | `enroll` | `ok`, HTTP 200; newly enrolled identity has `admin:false` |
-| `enroll-used-invite` | `rejected`, HTTP 403 `invalid_invite` (signed) |
+| `enroll-used-invite` | `rejected`, HTTP 401 `unknown_key` (unsigned: a used invite is no longer live) |
+| `bootstrap-admin` | dedicated server started with `--bootstrap-ttl 3600`; its stderr invite enrolls `newbie` (`admin:true`, single use); re-enrolling with the consumed code is HTTP 409 `key_exists` (signed, spec 03 section 3.2); final whoami reports `admin:true` |
 | `rotate` | `ok`, HTTP 200; new key retains Alice name and `admin:false` |
 | `admin-create` | `ok`, HTTP 200; newbie2 key is reported as Dave with `admin:false` |
 | `revoke-key` | `rejected`, HTTP 401 `unknown_key` after revocation |
@@ -222,12 +227,15 @@ The focused TypeScript raw-path integration controls are in `ts/test/interop-cli
 
 Current coverage includes non-admin and admin identity reports; ordinary MCP forwarding with forged identity arguments and noncanonical body whitespace; authenticated GET identity handoff; app-allowed and app-denied ordinary tool calls; native admin gate; typed `admin=false` plus raw omitted/null/string/number invalid controls; authentication, freshness and replay controls; and enrollment/rotation/revocation/last-admin lifecycle. Do not restore retired scenarios such as policy-based `denied-tool`, `unmapped-tool`, or old `agent-admin` as current cases.
 
+**Raw-request scenarios.** A scenario with a `raw_request` object (`method`, `target`, optional `body` string, optional `sign_target`) is not run through the client's scenario handlers. For each client language the harness invokes the client in `sign-only` mode with the current time, a fresh nonce and the request method, `sign_target` (default: `target`) and body, then writes the request itself over a TCP socket to the pair's shared server: the request line carries `target` verbatim as UTF-8 bytes, so no HTTP library normalises it. The result is the HTTP status and, for non-200 responses, the `error.code` found in the body; `expected.outcome`/`http_status`/`code` are compared (`expected.data` is not used). The refusal scenarios sign the benign target `/mcp` through `sign_target`, so a server that verified before checking the target form would answer 401 `bad_signature` and fail the case. The harness does not verify response signatures for these cases.
+
 State-changing `fresh` cases use a pristine state file. A scenario with `registry_overrides` also gets a dedicated server (the current `key-not-yet-valid` override sets Erin's `not_before` to now + 3600 seconds). Other live scenarios share the pair's server. `replay` signs once, sends the exact same request bytes/header twice, and reports the second response. `clock-skew` signs 120 seconds in the past against the default 30-second server window. `tampered-body` changes the final `}` byte to `|` after signing. `bad-server-key` pins Mallory's key to force a client-side verification error.
 
 Multi-step mechanics are normative through the scenario steps and expected result:
 
 - `enroll`: root creates a default (non-admin) invite; the new identity enrolls with its own key; that identity calls `jack.whoami`.
-- `enroll-used-invite`: create one default invite, enroll `newbie`, then attempt to enroll `newbie2` with the same code; the final step must be `invalid_invite`.
+- `enroll-used-invite`: create one default invite, enroll `newbie`, then attempt to enroll `newbie2` with the same code; the final step must be an unsigned `401 unknown_key`.
+- `bootstrap-admin`: the harness starts the server with `--bootstrap-ttl 3600` and takes the invite code from the stderr `bootstrap_invite` line; `newbie` enrolls once (admin true), re-enrolling with the same code is `409 key_exists` because the kid is already registered (spec 03 section 3.2), and whoami reports `admin:true`.
 - `rotate`: Alice proves possession of the new key; the old Alice key must then be rejected as `unknown_key`; the new key reports Alice's name and non-admin status.
 - `admin-create`: root creates a default invite and creates `dave` with `admin` omitted; `newbie` enrolls; the primary fixture key reports the registered name `dave`.
 - `revoke-key`: root revokes Bob, then Bob's next request is `unknown_key`.
@@ -275,7 +283,7 @@ The assertions describe what a future invocation checks; they are not results fr
 2. Add server/client/transfer argv to `interop/targets.json`. Relative paths resolve from repository root; executable commands may be on `PATH`.
 3. Build the language targets using the appropriate instructions in section 2; do not infer a passing result from a successful build.
 4. Exercise the request harness self-test, then the selected language pair and signing parity; run the independent transfer self-test and matrix for transfer changes.
-5. CI builds language binaries and runs the shared jobs. For baseline `b13b972`, shared interop, transfer-matrix, consumer, coverage/fuzz evidence was verified on `444c69b`; final merge and post-merge verification are separate gates.
+5. CI builds language binaries and runs the matrices on every pull request; do not infer a passing result from a successful build.
 
 ## 10. Determinism notes
 
@@ -343,7 +351,7 @@ Fixtures pin seed/public/kid triples independently, include RFC 8032 test materi
 node interop/transfer.mjs --self-test
 ```
 
-The transfer self-test uses actual SDK probes for positive issuance/import/public verification before running refusal and lifecycle controls. Its expectations include exact fixture credential bytes; signature verification against independently pinned key material; wrong identity, signature, message, envelope, connection, issued bytes, and export-freshness mutations; all-accept/all-reject verifier controls; rejection-class and result-shape controls; and child truncation, extra output, invalid UTF-8, overflow, timeout, spawn failure, secret-safe diagnostics, synthetic post-exit stdout, cleanup timeout, and owned-child accounting. Lifecycle controls specifically expect success for normal and final-chunk output; classify exit-2, truncated, malformed, no-newline, extra-line, invalid-UTF-8, overflow, stderr-secret, timeout, and spawn-failure probes; reject invalid timeout options; retain stdout emitted after `exit` until `close`; and kill/reap the owned PID within bounded cleanup, including reporting `cleanup_timeout` if a synthetic child cannot close. These are specified controls, not reported outcomes; no test was run here. For the current baseline, transfer matrix and self-test acceptance were verified in GitHub CI on `444c69b` (see readiness evidence).
+The transfer self-test uses actual SDK probes for positive issuance/import/public verification before running refusal and lifecycle controls. Its expectations include exact fixture credential bytes; signature verification against independently pinned key material; wrong identity, signature, message, envelope, connection, issued bytes, and export-freshness mutations; all-accept/all-reject verifier controls; rejection-class and result-shape controls; and child truncation, extra output, invalid UTF-8, overflow, timeout, spawn failure, secret-safe diagnostics, synthetic post-exit stdout, cleanup timeout, and owned-child accounting. Lifecycle controls specifically expect success for normal and final-chunk output; classify exit-2, truncated, malformed, no-newline, extra-line, invalid-UTF-8, overflow, stderr-secret, timeout, and spawn-failure probes; reject invalid timeout options; retain stdout emitted after `exit` until `close`; and kill/reap the owned PID within bounded cleanup, including reporting `cleanup_timeout` if a synthetic child cannot close. These are specified controls, not reported outcomes; no test was run here. CI builds the language binaries and runs the matrices on every pull request; do not infer a passing result from a successful build.
 
 Transfer design references: [`docs/design/user-keys.md`](../docs/design/user-keys.md) is normative for exact credential canonicalization, import ordering, trust comparison, result redaction, mutability, and language-role API obligations; `spec/fixtures/user-key-transfer.json` is the hand-maintained case source. Transfer envelope `type` is a document discriminator, not legacy user `kind`.
 
@@ -364,7 +372,7 @@ Executable contract, concisely. The rotation server runs with `--aud <aud> --url
 
 Every time sample comes from the `--clock-file` integer, and the driver moves clocks forward monotonically between steps. Clock injection exists only in these interop executables (and the fake peer); it is never new SDK public API.
 
-The matrix pins 14 named checks:
+The matrix pins 19 named checks:
 
 | Check | What it proves |
 |---|---|
@@ -382,7 +390,32 @@ The matrix pins 14 named checks:
 | `s4-cutoff-successor` | At exactly A the successor signs and is accepted. |
 | `s5-old-key-after-cutoff` | An old-key response at or after the cutoff is refused with `rotation_key_interval`. |
 | `c2-state-stable` | Failed controls never fall back, retry, or mutate trust. |
+| `r1-server-rollback-refused` | A server clock below the durable high water latches ClockGuard unsafe and the next response is refused (G9). |
+| `r2-server-latch-fail-closed` | The latch persists: with the clock back at the high water the server still refuses. |
+| `r3-server-restart-still-latched` | A fresh server process on the latched store fails closed at startup (never ready) in every language. |
+| `r4-client-rollback-refused` | A client store clock below its high water latches unsafe; the client refuses (nonzero exit, no JSON line). |
+| `r5-client-restart-no-recovery` | A restart on the latched client store still refuses even with the clock moved far forward: no catch-up recovery exists. |
 
 The fake peer `tools/rotation-fake.mjs` (page, page-tamper, and old-key modes) is driver-owned harness tooling like `tools/fake-server.mjs` and is never SDK evidence. The self-test fakes exercise driver logic only and are not SDKs.
 
-Limits: single-page refresh only (no pagination); no quarantine/conflict coverage; no capacity/compaction coverage; no concurrent publishers or restart/recovery; no bridge-expired refusal (the client never receives a first-seen record at or after A in this matrix); no Windows/macOS runs; no durable-nonce profile; no fuzzing. Per-language deeper coverage stays in the SDK test suites.
+Limits: single-page refresh only (no pagination); no quarantine/conflict coverage; no capacity/compaction coverage; no concurrent publishers; restart coverage limited to the fail-closed rollback latch above (no recovery/reconcile or fence-clearing flow is exercised — no SDK implements one); no bridge-expired refusal (the client never receives a first-seen record at or after A in this matrix); no Windows/macOS runs; no durable-nonce profile; no fuzzing. Per-language deeper coverage stays in the SDK test suites.
+
+## 13. Durable-nonce restart matrix
+
+Entry point: `node interop/durable.mjs [--targets <file>] [--servers <l,l,...>] [--clients <l,l,...>] [--list] [--self-test]`. Exit codes match section 3 (0 pass, 1 scenario failure, 2 usage/self-test failure).
+
+Normative source: `spec/candidate/durable-nonces.md`. Each SDK implements it through its durable store: Go `durable/`, Rust `rust/src/server/durable_*.rs`, TypeScript `ts/src/server/durable-*.ts`. The durable stores are Linux-only, so the matrix runs on Linux only (CI job `durable-interop`).
+
+Executable flag contract (same names in all three interop servers): `--durable-dir <dir>` admits requests through the language's durable nonce store with store file `<dir>/nonces`; deployment identity comes from `--aud`; store window and verifier window both come from `--durable-window` (default 30, integer 1..120). Absent flags mean unchanged behaviour. `--durable-init` performs the explicit out-of-band store initialization, prints `{"durable_initialized":true}` and exits 0. A dirty store after an unclean stop refuses startup with no ready line.
+
+Checks per client x server pair:
+
+| Check | What it proves |
+|---|---|
+| `durable-restart-replay` | Signed request accepted; clean restart on the same store; byte-identical replay refused 401 `replayed_nonce` unsigned; fresh nonce accepted. |
+| `durable-crash-fail-closed` | SIGKILL after a committed request; restart on the same store must refuse startup with no ready line (the spec's dirty-serving-epoch gate, sections 2-3). |
+| `durable-expiry-reuse` | Window 2; the same (kid, nonce) pair is accepted again only after retention expired past a durable high-water advance, and immediately re-refused afterwards. |
+
+Requests are driven raw: the client signs in sign-only mode and the harness writes the exact request bytes over TCP (section 6 raw-request mechanics); responses are not signature-verified (same as raw scenarios).
+
+Limits: real wall clock only (no injected clock in these executables; the expiry scenario uses a short 2-second window instead); no recovery-inspect/reconcile coverage; no capacity or concurrent-owner coverage; the self-test uses bundled fakes and is not SDK evidence; Linux only.

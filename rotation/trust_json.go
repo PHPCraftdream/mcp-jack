@@ -115,7 +115,7 @@ func trustDocumentShape(value any) bool {
 	return ok && len(records) < MaxRetainedKeys
 }
 
-// DecodeTrustSnapshot — strict local state decoder, не startup readiness или ACK.
+// DecodeTrustSnapshot is a strict local state decoder, not startup readiness or ACK.
 func DecodeTrustSnapshot(data []byte, binding Binding, window int64, checkpoint Checkpoint) (TrustSnapshot, error) {
 	refuse := func() (TrustSnapshot, error) { return TrustSnapshot{}, invalid("rotation_state_unknown") }
 	if len(data) == 0 || len(data) > MaxTrustSnapshotBytes {
@@ -152,7 +152,7 @@ func DecodeTrustSnapshot(data []byte, binding Binding, window int64, checkpoint 
 	return ValidateTrustSnapshot(loaded, binding, window, checkpoint)
 }
 
-// EncodeTrustSnapshot пишет только validated public state, без signer/private material.
+// EncodeTrustSnapshot writes only validated public state, without signer/private material.
 func EncodeTrustSnapshot(input TrustSnapshot, binding Binding, window int64, checkpoint Checkpoint) ([]byte, error) {
 	snapshot, err := ValidateTrustSnapshot(input, binding, window, checkpoint)
 	if err != nil {

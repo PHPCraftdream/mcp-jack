@@ -256,9 +256,43 @@ jobs:
       - name: Run the rotation matrix
         run: node interop/rotation.mjs
 
+  durable-interop:
+    name: durable nonce interop matrix (3x3, linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [go, rust, ts, fixtures]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Build Go executables
+        run: |
+          go build -o interop/bin/go-server ./interop/go/server
+          go build -o interop/bin/go-client ./interop/go/client
+      - name: Build Rust executables
+        working-directory: rust
+        run: cargo build --locked --release --features interop
+      - name: Build TypeScript executables
+        working-directory: ts
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+      - run: node interop/durable.mjs --self-test
+      - name: Run the durable restart matrix
+        run: node interop/durable.mjs
+
   mcp-compat-e2e:
     name: mcp compat e2e (official clients x official servers)
     runs-on: ubuntu-latest
+    needs: [go, rust, ts, fixtures]
     timeout-minutes: 45
     env:
       CGO_ENABLED: '0'
@@ -298,7 +332,9 @@ jobs:
       - name: Run the official MCP SDK end-to-end matrix
         env:
           JACK_BIN: ${{ runner.temp }}/jack
-        run: node tools/mcp-e2e/run.mjs
+        # Known limitation: the official TypeScript server answers initialize with SSE and the
+        # gateway refuses SSE by design. The skip is explicit and every skipped cell is listed.
+        run: node tools/mcp-e2e/run.mjs --allow-skip-ts-server
 
   credential-transfer:
     name: credential transfer matrix (3x3)

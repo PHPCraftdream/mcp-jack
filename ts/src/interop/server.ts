@@ -19,6 +19,8 @@ import type { FileState } from "../server/state-file.js";
 import { parseJsonRaw, Verifier } from "../server/verify.js";
 import type { RawJsonNode } from "../server/verify.js";
 import { serveNode } from "../server/node.js";
+import { durableInit, durableOpen, durableSettings } from "./durable.js";
+import type { DurableHandle, DurableSettings } from "./durable.js";
 
 function fail(msg: string): never {
   process.stderr.write(`interop-server: ${msg}\n`);
@@ -38,19 +40,30 @@ interface Flags {
   statePath: string;
   serverSeedHex: string;
   bootstrapTtl: string;
+  durableDir: string;
+  durableWindow: string;
+  durableInit: boolean;
   verifyOnly: boolean;
 }
 
-const VALUE_FLAGS: ReadonlySet<string> = new Set(["aud", "state", "server-seed-hex", "bootstrap-ttl"]);
+const VALUE_FLAGS: ReadonlySet<string> =
+  new Set(["aud", "state", "server-seed-hex", "bootstrap-ttl", "durable-dir", "durable-window"]);
 
 function parseFlags(argv: readonly string[]): Flags {
-  const flags: Flags = { aud: "", statePath: "", serverSeedHex: "", bootstrapTtl: "", verifyOnly: false };
+  const flags: Flags = {
+    aud: "", statePath: "", serverSeedHex: "", bootstrapTtl: "",
+    durableDir: "", durableWindow: "30", durableInit: false, verifyOnly: false,
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] as string;
     const name = arg.startsWith("--") ? arg.slice(2) : arg.length > 1 && arg.startsWith("-") ? arg.slice(1) : null;
     if (name === null) fail(`unexpected argument '${arg}'`);
     if (name === "verify-only") {
       flags.verifyOnly = true;
+      continue;
+    }
+    if (name === "durable-init") {
+      flags.durableInit = true;
       continue;
     }
     if (!VALUE_FLAGS.has(name)) fail(`unknown flag --${name}`);
@@ -60,7 +73,9 @@ function parseFlags(argv: readonly string[]): Flags {
     if (name === "aud") flags.aud = value;
     else if (name === "state") flags.statePath = value;
     else if (name === "server-seed-hex") flags.serverSeedHex = value;
-    else flags.bootstrapTtl = value;
+    else if (name === "bootstrap-ttl") flags.bootstrapTtl = value;
+    else if (name === "durable-dir") flags.durableDir = value;
+    else flags.durableWindow = value;
   }
   return flags;
 }
@@ -364,19 +379,33 @@ function createBootstrapInvite(state: FileState, ttlText: string): string {
   }
 }
 
-function serve(flags: Flags, seed: Uint8Array, state: FileState, signer: InMemorySigner): void {
+function serve(flags: Flags, seed: Uint8Array, state: FileState, signer: InMemorySigner,
+  settings: DurableSettings | undefined): void {
   const nowSec = (): number => Math.floor(Date.now() / 1000);
   if (flags.bootstrapTtl !== "") {
     // Printed on stderr; the harness never uses the bootstrap invite.
     process.stderr.write(JSON.stringify({ bootstrap_invite: createBootstrapInvite(state, flags.bootstrapTtl) }) + "\n");
   }
-  // No window override: the contract pins the spec default (30 s).
+  // Open the durable store before any stdout output: a failure (dirty store
+  // after a crash, owner marker left by a killed process) must exit nonzero
+  // without a ready line.
+  let durable: DurableHandle | undefined;
+  if (settings !== undefined) {
+    try {
+      durable = durableOpen(settings, flags.aud, nowSec);
+    } catch (err) {
+      return fail(`durable store: ${message(err)}`);
+    }
+  }
+  // Without the durable seam: no window override, the contract pins the spec
+  // default (30 s). With it: the verifier window must equal the store's W.
   const verifier = new Verifier({
     aud: flags.aud,
     state,
-    nonces: new NonceStore(),
     native: new Native(),
     now: nowSec,
+    // Exactly one nonce profile: the durable admission replaces the volatile store.
+    ...(durable !== undefined ? { durable: durable.admission, window: durable.window } : { nonces: new NonceStore() }),
   });
   const handler = jackFetchHandler({ verifier, serverKey: seed }, mcpHandler);
   const server = createServer(serveNode(handler));
@@ -393,6 +422,15 @@ function serve(flags: Flags, seed: Uint8Array, state: FileState, signer: InMemor
   // Exit 0 on SIGTERM/SIGINT or stdin EOF (the harness closes stdin to stop
   // the server; the fake reference server does the same).
   const stop = (): void => {
+    if (durable !== undefined) {
+      // Close before exit; it throws when fenced/dirty or with leases
+      // outstanding — report on stderr, still exit 0.
+      try {
+        durable.store.close();
+      } catch (err) {
+        process.stderr.write(`interop-server: durable store close: ${message(err)}\n`);
+      }
+    }
     server.close();
     process.exit(0);
   };
@@ -409,6 +447,27 @@ function serve(flags: Flags, seed: Uint8Array, state: FileState, signer: InMemor
 
 function main(): void {
   const flags = parseFlags(process.argv.slice(2));
+  // Validate the durable flags first: --durable-init never needs the state
+  // file and must be handled before loadState.
+  let settings: DurableSettings | undefined;
+  try {
+    settings = durableSettings(flags.durableDir, flags.durableWindow);
+  } catch (err) {
+    return fail(`${message(err)}`);
+  }
+  if (flags.durableInit) {
+    if (flags.verifyOnly) fail("--durable-init cannot be combined with --verify-only");
+    if (settings === undefined) fail("--durable-init requires --durable-dir");
+    try {
+      durableInit(settings, flags.aud);
+    } catch (err) {
+      return fail(`--durable-init: ${message(err)}`);
+    }
+    process.stdout.write('{"durable_initialized":true}\n', () => {
+      process.exit(0);
+    });
+    return;
+  }
   if (flags.aud === "" || flags.statePath === "" || flags.serverSeedHex === "") {
     fail("--aud, --state and --server-seed-hex are required");
   }
@@ -419,7 +478,7 @@ function main(): void {
     void runVerifyOnly(flags.aud, state).catch((err) => fail(`unexpected error: ${message(err)}`));
     return;
   }
-  serve(flags, seed, state, signer);
+  serve(flags, seed, state, signer, settings);
 }
 
 main();

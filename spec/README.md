@@ -49,7 +49,7 @@ node spec/tools/gen-fixtures.mjs --check  # check current top-level vectors
 | D10 | Enrollment is the exception to unknown-key rejection: a new key signs proof of possession and presents a single-use invite. | Invites are narrowly scoped bearer permissions. |
 | D11 | One strict boolean `admin` per user, default false; protocol admin privilege gates native administration. | Keep protocol privilege simple and auditable. |
 | D12 | Strict Ed25519 public-key admission and signature scalar rule (`S < L`). | Preserve the normative cryptographic contract; do not weaken it. |
-| D13 | Duplicate JSON members in request bodies use last-occurrence-wins and are not merged; authentication still covers exact bytes. | Keep parser behavior explicit and narrowly scoped. |
+| D13 | A request body in which any JSON object has two members with the same name (compared after unescaping) is not acceptable: `400 invalid_request` after authentication, with the nonce consumed. | JSON libraries disagree on duplicates, so last-wins would let the bytes the signature covers mean different things to the verifier and to the wrapped server. |
 | D14 | Server SDK hands a read-only verified identity snapshot to wrapped handlers. | Consumers can apply their own authorization. |
 
 ## Open questions and separately selected future directions

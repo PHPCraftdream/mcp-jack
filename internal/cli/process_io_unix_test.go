@@ -325,7 +325,7 @@ func socketPair(t *testing.T) (child, peer *os.File) {
 	return child, peer
 }
 
-// Node child_process отдаёт stdio дочернему процессу как UNIX socketpair.
+// Node child_process hands stdio to the child process as a UNIX socketpair.
 func TestPrepareProcessIOAcceptsUnixSocketpairs(t *testing.T) {
 	in, inPeer := socketPair(t)
 	out, outPeer := socketPair(t)

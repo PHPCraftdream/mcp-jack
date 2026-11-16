@@ -39,7 +39,7 @@ function setup(context: TestContext, endpoint = "https://controller.example.test
   const path = join(root, "trust");
   rotation.RotationTrustStore.initializeUnused(path, options);
   const store = rotation.RotationTrustStore.open(path, options);
-  context.after(() => { try { store.close(); } catch { /* Только test-owned cleanup. */ } rmSync(root, { recursive: true, force: true }); });
+  context.after(() => { try { store.close(); } catch { /* Test-owned cleanup only. */ } rmSync(root, { recursive: true, force: true }); });
   const controller = new RotationController(store);
   const request = client.signRequest(user, binding.aud, "POST", "/mcp", new Uint8Array(), new Uint8Array(16), 1000);
   const requestSignature = parseRequestAuth([request]).sig;
@@ -269,7 +269,7 @@ test("refresh controller: explicit overlapping pages ACK terminal only; duplicat
   assert.deepEqual(store.snapshot(), before);
   store.close();
   const reopened = rotation.RotationTrustStore.open(environment.path, environment.options);
-  context.after(() => { try { reopened.close(); } catch { /* Только test-owned cleanup. */ } });
+  context.after(() => { try { reopened.close(); } catch { /* Test-owned cleanup only. */ } });
   assert.deepEqual(reopened.snapshot().snapshot, before.snapshot);
   const restored = new RotationController(reopened);
   clock.now = first.activatesAt;
@@ -393,4 +393,41 @@ test("refresh controller: real pre/post-rename unknown CAS keeps one-attempt gat
     const retained = readdirSync(environment.root).filter((name) => name.startsWith(".trust.") && name.endsWith(".tmp"));
     assert.equal(retained.length, outcome === "before" ? 1 : 0);
   }
+});
+
+test("refresh controller: late final failure after commit reports BOTH the committed outcome and the error", { skip: !linux }, (context) => {
+  const environment = setup(context);
+  const first = firstRecord(environment);
+  const { controller, store, clock } = environment;
+  clock.now = first.activatesAt - 1;
+  const page = signedPage(environment, [first]);
+  const cursor = store.snapshot().snapshot.head;
+  const before = first.activatesAt - 1;
+  // Four authoritative samples: the last one (first.activatesAt) makes the
+  // POST-commit final gate fail with rotation_key_interval.
+  const sequence = [before, before, before, first.activatesAt];
+  clock.hook = () => { const value = sequence.shift(); assert.notEqual(value, undefined); return value as number; };
+  let caught: unknown;
+  try {
+    controller.acceptRefresh(page, "refresh", cursor);
+  } catch (error) {
+    caught = error;
+  }
+  assert.equal(sequence.length, 0);
+  delete clock.hook;
+  assert.ok(caught instanceof JackError, "still a JackError (httpStatus 0 handling keeps working)");
+  assert.ok(caught instanceof rotation.RotationRefreshCommittedError, "carries the committed outcome");
+  const committedError = caught as rotation.RotationRefreshCommittedError;
+  assert.equal(committedError.httpStatus, 0);
+  assert.equal(committedError.code, "rotation_key_interval");
+  // Without the fix this is a plain JackError: the caller cannot observe that
+  // trust already advanced (revision 2, head ordinal 1).
+  assert.ok(committedError.result !== undefined, "committed result is attached to the error");
+  assert.equal(committedError.result?.committed, true);
+  assert.equal(committedError.result?.revision, 2);
+  // The store really did commit.
+  const state = store.snapshot();
+  assert.equal(state.snapshot.revision, 2);
+  assert.equal(state.snapshot.head.ordinal, 1);
+  assert.deepEqual(state.snapshot.records, [first.wire]);
 });

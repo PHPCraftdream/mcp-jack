@@ -21,7 +21,7 @@ func loadRecoverySnapshot(tx *bolt.Tx, opts Options, snapshot *RecoverySnapshot)
 		Window: m.Window, HighWater: m.HighWater,
 		Dirty: m.Dirty, Unsafe: m.Unsafe,
 	}
-	// Length framing исключает неоднозначность между именами, ключами и значениями.
+	// Length framing eliminates ambiguity between names, keys, and values.
 	hash := sha256.New()
 	_, _ = hash.Write([]byte("mcp-jack/durable-nonce/recovery-snapshot/v1\n"))
 	field := func(value []byte) {

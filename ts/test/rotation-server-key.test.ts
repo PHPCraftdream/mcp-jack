@@ -6,7 +6,7 @@ import { denies, overlapping, serverFrom, signedChain, trustFrom, validateServer
 
 const invalidParams = denies("invalid_params");
 const checkpointUnavailable = denies("rotation_checkpoint_unavailable");
-// Escaped member names (U+006F "o", U+0068 "h") строятся без backslash-литералов в источнике.
+// Escaped member names (U+006F "o", U+0068 "h") are built without backslash literals in the source.
 const slash = String.fromCharCode(92);
 const escapedOrdinal = `after_${slash}u006frdinal`;
 const escapedHash = `after_${slash}u0068ash`;
@@ -22,9 +22,9 @@ test("server-key arguments accept exactly one canonical cursor and own the resul
   assert.deepEqual(zero, { ordinal: 0, hash: "-" });
   assert.ok(Object.isFrozen(zero));
   assert.deepEqual(rotation.decodeRotationServerKeyArguments(args("1", first.hash)), { ordinal: 1, hash: first.hash });
-  // Порядок членов и whitespace не значимы; семантика не зависит от last-wins map.
+  // Member order and whitespace are not significant; semantics are independent of the last-wins map.
   assert.deepEqual(rotation.decodeRotationServerKeyArguments(' { "after_hash" : "-" ,\n"after_ordinal" : 0 } '), zero);
-  // JSON-литерал -0 — целое ноль; escaped member name декодируется до сравнения имён.
+  // The JSON literal -0 is the integer zero; the escaped member name is decoded before name comparison.
   assert.deepEqual(rotation.decodeRotationServerKeyArguments(args("-0", "-")), zero);
   assert.deepEqual(rotation.decodeRotationServerKeyArguments(`{"${escapedOrdinal}":0,"after_hash":"-"}`), zero);
   assert.equal(rotation.decodeRotationServerKeyArguments(args(String(Number.MAX_SAFE_INTEGER), first.hash)).ordinal, Number.MAX_SAFE_INTEGER);
@@ -34,7 +34,7 @@ test("server-key arguments reject every non-canonical shape as invalid_params", 
   const [first] = overlapping();
   assert.ok(first);
   const good = first.hash;
-  // Последний символ canonical hash имеет нулевые trailing bits; "B" их нарушает.
+  // The last character of the canonical hash has zero trailing bits; "B" violates them.
   const trailingBits = `${good.slice(0, 42)}B`;
   const bad: (string | undefined)[] = [
     undefined, "", "null", "[]", "0", '"x"', "{}", "{ }", "true",
@@ -95,7 +95,7 @@ test("server-key page is bounded to 16 records and always advances", () => {
   const rest = rotation.rotationServerKeyPage(snapshot, { ordinal: 16, hash: sixteenth.hash }, signer);
   assert.deepEqual(rest.records, records.slice(16).map((record) => record.wire));
   assert.equal(rest.complete, true);
-  // Ровно 16 записей до head: страница complete без пустого продолжения.
+  // Exactly 16 records up to the head: the page is complete with no empty continuation.
   const exact = validateServer(serverFrom(trustFrom(records.slice(0, 16), base)), base);
   const page = rotation.rotationServerKeyPage(exact, { ordinal: 0, hash: "-" }, signer);
   assert.equal(page.records.length, 16);
@@ -115,7 +115,7 @@ test("server-key page refuses cursors outside the retained ring or with a wrong 
   for (const [ordinal, cursorHash] of refused) {
     assert.throws(() => rotation.rotationServerKeyPage(snapshot, { ordinal, hash: cursorHash }, signer), checkpointUnavailable, `${ordinal}:${cursorHash}`);
   }
-  // Подписант вне ring никогда не получает fallback на другой key.
+  // A signer outside the ring never gets a fallback to another key.
   const outsider = bodyHash(Buffer.from("unknown signer", "utf8"));
   assert.throws(() => rotation.rotationServerKeyPage(snapshot, { ordinal: 0, hash: "-" }, outsider), denies("rotation_state_unavailable"));
 });

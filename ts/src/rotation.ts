@@ -1,4 +1,4 @@
-/** Candidate rotation primitives; current static credentials остаются без изменений. */
+/** Candidate rotation primitives; current static credentials remain unchanged. */
 export * from "./rotation-record.js";
 export * from "./rotation-chain.js";
 export * from "./rotation-sign.js";
@@ -8,7 +8,7 @@ export * from "./rotation-trust.js";
 export * from "./rotation-trust-json.js";
 export { RotationTrustStore } from "./rotation-store.js";
 export type { RotationStoreOptions } from "./rotation-store.js";
-export { RotationController } from "./rotation-controller.js";
+export { RotationController, RotationRefreshCommittedError } from "./rotation-controller.js";
 export type { RotationResponse, RotationRefreshResult } from "./rotation-controller.js";
 export { RotationHTTPClient } from "./rotation-http.js";
 export type { RotationHTTPReply } from "./rotation-http.js";

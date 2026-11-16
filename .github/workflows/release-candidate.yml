@@ -1,0 +1,388 @@
+# Artifact-only release candidate (RC).
+#
+# One manually started run builds the shippable artifacts for one exact
+# commit, checksums them, attests their provenance, and verifies them again
+# from the downloaded bytes. Nothing is published: no registry, no tag, no
+# GitHub Release. The same workflow is intended to be run on the release
+# commit later.
+
+name: release-candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full 40-character lowercase hex commit SHA to certify
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-candidate-${{ inputs.sha }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Single place that determines the commit. Every other job checks out the
+  # SHA from this job's outputs, so a temporary second trigger for validation
+  # only touches this job.
+  resolve:
+    name: resolve candidate commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+      commit_epoch: ${{ steps.resolve.outputs.commit_epoch }}
+      commit_time_utc: ${{ steps.resolve.outputs.commit_time_utc }}
+    env:
+      RC_SHA: ${{ inputs.sha }}
+    steps:
+      - name: Require the default branch
+        run: |
+          # A dispatch from another branch could carry a modified workflow that
+          # passes its own verification; the signer ref is refs/heads/main.
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::the release candidate must be dispatched from refs/heads/main"
+            exit 1
+          fi
+      - name: Validate the requested SHA format
+        run: |
+          if ! printf '%s' "$RC_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::sha input must be a full 40-character lowercase hex commit SHA"
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+      - name: Confirm HEAD matches the input and sits on the default branch
+        run: |
+          resolved="$(git rev-parse HEAD)"
+          if [ "$resolved" != "$RC_SHA" ]; then
+            echo "::error::checkout HEAD $resolved does not match the requested sha"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$RC_SHA" origin/main; then
+            echo "::error::$RC_SHA is not an ancestor of the default branch (main)"
+            exit 1
+          fi
+      - name: Record the resolved commit
+        id: resolve
+        run: |
+          epoch="$(git show -s --format=%ct HEAD)"
+          {
+            echo "sha=$RC_SHA"
+            echo "commit_epoch=$epoch"
+            echo "commit_time_utc=$(date -u -d "@$epoch" +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+      - name: Summarize
+        run: echo "Release candidate for commit $RC_SHA - artifact-only, nothing is published." >> "$GITHUB_STEP_SUMMARY"
+
+  # CLI binaries: the existing qualification tool builds all six targets
+  # twice from independent source roots and proves byte equality. Windows
+  # binaries fail closed by design and never enter the RC artifact set.
+  cli-binaries:
+    name: qualify CLI binaries
+    runs-on: ubuntu-latest
+    needs: [resolve]
+    timeout-minutes: 30
+    env:
+      CGO_ENABLED: '0'
+      GOTOOLCHAIN: local
+      GOPROXY: https://proxy.golang.org
+      GOSUMDB: sum.golang.org
+      RC_SHA: ${{ needs.resolve.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve.outputs.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26.11'
+      - name: Qualify independent byte-identical builds
+        run: >-
+          python3 -I tools/binaries/qualify.py
+          --source "$GITHUB_WORKSPACE"
+          --output "$RUNNER_TEMP/jack-cli-portable"
+          --expected-sha "$RC_SHA"
+          --feature-sha "$RC_SHA"
+      - name: Keep only the RC targets
+        run: |
+          mkdir "$RUNNER_TEMP/rc-binaries"
+          for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+            cp "$RUNNER_TEMP/jack-cli-portable/jack-$target" "$RUNNER_TEMP/rc-binaries/"
+          done
+      - name: Upload RC binaries
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: rc-binaries-${{ env.RC_SHA }}
+          path: ${{ runner.temp }}/rc-binaries/
+          if-no-files-found: error
+
+  # TypeScript SDK tarball: the same packaging and standalone-consumer
+  # verification steps as the CI consumer lane, so the RC bytes are the
+  # bytes the consumer lane verified at this commit.
+  sdk-ts:
+    name: package and verify TypeScript tarball
+    runs-on: ubuntu-latest
+    needs: [resolve]
+    timeout-minutes: 20
+    env:
+      RC_SHA: ${{ needs.resolve.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve.outputs.sha }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+      - name: Install TypeScript workspace dependencies
+        working-directory: ts
+        run: npm ci --no-audit --no-fund
+      - name: Package the private npm tarball
+        run: node tools/consumer/package-ts.mjs tools/consumer/.scratch/ts-consumer
+      - name: Verify from a standalone consumer install
+        run: node tools/consumer/verify-ts.mjs tools/consumer/.scratch/ts-consumer
+      - name: Upload the verified tarball
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: rc-ts-tarball-${{ env.RC_SHA }}
+          path: tools/consumer/.scratch/ts-consumer/mcp-jack-0.0.0.tgz
+          if-no-files-found: error
+
+  # Rust SDK crate: same as the CI consumer-rust lane.
+  sdk-rust:
+    name: package and verify Rust crate
+    runs-on: ubuntu-latest
+    needs: [resolve]
+    timeout-minutes: 30
+    env:
+      RC_SHA: ${{ needs.resolve.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve.outputs.sha }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@5445741acf05630efa19e221cc588ebe0842b13d # 1.88.0
+        with:
+          toolchain: 1.88.0
+      - name: Package the .crate artifact
+        run: node tools/consumer/package-rust.mjs tools/consumer/.scratch/rust-consumer
+      - name: Verify from a standalone consumer crate
+        run: node tools/consumer/verify-rust.mjs tools/consumer/.scratch/rust-consumer
+      - name: Upload the verified crate
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: rc-rust-crate-${{ env.RC_SHA }}
+          path: tools/consumer/.scratch/rust-consumer/mcp-jack-0.1.0.crate
+          if-no-files-found: error
+
+  # Go SDK module archive: same as the CI consumer-go lane, including the
+  # tar step that produces go-module-snapshot.tgz.
+  sdk-go:
+    name: package and verify Go module archive
+    runs-on: ubuntu-latest
+    needs: [resolve]
+    timeout-minutes: 20
+    env:
+      RC_SHA: ${{ needs.resolve.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve.outputs.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+      - name: Package the staged module snapshot
+        run: node tools/consumer/package-go.mjs tools/consumer/.scratch/go-consumer
+      - name: Tar the staged module snapshot
+        run: tar -czf tools/consumer/.scratch/go-consumer/go-module-snapshot.tgz -C tools/consumer/.scratch/go-consumer module
+      - name: Verify from a standalone consumer module
+        run: node tools/consumer/verify-go.mjs tools/consumer/.scratch/go-consumer
+      - name: Upload the verified module archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: rc-go-archive-${{ env.RC_SHA }}
+          path: tools/consumer/.scratch/go-consumer/go-module-snapshot.tgz
+          if-no-files-found: error
+
+  # One checksum file over exactly the RC artifact set plus a machine
+  # readable manifest, uploaded together with the artifacts as the RC bundle.
+  checksums:
+    name: write SHA256SUMS and RC manifest
+    runs-on: ubuntu-latest
+    needs: [resolve, cli-binaries, sdk-ts, sdk-rust, sdk-go]
+    timeout-minutes: 10
+    env:
+      RC_SHA: ${{ needs.resolve.outputs.sha }}
+      RC_COMMIT_TIME_UTC: ${{ needs.resolve.outputs.commit_time_utc }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve.outputs.sha }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: rc-binaries-${{ env.RC_SHA }}
+          path: rc
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: rc-ts-tarball-${{ env.RC_SHA }}
+          path: rc
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: rc-rust-crate-${{ env.RC_SHA }}
+          path: rc
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: rc-go-archive-${{ env.RC_SHA }}
+          path: rc
+      - name: Write SHA256SUMS and rc-manifest.json
+        run: bash tools/release/rc-checksums.sh "$GITHUB_WORKSPACE/rc" "$RC_SHA" "$RC_COMMIT_TIME_UTC"
+      - name: Upload the RC bundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: rc-bundle-${{ env.RC_SHA }}
+          path: rc/
+          if-no-files-found: error
+      - name: Summarize
+        run: |
+          {
+            echo "### RC artifact checksums for $RC_SHA"
+            echo '```'
+            cat rc/SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Provenance attestation over the checksum file. This is the only job with
+  # id-token and attestations permissions.
+  attest:
+    name: attest build provenance
+    runs-on: ubuntu-latest
+    needs: [resolve, checksums]
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      RC_SHA: ${{ needs.resolve.outputs.sha }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: rc-bundle-${{ env.RC_SHA }}
+          path: rc
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: rc/SHA256SUMS
+      # The provenance records the workflow ref, not the sha input: attesting
+      # the manifest binds the artifact digests to the certified commit.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            rc/rc-manifest.json
+            rc/SHA256SUMS
+      - name: Summarize
+        run: echo "Provenance attested for the RC artifacts, SHA256SUMS and rc-manifest.json." >> "$GITHUB_STEP_SUMMARY"
+
+  # Prove that what the Go ecosystem would serve for this commit is the real
+  # source: compute the proxy pseudo-version, fetch .info and .zip with
+  # bounded retries, and byte-compare the module zip with the committed tree.
+  # Expected to fail until the commit is on the public default branch.
+  go-proxy:
+    name: go proxy pseudo-version check
+    runs-on: ubuntu-latest
+    needs: [resolve]
+    timeout-minutes: 15
+    env:
+      RC_SHA: ${{ needs.resolve.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve.outputs.sha }}
+      - name: Compare the proxy module zip with the committed tree
+        run: bash tools/release/go-proxy-check.sh "$RC_SHA"
+
+  # Verify the RC from the downloaded bytes alone: no checkout, no rebuild.
+  # Checksums, attestations, and a bounded help smoke of the linux/amd64
+  # binary (same rule as tools/binaries/qualify.py).
+  verify:
+    name: verify downloaded RC bundle
+    runs-on: ubuntu-latest
+    needs: [resolve, attest]
+    timeout-minutes: 10
+    env:
+      RC_SHA: ${{ needs.resolve.outputs.sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: rc-bundle-${{ env.RC_SHA }}
+          path: rc
+      - name: Check every artifact against SHA256SUMS
+        working-directory: rc
+        run: sha256sum -c SHA256SUMS
+      - name: Check the manifest names this commit and the same digests
+        working-directory: rc
+        run: |
+          if [ "$(jq -r .sha rc-manifest.json)" != "$RC_SHA" ]; then
+            echo "::error::rc-manifest.json does not name the certified commit"
+            exit 1
+          fi
+          if ! diff <(jq -r '.artifacts[] | "\(.sha256)  \(.name)"' rc-manifest.json) SHA256SUMS; then
+            echo "::error::rc-manifest.json and SHA256SUMS disagree"
+            exit 1
+          fi
+      - name: Verify attestations for every artifact
+        working-directory: rc
+        run: |
+          signer="$GITHUB_REPOSITORY/.github/workflows/release-candidate.yml@$GITHUB_REF"
+          verified=0
+          for artifact in \
+            go-module-snapshot.tgz \
+            jack-darwin-amd64 \
+            jack-darwin-arm64 \
+            jack-linux-amd64 \
+            jack-linux-arm64 \
+            mcp-jack-0.0.0.tgz \
+            mcp-jack-0.1.0.crate \
+            rc-manifest.json \
+            SHA256SUMS
+          do
+            gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY" --signer-workflow "$signer"
+            verified=$((verified + 1))
+          done
+          echo "Attestation verification passed for $verified artifacts (signer workflow: $signer)." >> "$GITHUB_STEP_SUMMARY"
+      - name: Bounded help smoke of the downloaded linux/amd64 binary
+        working-directory: rc
+        run: |
+          chmod +x jack-linux-amd64
+          if ! help_stdout="$(timeout 30 ./jack-linux-amd64 help 2> jack-help-stderr.txt)"; then
+            echo "::error::jack help exited nonzero"
+            exit 1
+          fi
+          if [ -n "$help_stdout" ]; then
+            echo "::error::jack help must print nothing on stdout"
+            exit 1
+          fi
+          if ! grep -q "jack keygen" jack-help-stderr.txt; then
+            echo "::error::jack help must print usage (jack keygen ...) on stderr"
+            exit 1
+          fi
+          echo "Downloaded linux/amd64 binary help smoke passed: stdout empty, usage on stderr." >> "$GITHUB_STEP_SUMMARY"

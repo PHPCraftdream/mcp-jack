@@ -1,6 +1,6 @@
 /** Tests for strict Ed25519 verification and public-key rules, ported from Go's keys_test.go and ed25519_test.go. */
 import assert from "node:assert/strict";
-import { createPrivateKey, createPublicKey, sign as cryptoSign } from "node:crypto";
+import { createHash, createPrivateKey, createPublicKey, sign as cryptoSign } from "node:crypto";
 import type { KeyObject } from "node:crypto";
 import { test } from "node:test";
 import { keyId, decodeBase64URLFixed } from "../src/encoding.js";
@@ -122,4 +122,78 @@ test("verify rejects bad key and signature lengths", () => {
   // Returns false rather than throwing on empty inputs.
   assert.equal(verify(new Uint8Array(0), msg, sig), false, "Verify must return false for an empty key");
   assert.equal(verify(pub, msg, new Uint8Array(0)), false, "Verify must return false for an empty signature");
+});
+
+test("verify rejects a signature whose R is a small-order point", () => {
+  // Spec 01 section 2: a signature whose R is a small-order point is
+  // invalid. A key holder can craft one: with R = identity encoding,
+  // k = SHA-512(R || A || M) mod L and S = k*a mod L satisfy
+  // [S]B = R + [k]A, so the equation holds and only the small-order R rule
+  // can reject it. Before that rule, verify accepted this signature.
+  const key = findKeyByName("alice");
+  const seed = seedOf(key);
+  const priv = privateKeyFromSeed(seed);
+  const pub = publicKeyOf(priv);
+  const msg = new TextEncoder().encode("mcp-jack strict small-order R");
+
+  const l = 2n ** 252n + 27742317777372353535851937790883648493n;
+  // a = clamp(SHA-512(seed)[0..32]) (RFC 8032 section 5.1.5), little-endian.
+  const aBytes = Buffer.from(
+    createHash("sha512").update(Buffer.from(seed)).digest().subarray(0, 32),
+  );
+  aBytes[0] = (aBytes[0] as number) & 248;
+  aBytes[31] = ((aBytes[31] as number) & 63) | 64;
+  const a = BigInt(`0x${Buffer.from(aBytes).reverse().toString("hex")}`);
+
+  const r = Buffer.alloc(32);
+  r[0] = 1; // identity encoding: y = 1, x = 0, clear sign bit
+  const kHash = createHash("sha512")
+    .update(Buffer.concat([r, Buffer.from(pub), Buffer.from(msg)]))
+    .digest();
+  const k = BigInt(`0x${Buffer.from(kHash).reverse().toString("hex")}`) % l;
+  const s = (k * a) % l;
+  assert.ok(s < l, "S is not below L");
+  const sig = new Uint8Array(64);
+  sig.set(r, 0);
+  sig.set(Buffer.from(s.toString(16).padStart(64, "0"), "hex").reverse(), 32);
+
+  assert.equal(verify(pub, msg, sig), false, "Verify accepted a signature whose R is a small-order point");
+  // Non-vacuity: an ordinary signature over the same message verifies.
+  assert.equal(verify(pub, msg, signEd25519(priv, msg)), true, "ordinary signature over the same message must verify");
+});
+
+test("verify rejects a small-order R for the order-2 point (S = 0)", () => {
+  // With a prime-order public key the equation [S]B = R + [k]A forces R
+  // into the prime-order subgroup, so R = identity is the only small-order
+  // value the equation can produce there (covered above). This test uses a
+  // small-order public key A = R = the order-2 point with S = 0: the
+  // equation holds for every odd k, and the pre-change verifier accepted
+  // it. Order-4 and order-8 points are reachable the same way (k = -1 mod
+  // the point's order), so they need no separate recipe here.
+  const order2 = Buffer.from(
+    "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+    "hex",
+  );
+  const baseMsg = new TextEncoder().encode("mcp-jack strict small-order R order2 #");
+  // First message whose k = SHA-512(R || A || M) mod L is odd: the parity
+  // of k equals the low bit of the last hash byte because L is odd. The
+  // search is deterministic and the first hit is stable.
+  let msg: Uint8Array | undefined;
+  for (let i = 0; i < 256; i++) {
+    const candidate = new Uint8Array(baseMsg.length + 1);
+    candidate.set(baseMsg, 0);
+    candidate[baseMsg.length] = i;
+    const digest = createHash("sha512")
+      .update(Buffer.concat([order2, order2, Buffer.from(candidate)]))
+      .digest();
+    if (((digest[63] as number) & 1) === 1) {
+      msg = candidate;
+      break;
+    }
+  }
+  assert.ok(msg !== undefined, "no message with odd k found among 256 candidates");
+
+  const sig = new Uint8Array(64);
+  sig.set(order2, 0); // S stays all zero: [0]B = R + [k]A for odd k
+  assert.equal(verify(order2, msg, sig), false, "Verify accepted a small-order R with S = 0");
 });

@@ -7,8 +7,8 @@ use crate::ed25519::{validate_public_key, verify};
 use crate::encoding::{decode_b64url_fixed, encode_b64url, key_id};
 use std::collections::BTreeMap;
 
-/// Использует существующий dyn-compatible Signer, не требует private export.
-/// Только создание record: не publication, persistence, trust mutation или retry.
+/// Uses the existing dyn-compatible Signer, requires no private export.
+/// Record creation only: no publication, persistence, trust mutation, or retry.
 pub fn create_record(
     binding: Binding<'_>,
     previous: &Checkpoint,
@@ -77,7 +77,7 @@ pub fn create_record(
         return Err(invalid("new_proof"));
     }
     let next_proof_text = encode_b64url(&next_proof);
-    // OLD вызывается только после подтверждённого NEXT proof; retries отсутствуют.
+    // OLD is called only after a confirmed NEXT proof; there are no retries.
     let old_message = format!("{DOMAIN}/authorize\n{body}\n{next_proof_text}");
     let old_proof = old
         .sign(old_message.as_bytes())

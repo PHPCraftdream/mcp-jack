@@ -437,6 +437,28 @@
       },
       "expect": "invalid",
       "reason": "validity"
+    },
+    {
+      "id": "invalid-not-before-int64-overflow",
+      "document": {
+        "version": 1,
+        "aud": "https://svc.example.test",
+        "keys": [
+          {
+            "kid": "TXF9TkhWm8UNPD-pk0NiJtux3ecJ69fMW8J9_YBDGNs",
+            "public_key": "kelVoYoxb3XSb-kFkOMEZNQ_x6GUFJNgdI2RjrsdgJE",
+            "name": "alice",
+            "not_before": 9223372036854776000
+          },
+          {
+            "kid": "g1T9GIZg0cumv7-IsIzIcKz9DRzv_zxZQLOnHSI4Rns",
+            "public_key": "27O5sjd6_PRkCVbNLwEbIwxpfh0DZCURwFI9lWF-UHE",
+            "name": "bob"
+          }
+        ]
+      },
+      "expect": "invalid",
+      "reason": "validity"
     }
   ]
 }

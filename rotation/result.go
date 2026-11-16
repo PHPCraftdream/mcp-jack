@@ -2,8 +2,10 @@ package rotation
 
 import (
 	"encoding/json"
+	"math/big"
 	"reflect"
 	"strconv"
+	"strings"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
 )
@@ -21,7 +23,7 @@ type ResultCursor struct {
 	Hash    string
 }
 
-// DecodedResult — owned schema data, не authenticated carrier или ACKed trust.
+// DecodedResult — owned schema data, not an authenticated carrier or ACKed trust.
 type DecodedResult struct {
 	Current  CurrentKey
 	Records  []string
@@ -92,9 +94,149 @@ func structuredResult(value any) (DecodedResult, error) {
 	return result, nil
 }
 
-// DecodeResult вызывать только после outer authentication, known interval и ClockGuard.
-// Проверяет success schema/parity/limits, не proofs/cursor/gaps/current binding;
-// не выполняет ACK, persistence, fetch или refresh. Signed errors обрабатывает caller.
+// canonicalNumber returns the canonical JSON text of a numeric id: exact
+// decimal canonicalization without float. Rejects |value| >= 2^1024, the point
+// where Number() in TS yields Infinity.
+func canonicalNumber(number json.Number) (string, bool) {
+	negative, digits, exponent, ok := parseNumberLexeme(number.String())
+	if !ok || !withinFloatRange(digits, exponent) {
+		return "", false
+	}
+	return canonicalDecimal(negative, digits, exponent), true
+}
+
+// parseNumberLexeme checks the JSON number grammar
+// -?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)? and splits the lexeme into:
+// sign, concatenated digits int+frac, E = exp - len(frac).
+func parseNumberLexeme(text string) (bool, string, int, bool) {
+	rest := text
+	negative := false
+	if len(rest) > 0 && rest[0] == '-' {
+		negative, rest = true, rest[1:]
+	}
+	mantissa, expText := rest, ""
+	if index := strings.IndexAny(rest, "eE"); index >= 0 {
+		mantissa, expText = rest[:index], rest[index+1:]
+	}
+	intPart, fracPart := mantissa, ""
+	if index := strings.IndexByte(mantissa, '.'); index >= 0 {
+		intPart, fracPart = mantissa[:index], mantissa[index+1:]
+	}
+	if !allDigits(intPart) || (len(intPart) > 1 && intPart[0] == '0') {
+		return false, "", 0, false
+	}
+	if index := strings.IndexByte(mantissa, '.'); index >= 0 && !allDigits(fracPart) {
+		return false, "", 0, false
+	}
+	exponent := -len(fracPart)
+	if expText != "" {
+		sign := 1
+		if expText[0] == '+' || expText[0] == '-' {
+			if expText[0] == '-' {
+				sign = -1
+			}
+			expText = expText[1:]
+		}
+		if !allDigits(expText) {
+			return false, "", 0, false
+		}
+		parsed, err := strconv.Atoi(expText)
+		if err != nil {
+			return false, "", 0, false
+		}
+		exponent += sign * parsed
+	}
+	return negative, intPart + fracPart, exponent, true
+}
+
+func allDigits(text string) bool {
+	if text == "" {
+		return false
+	}
+	for index := 0; index < len(text); index++ {
+		if text[index] < '0' || text[index] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// withinFloatRange is an exact |value| < 2^1024 gate via math/big:
+// E >= 0 compares D·10^E with 2^1024, E < 0 compares D with 2^1024·10^(-E).
+// Outside the f64 range the gate can be closed immediately: 10^309 > 2^1024;
+// E < -MaxResultBodyBytes ⇒ the canonical text is longer than the body limit
+// and cannot match the lexeme in an accepted response byte-for-byte.
+func withinFloatRange(digits string, exponent int) bool {
+	if exponent > 308 {
+		return false
+	}
+	if -exponent > MaxResultBodyBytes {
+		return false
+	}
+	value, ok := new(big.Int).SetString(digits, 10)
+	if !ok {
+		return false
+	}
+	limit := new(big.Int).Lsh(big.NewInt(1), 1024)
+	if exponent >= 0 {
+		value.Mul(value, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(exponent)), nil))
+	} else {
+		limit.Mul(limit, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-exponent)), nil))
+	}
+	return value.Cmp(limit) < 0
+}
+
+// canonicalDecimal is the shortest decimal form without an exponent;
+// leading/trailing zeros are removed, -0 → "0", minus sign only on nonzero values.
+func canonicalDecimal(negative bool, digits string, exponent int) string {
+	digits = strings.TrimLeft(digits, "0")
+	if digits == "" {
+		return "0"
+	}
+	var text string
+	if exponent >= 0 {
+		text = digits + strings.Repeat("0", exponent)
+	} else {
+		split := -exponent
+		integer := "0"
+		fraction := digits
+		if len(digits) > split {
+			integer, fraction = digits[:len(digits)-split], digits[len(digits)-split:]
+		} else {
+			fraction = strings.Repeat("0", split-len(digits)) + digits
+		}
+		fraction = strings.TrimRight(fraction, "0")
+		if fraction == "" {
+			text = integer
+		} else {
+			text = integer + "." + fraction
+		}
+	}
+	if negative {
+		text = "-" + text
+	}
+	return text
+}
+
+// idMatches compares the response id with the expected one: strings by decoded
+// value, numbers byte-for-byte with the canonical text of the expected value.
+func idMatches(actual, expected any) bool {
+	switch expectedValue := expected.(type) {
+	case string:
+		actualValue, ok := actual.(string)
+		return ok && actualValue == expectedValue
+	case json.Number:
+		text, ok := canonicalNumber(expectedValue)
+		number, numberOK := actual.(json.Number)
+		return ok && numberOK && number.String() == text
+	default:
+		return false
+	}
+}
+
+// DecodeResult call only after outer authentication, known interval and ClockGuard.
+// Checks success schema/parity/limits, not proofs/cursor/gaps/current binding;
+// performs no ACK, persistence, fetch or refresh. The caller handles signed errors.
 func DecodeResult(body []byte, expectedID json.RawMessage) (DecodedResult, error) {
 	fail := func() (DecodedResult, error) { return DecodedResult{}, invalid("rotation_result_invalid") }
 	if len(body) == 0 || len(body) > MaxResultBodyBytes {
@@ -104,17 +246,12 @@ func DecodeResult(body []byte, expectedID json.RawMessage) (DecodedResult, error
 	if err != nil {
 		return fail()
 	}
-	switch expected.(type) {
-	case string, json.Number:
-	default:
-		return fail()
-	}
 	value, err := strictJSON(body)
 	if err != nil {
 		return fail()
 	}
 	root, ok := fields(value, "jsonrpc", "id", "result")
-	if !ok || root["jsonrpc"] != "2.0" || !reflect.DeepEqual(root["id"], expected) {
+	if !ok || root["jsonrpc"] != "2.0" || !idMatches(root["id"], expected) {
 		return fail()
 	}
 	result, ok := fields(root["result"], "content", "structuredContent", "isError")

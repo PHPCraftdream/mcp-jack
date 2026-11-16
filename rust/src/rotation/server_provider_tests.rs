@@ -1,3 +1,4 @@
+use super::server_provider::{MAX_ANNOUNCE_RING_KEYS, MAX_RETIRED};
 use super::store_tests::{options, Sandbox};
 use super::*;
 use crate::client::{ClientError, InMemorySigner, Signer};
@@ -9,7 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 type Hook = Arc<dyn Fn() + Send + Sync>;
 
-/// Signer с test hook: hook вызывается перед фактической подписью (Go signingHook).
+/// Signer with a test hook: the hook is called before the actual signature (Go signingHook).
 struct HookSigner {
     inner: InMemorySigner,
     on_sign: Option<Hook>,
@@ -30,8 +31,8 @@ impl Signer for HookSigner {
     }
 }
 
-/// Next proof всегда невалиден: create_record отказывает до old authorization (Go faultyProof).
-/// Паники callback в Rust сознательно не превращаются в Err — здесь проверяется только invalid proof.
+/// The next proof is always invalid: create_record refuses before old authorization (Go faultyProof).
+/// Callback panics in Rust are deliberately not turned into Err — only an invalid proof is checked here.
 struct InvalidProofSigner {
     inner: InMemorySigner,
 }
@@ -65,8 +66,8 @@ fn server_options() -> RotationServerStoreOptions {
     }
 }
 
-/// Go setup: seeds 31/32/33, init при 1000, store с shared clock; каждый sample считается,
-/// чтобы тесты требовали ровно один sample на публикацию.
+/// Go setup: seeds 31/32/33, init at 1000, store with a shared clock; every sample is counted,
+/// so the tests require exactly one sample per publication.
 fn setup(
     sandbox: &Sandbox,
 ) -> Fixture<impl FnMut() -> Result<u64, RotationError> + Send + 'static> {
@@ -149,7 +150,7 @@ fn sign_counts(signs: &[Arc<AtomicU64>]) -> [u64; 3] {
     ]
 }
 
-/// Не-key authority selector: page нет, как Go ResponseKeyRequest{}.
+/// Non-key-authority selector: no page, like Go ResponseKeyRequest{}.
 fn selector_request() -> ResponseKeyRequest<'static> {
     ResponseKeyRequest {
         status: 404,
@@ -159,8 +160,8 @@ fn selector_request() -> ResponseKeyRequest<'static> {
     }
 }
 
-/// Go expectIdentity: авторизация выбирает ожидаемый pinned identity по свежему sample,
-/// подписывает точный response string и проходит final gate.
+/// Go expectIdentity: authorization picks the expected pinned identity by a fresh sample,
+/// signs the exact response string, and passes the final gate.
 fn expect_identity<C: FnMut() -> Result<u64, RotationError> + Send + 'static>(
     fixture: &Fixture<C>,
     provider: &RotationServerProvider<C>,
@@ -187,7 +188,7 @@ fn expect_identity<C: FnMut() -> Result<u64, RotationError> + Send + 'static>(
         &signature
     ));
     (authorization.final_gate)().unwrap();
-    // Повторный Final структурно невозможен: Box<dyn FnOnce> потреблён первым вызовом.
+    // A repeated Final is structurally impossible: Box<dyn FnOnce> is consumed by the first call.
     (authorization.release)();
 }
 
@@ -205,13 +206,13 @@ fn overlapping_pending_tail_and_equal_activation_ordinal() {
         "fixture must overlap in time"
     );
     assert_eq!(second.record.old_kid, first.record.new_kid);
-    // Caller mutation inventory после new не меняет pinned identity provider.
+    // Caller mutation of the inventory after new does not change the provider's pinned identity.
     let mut caller = inventory(&f.keys, [None, None, None]);
     caller[0].reference = "mutated caller inventory".into();
     expect_identity(&f, &provider, 0, 1000);
     f.now.store(first.record.activates_at - 1, Ordering::SeqCst);
     expect_identity(&f, &provider, 0, first.record.activates_at - 1);
-    // Равная активация eligible; cutoff anchor в той же точке retired строго.
+    // Equal activation is eligible; the anchor with a cutoff at the same point is retired strictly.
     f.now.store(first.record.activates_at, Ordering::SeqCst);
     expect_identity(&f, &provider, 2, first.record.activates_at);
 }
@@ -222,20 +223,20 @@ fn missing_pending_or_current_signer_never_falls_back() {
     let f = setup(&sandbox);
     let provider = new_provider(&f, [None, None, None]);
     let first = provider.announce("next", f.keys[1].kid()).unwrap();
-    // До активации pending handle обязателен.
+    // Before activation a pending handle is required.
     assert!(RotationServerProvider::new(
         Arc::clone(&f.store),
         vec![entry(&f.keys, "anchor", 0, None)]
     )
     .is_err());
     f.now.store(first.record.activates_at, Ordering::SeqCst);
-    // После активации отсутствие текущего signer не откатывается на retired anchor.
+    // After activation, absence of the current signer does not fall back to the retired anchor.
     assert!(RotationServerProvider::new(
         Arc::clone(&f.store),
         vec![entry(&f.keys, "anchor", 0, None)]
     )
     .is_err());
-    // Retired anchor handle необязателен.
+    // The retired anchor handle is optional.
     let provider =
         RotationServerProvider::new(Arc::clone(&f.store), vec![entry(&f.keys, "next", 1, None)])
             .unwrap();
@@ -276,8 +277,8 @@ fn freshness_equality_and_release_idempotence() {
     f.now.store(1030, Ordering::SeqCst);
     (authorization.final_gate)().expect("inclusive window equality must pass");
     (authorization.release)();
-    // Повторный Release структурно невозможен: Box<dyn FnOnce> потреблён первым вызовом;
-    // lease падает и при drop без вызова, поэтому leaked lease не создаётся.
+    // A repeated Release is structurally impossible: Box<dyn FnOnce> is consumed by the first call;
+    // the lease also fails on drop without a call, so no leaked lease is created.
     {
         let mut store = lock(&f);
         store
@@ -309,11 +310,11 @@ fn announce_single_fixed_sample_and_refusals() {
     assert_eq!(second.record.old_kid, first.record.new_kid);
     assert_eq!(f.samples.load(Ordering::SeqCst), 2);
     assert_eq!(sign_counts(&signs), [1, 2, 1]);
-    // Retained kid отказывает до clock sample и до любого callback.
+    // A retained kid refuses before the clock sample and before any callback.
     assert!(provider.announce("next", &first.record.new_kid).is_err());
     assert_eq!(f.samples.load(Ordering::SeqCst), 2);
     assert_eq!(sign_counts(&signs), [1, 2, 1]);
-    // Unknown inventory entry отказывает до store.
+    // Unknown inventory entry refuses before the store.
     assert!(provider.announce("unknown", &first.record.new_kid).is_err());
     assert_eq!(f.samples.load(Ordering::SeqCst), 2);
     assert_eq!(sign_counts(&signs), [1, 2, 1]);
@@ -363,7 +364,7 @@ fn announce_concurrent_clock_conflict_does_not_retry_or_publish() {
         Some(Arc::new(move || {
             proof_count.fetch_add(1, Ordering::SeqCst);
             conflict_now.store(1001, Ordering::SeqCst);
-            // Возможен только потому, что announce не держит store lock во время callbacks.
+            // Possible only because announce does not hold the store lock during callbacks.
             let mut store = hook_store
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -420,7 +421,7 @@ fn constructor_inventory_validation() {
     let sandbox = Sandbox::new();
     let f = setup(&sandbox);
     assert!(RotationServerProvider::new(Arc::clone(&f.store), Vec::new()).is_err());
-    // 1154 записи: length check срабатывает до identity work; клоны одного signer дёшевы.
+    // 1154 entries: the length check fires before identity work; clones of one signer are cheap.
     let shared = Arc::new(f.keys[0].clone());
     let oversized: Vec<RotationServerKey> = (0..=MAX_RETAINED_KEYS)
         .map(|index| RotationServerKey {
@@ -451,4 +452,88 @@ fn constructor_inventory_validation() {
         },
     ];
     assert!(RotationServerProvider::new(Arc::clone(&f.store), duplicate).is_err());
+}
+
+/// A ring that after announcement cannot be served: all keys except the newest
+/// eventually retire, and serving refuses above MAX_RETIRED retired — so the ring cannot
+/// grow beyond MAX_ANNOUNCE_RING_KEYS. Instead of building a real 1025-key ring
+/// (the quadratic chain check is beyond what CI can afford), the test lowers the announce limit via
+/// the test-only setter and checks the same refusal on 5 keys.
+#[test]
+fn announce_refuses_ring_that_would_exceed_servable_keys() {
+    // The production ratio asserted for the setter: the test limit does not diverge from prod.
+    assert_eq!(MAX_ANNOUNCE_RING_KEYS, MAX_RETIRED + 1);
+    let sandbox = Sandbox::new();
+    // 5 signer keys: 1 initial (anchor checkpoint key from options(), seed 31) + 4 inventory handles.
+    let mut keys: Vec<InMemorySigner> = vec![InMemorySigner::from_seed(&[31; 32]).unwrap()];
+    keys.extend((1..5usize).map(|index| {
+        let mut seed = [0u8; 32];
+        seed[0] = (index + 1) as u8;
+        InMemorySigner::from_seed(&seed).unwrap()
+    }));
+    let path = sandbox.file();
+    RotationServerStore::initialize_unused(&path, server_options(), || Ok(1000)).unwrap();
+    let now = Arc::new(AtomicU64::new(1000));
+    let samples = Arc::new(AtomicU64::new(0));
+    let clock_now = Arc::clone(&now);
+    let clock_samples = Arc::clone(&samples);
+    let store = Arc::new(Mutex::new(
+        RotationServerStore::open(&path, server_options(), move || {
+            clock_samples.fetch_add(1, Ordering::SeqCst);
+            Ok(clock_now.load(Ordering::SeqCst))
+        })
+        .unwrap(),
+    ));
+    // One reference for all handles is allowed: identity is (reference, kid), the kids differ.
+    let inventory: Vec<RotationServerKey> = keys
+        .iter()
+        .map(|signer| RotationServerKey {
+            reference: "anchor".into(),
+            signer: Arc::new(signer.clone()),
+        })
+        .collect();
+    assert_eq!(inventory.len(), 5);
+    assert!(inventory.len() <= MAX_RETAINED_KEYS, "inventory must load");
+    let mut provider = RotationServerProvider::new(Arc::clone(&store), inventory).unwrap();
+    provider.set_announce_ring_keys_for_tests(4);
+    // The clock stands at 1000: predecessor cutoffs (117800+) are far ahead, retired = 0,
+    // pending grows at most to 3 — the refusal below comes exclusively from the new limit.
+    for (step, key) in keys.iter().enumerate().take(4).skip(1) {
+        let publication = provider.announce("anchor", key.kid()).unwrap();
+        assert_eq!(publication.revision, step as u64 + 1);
+    }
+    let before = {
+        let mut store_guard = store
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (snapshot, _) = store_guard.snapshot().unwrap();
+        assert_eq!(snapshot.public.keys.len(), 4);
+        snapshot
+    };
+    // With 4 keys in the ring one more announce refuses: the ring would become 5 > the test limit of 4.
+    // Without the refusal select_pinned would pass: retired = 0, pending = 3 < MAX_PENDING.
+    let error = provider
+        .announce("anchor", keys[4].kid())
+        .err()
+        .expect("announce must be refused");
+    assert_eq!(error.code, "rotation_state_unavailable");
+    let mut store_guard = store
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (after, _) = store_guard.snapshot().unwrap();
+    // The refusal mutates nothing: the same state byte-for-byte.
+    assert_eq!(after.format_version, before.format_version);
+    assert_eq!(after.public.records, before.public.records);
+    assert_eq!(after.public.keys, before.public.keys);
+    assert_eq!(after.public.revision, before.public.revision);
+    assert_eq!(after.public.head.ordinal, before.public.head.ordinal);
+    assert_eq!(after.public.head.hash, before.public.head.hash);
+    assert_eq!(
+        after.public.checkpoint.ordinal,
+        before.public.checkpoint.ordinal
+    );
+    assert_eq!(after.signer_references, before.signer_references);
+    store_guard
+        .close()
+        .expect("refused announce must release the lease");
 }

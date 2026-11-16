@@ -4,14 +4,14 @@ use super::{
 };
 use std::collections::BTreeMap;
 
-/// Owned binding для whole-state values; fixed v1 DTO, без caller borrows.
+/// Owned binding for whole-state values; fixed v1 DTO, no caller borrows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnedBinding {
     pub endpoint: String,
     pub aud: String,
 }
 
-/// Copied CAS dependency, не самостоятельная time authority.
+/// Copied CAS dependency, not an independent time authority.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClockTuple {
     pub binding: OwnedBinding,
@@ -21,7 +21,7 @@ pub struct ClockTuple {
     pub unsafe_clock: bool,
 }
 
-/// Только публичные key metadata; cutoff остаётся optional, не zero sentinel.
+/// Only public key metadata; the cutoff stays optional, not a zero sentinel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrustKey {
     pub ordinal: u64,
@@ -31,7 +31,7 @@ pub struct TrustKey {
     pub known_cutoff: Option<u64>,
 }
 
-/// Целый fixed v1 value для будущего store; validation не подтверждает persistence.
+/// The whole fixed v1 value for the future store; validation does not confirm persistence.
 #[derive(Debug, Clone)]
 pub struct TrustSnapshot {
     pub format_version: u32,
@@ -68,8 +68,8 @@ fn same_checkpoint(left: &Checkpoint, right: &Checkpoint) -> bool {
         && left.published_at == right.published_at
 }
 
-/// Reference: Go rotation/trust.go и docs/design/minimal-server-rotation.md §5.
-/// Возвращает owned copy после полной chain/proof проверки, без clock/store/ACK.
+/// Reference: Go rotation/trust.go and docs/design/minimal-server-rotation.md §5.
+/// Returns an owned copy after full chain/proof validation, without clock/store/ACK.
 pub fn validate_trust_snapshot(
     input: &TrustSnapshot,
     binding: Binding<'_>,
@@ -170,7 +170,7 @@ pub fn validate_trust_snapshot(
     })
 }
 
-/// Требует validated snapshot; tuple compatibility не fresh clock/readiness/ACK.
+/// Requires a validated snapshot; tuple compatibility is not a fresh clock/readiness/ACK.
 pub fn trust_clock_compatible(snapshot: &TrustSnapshot, clock: &ClockTuple) -> bool {
     snapshot.format_version == 1
         && !snapshot.fenced

@@ -2,12 +2,13 @@ import { validatePublicKey } from "./ed25519.js";
 import { decodeBase64URLFixed, keyId } from "./encoding.js";
 import { parseCandidateJsonRaw } from "./json-raw.js";
 import type { RawJsonNode } from "./json-raw.js";
+import { canonicalNumber } from "./rotation-id.js";
 import { RotationError, ROTATION_MAX_ORDINAL } from "./rotation-record.js";
 
 export const ROTATION_MAX_BODY_BYTES = 256 * 1024;
 export const ROTATION_MAX_PAGE_RECORDS = 16;
 
-/** Только decoded данные; это не ACKed trust snapshot и не доказательство carrier trust. */
+/** Decoded data only; not an ACKed trust snapshot and not proof of carrier trust. */
 export interface DecodedRotationResult {
   readonly current: { readonly kid: string; readonly publicKeyB64u: string };
   readonly records: readonly string[];
@@ -87,18 +88,30 @@ function same(left: RawJsonNode, right: RawJsonNode): boolean {
 }
 
 /**
- * Вызывать только ПОСЛЕ outer authentication, known-key interval и ClockGuard gates.
- * Проверяет только schema/parity/limits; не records/proofs/cursor/gaps/current binding,
- * не carrier trust, persistence, ACK, fetch или refresh. Signed errors обрабатывает caller.
- * Numeric request ID сопоставляется с exact JSON.stringify lexeme SDK request.
+ * Call only AFTER outer authentication, known-key interval, and ClockGuard gates.
+ * Checks schema/parity/limits only; not records/proofs/cursor/gaps/current binding,
+ * not carrier trust, persistence, ACK, fetch, or refresh. The caller handles signed errors.
+ * Numeric request ID is matched by exact decimal canonicalisation without float
+ * (Go/Rust parity; see rotation-id.ts).
  */
-export function decodeRotationResult(body: Uint8Array, expectedId: string | number): DecodedRotationResult {
+export function decodeRotationResult(body: Uint8Array, expectedId: string | number | bigint): DecodedRotationResult {
   try {
-    if (!(body instanceof Uint8Array) || body.length === 0 || body.length > ROTATION_MAX_BODY_BYTES || (typeof expectedId !== "string" && (typeof expectedId !== "number" || !Number.isFinite(expectedId)))) invalid();
+    if (!(body instanceof Uint8Array) || body.length === 0 || body.length > ROTATION_MAX_BODY_BYTES || (typeof expectedId !== "string" && typeof expectedId !== "bigint" && (typeof expectedId !== "number" || !Number.isFinite(expectedId)))) invalid();
     const root = object(parseCandidateJsonRaw(utf8.decode(body)), ["jsonrpc", "id", "result"]);
     const id = field(root, "id");
-    if (field(root, "jsonrpc").value !== "2.0" || id.value !== expectedId) invalid();
-    if (typeof expectedId === "number" && id.text !== JSON.stringify(expectedId)) invalid();
+    if (field(root, "jsonrpc").value !== "2.0") invalid();
+    // A bigint carries an integer beyond 2^53 exactly: only the exact decimal text matches.
+    if (typeof expectedId === "bigint") {
+      if (typeof id.value !== "number" || id.text !== expectedId.toString()) invalid();
+    } else if (typeof expectedId === "number") {
+      // Numeric id: exact decimal canonicalisation without float, identical to Go and
+      // Rust (canonicalNumber). The canonical form has no exponent: expected 1e21
+      // requires the lexeme 1000000000000000000000, not JSON.stringify's "1e+21". The
+      // expected id is canonicalised from its shortest decimal form (what the SDK sent).
+      if (id.value !== expectedId) invalid();
+      const canonical = canonicalNumber(JSON.stringify(expectedId));
+      if (canonical === undefined || id.text !== canonical) invalid();
+    } else if (typeof id.value !== "string" || id.value !== expectedId) invalid();
     const result = object(field(root, "result"), ["content", "structuredContent", "isError"]);
     if (field(result, "isError").value !== false) invalid();
     const content = field(result, "content").items;

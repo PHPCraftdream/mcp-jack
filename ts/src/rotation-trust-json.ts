@@ -39,7 +39,7 @@ function clock(node: RawJsonNode): RotationClockTuple {
     revision: nodeNumber(nodeField(value, "clock_revision")), unsafe: nodeBoolean(nodeField(value, "unsafe")) };
 }
 
-/** Strict local parse сохраняет fences; не выполняет clock operation, persistence или ACK. */
+/** Strict local parse preserves fences; performs no clock operation, persistence, or ACK. */
 export function decodeRotationTrustSnapshot(
   bytes: Uint8Array,
   expectedBinding: RotationBinding,
@@ -64,7 +64,7 @@ export function decodeRotationTrustSnapshot(
   }
 }
 
-/** Валидирует whole value до serialization; local16MiB — не HTTP/physical DB guarantee. */
+/** Validates the whole value before serialization; local16MiB is not an HTTP/physical DB guarantee. */
 export function encodeRotationTrustSnapshot(
   input: RotationTrustSnapshot,
   expectedBinding: RotationBinding,
