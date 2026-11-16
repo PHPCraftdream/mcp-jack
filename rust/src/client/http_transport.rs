@@ -582,15 +582,21 @@ async fn perform(
         TransportError::Transport(format!("jack client: http transport: HTTP request: {e}"))
     })?;
     let status = response.status().as_u16();
-    // Every Content-Type field line takes part (see is_event_stream); a
-    // non-UTF-8 value cannot spell text/event-stream and is skipped.
-    if crate::client::transport::is_event_stream(
-        response
-            .headers()
-            .get_all(http::header::CONTENT_TYPE)
-            .iter()
-            .filter_map(|v| v.to_str().ok()),
-    ) {
+    // Every Content-Type field line takes part (see is_event_stream). The
+    // decision is byte-based: a non-UTF-8 line is lossily decoded so a
+    // text/event-stream member still refuses, matching Go and TypeScript.
+    let content_types: Vec<String> = response
+        .headers()
+        .get_all(http::header::CONTENT_TYPE)
+        .iter()
+        .map(|value| match value.to_str() {
+            Ok(text) => text.to_owned(),
+            // Lossy decoding keeps every ASCII media type intact; the
+            // replacement character only ever lands on the invalid bytes.
+            Err(_) => String::from_utf8_lossy(value.as_bytes()).into_owned(),
+        })
+        .collect();
+    if crate::client::transport::is_event_stream(content_types.iter().map(String::as_str)) {
         return Err(TransportError::Streaming);
     }
     let mut headers = Vec::new();
