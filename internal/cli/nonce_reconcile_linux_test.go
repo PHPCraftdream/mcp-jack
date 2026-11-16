@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -55,7 +56,8 @@ func nonceRecoveryCLIFixture(t *testing.T) (string, string, durable.Options, dur
 		t.Fatal("fixture did not reserve an actual authenticated request")
 	}
 	owner.Fence()
-	if err := owner.Close(); err != nil {
+	// A fenced store closes physically but reports that it needs recovery.
+	if err := owner.Close(); err != nil && !errors.Is(err, durable.ErrRecoveryRequired) {
 		t.Fatal("fixture physical owner close failed", err)
 	}
 	snapshot, err := durable.InspectRecovery(path, options)
