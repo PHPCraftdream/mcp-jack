@@ -843,7 +843,7 @@ impl<C: FnMut() -> i64> DurableNonceStore<C> {
     /// a fenced close still leaves the persisted state fail-closed.
     pub fn close(&self) -> Result<(), DurableStoreError> {
         {
-            let mut session = self.lock();
+            let session = self.lock();
             if session.shared.closed.load(Ordering::SeqCst) {
                 return Ok(());
             }

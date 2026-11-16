@@ -341,7 +341,7 @@ impl MutatingState {
                         } else {
                             entry.not_after = Some(0);
                         }
-                        edit.put_key(entry);
+                        edit.put_key(entry.clone());
                         Ok(())
                     })
                     .unwrap();
@@ -484,7 +484,7 @@ fn durable_child(
 /// zero committed rows, store not fenced, no authorization effect.
 fn assert_state_changed(
     result: &mcp_jack::server::verify::VerifyResult,
-    store: &SharedDurableNonceStore,
+    store: &Arc<SharedDurableNonceStore>,
     stable_request: &Request,
     stable_state: &Arc<MemoryState>,
     clock: &ScriptedClock,
@@ -567,7 +567,7 @@ fn reservation_refuses_when_enrollment_kid_becomes_registered() {
     inner
         .update(&mut |edit| {
             edit.put_invite(InviteRecord {
-                invite_id,
+                invite_id: invite_id.clone(),
                 admin: false,
                 created_by: "root".to_owned(),
                 created_at: 0,

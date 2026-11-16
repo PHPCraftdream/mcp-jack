@@ -565,7 +565,8 @@ mod tests {
     #[test]
     fn receipt_request_hash_is_bound() {
         let (mut receipt, auth, signing, window, metadata) = fixture();
-        receipt.request_hash = encode_b64url(&Sha256::digest(b"other").into());
+        let other: [u8; 32] = Sha256::digest(b"other").into();
+        receipt.request_hash = encode_b64url(&other);
         assert!(!receipt_matches(
             &receipt, &auth, &signing, window, &metadata
         ));

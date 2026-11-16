@@ -1190,10 +1190,10 @@ fn open_refuses_clean_file_with_unresolved_intents() {
         &[(record.receipt.operation_id, record.key)],
     );
     fs::write(sandbox.file(), &file).unwrap();
-    assert_eq!(
-        DurableNonceStore::open(&sandbox.file(), &options(), clock(&[100])).unwrap_err(),
-        DurableStoreError::RecoveryRequired
-    );
+    assert!(matches!(
+        DurableNonceStore::open(&sandbox.file(), &options(), clock(&[100])),
+        Err(DurableStoreError::RecoveryRequired)
+    ));
     // Recovery inspection still loads the same file.
     let snapshot = inspect_recovery(&sandbox.file(), &options()).unwrap();
     assert_eq!(snapshot.intents.len(), 1);
@@ -1226,10 +1226,10 @@ fn open_refuses_clean_file_at_tombstone_cap() {
         &operations,
     );
     fs::write(sandbox.file(), &file).unwrap();
-    assert_eq!(
-        DurableNonceStore::open(&sandbox.file(), &options(), clock(&[100])).unwrap_err(),
-        DurableStoreError::RecoveryRequired
-    );
+    assert!(matches!(
+        DurableNonceStore::open(&sandbox.file(), &options(), clock(&[100])),
+        Err(DurableStoreError::RecoveryRequired)
+    ));
     assert!(inspect_recovery(&sandbox.file(), &options()).is_ok());
 }
 
