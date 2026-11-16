@@ -8,7 +8,8 @@ This file records repository history. The `0.1.0 (unreleased)` section describes
 
 - Authenticated transport contract: Ed25519 request and response signatures, replay protection, strict canonical encoding, implemented across the Go, Rust and TypeScript SDKs.
 - User management with user-key rotation and a single strict-boolean admin flag.
-- Optional durable nonce admission in all three SDKs, fail-closed on unknown outcomes and explicit opt-in: bbolt-backed Go backend, Linux-only private-file store in each SDK (Go, Rust and TypeScript). Operator recovery commands (`nonce-init-unused`, `nonce-inspect`, `nonce-reconcile-terminal`) exist only in the Go `jack` CLI; Rust and TypeScript expose library recovery functions.
+- Optional durable nonce admission in all three SDKs (explicit opt-in; Linux-only for Go, Rust and TypeScript; Go uses bbolt, Rust and TypeScript use private-file stores). Clean serving-open rejects unresolved intents or 64 tombstones; recovery inspection remains available. TypeScript JSON and Rust binary loaders enforce canonical exact bytes.
+- Durable close differs by SDK: Go and Rust drain leases outside the mutex; fenced close reports recovery-required and releases the backend owner unless I/O fails. TypeScript leased close leaves admission open, so caller stop/drain/retry can succeed; fenced close retains the marker and retry cannot clear the fence (accepted difference; an operator removes the owner marker by hand once no owner process survives).
 - Server response-key rotation: `jack.server.key` delivery, fixed publication time P plus 48 h activation, overlap of both keys, strict cutoff on activation, and explicit single-page client refresh — in all three SDKs plus the Go CLI.
 - Candidate `jack.server.key` result decoding matches the response `id` canonically in Go, Rust and TypeScript: a numeric id must be the canonical JSON text of the expected value (`7.0`, `7e0`, `+7`, `07` fail with `rotation_result_invalid`).
 - Go CLI (`jack`): keygen/bootstrap/enroll/gateway/bridge, user and invite admin commands, nonce and server-key commands.
@@ -34,7 +35,7 @@ This file records repository history. The `0.1.0 (unreleased)` section describes
 - A request body in which any JSON object has two members with the same name (compared after unescaping) is `400 invalid_request` after authentication, in all three SDKs and the reference verifier; last-wins handling is removed (spec 02 section 2).
 - Internal, non-independent security pre-review package for an external reviewer: `docs/security-review-package.md`.
 - Bounded Go fuzz campaign (15 native targets, including the server-key-rotation parsers and the durable store codecs), coverage lanes, and packaged-consumer lanes.
-- Cross-language nonce vectors: 24 cases in `spec/fixtures/candidate/nonce-vectors.json` consumed by all three SDKs through per-SDK verdict tables (Go 16 full / 6 deviation / 2 excluded; TypeScript 16 / 6 / 2; Rust 14 / 8 / 2), with documented deviations per case and two excluded cases in each suite.
+- Cross-language nonce vectors: 24 cases classified by per-SDK verdict tables (Go 16 full-expectation / 6 deviation / 2 excluded; Rust 14 full-expectation / 8 deviation / 2 excluded; TS 16 driven / 6 deviation / 2 excluded). Rust's separate `all-cases` note is a suite-level caveat, not a per-case deviation. These labels do not claim every fixture field is asserted; deviation-marked expectations are omitted.
 - Cross-language rotation-state vectors: 14 client refresh cases plus 8 clock/selection/emission events in `spec/fixtures/candidate/rotation-state-vectors.json` consumed by all three SDKs; suites exclude or deviate per case as documented (TypeScript drives all 22 with 0 excluded; the single excluded event in the Go and Rust suites is a mapping artefact, not a divergence).
 - Deterministic property/mutation tests and a shared corpus for the Rust and TypeScript rotation layers.
 
@@ -49,7 +50,7 @@ This file records repository history. The `0.1.0 (unreleased)` section describes
 - Audit delivery is best effort.
 - Rust and TypeScript have property/mutation tests and a shared corpus but no coverage-guided fuzzing (Go has a bounded fuzz campaign).
 - All three SDKs ship the durable nonce store (Linux-only file-backed stores, explicit opt-in). The operator recovery CLI commands exist only in the Go `jack` CLI; Rust and TypeScript expose library recovery functions only.
-- A forward clock jump latches the durable stores unsafe permanently, and no command in any SDK clears that latch. Recovery inspect/reconcile commands exist in the Go CLI; Rust and TypeScript recovery is library-only. Unauthenticated load is bounded only by the gateway's global admission limits. See `docs/operations.md` and `docs/security-review-package.md`.
+- A below-high-water or out-of-domain clock sample latches the durable stores unsafe; a forward jump alone does not, though a later sample below the raised high-water mark does. Recovery inspect/reconcile commands exist in the Go CLI; Rust and TypeScript recovery is library-only. See `docs/operations.md` and `docs/security-review-package.md`.
 - The release is not independently audited.
 
 ## Development history

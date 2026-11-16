@@ -6,6 +6,8 @@ reviewer the scope, the coverage of the internal pre-review, its findings with t
 maintainers' disposition, the known divergences between the three SDKs, and the
 open questions. Nothing here is a security guarantee.
 
+A separate historical AI source review of later durable-store changes is recorded in [the independent-review document](independent-review.md#second-independent-review-historical-pre-fix-source-review). It was source-only, not a human or third-party audit; no project builds or tests were run, and the report discloses one interpreter invocation. Its coverage table records substantial unreviewed areas and the review did not read every test body; consult its coverage and dispositions, not a blanket audit claim.
+
 How to read it:
 
 - The pre-review was a read-only study of source and documents at commit
@@ -49,6 +51,8 @@ prepared receipt against the pre-transaction high water, rejecting every
 admission whose clock had moved since the last durable high-water write (fixed
 in `ts/src/server/durable-store.ts`).
 
+Serving-open in all three SDKs refuses dirty/unsafe state, unresolved intents or 64 tombstones; Rust uses canonical binary bytes and TypeScript canonical JSON. Recovery binds deployment and window; TypeScript additionally uses exclusive ownership, private-file, no-follow and bounded-read checks ([operations](operations.md); [cross-language conformance](cross-language-conformance.md)). Go and Rust drain leases outside the mutex; fenced close reports `RecoveryRequired` and releases the backend owner unless I/O fails. TypeScript leased close throws while remaining retryable after caller stop-ingress/drain; fenced close throws unavailable, retains its marker and retry cannot clear the fence. Rust fences when a poisoned lock is next acquired (`rust/src/server/durable_store.rs:704-711`); TypeScript fences on unexpected non-`JackError` reserve failure (`ts/src/server/durable-store.ts:430-446`). These current-source notes are separate from the historical pre-review; no builds or tests were run for this cleanup.
+
 ## 2. Findings and disposition
 
 Severity is the pre-reviewer's. "Open" means the maintainers want the external
@@ -64,7 +68,7 @@ reviewer's opinion before deciding.
 | F-06 | Low | Ed25519: Rust uses strict verification and rejects a signature whose `R` is a small-order point; Go and TypeScript accepted it. A malicious server-key holder could publish a rotation record that Go and TypeScript clients accept and Rust clients reject. | Fixed: Go and TypeScript reject a signature whose `R` is one of the eight small-order encodings and the specification states the rule; regression tests build the crafted signatures at test time. The shared corpus has the vector. A small-order public key at direct `Verify` time is still accepted by Go and TypeScript and rejected by Rust; all three reject such keys at admission. |
 | F-07 | Low | Expired invites are never removed; at 1024 stored invites `invite.create` fails and a gateway with 1025 does not start. | Fixed: expired invites are removed in the same atomic state edit that creates, enrolls with or revokes an invite, in all three SDKs; the gateway cap is evaluated after the purge. |
 | F-08 | Low | The announce limit (1153 keys) and the retired-key limit (1024) differ, so a long-lived deployment could eventually refuse to sign. Compaction is not implemented. | Fixed for the unservable state: an announcement is refused, before authorization and commit, once the ring holds more than 1024 keys (Go, Rust, TypeScript), so the ring can no longer outgrow what serving accepts. The remaining limit is by design: there is no spacing rule and no compaction, so a ring is good for at most 1024 rotations. |
-| F-09 | Low | At the reviewed commit the top-level documents said that durable nonces and rotation were not implemented, and did not state that only the Go server SDK has a durable nonce store. | Resolved by the documentation refresh: Rust and TypeScript nonce stores are stated to remain in memory. |
+| F-09 | Low | At the reviewed commit the top-level documents said that durable nonces and rotation were not implemented, and did not state that only the Go server SDK has a durable nonce store. | Updated in this tree: all three SDKs provide optional Linux-only durable nonce stores. Serving-open rejection, canonical formats and recovery/serving separation are documented in `docs/operations.md` and `docs/cross-language-conformance.md`. The historical review did not cover the later Rust/TS stores. |
 | F-10 | Low | The gateway applies global rate and connection limits before authentication, so garbage traffic can deny service to everyone. | Documented in the CLI design notes, the threat model and the operations guide. |
 | F-11 | Low | Rust `JackLayer::new` is infallible and accepts a verifier with `jack.server.key` routing next to a static response profile, so the page is served without the final gate. | Accepted for 0.1.0: the constructor contract is documented; making it fallible is an API change. Revisit for 0.2. |
 | F-12 | Low | Go `FileState`: an unknown outcome of `rename` can leave disk and memory different; every well-formed `jack.enroll` takes a deep copy of the state under the global mutex before the invite is checked. | Accepted for 0.1.0, documented. |
