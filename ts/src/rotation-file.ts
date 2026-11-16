@@ -168,6 +168,25 @@ export class RotationFileOwner {
 
   fence(): void { this.fenced = true; }
 
+  /**
+   * Removes this owner's own marker even after a fence: the caller keeps its
+   * state fail-closed by other means (the durable nonce store's persisted
+   * dirty epoch). A foreign or unreadable marker is never removed.
+   */
+  release(): void {
+    if (this.closed) return;
+    try {
+      privateDirectory(this.path);
+      if (!readPrivate(this.path + ".owner", markerLimit).equals(this.marker)) refuse();
+      unlinkSync(this.path + ".owner");
+      syncDirectory(this.path);
+      this.closed = true;
+    } catch {
+      this.fenced = true;
+      refuse("rotation_state_unknown");
+    }
+  }
+
   /** Higher store must first drain/settle and confirm a clean logical state. */
   close(): void {
     if (this.closed) return;

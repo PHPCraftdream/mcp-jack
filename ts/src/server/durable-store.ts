@@ -563,29 +563,42 @@ export class DurableNonceStore {
   fence(): void { this.fenced = true; }
 
   /**
-   * Stops admission, waits for leases, and clears dirty only when not fenced
-   * and no unresolved state remains (Go Close).
+   * Stops admission and clears dirty only when not fenced and no unresolved
+   * state remains (Go Close). Outstanding leases refuse before anything
+   * changes (a synchronous close cannot wait); retry after they drain. The
+   * owner marker is released either way (Go releases the bbolt lock, Rust its
+   * marker): a fenced store stays fail-closed through its persisted dirty
+   * epoch and reports recovery-required.
    */
   close(): void {
     if (this.closed) return;
-    if (this.fenced) { throw durableUnavailable(); }
     if (this.leases > 0) throw durableUnavailable();
     this.closing = true;
-    try {
-      if (this.doc.meta.intents !== 0 || this.doc.meta.tombstones >= DURABLE_MAX_TOMBSTONES || this.doc.meta.unsafe) {
-        this.fenced = true;
-        throw durableUnavailable();
-      }
-      this.commit({ meta: { ...this.doc.meta, dirty: false },
-        live: this.doc.live, intents: this.doc.intents, tombstones: this.doc.tombstones });
-      this.file.close();
-      this.closed = true;
-    } catch (error) {
+    let failure: JackError | undefined;
+    if (!this.fenced && (this.doc.meta.intents !== 0 ||
+      this.doc.meta.tombstones >= DURABLE_MAX_TOMBSTONES || this.doc.meta.unsafe)) {
       this.fenced = true;
-      throw error instanceof JackError ? error : durableUnavailable();
-    } finally {
-      this.closing = false;
     }
+    if (this.fenced) {
+      failure = recoveryRequired();
+    } else {
+      try {
+        this.commit({ meta: { ...this.doc.meta, dirty: false },
+          live: this.doc.live, intents: this.doc.intents, tombstones: this.doc.tombstones });
+      } catch {
+        this.fenced = true;
+        failure = durableUnavailable();
+      }
+    }
+    try {
+      this.file.release();
+    } catch {
+      this.fenced = true;
+      failure ??= durableUnavailable();
+    }
+    this.closed = true;
+    this.closing = false;
+    if (failure !== undefined) throw failure;
   }
 
   /** Whether the owner is durably fenced (test/diagnostic view). */
