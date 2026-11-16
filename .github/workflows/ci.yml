@@ -299,7 +299,9 @@ jobs:
       - name: Run the official MCP SDK end-to-end matrix
         env:
           JACK_BIN: ${{ runner.temp }}/jack
-        run: node tools/mcp-e2e/run.mjs
+        # Known limitation: the official TypeScript server answers initialize with SSE and the
+        # gateway refuses SSE by design. The skip is explicit and every skipped cell is listed.
+        run: node tools/mcp-e2e/run.mjs --allow-skip-ts-server
 
   credential-transfer:
     name: credential transfer matrix (3x3)

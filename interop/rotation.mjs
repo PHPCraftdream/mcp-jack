@@ -668,40 +668,20 @@ async function runMatrix(opts) {
         const r = await runClientStep(client, mainClient('call'), clientEnv, `r2 ${pairLabel}`, pairLabel);
         results['r2-server-latch-fail-closed'] = checkRefused('r2-server-latch-fail-closed', pairLabel, r);
       }
-      // r4/r5: a dedicated client store. Refresh establishes the high water,
-      // a rollback latches it, and further opens (new process = restart) stay
-      // fail-closed even with the clock moved far forward: no catch-up
-      // recovery exists in any SDK (spec: "never clamps or clears the latch").
-      const clkCliR = join(tmp, 'clk-cli-r');
-      setClock(clkCliR, T);
-      const rClient = (step, extra = []) => ([
-        '--step', step, '--url', urlA, '--aud', registry.aud,
-        '--seed-hex', keys.alice.seed_hex, '--anchor', keys.svc.public_key,
-        '--store', join(tmp, 'cli-r.store'), '--clock-file', clkCliR, ...extra,
-      ]);
+      // r4/r5: the fake-peer client store holds a durable high water of A (left
+      // by s5). A clock below it latches the store fail-closed; a restart with
+      // the clock far ahead must still refuse (no catch-up recovery in any SDK:
+      // spec: never clamps or clears the latch).
+      writeFileSync(modePath, 'clock-client-latch\n');
+      setClock(clkCliFake, A - 100);
       {
-        const setup = await runClientStep(client, rClient('refresh'), clientEnv, `r4 setup ${pairLabel}`, pairLabel);
-        if (setup.failed || setup.result?.outcome !== 'ok') {
-          recordFailure('r4-client-rollback-refused', pairLabel, { outcome: 'ok' }, setup, 'r4 setup refresh failed');
-        } else {
-          setClock(clkCliR, T - 100);
-          writeFileSync(modePath, 'clock-client-latch\n');
-          const r4 = await runClientStep(client, rClient('call'), clientEnv, `r4 ${pairLabel}`, pairLabel);
-          if (checkProcessRefused('r4-client-rollback-refused', pairLabel, r4)) {
-            results['r4-client-rollback-refused'] = true;
-            // r5: restart on the latched store with the clock far AHEAD of the
-            // high water must still refuse (latch is durable, not recovered).
-            setClock(clkCliR, T + 1000);
-            const r5 = await runClientStep(client, rClient('state'), clientEnv, `r5 ${pairLabel}`, pairLabel);
-            if (checkProcessRefused('r5-client-restart-no-recovery', pairLabel, r5)) {
-              results['r5-client-restart-no-recovery'] = true;
-            } else {
-              results['r5-client-restart-no-recovery'] = false;
-            }
-          } else {
-            results['r4-client-rollback-refused'] = false;
-          }
-        }
+        const r4 = await runClientStep(client, fakeClient('call'), clientEnv, `r4 ${pairLabel}`, pairLabel);
+        results['r4-client-rollback-refused'] = checkProcessRefused('r4-client-rollback-refused', pairLabel, r4);
+      }
+      setClock(clkCliFake, A + 1000);
+      {
+        const r5 = await runClientStep(client, fakeClient('state'), clientEnv, `r5 ${pairLabel}`, pairLabel);
+        results['r5-client-restart-no-recovery'] = checkProcessRefused('r5-client-restart-no-recovery', pairLabel, r5);
       }
       // r3: a fresh server process on the now-latched store must fail closed
       // at startup (never prints a ready line) in every language. Runs last:
