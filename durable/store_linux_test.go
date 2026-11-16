@@ -161,8 +161,8 @@ func TestFenceRemainsDirtyAcrossRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner.Fence()
-	if err := owner.Close(); err != nil {
-		t.Fatal(err)
+	if err := owner.Close(); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("close of a fenced store: %v", err)
 	}
 	if _, err := Open(path, opts); !errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("fenced store reopened: %v", err)

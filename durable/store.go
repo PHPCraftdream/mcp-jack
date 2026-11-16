@@ -220,6 +220,11 @@ func (s *Store) Close() error {
 			s.fenced.Store(true)
 			s.closeErr = ErrRecoveryRequired
 		}
+		// A store fenced during the drain keeps its dirty epoch: report it so the
+		// caller knows the next open needs recovery instead of seeing a clean close.
+		if s.fenced.Load() && s.closeErr == nil {
+			s.closeErr = ErrRecoveryRequired
+		}
 		if !s.fenced.Load() {
 			m := s.meta
 			m.Dirty = false
