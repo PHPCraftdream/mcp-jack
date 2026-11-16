@@ -350,7 +350,7 @@ impl MutatingState {
                 let entry = self.entry.clone();
                 self.inner
                     .update(&mut |edit| {
-                        edit.put_key(entry);
+                        edit.put_key(entry.clone());
                         Ok(())
                     })
                     .unwrap();
