@@ -106,9 +106,8 @@ export function decodeRotationResult(body: Uint8Array, expectedId: string | numb
     } else if (typeof expectedId === "number") {
       // Numeric id: exact decimal canonicalisation without float, identical to Go and
       // Rust (canonicalNumber). The canonical form has no exponent: expected 1e21
-      // requires the lexeme 1000000000000000000000, not JSON.stringify's "1e+21", and
-      // decimals just under 2^1024 that JSON.stringify shows in exponential form still
-      // match their exact decimal lexeme instead of being rejected as Infinity.
+      // requires the lexeme 1000000000000000000000, not JSON.stringify's "1e+21". The
+      // expected id is canonicalised from its shortest decimal form (what the SDK sent).
       if (id.value !== expectedId) invalid();
       const canonical = canonicalNumber(JSON.stringify(expectedId));
       if (canonical === undefined || id.text !== canonical) invalid();

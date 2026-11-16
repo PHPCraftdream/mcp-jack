@@ -517,7 +517,9 @@ test("durable admission: an unexpected error at the final sample fences the stor
     if (!out.accepted) {
       assert.equal(out.httpStatus, 503, "the raw Error is mapped to durability_unavailable");
       assert.equal(out.code, "durability_unavailable", "the raw Error never reaches the adapter");
-      assert.equal(out.nonceRecorded, true, "the intent had already committed");
+      // A refused reserve is never reported as recorded (Go storageRejection); only
+      // a returned receipt yields nonce-recorded.
+      assert.equal(out.nonceRecorded, false, "a failed reserve carries no nonce-recorded receipt");
       out.finish();
     }
     assert.equal(store.isFenced(), true, "an unexpected failure fences the store");
@@ -681,5 +683,6 @@ test("durable store: two colliding operation ids still fence (retry is once, not
       assert.equal(outcome.code, "durability_unavailable", "persistent collision code");
     }
     assert.equal(reopened.isFenced(), true, "two collisions fence the store like Go");
-    reopened.close();
+    assert.throws(() => reopened.close(), { code: "durability_unavailable" },
+      "a fenced store cannot close cleanly");
   });

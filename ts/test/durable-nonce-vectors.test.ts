@@ -524,7 +524,9 @@ test("shared nonce vectors: verdict table drives every case", { skip: !linux }, 
         });
         harness.store = DurableNonceStore.open(path, harness.config);
         harness.store.seedRecordsForTest({
-          meta: { ...harness.store.state().meta, highWater: seeded.document.meta.highWater },
+          meta: { ...harness.store.state().meta, highWater: seeded.document.meta.highWater,
+            live: seeded.document.live.length, intents: seeded.document.intents.length,
+            tombstones: seeded.document.tombstones.length },
           live: seeded.document.live, intents: seeded.document.intents, tombstones: seeded.document.tombstones,
         });
       } else {

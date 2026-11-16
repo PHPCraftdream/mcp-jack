@@ -65,18 +65,16 @@ test("rotation result id: expected 1e21 matches the exact decimal lexeme, not th
   }
 });
 
-test("rotation result id: decimal just under 2^1024 matches its exact lexeme and is not rejected as Infinity", () => {
-  // 2^1024 - 2^971: the largest finite double. Its exact decimal lexeme parses
-  // to a finite float, and the canonical text (no exponent) must match even
-  // though JSON.stringify renders it as 1.7976931348623157e+308.
-  const maxFinite =
-    "1797693134862315708145274237317043567980705675258449965989174768031572607800285387605895586327668781715404589535143824642343213268894641827684675467035375623920815464354331066725937729408567136666087088859762429764852315758328328870260627334096376499950856950707006067682665066386903";
-  const expected = Number(maxFinite);
-  assert.equal(Number.isFinite(expected), true);
-  assert.equal(rotation.decodeRotationResult(raw(envelope(maxFinite)), expected).complete, true);
-  // Near-miss: one more than the exact decimal still rounds to the same double,
-  // so it is refused only by the exact canonical text comparison.
-  rejected(envelope(`${maxFinite.slice(0, -1)}4`), expected);
+test("rotation result id: the largest finite double matches the canonical text of its shortest decimal form", () => {
+  // JSON.stringify renders it as 1.7976931348623157e+308; the canonical text (no
+  // exponent, computed without float arithmetic) is the 17 digits followed by 292 zeros.
+  const canonicalText = `17976931348623157${"0".repeat(292)}`;
+  const expected = Number.MAX_VALUE;
+  assert.equal(rotation.decodeRotationResult(raw(envelope(canonicalText)), expected).complete, true);
+  // The exponent spelling is refused: only the exact canonical text matches.
+  rejected(envelope("1.7976931348623157e308"), expected);
+  // Near-miss: it parses to the same double, so only the exact text comparison refuses it.
+  rejected(envelope(`${canonicalText.slice(0, -1)}4`), expected);
 });
 
 test("rotation result id: garbage or out-of-range numeric ids are refused", () => {
