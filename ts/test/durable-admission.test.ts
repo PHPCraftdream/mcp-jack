@@ -108,7 +108,6 @@ function registryWith(entry: RegistryEntry): MemoryState {
 interface Rig {
   readonly verifier: Verifier;
   readonly store: DurableNonceStore;
-  readonly nonces: NonceStore;
   readonly clock: () => number;
   /** The registered caller key. */
   readonly caller: { priv: KeyObject; pub: Uint8Array; kid: string };
@@ -123,17 +122,18 @@ function rig(clock: () => number, path: string, opts?: { window?: number },
   const store = DurableNonceStore.open(path, { deploymentId: DEPLOYMENT, window: WINDOW, now: clock });
   const admission = new DurableNonceAdmission({ store, now: clock });
   const caller = existing ?? freshKey();
-  const nonces = new NonceStore();
+  // T8 exactly-one-nonce-profile: `nonces` must be ABSENT when `durable` is
+  // configured, so no volatile store is wired into this verifier at all (the
+  // durable path never touches one; see verify.ts step 5).
   const verifier = new Verifier({
     aud: AUD,
     state: registryWith({ kid: caller.kid, publicKey: encodeBase64URL(caller.pub), name: "svc" }),
-    nonces,
     native: new Native(),
     now: clock,
     durable: admission,
     ...(opts?.window !== undefined ? { window: opts.window } : {}),
   });
-  return { verifier, store, nonces, clock, caller };
+  return { verifier, store, clock, caller };
 }
 
 /** Wraps the rig's verifier in the fetch adapter with the given server key. */
@@ -170,7 +170,10 @@ test("durable admission: accepted request, volatile store untouched, replay afte
     const body1 = new Uint8Array(await res1.arrayBuffer());
     verifyResponse(serverKey.pub, 200, [hv1], r1.sig, body1, 100, WINDOW);
     assert.equal(calls, 1, "wrapped handler dispatched");
-    assert.equal(first.nonces.len(), 0, "volatile store untouched while durable is configured");
+    // The durable profile reserves in the durable store itself; the verifier
+    // is built without any volatile store (exactly-one-nonce-profile), so the
+    // old "volatile store untouched" check would be vacuous. The real
+    // guarantee asserted here is the committed durable reservation below.
     assert.equal(first.store.state().counts.live, 1, "reservation committed");
 
     // Simulated crash/restart: close the store, reopen it, wire a new rig.
@@ -187,7 +190,6 @@ test("durable admission: accepted request, volatile store untouched, replay afte
     assert.equal(await errorCode(res2), "replayed_nonce", "replay code");
     assert.equal(res2.headers.get("jack-auth"), null, "replayed_nonce stays unsigned (no nonce-recorded receipt)");
     assert.equal(calls, 1, "replay never dispatched");
-    assert.equal(second.nonces.len(), 0, "volatile store still untouched");
     assert.equal(second.store.state().counts.live, 1, "committed reservation survived the restart");
     second.store.close();
   });
@@ -331,9 +333,9 @@ test("durable admission: enrollment reserves durably before invite consumption a
     const raw = new Uint8Array(32).fill(7);
     const code = encodeBase64URL(raw);
     state.update((edit) => edit.putInvite({ inviteId: inviteIdOf(raw), createdBy: "root", createdAt: 99, expiresAt: 200 }));
-    const nonces = new NonceStore();
-    const verifier = new Verifier({ aud: AUD, state, nonces, native: new Native(), now: clock, durable: admission });
     const k = freshKey();
+    // Exactly-one-nonce-profile: no volatile store alongside `durable`.
+    const verifier = new Verifier({ aud: AUD, state, native: new Native(), now: clock, durable: admission });
     const args = JSON.stringify({ name: "svc-enrolled", public_key: encodeBase64URL(k.pub), code });
     const enrollBody = utf8(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.enroll","arguments":${args}}}`);
     const nonce = encodeBase64URL(randomNonce());
@@ -348,7 +350,8 @@ test("durable admission: enrollment reserves durably before invite consumption a
     // The durable reservation was committed BEFORE the invite was consumed.
     assert.equal(store.state().counts.live, 1, "nonce reserved durably");
     assert.equal(state.lookupInvite(inviteIdOf(raw)), undefined, "invite consumed after the reservation");
-    assert.equal(nonces.len(), 0, "volatile store untouched");
+    // The verifier is built without any volatile store (exactly-one-nonce-profile), so the
+    // old "volatile store untouched" check would be vacuous and is omitted.
     // The adapters finish the admission after the response; the direct verifier call does it here.
     takeResultFinish(res)?.();
     store.close();
@@ -380,3 +383,304 @@ test("durable admission: absent option keeps the volatile default path identical
   assert.equal(replay.nonceRecorded, false, "volatile replay has no nonce-recorded receipt");
   assert.equal(replay.requestSig, "", "volatile replay stays unsigned");
 });
+
+// ---------------------------------------------------------------------------
+// T6/T7 probes: unexpected transaction failures fence the store (Go Reserve,
+// durable/admit.go:33-46) and the receipt binding matches Go receiptMatches
+// field-for-field (server/admission.go:129-138).
+// ---------------------------------------------------------------------------
+
+import { DURABLE_MAX_TIMESTAMP } from "../src/server/durable-format.js";
+import type { DurableReceipt } from "../src/server/durable-format.js";
+import type { DurableAdmissionRequest, DurableAdmissionOutcome } from "../src/server/durable-admission.js";
+import type { DurableNonceReservation } from "../src/server/durable-store.js";
+
+/** One directly-admissable signed request for the seam (no verifier needed). */
+function seamRequest(key: { priv: KeyObject; kid: string }, ts: number): DurableAdmissionRequest {
+  const nonce = encodeBase64URL(randomNonce());
+  const msg = requestSigningString("POST", TARGET, AUD, key.kid, ts, nonce, utf8(PING));
+  const sig = encodeBase64URL(new Uint8Array(nodeSign(null, Buffer.from(msg), key.priv)));
+  return { kid: key.kid, nonce, signature: sig, signingBytes: msg, timestamp: ts, window: WINDOW,
+    caller: undefined };
+}
+
+/**
+ * TEST-ONLY store view handing the adapter one tampered committed receipt
+ * (receiptMatches probes): reserve delegates to the real store, every other
+ * member is redirected so mutation cannot be shadowed on the view.
+ */
+function tamperedStore(store: DurableNonceStore,
+  mutate: (receipt: DurableReceipt) => DurableReceipt): DurableNonceStore {
+  const view = Object.create(store) as DurableNonceStore;
+  view.reserve = (request: Parameters<DurableNonceStore["reserve"]>[0]): DurableNonceReservation => {
+    const reservation = store.reserve(request);
+    return { receipt: mutate(reservation.receipt), release: reservation.release };
+  };
+  view.fence = (): void => store.fence();
+  view.isFenced = (): boolean => store.isFenced();
+  return view;
+}
+
+/** Opens a store at t=100 and runs one admission through a receipt-tampering view. */
+function probeReceipt(mutate: (receipt: DurableReceipt) => DurableReceipt):
+  { readonly outcome: DurableAdmissionOutcome; readonly store: DurableNonceStore } {
+  const path = directory();
+  const clock = scriptClock(100);
+  DurableNonceStore.initializeUnused(path, { deploymentId: DEPLOYMENT, window: WINDOW, now: clock });
+  const store = DurableNonceStore.open(path, { deploymentId: DEPLOYMENT, window: WINDOW, now: clock });
+  const admission = new DurableNonceAdmission({ store: tamperedStore(store, mutate), now: clock });
+  const outcome = admission.reserveForVerify(seamRequest(freshKey(), 100));
+  return { outcome, store };
+}
+
+/** A committed receipt that is not bound to the request must fence and refuse. */
+function assertReceiptRefused(outcome: DurableAdmissionOutcome, store: DurableNonceStore): void {
+  assert.equal(outcome.accepted, false, "mismatched receipt must be refused");
+  if (outcome.accepted) return;
+  assert.equal(outcome.httpStatus, 503, "receipt mismatch is durability_unavailable");
+  assert.equal(outcome.code, "durability_unavailable", "receipt mismatch code");
+  // The refusal happens BEFORE the post-commit sample, so nothing is reported
+  // as nonce-recorded even though the reservation committed.
+  assert.equal(outcome.nonceRecorded, false,
+    "receipt mismatch precedes the post-commit sample (nonce-recorded stays false)");
+  outcome.finish();
+  assert.equal(store.isFenced(), true, "receipt mismatch fences the store");
+  // A fenced owner cannot close cleanly (the scratch directory is left as-is).
+  assert.throws(() => store.close(), { code: "durability_unavailable" });
+}
+
+test("durable admission: receipt intent id not bound to the request refuses and fences",
+  { skip: !linux }, () => {
+    const { outcome, store } = probeReceipt((receipt) => ({ ...receipt, intentId: "Tampered-Intent" }));
+    assertReceiptRefused(outcome, store);
+  });
+
+test("durable admission: receipt format version not 1 refuses and fences",
+  { skip: !linux }, () => {
+    const { outcome, store } = probeReceipt((receipt) => ({ ...receipt, version: receipt.version + 1 }));
+    assertReceiptRefused(outcome, store);
+  });
+
+test("durable admission: receipt with non-positive store generation refuses and fences",
+  { skip: !linux }, () => {
+    const { outcome, store } = probeReceipt((receipt) => ({ ...receipt, storeGeneration: 0 }));
+    assertReceiptRefused(outcome, store);
+  });
+
+test("durable admission: receipt with non-positive owner generation refuses and fences",
+  { skip: !linux }, () => {
+    const { outcome, store } = probeReceipt((receipt) => ({ ...receipt, ownerGeneration: 0 }));
+    assertReceiptRefused(outcome, store);
+  });
+
+test("durable admission: receipt with negative high water refuses and fences",
+  { skip: !linux }, () => {
+    const { outcome, store } = probeReceipt((receipt) => ({ ...receipt, highWater: -1 }));
+    assertReceiptRefused(outcome, store);
+  });
+
+test("durable admission: receipt high water above the durable timestamp bound refuses and fences",
+  { skip: !linux }, () => {
+    const { outcome, store } =
+      probeReceipt((receipt) => ({ ...receipt, highWater: DURABLE_MAX_TIMESTAMP + 1 }));
+    assertReceiptRefused(outcome, store);
+  });
+
+test("durable admission: receipt high water farther than the window after the request refuses and fences",
+  { skip: !linux }, () => {
+    const { outcome, store } = probeReceipt((receipt) => ({ ...receipt, highWater: 100 + WINDOW + 1 }));
+    assertReceiptRefused(outcome, store);
+  });
+
+test("durable admission: receipt high water farther than the window before the request refuses and fences",
+  { skip: !linux }, () => {
+    const { outcome, store } = probeReceipt((receipt) => ({ ...receipt, highWater: 100 - WINDOW - 1 }));
+    assertReceiptRefused(outcome, store);
+  });
+
+test("durable admission: an unexpected error at the final sample fences the store and reports durability_unavailable",
+  { skip: !linux }, () => {
+    const path = directory();
+    // Samples: init, startup, entry, intent, FINAL; the final call throws a
+    // plain Error AFTER the intent transaction committed.
+    let calls = 0;
+    const clock = (): number => {
+      calls++;
+      if (calls === 5) throw new Error("clock exploded");
+      return 100;
+    };
+    DurableNonceStore.initializeUnused(path, { deploymentId: DEPLOYMENT, window: WINDOW, now: clock });
+    const store = DurableNonceStore.open(path, { deploymentId: DEPLOYMENT, window: WINDOW, now: clock });
+    const admission = new DurableNonceAdmission({ store, now: () => 100 });
+    const out = admission.reserveForVerify(seamRequest(freshKey(), 100));
+    assert.equal(out.accepted, false, "unexpected failure must not be accepted");
+    if (!out.accepted) {
+      assert.equal(out.httpStatus, 503, "the raw Error is mapped to durability_unavailable");
+      assert.equal(out.code, "durability_unavailable", "the raw Error never reaches the adapter");
+      assert.equal(out.nonceRecorded, true, "the intent had already committed");
+      out.finish();
+    }
+    assert.equal(store.isFenced(), true, "an unexpected failure fences the store");
+    assert.equal(store.state().counts.intents, 1, "the committed intent stays behind the fence");
+    // The fenced store refuses further admission with the mapped code.
+    const again = admission.reserveForVerify(seamRequest(freshKey(), 100));
+    assert.equal(again.accepted, false, "fenced store refuses");
+    if (!again.accepted) {
+      assert.equal(again.httpStatus, 503, "fenced status");
+      assert.equal(again.code, "durability_unavailable", "fenced code");
+    }
+    assert.throws(() => store.close(), { code: "durability_unavailable" },
+      "a fenced store cannot close cleanly");
+  });
+
+// ---------------------------------------------------------------------------
+// T8 probes: Verifier constructor durable configuration validation (Go
+// NewVerifier, server/verify.go: exactly one nonce profile; durable window
+// 0..120) and the operation-id collision retry (durable/admit.go: two random
+// attempts before fencing; spec section 1: on collision, allocate a new ID).
+// ---------------------------------------------------------------------------
+
+/** Stub seam that satisfies the Verifier's DurableAdmission shape without a store. */
+const stubDurable = {
+  reserveForVerify(): never {
+    throw new Error("constructor validation test must not reserve");
+  },
+};
+
+test("verifier constructor: selecting BOTH a volatile and a durable nonce store throws", () => {
+  const key = freshKey();
+  assert.throws(
+    () => new Verifier({
+      aud: AUD,
+      state: registryWith({ kid: key.kid, publicKey: encodeBase64URL(key.pub), name: "svc" }),
+      nonces: new NonceStore(),
+      durable: stubDurable,
+      native: new Native(),
+      now: () => 100,
+    }),
+    /select exactly one nonce profile/,
+    "both nonce profiles must be rejected",
+  );
+});
+
+test("verifier constructor: durable window 121 throws", () => {
+  const key = freshKey();
+  assert.throws(
+    () => new Verifier({
+      aud: AUD,
+      state: registryWith({ kid: key.kid, publicKey: encodeBase64URL(key.pub), name: "svc" }),
+      durable: stubDurable,
+      native: new Native(),
+      now: () => 100,
+      window: 121,
+    }),
+    /durable window must be between 1 and 120 seconds/,
+    "durable window above 120 must be rejected",
+  );
+});
+
+test("verifier constructor: durable window 120 is accepted (and 0 falls back to the default)", () => {
+  const key = freshKey();
+  assert.doesNotThrow(
+    () => new Verifier({
+      aud: AUD,
+      state: registryWith({ kid: key.kid, publicKey: encodeBase64URL(key.pub), name: "svc" }),
+      durable: stubDurable,
+      native: new Native(),
+      now: () => 100,
+      window: 120,
+    }),
+    "window 120 is the inclusive maximum",
+  );
+  assert.doesNotThrow(
+    () => new Verifier({
+      aud: AUD,
+      state: registryWith({ kid: key.kid, publicKey: encodeBase64URL(key.pub), name: "svc" }),
+      durable: stubDurable,
+      native: new Native(),
+      now: () => 100,
+      window: 0,
+    }),
+    "window 0 keeps the DEFAULT_WINDOW fallback like Go",
+  );
+});
+
+test("verifier constructor: a volatile window above 120 stays allowed when durable is absent", () => {
+  const key = freshKey();
+  const verifier = new Verifier({
+    aud: AUD,
+    state: registryWith({ kid: key.kid, publicKey: encodeBase64URL(key.pub), name: "svc" }),
+    nonces: new NonceStore(),
+    native: new Native(),
+    now: () => 100,
+    window: 500,
+  });
+  const nonce = encodeBase64URL(randomNonce());
+  const msg = requestSigningString("POST", TARGET, AUD, key.kid, 100, nonce, utf8(PING));
+  const sig = encodeBase64URL(new Uint8Array(nodeSign(null, Buffer.from(msg), key.priv)));
+  const res = verifier.verify({ method: "POST", target: TARGET,
+    authValues: [formatRequestAuth({ kid: key.kid, ts: 100, nonce, sig })], body: utf8(PING) });
+  assert.equal(res.accepted, true, "volatile profile keeps its own window semantics");
+});
+
+test("durable store: a colliding operation id is retried ONCE before any fence (Go parity)",
+  { skip: !linux }, () => {
+    const path = directory();
+    const clock = scriptClock(100);
+    DurableNonceStore.initializeUnused(path, { deploymentId: DEPLOYMENT, window: WINDOW, now: clock });
+    const first = DurableNonceStore.open(path, { deploymentId: DEPLOYMENT, window: WINDOW, now: clock });
+    const admission = new DurableNonceAdmission({ store: first, now: clock });
+    const initial = admission.reserveForVerify(seamRequest(freshKey(), 100));
+    assert.equal(initial.accepted, true, "first reservation commits");
+    if (initial.accepted) initial.finish();
+    const collidingId = first.state().live[0]?.operationId;
+    assert.ok(collidingId !== undefined && collidingId !== "", "the committed receipt exposes its operation id");
+    first.close();
+
+    // Reopen with a seam that returns the colliding id exactly once: the
+    // second attempt must allocate a NEW id and commit (Go durable/admit.go
+    // retries a collision once; without the fix the store fences instead).
+    const reopened = DurableNonceStore.open(path, { deploymentId: DEPLOYMENT, window: WINDOW, now: clock,
+      injectOperationId: (() => {
+        let calls = 0;
+        return () => {
+          calls++;
+          return calls === 1 ? (collidingId as string) : encodeBase64URL(randomBytes(16));
+        };
+      })() });
+    const retryAdmission = new DurableNonceAdmission({ store: reopened, now: clock });
+    const outcome = retryAdmission.reserveForVerify(seamRequest(freshKey(), 100));
+    assert.equal(outcome.accepted, true, "a single collision is retried, not fenced");
+    if (outcome.accepted) {
+      assert.notEqual(outcome.receipt.operationId, collidingId, "the retried id differs from the colliding one");
+      outcome.finish();
+    }
+    assert.equal(reopened.isFenced(), false, "a retried collision never fences");
+    reopened.close();
+  });
+
+test("durable store: two colliding operation ids still fence (retry is once, not unbounded)",
+  { skip: !linux }, () => {
+    const path = directory();
+    const clock = scriptClock(100);
+    DurableNonceStore.initializeUnused(path, { deploymentId: DEPLOYMENT, window: WINDOW, now: clock });
+    const first = DurableNonceStore.open(path, { deploymentId: DEPLOYMENT, window: WINDOW, now: clock });
+    const admission = new DurableNonceAdmission({ store: first, now: clock });
+    const initial = admission.reserveForVerify(seamRequest(freshKey(), 100));
+    assert.equal(initial.accepted, true, "first reservation commits");
+    if (initial.accepted) initial.finish();
+    const collidingId = first.state().live[0]?.operationId as string;
+    first.close();
+
+    const reopened = DurableNonceStore.open(path, { deploymentId: DEPLOYMENT, window: WINDOW, now: clock,
+      injectOperationId: () => collidingId });
+    const retryAdmission = new DurableNonceAdmission({ store: reopened, now: clock });
+    const outcome = retryAdmission.reserveForVerify(seamRequest(freshKey(), 100));
+    assert.equal(outcome.accepted, false, "a persistent collision cannot commit");
+    if (!outcome.accepted) {
+      assert.equal(outcome.httpStatus, 503, "persistent collision status");
+      assert.equal(outcome.code, "durability_unavailable", "persistent collision code");
+    }
+    assert.equal(reopened.isFenced(), true, "two collisions fence the store like Go");
+    reopened.close();
+  });

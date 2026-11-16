@@ -513,6 +513,14 @@ export class Verifier {
       throw new Error("server: VerifierConfig.nonces must be set");
     }
     if (cfg.now === undefined) throw new Error("server: VerifierConfig.now must be set");
+    // Go NewVerifier parity: exactly one nonce profile, and the durable
+    // profile bounds the window (server/verify.go: durable window <= 120).
+    if (cfg.nonces !== undefined && cfg.durable !== undefined) {
+      throw new Error("server: VerifierConfig: select exactly one nonce profile");
+    }
+    if (cfg.durable !== undefined && cfg.window !== undefined && (cfg.window < 0 || cfg.window > 120)) {
+      throw new Error("server: VerifierConfig.durable window must be between 1 and 120 seconds");
+    }
     this.aud = cfg.aud;
     this.state = cfg.state;
     this.nonces = cfg.nonces;

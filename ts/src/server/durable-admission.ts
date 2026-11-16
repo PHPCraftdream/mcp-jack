@@ -8,11 +8,12 @@
  * middleware). Refusals map one-to-one onto the spec section 5 statuses and
  * codes; replayed_nonce stays unsigned (no nonce-recorded receipt).
  */
-import { bodyHash } from "../encoding.js";
+import { bodyHash, decodeBase64URLFixed } from "../encoding.js";
 import { Code, JackError } from "../errors.js";
 import type { RegistryEntry } from "./state.js";
 import type { DurableNonceReservation, DurableNonceStore } from "./durable-store.js";
-import { DURABLE_MAX_TIMESTAMP } from "./durable-format.js";
+import { DURABLE_FORMAT_VERSION, DURABLE_MAX_TIMESTAMP, intentIdOf } from "./durable-format.js";
+import type { DurableReceipt } from "./durable-format.js";
 
 /** Whether now is inside the entry's validity interval (spec 02 section 1). */
 function entryActive(e: RegistryEntry, now: number): boolean {
@@ -57,6 +58,49 @@ export interface DurableNonceAdmissionOptions {
 }
 
 const noop = (): void => {};
+
+/**
+ * The full receipt-to-request binding (Go receiptMatches,
+ * server/admission.go:129-138): intent identity, format version, both
+ * generations and all four high-water bounds, on top of the kid/nonce/
+ * signature/requestHash/timestamp/retainUntil equality already checked.
+ * Any mismatch means the committed receipt is not bound to this request.
+ */
+function receiptMatches(receipt: DurableReceipt, request: DurableAdmissionRequest,
+  requestHash: string): boolean {
+  // Go receipt.Version == 1, receipt.StoreGeneration > 0, receipt.OwnerGeneration > 0.
+  if (receipt.version !== DURABLE_FORMAT_VERSION || receipt.storeGeneration <= 0 ||
+    receipt.ownerGeneration <= 0) {
+    return false;
+  }
+  // Go receipt.IntentID == NonceIntentID(receipt.DeploymentID, request, receipt.OperationID).
+  try {
+    const kidRaw = decodeBase64URLFixed(receipt.kid, 32);
+    const nonceRaw = decodeBase64URLFixed(receipt.nonce, 16);
+    const signatureRaw = decodeBase64URLFixed(receipt.signature, 64);
+    const hashRaw = decodeBase64URLFixed(receipt.requestHash, 32);
+    const operationRaw = decodeBase64URLFixed(receipt.operationId, 16);
+    if (receipt.intentId !==
+      intentIdOf(receipt.deploymentId, kidRaw, nonceRaw, signatureRaw, hashRaw, operationRaw)) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  // Go receipt.KID/Nonce/Signature/RequestHash/Timestamp/RetainUntil equality.
+  if (receipt.kid !== request.kid || receipt.nonce !== request.nonce ||
+    receipt.signature !== request.signature || receipt.requestHash !== requestHash ||
+    receipt.timestamp !== request.timestamp ||
+    receipt.retainUntil !== request.timestamp + request.window) {
+    return false;
+  }
+  // Go receipt.HighWater >= 0 && <= maxDurableTimestamp &&
+  // receipt.HighWater-request.Timestamp <= request.Window &&
+  // request.Timestamp-receipt.HighWater <= request.Window.
+  return receipt.highWater >= 0 && receipt.highWater <= DURABLE_MAX_TIMESTAMP &&
+    receipt.highWater - request.timestamp <= request.window &&
+    request.timestamp - receipt.highWater <= request.window;
+}
 
 /** Idempotent once-wrapper around the store's own idempotent release. */
 function onceRelease(release: () => void): () => void {
@@ -128,9 +172,7 @@ export class DurableNonceAdmission implements DurableAdmission {
     // Receipt equality against the exact request (Go receiptMatches); any
     // mismatch fences and refuses without dispatch.
     const receipt = reservation.receipt;
-    if (receipt.kid !== request.kid || receipt.nonce !== request.nonce || receipt.signature !== request.signature ||
-      receipt.timestamp !== ts || receipt.retainUntil !== ts + window ||
-      receipt.requestHash !== bodyHash(Buffer.from(request.signingBytes, "utf8"))) {
+    if (!receiptMatches(receipt, request, bodyHash(Buffer.from(request.signingBytes, "utf8")))) {
       store.fence();
       return unavailable(false, finish);
     }

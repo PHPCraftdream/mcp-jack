@@ -8,6 +8,14 @@
  * "driven" (full expectation), "deviation" (driven with documented field
  * deviations) or "excluded" (spec reason quoted); the test fails if the actual
  * outcome disagrees with the recorded verdict.
+ *
+ * bad-signature-zero-writes and commit-then-authorization-refusal are driven at
+ * the VERIFIER level (the durable-admission seam: a real Ed25519-signed request
+ * through a Verifier wired to the durable store), mirroring Go
+ * durable/nonce_vectors_linux_test.go: a tampered request target makes the real
+ * signature check fail pre-admission, and a refusing native tool produces the
+ * native 403 after the confirmed commit. Fence state is asserted in BOTH
+ * directions through store.isFenced() for every vector whose fixture records it.
  */
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync } from "node:fs";
@@ -17,8 +25,17 @@ import { test } from "node:test";
 import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { fileURLToPath } from "node:url";
-import { bodyHash, decodeBase64URLFixed, encodeBase64URL } from "../src/encoding.js";
+import { bodyHash, decodeBase64URLFixed, encodeBase64URL, keyId } from "../src/encoding.js";
+import { requestSigningString } from "../src/signing.js";
+import { formatRequestAuth } from "../src/auth-header.js";
+import { createPrivateKey, createPublicKey, sign as nodeSign } from "node:crypto";
+import type { PrivateKeyObject } from "node:crypto";
 import { DurableNonceStore } from "../src/server/durable-store.js";
+import { MemoryState } from "../src/server/state.js";
+import type { NonceStore } from "../src/server/nonce.js";
+import { Verifier } from "../src/server/verify.js";
+import type { NativeCall, NativeResult, NativeTools, VerifyRequest, VerifyResult } from "../src/server/verify.js";
+import { DurableNonceAdmission, takeResultFinish } from "../src/server/durable-admission.js";
 import { intentIdOf, pairKeyOf } from "../src/server/durable-format.js";
 import type { DurableDocument, DurableMetadata, DurableReceipt } from "../src/server/durable-format.js";
 import { JackError } from "../src/errors.js";
@@ -26,6 +43,13 @@ import { JackError } from "../src/errors.js";
 const linux = process.platform === "linux";
 const DEPLOYMENT = "candidate-test-deployment";
 const WINDOW = 30;
+const AUD = "https://candidate-vector.test";
+const TARGET = "/mcp";
+const PING_BODY = '{"jsonrpc":"2.0","id":1,"method":"ping"}';
+const WHOAMI_BODY =
+  '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.whoami","arguments":{}}}';
+
+const utf8 = (s: string): Uint8Array => new TextEncoder().encode(s);
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { readonly [key: string]: JsonValue };
 
@@ -111,6 +135,69 @@ function syntheticOperation(name: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Verifier-level driving (durable-admission rig): real Ed25519-signed requests
+// through a Verifier wired to the harness's durable store.
+// ---------------------------------------------------------------------------
+
+interface EdKey { readonly priv: PrivateKeyObject; readonly pub: Uint8Array; readonly kid: string }
+
+/** Deterministic Ed25519 key material with its derived kid. */
+function edKey(name: string): EdKey {
+  const seed = digest(`candidate-vector/ed25519/${name}`).subarray(0, 32);
+  const pkcs8Prefix = Buffer.from("302e020100300506032b657004220420", "hex");
+  const priv = createPrivateKey({ key: Buffer.concat([pkcs8Prefix, seed]), format: "der", type: "pkcs8" });
+  const der = createPublicKey(priv).export({ type: "spki", format: "der" });
+  const pub = new Uint8Array(der.subarray(der.length - 32));
+  return { priv, pub, kid: keyId(pub) };
+}
+
+interface VerifierDrive {
+  readonly verifier: Verifier;
+  readonly key: EdKey;
+  /** Effect counters (Go vectorCounters): authorization-gate entries. */
+  readonly nativeCalls: { value: number };
+}
+
+/**
+ * Wires a Verifier over the harness's durable store with the durable-admission
+ * seam. With refuseNative, the native tool handler is the Go refusingNative:
+ * it counts the authorization-gate entry and answers the native 403
+ * authorization_refused (durable/nonce_vectors_linux_test.go:502-509).
+ */
+function vectorVerifier(harness: Harness, refuseNative: boolean): VerifierDrive {
+  const store = harness.store as DurableNonceStore;
+  const state = new MemoryState();
+  const key = edKey("caller");
+  state.update((edit) =>
+    edit.putKey({ kid: key.kid, publicKey: encodeBase64URL(key.pub), name: "candidate-vector-caller" }));
+  const nativeCalls = { value: 0 };
+  const refusingNative: NativeTools = {
+    call(_call: NativeCall): NativeResult {
+      nativeCalls.value++;
+      throw new JackError(403, "authorization_refused", "authorization refused");
+    },
+  };
+  const verifier = new Verifier({
+    aud: AUD,
+    state,
+    // VerifierConfig.nonces is nominally required, but the constructor's
+    // exactly-one-nonce-profile check (T8) requires it ABSENT when `durable`
+    // is set — hand the type system the required key with no value.
+    nonces: undefined as unknown as NonceStore,
+    ...(refuseNative ? { native: refusingNative as NativeTools } : {}),
+    now: harness.config.now,
+    durable: new DurableNonceAdmission({ store, now: harness.config.now }),
+    window: harness.config.window,
+  });
+  return { verifier, key, nativeCalls };
+}
+
+/** Whether the verifier forwarded the request to a wrapped handler (dispatch). */
+function dispatchCount(result: VerifyResult): number {
+  return result.identity !== undefined ? 1 : 0;
+}
+
+// ---------------------------------------------------------------------------
 // Verdict table: every one of the 24 vectors, encoded as data.
 // ---------------------------------------------------------------------------
 
@@ -154,10 +241,13 @@ const VERDICTS: Record<string, Verdict> = {
   "enrollment-snapshot-change-zero-commit":
     driven("enrollment snapshot change surfaced through the injected validate closure"),
   "bad-signature-zero-writes":
-    driven("pre-authentication failure: the store is never contacted, so zero writes by construction"),
+    driven("full-path Verifier drive (durable-admission seam): a real signed request whose target is tampered " +
+      "after signing fails the real Ed25519 signature check pre-admission; the native 401 bad_signature, zero " +
+      "reservations, zero disk writes and an unfenced store are all asserted"),
   "commit-then-authorization-refusal":
-    driven("store-level: confirmed commit returns a receipt; the 403 is the caller's simulated post-commit " +
-      "authorization refusal and the nonce stays consumed"),
+    driven("full-path Verifier drive (durable-admission seam): the confirmed commit succeeds, then the refusing " +
+      "native tool (Go refusingNative parity) answers the native 403 authorization_refused before dispatch; " +
+      "the nonce stays consumed and the store stays unfenced"),
   "unknown-final-present":
     driven("unknown final with the live row found: reconcile to a terminal tombstone"),
   "unknown-final-absent": {
@@ -259,6 +349,34 @@ function admissionFor(event: VectorEvent): {
     timestamp: event.ts, window: event.window,
     validate: (): boolean => event.captured.key === event.cryptoSnapshot.key &&
       event.captured.enrollment === event.cryptoSnapshot.enrollment,
+  };
+}
+
+/** Builds one full-path VerifyRequest signed with the real key over `body`. */
+function vectorSignedRequest(key: EdKey, event: VectorEvent, body: Uint8Array, tamperTarget: boolean): VerifyRequest {
+  const nonce = encodeBase64URL(digest(`candidate-vector/verifier-nonce/${event.kid}:${event.nonce}`).subarray(0, 16));
+  const signing = requestSigningString("POST", TARGET, AUD, key.kid, event.ts, nonce, body);
+  const sig = encodeBase64URL(new Uint8Array(nodeSign(null, Buffer.from(signing), key.priv)));
+  return {
+    method: "POST",
+    target: tamperTarget ? `${TARGET}/tampered` : TARGET,
+    authValues: [formatRequestAuth({ kid: key.kid, ts: event.ts, nonce, sig })],
+    body,
+  };
+}
+
+/** Outcome fields plus the effect counters the fixture records. */
+interface Effects { readonly authorization: number; readonly handler: number; readonly stateMutation: number }
+
+/** Reads {authorization, handler, stateMutation} off a fixture expect block. */
+function expectEffects(expect: Record<string, JsonValue>): Effects | undefined {
+  const raw = expect["effects"];
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const effects = raw as Record<string, JsonValue>;
+  return {
+    authorization: Number(effects["authorization"] ?? 0),
+    handler: Number(effects["handler"] ?? 0),
+    stateMutation: Number(effects["stateMutation"] ?? 0),
   };
 }
 
@@ -390,42 +508,126 @@ test("shared nonce vectors: verdict table drives every case", { skip: !linux }, 
     const fault: Fault = {};
     // The store window is the seeded state window: the window vectors send a different request window.
     const harness = makeHarness(path, fault, vector.state?.window ?? WINDOW);
-    let seededHighWater: number;
     if (vector.state === undefined) {
       // Sequence vectors have no seeded state: an empty initialized store.
-      harness.queue(events[0]?.entryNow ?? 0);
+      const openNow = events[0]?.entryNow ?? 0;
+      harness.queue(openNow);
       DurableNonceStore.initializeUnused(path, harness.config);
-      harness.queue(events[0]?.entryNow ?? 0);
-      seededHighWater = events[0]?.entryNow ?? 0;
+      harness.queue(openNow);
     } else {
       const seeded = buildDocument(vector.state);
-      DurableNonceStore.seedDocumentForTest(path, seeded.document);
       // Startup sample: never below the seeded (possibly deviated) high water.
       harness.queue(seeded.highWater);
-      seededHighWater = seeded.highWater;
+      // Go seeds rows AFTER Open via a package-internal transaction
+      // (seedVectorState): a clean store holding unresolved intents or the
+      // tombstone cap refuses Open with ErrRecoveryRequired, so unresolved
+      // state must be seeded through the post-open test seam.
+      if (seeded.document.intents.length > 0 || seeded.document.tombstones.length > 0) {
+        DurableNonceStore.seedDocumentForTest(path, {
+          meta: { ...seeded.document.meta, live: 0, intents: 0, tombstones: 0 },
+          live: [], intents: [], tombstones: [],
+        });
+        harness.store = DurableNonceStore.open(path, harness.config);
+        harness.store.seedRecordsForTest({
+          meta: { ...harness.store.state().meta, highWater: seeded.document.meta.highWater },
+          live: seeded.document.live, intents: seeded.document.intents, tombstones: seeded.document.tombstones,
+        });
+      } else {
+        DurableNonceStore.seedDocumentForTest(path, seeded.document);
+      }
     }
-    harness.store = DurableNonceStore.open(path, harness.config);
+    if (harness.store === undefined) {
+      harness.store = DurableNonceStore.open(path, harness.config);
+    }
 
+    const expect = vector.expect;
     const actual: Outcome[] = [];
     let committedTotal = 0;
     for (const event of events) {
       if (!event.authenticated) {
-        // Pre-authentication refusal: the store is never contacted.
-        actual.push({ status: 401, code: "bad_signature", liveCount: 0, intentCount: 0, tombstoneCount: 0,
-          highWater: seededHighWater, fenced: false, writes: 0 });
+        // bad-signature-zero-writes: full-path Verifier drive. The request is
+        // really signed, but the target is tampered after signing (Go
+        // nonce_vectors_linux_test.go:552-555), so the real signature check
+        // fails pre-admission and the store is never contacted.
+        const store = harness.store as DurableNonceStore;
+        const drive = vectorVerifier(harness, false);
+        // One Verifier clock sample (the entry timestamp check); the refusal
+        // happens before the durable seam consumes any further samples.
+        harness.queue(event.entryNow);
+        const writesBefore = store.diskWrites;
+        const result = drive.verifier.verify(vectorSignedRequest(drive.key, event, utf8(PING_BODY), true));
+        assert.equal(result.accepted, false, `vector ${vector.id}: tampered signature must refuse`);
+        assert.equal(result.httpStatus, 401, `vector ${vector.id}: bad_signature status`);
+        assert.equal(result.code, "bad_signature", `vector ${vector.id}: bad_signature code`);
+        assert.equal(result.nonceRecorded, false, `vector ${vector.id}: pre-admission refusal is not nonce-recorded`);
+        assert.equal(dispatchCount(result), 0, `vector ${vector.id}: never dispatched`);
+        const counts = store.state().counts;
+        actual.push({
+          status: result.httpStatus, code: result.code,
+          liveCount: counts.live, intentCount: counts.intents, tombstoneCount: counts.tombstones,
+          highWater: store.state().meta.highWater, fenced: store.isFenced(),
+          writes: store.diskWrites - writesBefore,
+        });
+        // Fixture effects: authorization/handler gates are never reached.
+        const effects = expectEffects(expect);
+        if (effects !== undefined) {
+          assert.equal(drive.nativeCalls.value + (result.accepted ? 1 : 0), effects.authorization,
+            `vector ${vector.id}: effects.authorization`);
+          assert.equal(dispatchCount(result), effects.handler, `vector ${vector.id}: effects.handler`);
+          assert.equal(0, effects.stateMutation, `vector ${vector.id}: effects.stateMutation`);
+        }
+        continue;
+      }
+      if (event.authorization === "refused") {
+        // commit-then-authorization-refusal: full-path Verifier drive. The
+        // commit confirms, then the refusing native tool answers the native
+        // 403 authorization_refused before any dispatch (Go refusingNative).
+        const store = harness.store as DurableNonceStore;
+        const drive = vectorVerifier(harness, true);
+        // Verifier entry sample, store entry/intent/final samples, post-commit
+        // sample (5 pushes per event, Go driveVectorEvent parity).
+        harness.queue(event.entryNow);
+        harness.queue(event.entryNow);
+        harness.queue(event.intentNow);
+        harness.queue(event.finalNow);
+        harness.queue(event.finalNow);
+        const writesBefore = store.diskWrites;
+        const result = drive.verifier.verify(vectorSignedRequest(drive.key, event, utf8(WHOAMI_BODY), false));
+        takeResultFinish(result)?.();
+        assert.equal(result.accepted, false, `vector ${vector.id}: authorization refusal must refuse`);
+        assert.equal(result.httpStatus, 403, `vector ${vector.id}: authorization_refused status`);
+        assert.equal(result.code, "authorization_refused", `vector ${vector.id}: authorization_refused code`);
+        assert.equal(result.nonceRecorded, true,
+          `vector ${vector.id}: the confirmed commit makes the refusal nonce-recorded`);
+        assert.equal(dispatchCount(result), 0, `vector ${vector.id}: never dispatched`);
+        // The nonce stays consumed: replaying the SAME signed request after the
+        // native 403 answers the unsigned 401 replayed_nonce.
+        const replay = drive.verifier.verify(vectorSignedRequest(drive.key, event, utf8(WHOAMI_BODY), false));
+        assert.equal(replay.accepted, false, `vector ${vector.id}: the consumed nonce replays`);
+        assert.equal(replay.httpStatus, 401, `vector ${vector.id}: replay status`);
+        assert.equal(replay.code, "replayed_nonce", `vector ${vector.id}: replay code`);
+        assert.equal(replay.nonceRecorded, false, `vector ${vector.id}: replay is not nonce-recorded`);
+        const counts = store.state().counts;
+        actual.push({
+          status: result.httpStatus, code: result.code,
+          liveCount: counts.live, intentCount: counts.intents, tombstoneCount: counts.tombstones,
+          highWater: store.state().meta.highWater, fenced: store.isFenced(),
+          writes: store.diskWrites - writesBefore,
+        });
+        const effects = expectEffects(expect);
+        if (effects !== undefined) {
+          assert.equal(drive.nativeCalls.value + (result.accepted ? 1 : 0), effects.authorization,
+            `vector ${vector.id}: effects.authorization`);
+          assert.equal(dispatchCount(result), effects.handler, `vector ${vector.id}: effects.handler`);
+          assert.equal(0, effects.stateMutation, `vector ${vector.id}: effects.stateMutation`);
+        }
         continue;
       }
       const step = driveEvent(harness, event, fault);
       committedTotal += step.committed ? 1 : 0;
-      // The caller-level authorization refusal after a confirmed commit (a native tool answering 403).
-      if (event.authorization === "refused" && step.committed) {
-        actual.push({ ...step.outcome, status: 403, code: "authorization_refused" });
-        continue;
-      }
       actual.push(step.outcome);
     }
 
-    const expect = vector.expect;
     const deviations = verdict.deviations ?? [];
     const statuses = (expect["statuses"] as readonly JsonValue[] | undefined) ??
       [[expect["status"], expect["code"]]];
@@ -451,8 +653,19 @@ test("shared nonce vectors: verdict table drives every case", { skip: !linux }, 
     if (!deviations.includes("writes") && typeof expect["writes"] === "number") {
       assert.equal(final.writes, expect["writes"], `vector ${vector.id}: writes`);
     }
-    if (expect["fenced"] === true) {
-      assert.equal(final.fenced, true, `vector ${vector.id}: fenced`);
+    // The store's disk-transaction counter mirrors Go's transactCalls, which is
+    // exactly what the fixtures record as `callbacks`.
+    if (!deviations.includes("writes") && typeof expect["callbacks"] === "number") {
+      assert.equal(final.writes, expect["callbacks"], `vector ${vector.id}: callbacks (disk transactions)`);
+    }
+    // dispatches/effects are only observable on the full-path Verifier drives
+    // (bad-signature-zero-writes, commit-then-authorization-refusal), which
+    // assert them at the drive site above; the store-level drive has no
+    // authorization gate or handler to count.
+    if (typeof expect["fenced"] === "boolean") {
+      // Fence state is asserted in BOTH directions through the store seam:
+      // definite refusals must NOT fence, latched unsafe states must fence.
+      assert.equal(final.fenced, expect["fenced"], `vector ${vector.id}: fenced`);
     }
     if (typeof expect["tombstoneOutcome"] === "string") {
       // Unknown outcomes reconcile through recovery inspect + reconcile to terminal tombstones.
@@ -491,10 +704,9 @@ test("shared nonce vectors: verdict table drives every case", { skip: !linux }, 
     }
     if (vector.id === "commit-then-authorization-refusal") {
       const store = harness.store as DurableNonceStore;
-      // The 403 is simulated at the caller level; the nonce stays consumed either way.
+      // The nonce stays consumed after the native 403: exactly one live row.
+      // (The replay itself is asserted against the real request in the drive.)
       assert.equal(store.state().counts.live, 1);
-      assert.throws(() => store.reserve(admissionFor(events[0] as VectorEvent)),
-        (error: unknown) => error instanceof JackError && error.code === "replayed_nonce");
     }
   }
 });

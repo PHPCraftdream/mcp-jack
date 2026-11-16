@@ -55,3 +55,34 @@ test("rotation result id: canonical response matches non-canonical expected nume
   assert.equal(rotation.decodeRotationResult(raw(envelope("0")), -0).complete, true);
   rejected(envelope("-0"), -0);
 });
+
+test("rotation result id: expected 1e21 matches the exact decimal lexeme, not the exponent form", () => {
+  // Go/Rust parity: the canonical form of the expected value has no exponent,
+  // so the response must carry the exact decimal 1000000000000000000000.
+  assert.equal(rotation.decodeRotationResult(raw(envelope("1000000000000000000000")), 1e21).complete, true);
+  for (const lexeme of ["1e+21", "1e21", "1.0e21", "1000000000000000000001", "10000000000000000000000"]) {
+    rejected(envelope(lexeme), 1e21);
+  }
+});
+
+test("rotation result id: decimal just under 2^1024 matches its exact lexeme and is not rejected as Infinity", () => {
+  // 2^1024 - 2^971: the largest finite double. Its exact decimal lexeme parses
+  // to a finite float, and the canonical text (no exponent) must match even
+  // though JSON.stringify renders it as 1.7976931348623157e+308.
+  const maxFinite =
+    "1797693134862315708145274237317043567980705675258449965989174768031572607800285387605895586327668781715404589535143824642343213268894641827684675467035375623920815464354331066725937729408567136666087088859762429764852315758328328870260627334096376499950856950707006067682665066386903";
+  const expected = Number(maxFinite);
+  assert.equal(Number.isFinite(expected), true);
+  assert.equal(rotation.decodeRotationResult(raw(envelope(maxFinite)), expected).complete, true);
+  // Near-miss: one more than the exact decimal still rounds to the same double,
+  // so it is refused only by the exact canonical text comparison.
+  rejected(envelope(`${maxFinite.slice(0, -1)}4`), expected);
+});
+
+test("rotation result id: garbage or out-of-range numeric ids are refused", () => {
+  // 1e999 parses to Infinity on the wire: out of the f64 range, refused.
+  rejected(envelope("1e999"), 7);
+  rejected(envelope("1e999"), 1e21);
+  // A string response id never matches a numeric expected id.
+  rejected(envelope('"1000000000000000000000"'), 1e21);
+});
