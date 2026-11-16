@@ -308,23 +308,27 @@ test("durable store: intents and tombstones count against capacity without live 
     const rows = sortByPair([...Array.from({ length: 4095 }, (_, index) => rowFor(`capacity-${index}`, index)),
       rowFor("capacity-intent", 500000)]);
     const pendingIntent = rows[rows.length - 1] as DurableReceipt;
-    DurableNonceStore.seedDocumentForTest(path, doc(meta({ live: rows.length - 1, intents: 1 }),
-      rows.slice(0, rows.length - 1), [pendingIntent], []));
+    // A clean store with an unresolved intent refuses Open (Go
+    // ErrRecoveryRequired), so the intent is seeded AFTER open through the
+    // test-only seam, mirroring Go seedVectorState.
+    DurableNonceStore.seedDocumentForTest(path, doc(meta({ live: rows.length - 1 }),
+      rows.slice(0, rows.length - 1), [], []));
     const store = DurableNonceStore.open(path, config);
+    store.seedRecordsForTest(doc(store.state().meta, rows.slice(0, rows.length - 1), [pendingIntent], []));
     assert.throws(() => store.reserve(admission(id.kid, id.nonce, 100)), denies(503, "capacity_exhausted"),
       "the outstanding intent counts against the combined cap");
     assert.equal(store.state().counts.live, 4095, "no live row is evicted");
     assert.throws(() => store.close(), unavailable, "close refuses while an outstanding intent remains");
 
-    // 64 tombstones exhaust the unknown cap.
+    // 64 tombstones exhaust the unknown cap; seeded after open for the same reason.
     const path3 = join(dir, "nonce-store-tomb");
+    DurableNonceStore.seedDocumentForTest(path3, doc(meta({ highWater: 100 }), [], [], []));
+    const store3 = DurableNonceStore.open(path3, config);
     const tombstones = sortByPair(Array.from({ length: 64 }, (_, index) => {
       const row = rowFor(`tombstone-${index}`, index);
       return { ...row, timestamp: 60, retainUntil: 90, highWater: 61 };
     }));
-    DurableNonceStore.seedDocumentForTest(path3, doc(meta({ highWater: 100, tombstones: tombstones.length }),
-      [], [], tombstones));
-    const store3 = DurableNonceStore.open(path3, config);
+    store3.seedRecordsForTest(doc(store3.state().meta, [], [], tombstones));
     assert.throws(() => store3.reserve(admission(id.kid, id.nonce, 100)), denies(503, "capacity_exhausted"));
     assert.equal(store3.state().counts.tombstones, 64, "no tombstone is evicted");
     assert.throws(() => store3.close(), unavailable, "close refuses at the tombstone cap");
@@ -449,3 +453,240 @@ test("durable store: strict loading rejects tampered and noncanonical documents"
   DurableNonceStore.seedDocumentForTest(duplicatePath, doc(meta({ live: 2 }), [row, row], [], []));
   assert.throws(() => DurableNonceStore.open(duplicatePath, config), unavailable);
 });
+
+/** Sealed envelope with a correct checksum over an arbitrary (possibly noncanonical) payload. */
+function sealedEnvelope(payload: string): Buffer {
+  return Buffer.from(JSON.stringify({ payload, checksum: bodyHash(Buffer.from(payload, "utf8")) }), "utf8");
+}
+
+/** Payload text of the canonical seed store file. */
+function seededPayload(good: Buffer): string {
+  return (JSON.parse(Buffer.from(good).toString("utf8")) as { payload: string }).payload;
+}
+
+test("durable store: load refuses duplicate members, whitespace and noncanonical numbers",
+  { skip: !linux }, (context) => {
+    const { dir, path } = directory();
+    context.after(() => rmSync(dir, { recursive: true, force: true }));
+    const row = rowFor("canonical", 0);
+    DurableNonceStore.seedDocumentForTest(path, doc(meta({ live: 1 }), [row], [], []));
+    const config = options(scriptClock(100));
+    // Happy path: the store written by encodeDocument opens byte-identically.
+    {
+      const probe = DurableNonceStore.open(path, config);
+      probe.close();
+    }
+    const good = Buffer.from(readFileSync(path));
+    const payload = seededPayload(good);
+    const refuse = (name: string, bytes: Uint8Array): void => {
+      const variant = join(dir, name);
+      writeFileSync(variant, bytes, { mode: 0o600 });
+      assert.throws(() => DurableNonceStore.open(variant, config), unavailable,
+        `${name} must be refused as invalid store format`);
+    };
+
+    // Duplicated member at the top (envelope) level: checksum is valid, still refused.
+    const duplicateTop = Buffer.from(
+      `{"payload":${JSON.stringify(payload)},"checksum":"${bodyHash(Buffer.from(payload, "utf8"))}",` +
+      `"payload":${JSON.stringify(payload)}}`, "utf8");
+    refuse("duplicate-top", duplicateTop);
+
+    // Duplicated member nested inside the meta object: refused.
+    const deploymentMember = `"deployment":"${DEPLOYMENT}",`;
+    assert.ok(payload.includes(deploymentMember), "seed payload contains the deployment member");
+    refuse("duplicate-meta", sealedEnvelope(payload.replace(deploymentMember,
+      `${deploymentMember}${deploymentMember}`)));
+
+    // Duplicated member nested inside a record object: refused.
+    const kidMember = `"kid":"${row.kid}",`;
+    assert.ok(payload.includes(kidMember), "seed payload contains the record kid member");
+    refuse("duplicate-record", sealedEnvelope(payload.replace(kidMember, `${kidMember}${kidMember}`)));
+
+    // Leading whitespace before the document: refused.
+    refuse("leading-space", Buffer.concat([Buffer.from(" ", "utf8"), good]));
+
+    // Trailing whitespace after the document: refused.
+    refuse("trailing-space", Buffer.concat([good, Buffer.from("\n", "utf8")]));
+
+    // Trailing bytes after the document: refused.
+    refuse("trailing-bytes", Buffer.concat([good, Buffer.from("x", "utf8")]));
+
+    // Noncanonical integer spellings with identical numeric value: refused.
+    const timestampMember = `"timestamp":100,`;
+    assert.ok(payload.includes(timestampMember), "seed payload contains the timestamp member");
+    refuse("number-fraction", sealedEnvelope(payload.replace(timestampMember, `"timestamp":30.0,`)));
+    refuse("number-exponent", sealedEnvelope(payload.replace(timestampMember, `"timestamp":3e1,`)));
+    refuse("number-negative-zero", sealedEnvelope(payload.replace(timestampMember, `"timestamp":-0,`)));
+
+    // The canonical bytes still open after all refusals.
+    const canonical = join(dir, "canonical");
+    writeFileSync(canonical, good, { mode: 0o600 });
+    const reopened = DurableNonceStore.open(canonical, config);
+    reopened.close();
+  });
+
+function recoveryRequired(error: unknown): boolean {
+  return denies(503, "durability_unavailable")(error) &&
+    (error as JackError).message === "durable: recovery required";
+}
+
+/** Go ErrInvalidStore surfaces as a plain invalid-store failure, not unavailable. */
+function invalidStore(error: unknown): boolean {
+  return !(error instanceof JackError) && (error as Error).message === "durable: invalid store";
+}
+
+test("durable store: open refuses a clean store with unresolved intents until explicit recovery",
+  { skip: !linux }, (context) => {
+    const { dir, path } = directory();
+    context.after(() => rmSync(dir, { recursive: true, force: true }));
+    const config = options(scriptClock(100));
+    const intent = rowFor("open-intent", 0);
+    // Clean (dirty=false) with one unresolved intent: Go readStoreSnapshot
+    // refuses Open with ErrRecoveryRequired.
+    DurableNonceStore.seedDocumentForTest(path, doc(meta(), [], [intent], []));
+    assert.throws(() => DurableNonceStore.open(path, config), recoveryRequired,
+      "a clean store with unresolved intents must refuse open");
+    // Recovery inspection still loads the same file (only open refuses).
+    const snapshot = DurableNonceStore.inspectRecovery(path, config);
+    assert.equal(snapshot.dirty, false);
+    assert.equal(snapshot.intents.length, 1);
+    assert.equal(snapshot.intents[0]?.intentId, intent.intentId);
+  });
+
+test("durable store: open refuses a clean store at the tombstone cap until explicit recovery",
+  { skip: !linux }, (context) => {
+    const { dir, path } = directory();
+    context.after(() => rmSync(dir, { recursive: true, force: true }));
+    const config = options(scriptClock(100));
+    const expired = sortByPair(Array.from({ length: 64 }, (_, index) => {
+      const row = rowFor(`cap-tombstone-${index}`, index);
+      return { ...row, timestamp: 60, retainUntil: 90, highWater: 61 };
+    }));
+    DurableNonceStore.seedDocumentForTest(path, doc(meta(), [], [], expired));
+    assert.throws(() => DurableNonceStore.open(path, config), recoveryRequired,
+      "a clean store at the tombstone cap must refuse open");
+    // Below the cap a clean store still opens.
+    const belowPath = join(dir, "below-cap");
+    DurableNonceStore.seedDocumentForTest(belowPath, doc(meta(), [], [], expired.slice(0, 63)));
+    const below = DurableNonceStore.open(belowPath, config);
+    below.close();
+    // Recovery inspection still loads the capped file.
+    const snapshot = DurableNonceStore.inspectRecovery(path, config);
+    assert.equal(snapshot.tombstones.length, 64);
+  });
+
+test("durable store: recovery inspect and reconcile refuse a deployment or window mismatch",
+  { skip: !linux }, (context) => {
+    const { dir, path } = directory();
+    context.after(() => rmSync(dir, { recursive: true, force: true }));
+    const intent = rowFor("mismatch-intent", 0);
+    // A crashed dirty store with one unresolved intent (the recovery profile).
+    DurableNonceStore.seedDocumentForTest(path, doc(meta({ dirty: true }), [], [intent], []));
+    const config = options(scriptClock(100));
+    const snapshot = DurableNonceStore.inspectRecovery(path, config);
+    assert.equal(snapshot.intents.length, 1);
+    const wrongDeployment = { ...config, deploymentId: "other-deployment" };
+    const wrongWindow = { ...config, window: 31 };
+    assert.throws(() => DurableNonceStore.inspectRecovery(path, wrongDeployment), invalidStore,
+      "inspect must refuse a deployment mismatch");
+    assert.throws(() => DurableNonceStore.inspectRecovery(path, wrongWindow), invalidStore,
+      "inspect must refuse a window mismatch");
+    const receipt = snapshot.intents[0] as DurableReceipt;
+    assert.throws(() => DurableNonceStore.reconcileUnknown(path, wrongDeployment, snapshot.hash, receipt),
+      invalidStore, "reconcile must refuse a deployment mismatch");
+    assert.throws(() => DurableNonceStore.reconcileUnknown(path, wrongWindow, snapshot.hash, receipt),
+      invalidStore, "reconcile must refuse a window mismatch");
+    // A refused inspect/reconcile must not leave a stale owner marker: the
+    // store was never mutated (Go releases the lock cleanly on failure).
+    assert.equal(existsSync(path + ".owner"), false,
+      "a failed inspect must not leave an owner marker");
+    // The matching options still reconcile the exact row.
+    DurableNonceStore.reconcileUnknown(path, config, snapshot.hash, receipt);
+    const after = DurableNonceStore.inspectRecovery(path, config);
+    assert.equal(after.tombstones.length, 1);
+    assert.equal(after.intents.length, 0);
+    assert.equal(existsSync(path + ".owner"), false);
+
+    // The same refusals on a clean store must leave it fully openable: the
+    // mismatched inspect changes nothing and holds no fence afterwards.
+    const cleanPath = join(dir, "mismatch-clean");
+    DurableNonceStore.seedDocumentForTest(cleanPath, doc(meta(), [], [], []));
+    assert.throws(() => DurableNonceStore.inspectRecovery(cleanPath, wrongDeployment), invalidStore,
+      "inspect must refuse a deployment mismatch on a clean store");
+    assert.throws(() => DurableNonceStore.inspectRecovery(cleanPath, wrongWindow), invalidStore,
+      "inspect must refuse a window mismatch on a clean store");
+    assert.equal(existsSync(cleanPath + ".owner"), false,
+      "a refused clean-store inspect must not leave an owner marker");
+    const reopened = DurableNonceStore.open(cleanPath, config);
+    reopened.close();
+    assert.equal(existsSync(cleanPath + ".owner"), false, "a clean close removes the owner marker");
+  });
+
+test("durable store: recovery holds the exclusive owner and reads through private-file checks",
+  { skip: !linux }, (context) => {
+    const { dir, path } = directory();
+    context.after(() => rmSync(dir, { recursive: true, force: true }));
+    const intent = rowFor("owner-intent", 0);
+    const config = options(scriptClock(100));
+
+    // A store file that is not a private 0600 file refuses inspection
+    // (the private-file checks of the open path apply to recovery too).
+    DurableNonceStore.seedDocumentForTest(path, doc(meta({ dirty: true }), [], [intent], []));
+    chmodSync(path, 0o644);
+    assert.throws(() => DurableNonceStore.inspectRecovery(path, config), unavailable,
+      "a non-private store file must refuse inspection");
+    assert.throws(() => DurableNonceStore.reconcileUnknown(path, config, "x", intent), unavailable);
+    chmodSync(path, 0o600);
+    const snapshot = DurableNonceStore.inspectRecovery(path, config);
+    assert.equal(snapshot.intents.length, 1);
+
+    // A live owner marker fences recovery: the exclusive owner is taken even
+    // for inspection (Go InspectRecovery). A clean store opens and holds the
+    // marker; the unresolved intent is seeded through the test-only seam.
+    const livePath = join(dir, "live-owner");
+    DurableNonceStore.seedDocumentForTest(livePath, doc(meta(), [], [], []));
+    const live = DurableNonceStore.open(livePath, config);
+    live.seedRecordsForTest(doc(live.state().meta, [], [intent], []));
+    assert.equal(existsSync(livePath + ".owner"), true, "an open store holds the owner marker");
+    assert.throws(() => DurableNonceStore.inspectRecovery(livePath, config), unavailable,
+      "recovery must refuse while a live owner holds the marker");
+    assert.throws(() => DurableNonceStore.reconcileUnknown(livePath, config, "x", intent), unavailable,
+      "reconcile must refuse while a live owner holds the marker");
+    // The owner abandons the marker (simulated crash with the intent outstanding).
+    simulateCrash(livePath);
+    const crashed = DurableNonceStore.inspectRecovery(livePath, config);
+    assert.equal(crashed.dirty, true);
+    assert.equal(crashed.intents.length, 1);
+    DurableNonceStore.reconcileUnknown(livePath, config, crashed.hash, crashed.intents[0] as DurableReceipt);
+    const after = DurableNonceStore.inspectRecovery(livePath, config);
+    assert.equal(after.tombstones.length, 1);
+    assert.equal(after.intents.length, 0);
+  });
+
+test("durable store: an unexpected non-JackError inside reserve fences the owner and reports durability_unavailable",
+  { skip: !linux }, (context) => {
+    const { dir, path } = directory();
+    context.after(() => rmSync(dir, { recursive: true, force: true }));
+    // Samples: init, startup, entry, intent, FINAL. The final clock call
+    // throws a plain Error after the intent transaction committed.
+    let calls = 0;
+    const clock = (): number => {
+      calls++;
+      if (calls === 5) throw new Error("clock exploded");
+      return 100;
+    };
+    const config = options(clock);
+    DurableNonceStore.initializeUnused(path, config);
+    const store = DurableNonceStore.open(path, config);
+    const identity = synthetic("fence-clock");
+    assert.throws(() => store.reserve(admission(identity.kid, identity.nonce, 100)), unavailable,
+      "a plain Error from the transaction must surface as durability_unavailable");
+    // Go Reserve: the panic fenced the store before reporting.
+    assert.equal(store.isFenced(), true, "unexpected failure must fence the store");
+    // The intent was already committed when the final sample threw: it stays.
+    assert.equal(store.state().counts.intents, 1, "committed intent stays behind the fence");
+    // The fenced owner refuses further admission and cannot close cleanly.
+    assert.throws(() => store.reserve(admission(identity.kid, identity.nonce, 100)), unavailable,
+      "a fenced store refuses admission");
+    assert.throws(() => store.close(), unavailable);
+  });

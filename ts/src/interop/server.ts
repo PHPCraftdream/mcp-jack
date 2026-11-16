@@ -402,10 +402,10 @@ function serve(flags: Flags, seed: Uint8Array, state: FileState, signer: InMemor
   const verifier = new Verifier({
     aud: flags.aud,
     state,
-    nonces: new NonceStore(),
     native: new Native(),
     now: nowSec,
-    ...(durable !== undefined ? { durable: durable.admission, window: durable.window } : {}),
+    // Exactly one nonce profile: the durable admission replaces the volatile store.
+    ...(durable !== undefined ? { durable: durable.admission, window: durable.window } : { nonces: new NonceStore() }),
   });
   const handler = jackFetchHandler({ verifier, serverKey: seed }, mcpHandler);
   const server = createServer(serveNode(handler));
