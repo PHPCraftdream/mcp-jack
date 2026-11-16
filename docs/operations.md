@@ -51,7 +51,7 @@ Key and document formats:
 | --- | --- | --- | --- |
 | CLI binary (`jack`) | Qualified | Qualified (darwin/arm64: help, keygen, bootstrap, enroll, static gateway, bridge) | Fails closed on private-file operations (help works) |
 | Static gateway + bridge | Yes | Yes | No (private-file operations fail closed) |
-| Durable nonce profile | Qualified | Not qualified | Not qualified |
+| Durable nonce store (optional, Linux-only, in all three SDKs) | Qualified | Not qualified | Not qualified |
 | Rotation store (private-file backend) | Qualified (Linux-only) | Not qualified | Not qualified |
 | Go/Rust/TypeScript SDKs | Tested | Tested | Tested (CI) |
 
@@ -180,9 +180,27 @@ Retired seeds may be removed from the inventory once no longer required; retaine
 
 Clients refresh explicitly: an SDK rotation client requests one `jack.server.key` page (single page, at most 16 records) and commits it. Ordinary traffic never triggers a refresh. There is no auto-refresh, no hidden retry, no fallback, and no TOFU.
 
+## Durable nonce store across SDKs
+
+All three server SDKs ship an optional, Linux-only durable nonce store; without it every SDK keeps nonces in memory and a restart loses replay history. The store is explicit opt-in per deployment and is never selected by default.
+
+| SDK | Enable | Store format | Recovery |
+| --- | --- | --- | --- |
+| Go (library) | `durable/` package, bbolt-backed private file | bbolt store | library `durable.InitializeUnused`, `durable.InspectRecovery`, `durable.ReconcileUnknown`; CLI `jack nonce-init-unused`, `jack nonce-inspect`, `jack nonce-reconcile-terminal` |
+| TypeScript | set `VerifierConfig.durable` to a `DurableNonceAdmission` wrapping a `DurableNonceStore` | one JSON sealed document, atomically rewritten at the configured path; owner marker `<path>.owner` | static `DurableNonceStore.inspectRecovery(path, options)` and `reconcileUnknown(path, options, expectedHash, receipt)`; NO CLI command |
+| Rust (Linux only) | open with `SharedDurableNonceStore::open(path, &options)` (or `initialize_unused`), then `Verifier::with_durable_nonces(Arc<SharedDurableNonceStore>)` | private-file format; owner marker `<path>.owner` | library `inspect_recovery(path, &options)` and `reconcile_unknown(path, &options, expected_hash, &receipt)` in `rust/src/server/durable_recovery.rs`; NO CLI command |
+
+Operator recovery for Rust and TypeScript is a library call, not a command: only the Go CLI (`jack nonce-inspect`, `jack nonce-reconcile-terminal`) exposes operator commands.
+
+What fenced and dirty mean:
+
+- An unknown write outcome, `durability_unavailable` or `clock_unsafe` fences the store: it fails closed and refuses further admissions until recovery runs. Definite refusals (`401`, `state_changed`, `capacity_exhausted`) do NOT fence in any SDK.
+- A dirty store (for example after a crash between writes) raises a recovery-required error and refuses startup in every SDK until an operator runs recovery: first inspect, a read-only snapshot carrying the exact logical graph hash, then reconcile, which moves that exact snapshot and receipt to a terminal no-redelivery tombstone after checking the expected hash. Reconcile refuses on a hash mismatch, and a missing record is not proof of abort — the fence stays.
+- A forward clock jump latches the store unsafe permanently. No command in any SDK clears that latch; the remedy is fresh state as in the crash recovery runbook below.
+
 ## Crash recovery runbook
 
-v0.1.0 ships NO operator command for serving release, tombstone disposition (beyond the narrow reconcile below) or ring recovery. A supported in-product recovery path is deferred to a later release.
+v0.1.0 ships NO operator command for serving release, tombstone disposition beyond the narrow reconcile below or ring recovery. A supported in-product recovery path is deferred to a later release. The `nonce-reconcile-terminal` caveat is unchanged: reconcile refuses on an expected-hash mismatch, a missing record keeps the fence, and success is not permission to restart. Operator nonce-recovery commands exist only in this Go CLI.
 
 What failure looks like:
 
@@ -212,7 +230,7 @@ Consequences for clients: a new ring needs a checkpoint clients already trust or
 - **Unauthenticated load.** The gateway admits at most 64 calls per Unix second and 4096 nonce entries, and these limits apply before authentication. A self-signed `jack.enroll` from an unknown key reserves a nonce until `ts + window`. Put a rate-limited front or a firewall before the gateway and keep the durable `window` at 30 seconds or less.
 - **Rotation ring.** Each signed response re-verifies the key ring, so keep it short. There is no spacing rule between announcements: up to 128 keys can be pending and every retired key counts towards the limit of 1024 retired keys, after which the gateway refuses to sign and clients refuse the ring; compaction is not implemented. To keep a ring from becoming unservable, an announcement is refused once the ring already holds more than 1024 keys, so a ring is good for at most 1024 rotations. Announce rarely, and treat the 48 hours as the overlap of one announcement, not as a limit on how often you may announce.
 - **Invites.** The gateway stores at most 1024 invites. Expired invites are removed in the same atomic state edit that creates, enrolls with or revokes an invite (and in first-admin bootstrap), so only live invites count towards the limit; an expired invite is reported as unknown. Unused invites that have not yet expired still count, so do not create invites in bulk.
-- **Rust and TypeScript servers.** Only the Go SDK and the CLI gateway have the durable nonce store. Rust and TypeScript servers keep nonces in memory.
+- **Rust and TypeScript servers.** All three SDKs offer the optional Linux-only durable nonce store (see "Durable nonce store across SDKs" above). Without it, nonce stores are in-memory and restart loses replay history. The Rust and TypeScript durable stores have no operator CLI; recovery there is a library call.
 
 ## Monitoring and audit
 

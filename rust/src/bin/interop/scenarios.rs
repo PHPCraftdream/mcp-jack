@@ -381,6 +381,7 @@ pub fn run(env: &Env, scenario: &str) -> ! {
         "unknown-native-tool" => unknown_native_tool(env),
         "enroll" => enroll(env),
         "enroll-used-invite" => enroll_used_invite(env),
+        "bootstrap-admin" => bootstrap_admin(env),
         "rotate" => rotate(env),
         "admin-create" => admin_create(env),
         "revoke-key" => revoke_key(env),
@@ -756,6 +757,35 @@ fn enroll_used_invite(e: &Env) -> StepResult {
         "public_key": encode_b64url(&e.primary.public_key()),
     });
     e.typed_raw_call(e.primary.as_ref(), TOOL_ENROLL, Some(&args.to_string()))
+}
+
+fn bootstrap_admin(e: &Env) -> StepResult {
+    // The invite comes from the harness server's --bootstrap-ttl startup
+    // line (spec 03 section 5); it creates an admin:true entry.
+    let code = match e.arg("code") {
+        Some(c) if !c.is_empty() => c.to_owned(),
+        _ => fatal("bootstrap-admin: missing --arg code=<invite>"),
+    };
+    let name = e.primary_name();
+    let step0 = e.sdk_step(
+        e.typed(name)
+            .enroll(&code, "newbie", e.primary.as_ref())
+            .map(|_| ()),
+    );
+    if let Some(out) = e.require_intermediate(0, step0, Intermediate::Ok) {
+        return out;
+    }
+    // The kid is now registered: the normal path answers 409 key_exists
+    // (spec 03 section 3.2), the invite is consumed either way.
+    let step1 = e.sdk_step(
+        e.typed(name)
+            .enroll(&code, "agentx", e.primary.as_ref())
+            .map(|_| ()),
+    );
+    if let Some(out) = e.require_intermediate(1, step1, Intermediate::Rejected(409, "key_exists")) {
+        return out;
+    }
+    e.typed_raw_call(e.primary.as_ref(), TOOL_WHOAMI, None)
 }
 
 fn rotate(e: &Env) -> StepResult {

@@ -33,6 +33,7 @@
     "unknown-native-tool",
     "enroll",
     "enroll-used-invite",
+    "bootstrap-admin",
     "rotate",
     "admin-create",
     "revoke-key",
@@ -673,6 +674,34 @@
         }
       },
       "source": "spec/03-user-management.md:default invite admin=false"
+    },
+    "bootstrap-admin": {
+      "identity": "newbie",
+      "fresh": true,
+      "server_public_key": "server",
+      "args": {},
+      "bootstrap": {
+        "ttl_seconds": 3600,
+        "code_arg": "code"
+      },
+      "steps": [
+        "The dedicated server is started with --bootstrap-ttl 3600 and prints one {\"bootstrap_invite\":...} line on stderr (spec 03 section 5). The client enrolls newbie with that code (admin true, single use), re-enrolls with the consumed code (the kid is now registered: the normal path answers 409 key_exists, spec 03 section 3.2), and reports whoami with admin true."
+      ],
+      "expected": {
+        "outcome": "ok",
+        "http_status": 200,
+        "code": null,
+        "data": {
+          "structuredContent": {
+            "kid": {
+              "$kid": "newbie"
+            },
+            "name": "newbie",
+            "admin": true
+          }
+        }
+      },
+      "source": "spec/03-user-management.md section 5 (bootstrap) and section 3.2 closing paragraph"
     },
     "enroll-used-invite": {
       "identity": "newbie2",
