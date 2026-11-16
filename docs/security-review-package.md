@@ -31,7 +31,23 @@ How to read it:
 
 An external review should cover at least everything in the "not reached" column
 and the Rust and TypeScript rotation controllers and store formats, which the
-pre-review did not read against the Go reference.
+pre-review did not read against the Go reference. The Rust server durable-nonce
+sources (`rust/src/server/durable_store.rs`, `durable_format.rs`,
+`durable_recovery.rs`, `durable_admission.rs`) and the TypeScript counterparts
+(`ts/src/server/durable-store.ts`, `durable-format.ts`, `durable-admission.ts`)
+landed after the reviewed commit and were re-read in this tree; the reviewed
+commit `1822634` predates them.
+
+Three defects in those durable stores were found by CI during development and
+fixed before merge, stated here as fact: (a) the Rust store lost an
+operation-index entry at intent-to-live conversion, so every restart after a
+commit failed the strict loader (fixed in `rust/src/server/durable_store.rs`);
+(b) the Rust store fenced on definite refusals (`capacity_exhausted`,
+`state_changed`) where Go does not, now fixed — current code in both SDKs
+fences only on non-definite outcomes; (c) the TypeScript store validated the
+prepared receipt against the pre-transaction high water, rejecting every
+admission whose clock had moved since the last durable high-water write (fixed
+in `ts/src/server/durable-store.ts`).
 
 ## 2. Findings and disposition
 
@@ -78,9 +94,9 @@ covered by the shared corpus; the others are investigated, not changed.
 | 8 | Fetch adapter without Node | | | WHATWG path normalisation | unchanged |
 | 9 | Header `v2 <obs-text>` | `unsupported_version` | `malformed_auth` | `unsupported_version` | `unsupported_version` in all three (single header value; more than one is `malformed_auth` first) |
 | 10 | Bytes of native responses | HTML-escaped, compact `id` | as is | as is | unchanged; each response is signed over its own bytes, so no verdict differs |
-| 11 | Durable nonce store | yes | no | no | unchanged |
+| 11 | Durable nonce store | yes | no | no | yes in all three SDKs now (optional, Linux-only): Go bbolt-backed private file; TypeScript a single JSON sealed document with an `.owner` marker; Rust a private-file store with an `.owner` marker |
 | 12 | `jack.server.key` with a static signer | constructor refuses | allowed | constructor refuses | unchanged |
-| 13 | Store format and exclusion | bbolt and flock | JSON bundle and `.owner` marker | JSON bundle and `.owner` marker, path based checks | unchanged |
+| 13 | Store format and exclusion | bbolt and flock | JSON bundle and `.owner` marker | JSON bundle and `.owner` marker, path based checks | unchanged for the Go rotation store; the Rust and TypeScript durable nonce stores (landed after the reviewed commit) use the same private-file plus `.owner` exclusion pattern |
 | 14 | Serving lease released | after the physical write | before the physical write | before the physical write | unchanged; affects the latency of `close()` only |
 | 15 | Panic in the signer callback | recovered, `503` | not recovered | try/catch, `503` | unchanged; not reachable from client input |
 
@@ -102,9 +118,11 @@ covered by the shared corpus; the others are investigated, not changed.
 6. Do read-then-rename under an `.owner` marker (Rust, TypeScript) give the same
    guarantee as a bbolt compare-and-swap when the process stops between rename
    and the directory fsync?
-7. Why is `jack.server.key` served with a volatile nonce store in Rust and
-   TypeScript when the profile asks for a durable reservation? (Answer in the
-   documents: only the Go SDK has the durable store.)
+7. `jack.server.key` can be served with the durable nonce store in all three
+   SDKs; each deployment chooses whether the served key's verifier uses it.
+   Should the served-key deployment be required to select the durable store
+   where the profile asks for a durable reservation, or is per-deployment
+   choice acceptable?
 8. Should the bridge ever pass `jack.*` tools? (Current answer: no.)
 
 Also wanted: real power-loss and kill testing of the durable stores, races under
