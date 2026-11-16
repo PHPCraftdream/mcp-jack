@@ -1049,7 +1049,7 @@ fn run_single(case: &VectorCase, plan: Plan) {
         expect.fenced = fenced;
     }
     // A committed request still holds its serving lease; close drains leases.
-    drop(result);
+    std::mem::drop(result);
     assert_close_fencing(harness, case, &expect);
 }
 
@@ -1345,7 +1345,7 @@ fn run_crash(case: &VectorCase, plan: Plan) {
         case.id
     );
     // The committed request holds its serving lease until the response is finished.
-    drop(result);
+    std::mem::drop(result);
     assert!(
         harness.store.close().is_ok(),
         "case {}: clean close after commit",
