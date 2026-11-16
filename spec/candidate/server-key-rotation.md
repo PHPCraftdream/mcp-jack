@@ -1,6 +1,6 @@
 # Candidate profile: chained server-key rotation
 
-**Status:** candidate normative for an explicitly selected future rotation profile only. This is not current v0.1, SDK support, freeze, Task 57 acceptance, or a promise that any current client can rotate. Existing static pins remain static unless an application deliberately provisions and opens a separate rotation snapshot. The selected direction permits arbitrarily many successor announcements, including multiple pending announcements with no one-pending or cooldown rule. The timing, codec, API, persistence, status codes, and bounds below are candidate technical defaults, not additional owner approvals.
+**Status:** normative for the explicitly selected server-key rotation profile of the v0.1.x line, frozen on the wire at commit `c8ea1a0b37e68ab6dcdfb19fd0e427668cf1f343` (no wire changes within 0.1.x). It is implemented in the Go, Rust and TypeScript SDKs; a client rotates only if it deliberately opens a rotation snapshot. Existing static pins remain static unless an application deliberately provisions and opens a separate rotation snapshot. The selected direction permits arbitrarily many successor announcements, including multiple pending announcements with no one-pending or cooldown rule. The timing, codec, API, persistence, status codes, and bounds below are the profile's technical defaults, frozen with it.
 
 ## 1. Selected schedule and response signing
 

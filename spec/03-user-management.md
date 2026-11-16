@@ -1,6 +1,6 @@
 # 03. User management
 
-Status: draft v0.1. Normative unless marked *informative*.
+Status: v0.1, frozen on the wire for the 0.1.x line at commit `c8ea1a0b37e68ab6dcdfb19fd0e427668cf1f343`. Normative unless marked *informative*.
 
 Users and their keys are managed through the protocol itself, as MCP tools, so that administrators, SDK clients and agents all use the same authenticated channel. Whoever generates a key pair, the server only ever receives the public key.
 

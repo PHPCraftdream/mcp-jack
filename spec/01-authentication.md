@@ -1,6 +1,6 @@
 # 01. Authentication
 
-Status: draft v0.1. Normative unless marked *informative*.
+Status: v0.1, frozen on the wire for the 0.1.x line at commit `c8ea1a0b37e68ab6dcdfb19fd0e427668cf1f343`. Normative unless marked *informative*.
 
 The key words MUST, MUST NOT, SHOULD, MAY are used as in RFC 2119.
 
