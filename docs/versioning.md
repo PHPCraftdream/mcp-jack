@@ -49,7 +49,7 @@ Acceptance and freeze require review of evidence for the **same exact full SHA**
 - Reviewed normative spec, generated candidate-fixture freshness and agreement with the reference model.
 - Matching accept/reject, status, error-order, nonce-state and rotation-boundary results in all Go, Rust and TypeScript runners.
 - Separate existing Jack 3×3 request/response interop and 3×3 credential-transfer matrices, plus future candidate-specific coverage. These are distinct from official MCP client/stdio/HTTP-server compatibility and its proposed end-to-end fixture coverage.
-- Applicable Go CLI gateway/bridge end-to-end and consumer checks; actual artifact/consumer receipts; and security-blocker disposition.
+- Applicable Go CLI gateway/bridge end-to-end and consumer checks, and security-blocker disposition. Release-candidate artifact and consumer receipts are a gate of the release, not of the freeze: the owner accepted the freeze on 2026-11-16 without a release-candidate run, and the receipts for the release commit are produced and checked at release readiness.
 - Negative/boundary cases for strict Ed25519, restart replay, durable-store failures, key rotation and cutoffs, unknown keys, credential/profile migration or rejection, and any documented MCP compatibility profile.
 
 Evidence must report observed results, not just test names, workflow wiring or green-status claims. The 0.1.x wire profile is frozen at `c8ea1a0b37e68ab6dcdfb19fd0e427668cf1f343`; any later wire change is a new profile decision, not a 0.1.x change. SDK versions, publication, tags and release actions remain unauthorized and require separate explicit approval. There is no blanket compatibility guarantee across 0.x lines.

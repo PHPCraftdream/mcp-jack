@@ -6,7 +6,7 @@ This file records repository history. The `0.1.0 (unreleased)` section describes
 
 ### What ships
 
-- Wire freeze: the 0.1.x wire profile (the base protocol, durable nonce admission and server-key rotation) is frozen; the repository owner accepted the freeze on 2026-11-16 at commit `c8ea1a0b37e68ab6dcdfb19fd0e427668cf1f343`. Evidence at that commit: all CI jobs green, the 3x3 request/response, rotation, durable-restart and credential-transfer matrices (9 client x server pairs each) passing. The freeze is not a release, a version change or a publication.
+- Wire freeze: the 0.1.x wire profile (the base protocol, durable nonce admission and server-key rotation) is frozen; the repository owner accepted the freeze on 2026-11-16 at commit `c8ea1a0b37e68ab6dcdfb19fd0e427668cf1f343`. Evidence at that commit: all CI jobs green, the 3x3 request/response, rotation, durable-restart and credential-transfer matrices (9 client x server pairs each) passing. No release-candidate run was required for the freeze. The freeze is not a release, a version change or a publication.
 - Authenticated transport contract: Ed25519 request and response signatures, replay protection, strict canonical encoding, implemented across the Go, Rust and TypeScript SDKs.
 - User management with user-key rotation and a single strict-boolean admin flag.
 - Optional durable nonce admission in all three SDKs (explicit opt-in; Linux-only for Go, Rust and TypeScript; Go uses bbolt, Rust and TypeScript use private-file stores). Clean serving-open rejects unresolved intents or 64 tombstones; recovery inspection remains available. TypeScript JSON and Rust binary loaders enforce canonical exact bytes.
