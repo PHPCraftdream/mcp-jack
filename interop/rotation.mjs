@@ -27,6 +27,12 @@ const CHECKS = [
   's4-cutoff-successor',
   's5-old-key-after-cutoff',
   'c2-state-stable',
+  // G9 durability family: ClockGuard rollback latch and fail-closed restart.
+  'r1-server-rollback-refused',
+  'r2-server-latch-fail-closed',
+  'r3-server-restart-still-latched',
+  'r4-client-rollback-refused',
+  'r5-client-restart-no-recovery',
 ];
 const USAGE = `usage: node interop/rotation.mjs [--targets <file>] [--servers <l,l,...>] [--clients <l,l,...>] [--list] [--self-test]`;
 
@@ -308,6 +314,23 @@ async function runMatrix(opts) {
     return false;
   }
 
+  // G9 refusals where the exact code is not uniformly observable (see
+  // checkRefused / r-checks): any non-ok outcome counts as refused.
+  function checkRefused(id, pairLabel, run) {
+    if (run.failed) { recordFailure(id, pairLabel, { refused: true }, run); return false; }
+    if (run.result.outcome === 'rejected' || run.result.outcome === 'client_error') return true;
+    recordFailure(id, pairLabel, { refused: true }, run, `outcome ${JSON.stringify(run.result.outcome)} is not a refusal`);
+    return false;
+  }
+
+  // G9 process-level refusals (client store latched unsafe at open: the
+  // executables exit nonzero without emitting a JSON line).
+  function checkProcessRefused(id, pairLabel, run) {
+    if (run.failed && run.exitCode !== null && run.exitCode !== 0) return true;
+    recordFailure(id, pairLabel, { exit_nonzero: true }, run);
+    return false;
+  }
+
   async function spawnRotationServer(lang, role, args, label) {
     const t = resolveTarget(targets[lang][role], role, `${role}=${lang}`);
     let child;
@@ -332,6 +355,33 @@ async function runMatrix(opts) {
       fail(`malformed ready line from ${role} (${label}): ${line}`);
     }
     return { child, port: ready.port, ready };
+  }
+
+  // Spawn the rotation server expecting a fail-closed startup (G9 r3): resolves
+  // started=false only when the process exits without ever printing a ready
+  // line. Uses a fresh port so an environment port race cannot fake a pass of
+  // a healthy server; a startup port race here is reported as refusal, which
+  // is why the probe always targets a latched store.
+  async function probeRotationServerStart(lang, args, env, label) {
+    const t = resolveTarget(targets[lang].rotation_server, 'rotation_server', `server=${lang}`);
+    let child;
+    try {
+      child = makeChild(t.cmd, [...t.args, ...args], env);
+    } catch (e) {
+      return { started: false, stderr: String(e.message), closeCode: null };
+    }
+    allChildren.add(child);
+    processesSpawned++;
+    try {
+      const line = await child._nextLine(10000, `rotation_server ${label}`);
+      killTree(child);
+      allChildren.delete(child);
+      return { started: true, stderr: line, closeCode: null };
+    } catch {
+      const close = await child._closeOutcome;
+      allChildren.delete(child);
+      return { started: false, stderr: child._stderrTail(), closeCode: close.code };
+    }
   }
 
   const matrixCells = {};
@@ -369,7 +419,7 @@ async function runMatrix(opts) {
     }
   }
 
-  // ---- one (client, server) cell: the full 14-check rotation sequence ----
+  // ---- one (client, server) cell: the full check sequence ----
   async function runPairOnce(client, server, pairLabel) {
     const tmp = mkdtempSync(join(tmpdir(), 'mcp-jack-rotation-'));
     tmpRoots.push(tmp);
@@ -597,6 +647,81 @@ async function runMatrix(opts) {
         const r = await runClientStep(client, mainClient('state'), clientEnv, `c2 ${pairLabel}`, pairLabel);
         results['c2-state-stable'] = checkResult('c2-state-stable', pairLabel, expect('ok', undefined, null, { head_ordinal: 1, revision: 2 }), r);
       }
+
+      // ---- G9 durability family ----
+      // r1: a server clock BELOW its durable high water latches unsafe and the
+      // next response is refused. The exact SDK code is rotation_clock_unsafe
+      // in all three durable layers, but the interop executables surface it
+      // differently (Go maps open/authorization failure to recovery-required /
+      // unsigned 503), so the wire assertion here is refusal, not one code.
+      writeFileSync(modePath, 'clock-rollback\n');
+      setClock(clkCliMain, A);
+      setClock(clkSrvPri, A - 1);
+      {
+        const r = await runClientStep(client, mainClient('call'), clientEnv, `r1 ${pairLabel}`, pairLabel);
+        results['r1-server-rollback-refused'] = checkRefused('r1-server-rollback-refused', pairLabel, r);
+      }
+      // r2: the latch persists even once the clock is back at the high water:
+      // the guard skips sampling while unsafe and never clears the latch.
+      setClock(clkSrvPri, A);
+      {
+        const r = await runClientStep(client, mainClient('call'), clientEnv, `r2 ${pairLabel}`, pairLabel);
+        results['r2-server-latch-fail-closed'] = checkRefused('r2-server-latch-fail-closed', pairLabel, r);
+      }
+      // r4/r5: a dedicated client store. Refresh establishes the high water,
+      // a rollback latches it, and further opens (new process = restart) stay
+      // fail-closed even with the clock moved far forward: no catch-up
+      // recovery exists in any SDK (spec: "never clamps or clears the latch").
+      const clkCliR = join(tmp, 'clk-cli-r');
+      setClock(clkCliR, T);
+      const rClient = (step, extra = []) => ([
+        '--step', step, '--url', urlA, '--aud', registry.aud,
+        '--seed-hex', keys.alice.seed_hex, '--anchor', keys.svc.public_key,
+        '--store', join(tmp, 'cli-r.store'), '--clock-file', clkCliR, ...extra,
+      ]);
+      {
+        const setup = await runClientStep(client, rClient('refresh'), clientEnv, `r4 setup ${pairLabel}`, pairLabel);
+        if (setup.failed || setup.result?.outcome !== 'ok') {
+          recordFailure('r4-client-rollback-refused', pairLabel, { outcome: 'ok' }, setup, 'r4 setup refresh failed');
+        } else {
+          setClock(clkCliR, T - 100);
+          writeFileSync(modePath, 'clock-client-latch\n');
+          const r4 = await runClientStep(client, rClient('call'), clientEnv, `r4 ${pairLabel}`, pairLabel);
+          if (checkProcessRefused('r4-client-rollback-refused', pairLabel, r4)) {
+            results['r4-client-rollback-refused'] = true;
+            // r5: restart on the latched store with the clock far AHEAD of the
+            // high water must still refuse (latch is durable, not recovered).
+            setClock(clkCliR, T + 1000);
+            const r5 = await runClientStep(client, rClient('state'), clientEnv, `r5 ${pairLabel}`, pairLabel);
+            if (checkProcessRefused('r5-client-restart-no-recovery', pairLabel, r5)) {
+              results['r5-client-restart-no-recovery'] = true;
+            } else {
+              results['r5-client-restart-no-recovery'] = false;
+            }
+          } else {
+            results['r4-client-rollback-refused'] = false;
+          }
+        }
+      }
+      // r3: a fresh server process on the now-latched store must fail closed
+      // at startup (never prints a ready line) in every language. Runs last:
+      // it stops the primary server.
+      {
+        await stopChild(pri.child);
+        allChildren.delete(pri.child);
+        writeFileSync(modePath, 'clock-latched\n');
+        const portR = await allocPort();
+        const probe = await probeRotationServerStart(server, [
+          ...serverArgs(portR, 'server-pri.store', clkSrvPri),
+          '--ring-seed', `ring-1=${keys.erin.seed_hex}`,
+        ], { JACK_ROTATION_MODE_FILE: modePath }, `${pairLabel} restart`);
+        if (probe.started) {
+          recordFailure('r3-server-restart-still-latched', pairLabel, { started: false }, { failed: false, result: { started: true, line: probe.stderr }, exitCode: null, stderr: probe.stderr });
+          results['r3-server-restart-still-latched'] = false;
+        } else {
+          results['r3-server-restart-still-latched'] = true;
+        }
+      }
     } finally {
       await stopAll();
     }
@@ -630,8 +755,9 @@ async function selfTest() {
     process.stdout.write(`self-test: ${what}\n`);
   };
 
-  // 1. Clean in-process run with the fake pseudo-language: all 14 checks per
-  // pair must pass and exactly 3 processes (primary + fresh + fake) spawn.
+  // 1. Clean in-process run with the fake pseudo-language: all checks per
+  // pair must pass and exactly 4 processes (primary + fresh + fake + restart
+  // probe) spawn.
   const res = await runMatrix({
     clientLangs: ['fake'], serverLangs: ['fake'], targets, ...loaded,
   });
@@ -639,7 +765,7 @@ async function selfTest() {
   ok(res.pairSummaries.length === 1 && res.pairSummaries[0].passed === CHECKS.length && res.pairSummaries[0].total === CHECKS.length,
     `fake pair runs exactly ${CHECKS.length} checks, all passing`);
   ok(res.matrixCells.fake?.fake && res.matrixCells.fake.fake.passed === res.matrixCells.fake.fake.total, 'matrix cell fake/fake is pass');
-  ok(res.processesSpawned === 3, `exactly 3 processes spawned (primary + fresh + fake), got ${res.processesSpawned}`);
+  ok(res.processesSpawned === 4, `exactly 4 processes spawned (primary + fresh + fake + restart probe), got ${res.processesSpawned}`);
 
   // 2..5. Deviation controls run as subprocesses against a temp targets file.
   const tmp = mkdtempSync(join(tmpdir(), 'mcp-jack-rotation-selftest-'));
@@ -667,7 +793,7 @@ async function selfTest() {
     // 6. --list prints exactly the named check ids.
     const list = await runChild(['--list'], {});
     const ids = list.out.split('\n').map((s) => s.trim()).filter(Boolean);
-    ok(list.code === 0 && JSON.stringify(ids) === JSON.stringify(CHECKS), '--list prints exactly the 14 check ids');
+    ok(list.code === 0 && JSON.stringify(ids) === JSON.stringify(CHECKS), `--list prints exactly the ${CHECKS.length} check ids`);
 
     // 7. A targets file missing the rotation roles must exit 2.
     const legacyPath = join(tmp, 'legacy-targets.json');

@@ -105,7 +105,7 @@ The server binds plain HTTP to `127.0.0.1` on an available port. It prints exact
 
 The server public key and kid are derived from the supplied seed. The harness accepts a complete non-empty JSON line, tolerates preceding blank lines, and waits up to 10 seconds. Stderr may carry diagnostics. In serve mode, SIGTERM/SIGINT or stdin EOF stops the server; normal stop exits 0. A malformed flag, seed, state file, verifier setup, or bind failure is a startup error.
 
-Optional `--bootstrap-ttl` asks the SDK's local `BootstrapAdmin` operation to create an administrator invite; the invite is printed as `{"bootstrap_invite":"<code>"}` to stderr. The harness does not use bootstrap mode; scenario setup and protocol-native invite creation are used instead.
+Optional `--bootstrap-ttl` asks the SDK's local `BootstrapAdmin` operation to create an administrator invite; the invite is printed as `{"bootstrap_invite":"<code>"}` to stderr. The `bootstrap-admin` scenario starts its dedicated server with this flag, reads the stderr invite line, and passes the code to the client as `--arg code=<invite>`; other scenarios use protocol-native invite creation instead.
 
 ### State file
 
@@ -187,7 +187,7 @@ The focused TypeScript raw-path integration controls are in `ts/test/interop-cli
 
 ## 6. Scenarios
 
-[`scenarios.json`](scenarios.json) is the current scenario source of truth (38 ordered scenario IDs). Expected objects are recursively matched subsets; arrays are exact; `$kid` resolves from `spec/fixtures/keys.json`, and `$base64url` resolves the exact UTF-8 string bytes. The table below reports the current expected outcome/status/code; identity forwarding, application decisions, and administrative controls are distinct:
+[`scenarios.json`](scenarios.json) is the current scenario source of truth (39 ordered scenario IDs). Expected objects are recursively matched subsets; arrays are exact; `$kid` resolves from `spec/fixtures/keys.json`, and `$base64url` resolves the exact UTF-8 string bytes. The table below reports the current expected outcome/status/code; identity forwarding, application decisions, and administrative controls are distinct:
 
 | Current scenario IDs | Expected result |
 |---|---|
@@ -218,6 +218,7 @@ The focused TypeScript raw-path integration controls are in `ts/test/interop-cli
 | `unknown-native-tool` | `rejected`, HTTP 403 `operation_denied` (signed) |
 | `enroll` | `ok`, HTTP 200; newly enrolled identity has `admin:false` |
 | `enroll-used-invite` | `rejected`, HTTP 401 `unknown_key` (unsigned: a used invite is no longer live) |
+| `bootstrap-admin` | dedicated server started with `--bootstrap-ttl 3600`; its stderr invite enrolls `newbie` (`admin:true`, single use); re-enrolling with the consumed code is HTTP 409 `key_exists` (signed, spec 03 section 3.2); final whoami reports `admin:true` |
 | `rotate` | `ok`, HTTP 200; new key retains Alice name and `admin:false` |
 | `admin-create` | `ok`, HTTP 200; newbie2 key is reported as Dave with `admin:false` |
 | `revoke-key` | `rejected`, HTTP 401 `unknown_key` after revocation |
@@ -234,6 +235,7 @@ Multi-step mechanics are normative through the scenario steps and expected resul
 
 - `enroll`: root creates a default (non-admin) invite; the new identity enrolls with its own key; that identity calls `jack.whoami`.
 - `enroll-used-invite`: create one default invite, enroll `newbie`, then attempt to enroll `newbie2` with the same code; the final step must be an unsigned `401 unknown_key`.
+- `bootstrap-admin`: the harness starts the server with `--bootstrap-ttl 3600` and takes the invite code from the stderr `bootstrap_invite` line; `newbie` enrolls once (admin true), re-enrolling with the same code is `409 key_exists` because the kid is already registered (spec 03 section 3.2), and whoami reports `admin:true`.
 - `rotate`: Alice proves possession of the new key; the old Alice key must then be rejected as `unknown_key`; the new key reports Alice's name and non-admin status.
 - `admin-create`: root creates a default invite and creates `dave` with `admin` omitted; `newbie` enrolls; the primary fixture key reports the registered name `dave`.
 - `revoke-key`: root revokes Bob, then Bob's next request is `unknown_key`.
@@ -370,7 +372,7 @@ Executable contract, concisely. The rotation server runs with `--aud <aud> --url
 
 Every time sample comes from the `--clock-file` integer, and the driver moves clocks forward monotonically between steps. Clock injection exists only in these interop executables (and the fake peer); it is never new SDK public API.
 
-The matrix pins 14 named checks:
+The matrix pins 19 named checks:
 
 | Check | What it proves |
 |---|---|
@@ -388,7 +390,12 @@ The matrix pins 14 named checks:
 | `s4-cutoff-successor` | At exactly A the successor signs and is accepted. |
 | `s5-old-key-after-cutoff` | An old-key response at or after the cutoff is refused with `rotation_key_interval`. |
 | `c2-state-stable` | Failed controls never fall back, retry, or mutate trust. |
+| `r1-server-rollback-refused` | A server clock below the durable high water latches ClockGuard unsafe and the next response is refused (G9). |
+| `r2-server-latch-fail-closed` | The latch persists: with the clock back at the high water the server still refuses. |
+| `r3-server-restart-still-latched` | A fresh server process on the latched store fails closed at startup (never ready) in every language. |
+| `r4-client-rollback-refused` | A client store clock below its high water latches unsafe; the client refuses (nonzero exit, no JSON line). |
+| `r5-client-restart-no-recovery` | A restart on the latched client store still refuses even with the clock moved far forward: no catch-up recovery exists. |
 
 The fake peer `tools/rotation-fake.mjs` (page, page-tamper, and old-key modes) is driver-owned harness tooling like `tools/fake-server.mjs` and is never SDK evidence. The self-test fakes exercise driver logic only and are not SDKs.
 
-Limits: single-page refresh only (no pagination); no quarantine/conflict coverage; no capacity/compaction coverage; no concurrent publishers or restart/recovery; no bridge-expired refusal (the client never receives a first-seen record at or after A in this matrix); no Windows/macOS runs; no durable-nonce profile; no fuzzing. Per-language deeper coverage stays in the SDK test suites.
+Limits: single-page refresh only (no pagination); no quarantine/conflict coverage; no capacity/compaction coverage; no concurrent publishers; restart coverage limited to the fail-closed rollback latch above (no recovery/reconcile or fence-clearing flow is exercised — no SDK implements one); no bridge-expired refusal (the client never receives a first-seen record at or after A in this matrix); no Windows/macOS runs; no durable-nonce profile; no fuzzing. Per-language deeper coverage stays in the SDK test suites.

@@ -555,6 +555,26 @@ var scenarios = map[string]func(*env) stepResult{
 			"public_key": jack.EncodeBase64URL(e.signer(e.primaryName).PublicKey()),
 		})
 	},
+	"bootstrap-admin": func(e *env) stepResult {
+		code := e.args["code"]
+		if code == "" {
+			fatal("bootstrap-admin: missing --arg code=<invite>")
+		}
+		ctx := context.Background()
+		// The invite comes from the harness server's --bootstrap-ttl startup
+		// line (spec 03 section 5); it creates an admin:true entry.
+		_, err := e.typed(e.primaryName).Enroll(ctx, code, "newbie", e.signer(e.primaryName))
+		if out, ok := requireIntermediate(0, false, 0, "", e.sdkStep(nil, err)); !ok {
+			return out
+		}
+		// The kid is now registered: the normal path answers 409 key_exists
+		// (spec 03 section 3.2), the invite is consumed either way.
+		_, err = e.typed(e.primaryName).Enroll(ctx, code, "agentx", e.signer(e.primaryName))
+		if out, ok := requireIntermediate(1, true, http.StatusConflict, "key_exists", e.sdkStep(nil, err)); !ok {
+			return out
+		}
+		return e.typedRawCall(e.signer(e.primaryName), client.ToolWhoAmI, nil)
+	},
 	"rotate": func(e *env) stepResult {
 		ctx := context.Background()
 		_, err := e.typed(e.primaryName).RotateKey(ctx, e.signer("newbie"))
