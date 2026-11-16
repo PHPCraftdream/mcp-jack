@@ -464,6 +464,8 @@ async function runMatrix(opts) {
     } catch (e) {
       if (srv) { await stopChild(srv.child); allChildren.delete(srv.child); }
       return failR(null, { actual: null, reason: e.message, stderr: '' });
+    } finally {
+      if (srv) { await stopChild(srv.child); allChildren.delete(srv.child); }
     }
   }
 
@@ -491,6 +493,8 @@ async function runMatrix(opts) {
     } catch (e) {
       if (srv) { await stopChild(srv.child); allChildren.delete(srv.child); }
       return failR(null, { actual: null, reason: e.message });
+    } finally {
+      if (srv) { await stopChild(srv.child); allChildren.delete(srv.child); }
     }
   }
 
@@ -529,6 +533,8 @@ async function runMatrix(opts) {
     } catch (e) {
       if (srv) { await stopChild(srv.child); allChildren.delete(srv.child); }
       return failR(null, { actual: null, reason: e.message });
+    } finally {
+      if (srv) { await stopChild(srv.child); allChildren.delete(srv.child); }
     }
   }
 
@@ -641,10 +647,12 @@ async function selfTest() {
         cwd: REPO_ROOT, env: { ...process.env, JACK_FAKE_DEVIATE: 'forget' }, stdio: ['ignore', 'pipe', 'pipe'],
       });
       let out = '';
+      let err = '';
       child.stdout.on('data', (d) => { out += d; });
-      child.on('close', (c) => res2({ code: c, out }));
+      child.stderr.on('data', (d) => { err += d; });
+      child.on('close', (c) => res2({ code: c, out, err }));
     });
-    ok(negative.code === 1 && negative.out.includes('FAIL'), `negative control exits 1 and prints FAIL (got ${negative.code})`);
+    ok(negative.code === 1 && negative.out.includes('FAIL'), `negative control exits 1 and prints FAIL (got ${negative.code}; stderr: ${negative.err.trim().slice(0, 300)})`);
   } finally {
     try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ }
   }
