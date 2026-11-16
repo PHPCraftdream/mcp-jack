@@ -1182,6 +1182,9 @@ fn run_unknown_final(case: &VectorCase, plan: Plan) {
         .clock
         .arm_fault(3, fault_final_persist(&harness.sandbox.0));
     let result = drive_event(&harness, event, "/mcp");
+    // The fault left the directory read-only; restore it so close and recovery can run.
+    fs::set_permissions(&harness.sandbox.0, read_write_dir())
+        .expect("restore directory permissions");
     assert_status(&case.id, &result, 503, "durability_unavailable");
     assert!(
         !result.accepted,
@@ -1262,6 +1265,9 @@ fn run_unknown_intent(case: &VectorCase, plan: Plan) {
         .clock
         .arm_fault(2, fault_intent_persist(&harness.sandbox.0));
     let result = drive_event(&harness, event, "/mcp");
+    // The fault left the directory read-only; restore it so close and recovery can run.
+    fs::set_permissions(&harness.sandbox.0, read_write_dir())
+        .expect("restore directory permissions");
     assert_status(&case.id, &result, 503, "durability_unavailable");
     assert!(
         !result.accepted,
