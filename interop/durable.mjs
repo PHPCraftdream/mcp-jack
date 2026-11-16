@@ -6,7 +6,7 @@
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { connect } from 'node:net';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -437,6 +437,7 @@ async function runMatrix(opts) {
     const id = 'durable-restart-replay';
     const base = baseArgs(ctx.tmp);
     const dir = join(ctx.tmp, 'durable-a');
+    mkdirSync(dir, { mode: 0o700 }); // the stores require an existing private directory
     const failR = (expected, run) => { recordFailure(id, pairLabel, expected, run); return false; };
     await durableInit(ctx.server, [...base, '--durable-dir', dir, '--durable-init'], `${pairLabel} ${id}`);
     let srv;
@@ -498,6 +499,7 @@ async function runMatrix(opts) {
     const id = 'durable-expiry-reuse';
     const base = baseArgs(ctx.tmp);
     const dir = join(ctx.tmp, 'durable-c');
+    mkdirSync(dir, { mode: 0o700 });
     const wArgs = ['--durable-dir', dir, '--durable-window', '2'];
     const failR = (expected, run) => { recordFailure(id, pairLabel, expected, run); return false; };
     await durableInit(ctx.server, [...base, ...wArgs, '--durable-init'], `${pairLabel} ${id}`);
