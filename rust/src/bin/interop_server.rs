@@ -476,7 +476,7 @@ async fn run() -> Result<(), String> {
     if let Some(setup) = &durable {
         // A close error is logged but the process still exits 0.
         if let Err(e) = setup.store.close() {
-            eprintln!("interop-server: durable store close: {e}");
+            eprintln!("interop-server: durable store close: {e:?}");
         }
     }
     Ok(())

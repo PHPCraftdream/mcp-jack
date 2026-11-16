@@ -51,7 +51,7 @@ pub fn init_and_print(dir: &str, window_raw: Option<&str>, aud: &str) -> ! {
     let path = store_path(dir);
     let opts = options(aud, window);
     if let Err(e) = DurableNonceStore::initialize_unused(&path, &opts, boxed_clock()) {
-        fail(format!("durable init: {e}"));
+        fail(format!("durable init: {e:?}"));
     }
     println!("{{\"durable_initialized\":true}}");
     std::process::exit(0)
@@ -68,6 +68,6 @@ pub fn setup(dir: &str, window_raw: Option<&str>, aud: &str) -> Setup {
             store: Arc::new(store),
             window,
         },
-        Err(e) => fail(format!("durable nonce store: {e}")),
+        Err(e) => fail(format!("durable nonce store: {e:?}")),
     }
 }
