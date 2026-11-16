@@ -758,6 +758,21 @@ const SCENARIOS: Readonly<Record<string, (e: Env) => Promise<StepResult>>> = {
       public_key: encodeBase64URL(signerFor(e, e.primaryName).publicKey()),
     });
   },
+  "bootstrap-admin": async (e) => {
+    const code = e.args.get("code");
+    if (code === undefined || code === "") fatal("bootstrap-admin: missing --arg code=<invite>");
+    // The invite comes from the harness server's --bootstrap-ttl startup
+    // line (spec 03 section 5); it creates an admin:true entry.
+    const enr0 = await sdkStep(typedClient(e, e.primaryName).enroll(code, "newbie", signerFor(e, e.primaryName)));
+    const bad0 = requireIntermediate(0, false, 0, "", enr0.step);
+    if (bad0 !== undefined) return bad0;
+    // The kid is now registered: the normal path answers 409 key_exists
+    // (spec 03 section 3.2), the invite is consumed either way.
+    const enr1 = await sdkStep(typedClient(e, e.primaryName).enroll(code, "agentx", signerFor(e, e.primaryName)));
+    const bad1 = requireIntermediate(1, true, 409, Code.KEY_EXISTS, enr1.step);
+    if (bad1 !== undefined) return bad1;
+    return typedRawCall(e, signerFor(e, e.primaryName), TOOL_WHOAMI);
+  },
   rotate: async (e) => {
     const rot0 = await sdkStep(typedClient(e, e.primaryName).rotateKey(signerFor(e, "newbie")));
     const bad0 = requireIntermediate(0, false, 0, "", rot0.step);

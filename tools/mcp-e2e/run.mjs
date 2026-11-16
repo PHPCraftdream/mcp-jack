@@ -5,13 +5,16 @@
 //   -> OFFICIAL Streamable HTTP MCP server fixture (unix socket)
 //
 // run as a 3x3 matrix (clients go/ts/rust x servers go/ts/rust) plus one tamper
-// cell per client (server pinned to go), and driver-side GET probes recording
-// the design-doc "G4" GET behaviour.
+// cell per client x server pair, and driver-side GET probes recording the
+// design-doc "G4" GET behaviour.
 //
 // Node >= 22, node: builtins only. Exit codes: 2 usage / artifact-resolution
-// failure; 1 if any cell FAILED; 0 otherwise (SKIP cells allowed but reported).
+// failure; 1 if any cell FAILED; 0 only when every required cell ran — a
+// TS-server cell that cannot run (known initialize->SSE->gateway 501 limit)
+// FAILS by default and may be skipped only with --allow-skip-ts-server.
 //
 //   node tools/mcp-e2e/run.mjs [--clients go,ts,rust] [--servers go,ts,rust] [--list] [--keep]
+//       [--allow-skip-ts-server]
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import {
   chmodSync,
@@ -51,7 +54,7 @@ const TOLERANCES = {
   ts: '405 benign; 501 (either content type) fatal ClientHttpFailedToOpenStream',
   rust: '405 -> ServerDoesNotSupportSse (benign); 501 (either content type) HTTP status error',
 };
-const USAGE = 'usage: node tools/mcp-e2e/run.mjs [--clients go,ts,rust] [--servers go,ts,rust] [--list] [--keep]';
+const USAGE = 'usage: node tools/mcp-e2e/run.mjs [--clients go,ts,rust] [--servers go,ts,rust] [--list] [--keep] [--allow-skip-ts-server]';
 
 const POLL_MS = 200;
 const READY_TIMEOUT_MS = 10000;
@@ -114,7 +117,7 @@ function clipText(text, emptyLabel) {
 // ---- cli --------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const out = { clients: null, servers: null, list: false, keep: false };
+  const out = { clients: null, servers: null, list: false, keep: false, allowSkipTsServer: false };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     const val = () => {
@@ -127,6 +130,7 @@ function parseArgs(argv) {
       case '--servers': out.servers = val(); break;
       case '--list': out.list = true; break;
       case '--keep': out.keep = true; break;
+      case '--allow-skip-ts-server': out.allowSkipTsServer = true; break;
       default: fail(`unknown flag: ${flag}\n${USAGE}`);
     }
   }
@@ -645,7 +649,7 @@ function resolveTsFixtures(event) {
 
 // Only languages that at least one selected cell needs are resolved: a
 // filtered run (--clients go --servers go) must not demand a rust toolchain.
-// The tamper cells pin the server to go, so go is always needed.
+// Tamper cells exist per server language, so no server fixture is force-added.
 function resolveArtifacts(workDir, needed) {
   let buildDir = null;
   const ensureBuildDir = () => {
@@ -982,8 +986,10 @@ async function runCellFlow(ctx) {
 
   // Known limitation: TS server 2.4.0 answers initialize with an SSE stream even in JSON mode,
   // and the gateway by design rejects SSE with a signed 501 streaming_unsupported (v0.1: no streams).
-  const first501 = proxy.captures[0];
-  if (server === 'ts' && !tamper && first501 && first501.status === 501 && /streaming_unsupported/.test(first501.response_body ?? '')) {
+  // Applies to the tamper variant too: the tampered bytes are the 501 body, which is itself the
+  // known limitation. Skipped only via --allow-skip-ts-server (fail by default, see runCell).
+  const firstCapture = proxy.captures[0];
+  if (server === 'ts' && firstCapture && firstCapture.status === 501 && /streaming_unsupported/.test(firstCapture.response_body ?? '')) {
     throw new KnownLimit('official TS server 2.4.0 answered initialize with text/event-stream (200) despite responseMode json; the gateway refuses SSE by design with a signed 501 streaming_unsupported');
   }
 
@@ -1031,7 +1037,7 @@ async function runCellFlow(ctx) {
 }
 
 async function runCell(opts) {
-  const { workDir, index, client, server, tamper, artifacts, keep } = opts;
+  const { workDir, index, client, server, tamper, artifacts, keep, allowSkipTsServer } = opts;
   const name = cellName({ client, server, tamper });
   const chk = makeChecks();
   const g4 = {
@@ -1049,9 +1055,15 @@ async function runCell(opts) {
     const reasons = [];
     if (!fcl.ok) reasons.push(`${client} client fixture unavailable: ${fcl.reason}`);
     if (!fsv.ok) reasons.push(`${server} server fixture unavailable: ${fsv.reason}`);
-    chk.note(reasons.join('; '));
-    g4.skipped = true;
-    return { name, result: 'SKIP', details: chk.lines(), g4, tamper };
+    const text = reasons.join('; ');
+    // Skip is reserved for the known TS-server limitation and only via the opt-in flag.
+    if (allowSkipTsServer && server === 'ts') {
+      chk.note(`SKIP (allowed by --allow-skip-ts-server): ${text}`);
+      g4.skipped = true;
+      return { name, result: 'SKIP', details: chk.lines(), g4, tamper };
+    }
+    chk.bad(`cell cannot run${server === 'ts' ? ' (pass --allow-skip-ts-server to skip TS-server cells)' : ''}: ${text}`);
+    return { name, result: 'FAIL', details: chk.lines(), g4, tamper };
   }
 
   const cellDir = join(workDir, `c${index}`);
@@ -1067,9 +1079,14 @@ async function runCell(opts) {
     }
   } catch (e) {
     if (e instanceof KnownLimit) {
-      chk.note(`KNOWN-LIMIT: ${e.message}`);
-      g4.skipped = true;
-      return { name, result: 'SKIP', details: chk.lines(), g4, tamper };
+      // Known TS-server limitation: fail by default; skip only via the opt-in flag.
+      if (allowSkipTsServer && server === 'ts') {
+        chk.note(`SKIP (allowed by --allow-skip-ts-server) KNOWN-LIMIT: ${e.message}`);
+        g4.skipped = true;
+        return { name, result: 'SKIP', details: chk.lines(), g4, tamper };
+      }
+      chk.bad(`FAILED by known TS-server limitation (pass --allow-skip-ts-server to skip): ${e.message}`);
+      return { name, result: 'FAIL', details: chk.lines(), g4, tamper };
     }
     if (e instanceof CellFail) chk.bad(e.message);
     else chk.bad(`internal error: ${e.message}`);
@@ -1103,11 +1120,17 @@ function printCell(record) {
   for (const line of record.details) process.stdout.write(`${line}\n`);
 }
 
-function printSummary(records) {
+function printSummary(records, allowSkipTsServer) {
   const passed = records.filter((r) => r.result === 'PASS').length;
   const skipped = records.filter((r) => r.result === 'SKIP').length;
   const failed = records.filter((r) => r.result === 'FAIL').length;
   process.stdout.write(`SUMMARY cells=${records.length} passed=${passed} skipped=${skipped} failed=${failed}\n`);
+  if (skipped > 0) {
+    process.stdout.write(`SKIPPED cells (${allowSkipTsServer ? 'named skip via --allow-skip-ts-server' : 'unexpected'}):\n`);
+    for (const r of records) {
+      if (r.result === 'SKIP') process.stdout.write(`  SKIP ${r.name}\n`);
+    }
+  }
   process.stdout.write('G4 GET behaviour:\n');
   for (const r of records) {
     if (r.tamper) continue;
@@ -1137,8 +1160,11 @@ async function main() {
   for (const c of clients) {
     for (const s of servers) cells.push({ client: c, server: s, tamper: false });
   }
-  // One tamper cell per selected client; the upstream is always the go server.
-  for (const c of clients) cells.push({ client: c, server: 'go', tamper: true });
+  // One tamper cell per selected client x server pair: tamper is asserted for
+  // every server language, not only go.
+  for (const c of clients) {
+    for (const s of servers) cells.push({ client: c, server: s, tamper: true });
+  }
 
   if (cli.list) {
     for (const cell of cells) process.stdout.write(`${cellName(cell)}\n`);
@@ -1156,7 +1182,6 @@ async function main() {
   });
 
   const needed = new Set([...clients, ...servers]);
-  needed.add('go'); // tamper cells always need the go server fixture
   const artifacts = resolveArtifacts(workDir, needed);
 
   printHeader(artifacts);
@@ -1167,12 +1192,12 @@ async function main() {
   let index = 0;
   for (const cell of cells) {
     index += 1;
-    const record = await runCell({ workDir, index, ...cell, artifacts, keep: cli.keep });
+    const record = await runCell({ workDir, index, ...cell, artifacts, keep: cli.keep, allowSkipTsServer: cli.allowSkipTsServer });
     printCell(record);
     records.push(record);
   }
 
-  printSummary(records);
+  printSummary(records, cli.allowSkipTsServer);
   const failed = records.filter((r) => r.result === 'FAIL').length;
   for (const child of tracked) {
     try {

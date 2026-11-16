@@ -265,15 +265,15 @@ async function runMatrix(opts) {
   const baseStatePath = join(tmp, 'state.json');
   writeFileSync(baseStatePath, JSON.stringify(buildStateDoc(registry, null), null, 2) + '\n');
 
-  const resolveServerArgv = (lang, statePath) => {
+  const resolveServerArgv = (lang, statePath, extraArgs = []) => {
     const t = resolveTarget(targets[lang].server, 'server', `server=${lang}`);
-    return { cmd: t.cmd, args: [...t.args, '--aud', registry.aud, '--state', statePath, '--server-seed-hex', keys.svc.seed_hex], display: t.display };
+    return { cmd: t.cmd, args: [...t.args, ...extraArgs, '--aud', registry.aud, '--state', statePath, '--server-seed-hex', keys.svc.seed_hex], display: t.display };
   };
 
   const pinFor = (sc, readyKey) => (keys[sc.server_public_key] ? keys[sc.server_public_key].public_key : readyKey);
 
-  async function spawnServer(statePath, label) {
-    const argv = resolveServerArgv(label.lang, statePath);
+  async function spawnServer(statePath, label, extraArgs = []) {
+    const argv = resolveServerArgv(label.lang, statePath, extraArgs);
     let child;
     try {
       child = makeChild(argv.cmd, argv.args);
@@ -295,6 +295,22 @@ async function runMatrix(opts) {
     }
     return { child, port: ready.port, pin: ready.server_public_key };
   }
+
+// Scan captured server stderr for the bootstrap invite line of interop
+// README section 4: {"bootstrap_invite":"<code>"} on a single line. A server
+// without --bootstrap-ttl support prints none, so a missing line must fail
+// the scenario (no silent skips).
+function bootstrapInviteFromStderr(child) {
+  for (const line of child._stderrTail().split('\n')) {
+    const t = line.trim();
+    if (!t.startsWith('{')) continue;
+    try {
+      const o = JSON.parse(t);
+      if (o && typeof o.bootstrap_invite === 'string' && o.bootstrap_invite !== '') return o.bootstrap_invite;
+    } catch { /* not JSON: skip */ }
+  }
+  return null;
+}
 
   function clientArgv(lang, sc, pin, port, extraArgs) {
     const t = resolveTarget(targets[lang].client, 'client', `client=${lang}`);
@@ -513,8 +529,22 @@ async function runMatrix(opts) {
           const statePath = join(tmp, `state-${pairId}-${id}.json`);
           const stateBytes = JSON.stringify(buildStateDoc(registry, sc.registry_overrides), null, 2) + '\n';
           writeFileSync(statePath, stateBytes);
-          const srv = await spawnServer(statePath, { lang: server, name: `${pairId}-${id}` });
+          // Bootstrap scenarios (spec 03 section 5): the dedicated server is
+          // started with --bootstrap-ttl; its stderr invite becomes the
+          // `code` argument of the client.
+          const boot = sc.bootstrap;
+          const srv = await spawnServer(statePath, { lang: server, name: `${pairId}-${id}` }, boot ? ['--bootstrap-ttl', String(boot.ttl_seconds)] : []);
           const argv = clientArgv(client, sc, pinFor(sc, srv.pin), srv.port);
+          if (boot) {
+            const invite = bootstrapInviteFromStderr(srv.child);
+            if (invite === null) {
+              killTree(srv.child);
+              allChildren.delete(srv.child);
+              recordFailure(id, pairLabel, sc.expected, { failed: true, reason: `server (${server}) printed no {"bootstrap_invite":...} line on stderr (--bootstrap-ttl missing or failed)`, exitCode: null, stderr: srv.child._stderrTail(), result: null });
+              continue;
+            }
+            argv.args.push('--arg', `${boot.code_arg ?? 'code'}=${invite}`);
+          }
           const run = await runClient(client, argv, `${pairLabel} ${id}`, pairLabel);
           killTree(srv.child);
           allChildren.delete(srv.child);
