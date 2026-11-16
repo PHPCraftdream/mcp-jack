@@ -1428,12 +1428,13 @@ fn run_capacity(case: &VectorCase, plan: Plan) {
             case.id
         );
     }
-    // capacity_exhausted is definite and does not fence; the close still
-    // refuses because the seeded state holds an unresolved intent or the
-    // tombstone cap, which need recovery.
-    assert!(
+    // capacity_exhausted is definite and does not fence: the close fails only
+    // when the seeded state holds an unresolved intent or the tombstone cap.
+    let needs_recovery = info.intents != 0 || info.tombstones >= 64;
+    assert_eq!(
         harness.store.close().is_err(),
-        "case {}: close must report the unresolved seeded state",
+        needs_recovery,
+        "case {}: close outcome",
         case.id
     );
     drop(harness);
