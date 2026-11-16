@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/PHPCraftdream/mcp-jack/durable"
 	"github.com/PHPCraftdream/mcp-jack/server"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
@@ -36,9 +37,18 @@ func main() {
 	seedHex := flag.String("server-seed-hex", "", "server Ed25519 seed, 64 hex chars (required)")
 	bootstrapTTL := flag.String("bootstrap-ttl", "", "create an admin invite with this TTL in seconds")
 	verifyOnly := flag.Bool("verify-only", false, "verify one request from stdin and exit")
-	flag.Parse()
+	durableOpts := parseDurableFlags()
 	if *aud == "" || *statePath == "" || *seedHex == "" {
 		fail("--aud, --state and --server-seed-hex are required")
+	}
+	if durableOpts.init && *verifyOnly {
+		fail("--durable-init cannot be combined with --verify-only")
+	}
+	if durableOpts.dir == "" && durableOpts.init {
+		fail("--durable-init requires --durable-dir")
+	}
+	if durableOpts.dir != "" && durableOpts.init {
+		durableInit(durableOpts, *aud)
 	}
 
 	seed, err := hex.DecodeString(*seedHex)
@@ -74,12 +84,20 @@ func main() {
 		fmt.Fprintln(os.Stderr, string(b))
 	}
 
-	verifier, err := server.NewVerifier(server.Config{
-		Aud:    *aud,
-		State:  state,
-		Nonces: server.NewNonceStore(),
-		Native: server.NewNativeTools(server.NativeOptions{}),
-	})
+	var durableStore *durable.Store
+	var verifier *server.Verifier
+	if durableOpts.dir != "" {
+		var cfg server.Config
+		durableStore, cfg = durableVerifierConfig(durableOpts, *aud, state)
+		verifier, err = server.NewVerifier(cfg)
+	} else {
+		verifier, err = server.NewVerifier(server.Config{
+			Aud:    *aud,
+			State:  state,
+			Nonces: server.NewNonceStore(),
+			Native: server.NewNativeTools(server.NativeOptions{}),
+		})
+	}
 	if err != nil {
 		fail("verifier: %v", err)
 	}
@@ -122,6 +140,11 @@ func main() {
 		}
 	}
 	_ = srv.Close()
+	if durableStore != nil {
+		if err := durableStore.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "interop-server: durable store close: %v\n", err)
+		}
+	}
 }
 
 // verifyInput is the one JSON object --verify-only reads from stdin.
