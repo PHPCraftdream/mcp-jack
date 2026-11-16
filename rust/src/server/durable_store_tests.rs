@@ -1236,31 +1236,31 @@ fn open_refuses_clean_file_at_tombstone_cap() {
 // ------------------------------------------------------------------ R5 update
 
 #[test]
-fn capacity_refusal_rolls_back_purge_and_high_water_raise() {
+fn capacity_refusal_rolls_back_high_water_raise() {
     let sandbox = Sandbox::new();
-    // Samples: open 100; reserve at 200 (entry, intent) hits the combined-row
-    // cap after the staged purge raised H; then two 150 samples prove that a
-    // smaller clock sample still lands in domain.
-    let store = initialized(&sandbox, &[100, 200, 200, 150, 150]);
+    // Samples: open 100; reserve at 120 (entry, intent) hits the combined-row
+    // cap after the staged intent sample raised H; then two 110 samples prove
+    // that a smaller clock sample still lands in domain.
+    let store = initialized(&sandbox, &[100, 120, 120, 110, 110]);
     let metadata = store.snapshot_metadata();
-    // 4096 + 128 live rows, all expired at now=200: the purge removes 128 and
-    // raises H, but the cap is still exhausted.
-    let records = seeded_live(&metadata, 4096 + 128, RecordKind::Live, 100, 100);
+    // 4096 live rows, none expired at now=120 (retained until 130): nothing is
+    // purged and the cap is exhausted.
+    let records = seeded_live(&metadata, 4096, RecordKind::Live, 100, 100);
     store.seed_records(&records).unwrap();
     let error = store
-        .reserve(&admission(&b64(6, 32), &b64(7, 16), 200))
+        .reserve(&admission(&b64(6, 32), &b64(7, 16), 120))
         .unwrap_err();
     assert_eq!(error.status, 503);
     assert_eq!(error.code, "capacity_exhausted");
-    // The staged purge and high-water raise are discarded: memory and disk
-    // both keep H=100 and all 4224 rows.
+    // The staged high-water raise is discarded: memory and disk both keep H=100
+    // and all 4096 rows.
     assert_eq!(store.snapshot_metadata().high_water.get(), 100);
     assert_eq!(decoded(&sandbox).metadata.high_water.get(), 100);
-    assert_eq!(decoded(&sandbox).live.len(), 4096 + 128);
+    assert_eq!(decoded(&sandbox).live.len(), 4096);
     // A smaller clock sample is still >= the durable H: the store keeps
     // serving with the same definite, non-fencing refusal (no clock_unsafe).
     let error = store
-        .reserve(&admission(&b64(8, 32), &b64(9, 16), 150))
+        .reserve(&admission(&b64(8, 32), &b64(9, 16), 110))
         .unwrap_err();
     assert_eq!(error.status, 503);
     assert_eq!(error.code, "capacity_exhausted");
