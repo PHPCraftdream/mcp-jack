@@ -563,7 +563,7 @@ fn reservation_refuses_when_enrollment_kid_becomes_registered() {
     let kid = key_id(&public);
     let raw_code: [u8; 32] = Sha256::digest(b"invite-code").into();
     let code = encode_b64url(&raw_code);
-    let invite_id = encode_b64url(&Sha256::digest(&raw_code));
+    let invite_id = encode_b64url(&Sha256::digest(raw_code));
     inner
         .update(&mut |edit| {
             edit.put_invite(InviteRecord {
