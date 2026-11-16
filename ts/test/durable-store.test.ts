@@ -690,3 +690,28 @@ test("durable store: an unexpected non-JackError inside reserve fences the owner
       "a fenced store refuses admission");
     assert.throws(() => store.close(), unavailable);
   });
+
+test("durable store: a fenced close releases the owner marker and reports recovery-required (Go/Rust parity)",
+  { skip: !linux }, (context) => {
+    const { dir, path } = directory();
+    context.after(() => rmSync(dir, { recursive: true, force: true }));
+    const config = options(scriptClock(100, 100, Number.NaN));
+    DurableNonceStore.initializeUnused(path, config);
+    const store = DurableNonceStore.open(path, config);
+    const id = synthetic("fenced-close");
+    assert.throws(() => store.reserve(admission(id.kid, id.nonce, 100)), denies(503, "clock_unsafe"));
+    assert.equal(store.isFenced(), true);
+    // Go Close reports ErrRecoveryRequired and releases the bbolt lock; Rust
+    // reports RecoveryRequired and removes its marker (durable/store.go Close;
+    // rust/src/server/durable_store.rs close).
+    assert.throws(() => store.close(), (error: unknown) => unavailable(error) &&
+      (error as JackError).message === "durable: recovery required");
+    assert.equal(existsSync(path + ".owner"), false, "a fenced close releases the owner marker");
+    store.close();
+    // The persisted dirty epoch and unsafe latch keep the store fail-closed.
+    assert.throws(() => DurableNonceStore.open(path, config), unavailable);
+    // Recovery inspection runs at once: no manual marker removal is needed.
+    const snapshot = DurableNonceStore.inspectRecovery(path, config);
+    assert.equal(snapshot.dirty, true);
+    assert.equal(snapshot.unsafe, true);
+  });
