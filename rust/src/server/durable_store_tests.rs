@@ -284,6 +284,8 @@ fn reserve_commit_receipt_fields_and_replay() {
     let error = store.reserve(&admission(&kid, &nonce, 100)).unwrap_err();
     assert_eq!(error.code, "replayed_nonce");
     assert_eq!(decoded(&sandbox).live.len(), 1);
+    // The lease must be released before close, which drains serving leases.
+    drop(lease);
     store.close().unwrap();
 }
 
@@ -678,9 +680,10 @@ fn purge_is_bounded_to_128_removals_per_transaction() {
             .reserve(&admission(&b64(8, 32), &b64(9, 16), 131))
             .unwrap(),
     );
+    // The two new rows are live (retain_until 161); every expired row is gone.
     let state = decoded(&sandbox);
-    assert_eq!(state.live.len(), 1);
-    assert_eq!(state.expiry.len(), 1);
+    assert_eq!(state.live.len(), 2);
+    assert_eq!(state.expiry.len(), 2);
     store.close().unwrap();
 }
 
