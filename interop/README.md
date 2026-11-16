@@ -392,3 +392,23 @@ The matrix pins 14 named checks:
 The fake peer `tools/rotation-fake.mjs` (page, page-tamper, and old-key modes) is driver-owned harness tooling like `tools/fake-server.mjs` and is never SDK evidence. The self-test fakes exercise driver logic only and are not SDKs.
 
 Limits: single-page refresh only (no pagination); no quarantine/conflict coverage; no capacity/compaction coverage; no concurrent publishers or restart/recovery; no bridge-expired refusal (the client never receives a first-seen record at or after A in this matrix); no Windows/macOS runs; no durable-nonce profile; no fuzzing. Per-language deeper coverage stays in the SDK test suites.
+
+## 13. Durable-nonce restart matrix
+
+Entry point: `node interop/durable.mjs [--targets <file>] [--servers <l,l,...>] [--clients <l,l,...>] [--list] [--self-test]`. Exit codes match section 3 (0 pass, 1 scenario failure, 2 usage/self-test failure).
+
+Normative source: `spec/candidate/durable-nonces.md`. Each SDK implements it through its durable store: Go `durable/`, Rust `rust/src/server/durable_*.rs`, TypeScript `ts/src/server/durable-*.ts`. The durable stores are Linux-only, so the matrix runs on Linux only (CI job `durable-interop`).
+
+Executable flag contract (same names in all three interop servers): `--durable-dir <dir>` admits requests through the language's durable nonce store with store file `<dir>/nonces`; deployment identity comes from `--aud`; store window and verifier window both come from `--durable-window` (default 30, integer 1..120). Absent flags mean unchanged behaviour. `--durable-init` performs the explicit out-of-band store initialization, prints `{"durable_initialized":true}` and exits 0. A dirty store after an unclean stop refuses startup with no ready line.
+
+Checks per client x server pair:
+
+| Check | What it proves |
+|---|---|
+| `durable-restart-replay` | Signed request accepted; clean restart on the same store; byte-identical replay refused 401 `replayed_nonce` unsigned; fresh nonce accepted. |
+| `durable-crash-fail-closed` | SIGKILL after a committed request; restart on the same store must refuse startup with no ready line (the spec's dirty-serving-epoch gate, sections 2-3). |
+| `durable-expiry-reuse` | Window 2; the same (kid, nonce) pair is accepted again only after retention expired past a durable high-water advance, and immediately re-refused afterwards. |
+
+Requests are driven raw: the client signs in sign-only mode and the harness writes the exact request bytes over TCP (section 6 raw-request mechanics); responses are not signature-verified (same as raw scenarios).
+
+Limits: real wall clock only (no injected clock in these executables; the expiry scenario uses a short 2-second window instead); no recovery-inspect/reconcile coverage; no capacity or concurrent-owner coverage; the self-test uses bundled fakes and is not SDK evidence; Linux only.
