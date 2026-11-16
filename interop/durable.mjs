@@ -619,7 +619,7 @@ async function selfTest() {
     child.stdout.on('data', (d) => { out += d; });
     child.on('close', (c) => res({ code: c, out }));
   });
-  const ids = list.out.split('\n').map((s) => s.trim()).filter(Boolean);
+  const ids = list.out.split('\n').map((s) => s.split('\t')[0].trim()).filter(Boolean);
   ok(list.code === 0 && JSON.stringify(ids) === JSON.stringify(CHECKS), '--list exits 0 listing 3 checks');
 
   // 2. Full fake pair run in-process: all three checks pass.
