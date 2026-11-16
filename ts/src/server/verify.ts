@@ -427,7 +427,8 @@ export interface VerifyResult {
 export interface VerifierConfig {
   readonly aud: string;
   readonly state: StateStore;
-  readonly nonces: NonceStore;
+  /** Volatile nonce store; required unless `durable` is set, and never both. */
+  readonly nonces?: NonceStore;
   /**
    * Candidate durable admission seam (Go Config.DurableNonces; spec
    * candidate durable-nonces.md sections 1, 2, 5). When set, the nonce is

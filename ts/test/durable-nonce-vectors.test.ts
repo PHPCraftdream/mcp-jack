@@ -29,10 +29,9 @@ import { bodyHash, decodeBase64URLFixed, encodeBase64URL, keyId } from "../src/e
 import { requestSigningString } from "../src/signing.js";
 import { formatRequestAuth } from "../src/auth-header.js";
 import { createPrivateKey, createPublicKey, sign as nodeSign } from "node:crypto";
-import type { PrivateKeyObject } from "node:crypto";
+import type { KeyObject } from "node:crypto";
 import { DurableNonceStore } from "../src/server/durable-store.js";
 import { MemoryState } from "../src/server/state.js";
-import type { NonceStore } from "../src/server/nonce.js";
 import { Verifier } from "../src/server/verify.js";
 import type { NativeCall, NativeResult, NativeTools, VerifyRequest, VerifyResult } from "../src/server/verify.js";
 import { DurableNonceAdmission, takeResultFinish } from "../src/server/durable-admission.js";
@@ -139,7 +138,7 @@ function syntheticOperation(name: string): string {
 // through a Verifier wired to the harness's durable store.
 // ---------------------------------------------------------------------------
 
-interface EdKey { readonly priv: PrivateKeyObject; readonly pub: Uint8Array; readonly kid: string }
+interface EdKey { readonly priv: KeyObject; readonly pub: Uint8Array; readonly kid: string }
 
 /** Deterministic Ed25519 key material with its derived kid. */
 function edKey(name: string): EdKey {
@@ -180,10 +179,6 @@ function vectorVerifier(harness: Harness, refuseNative: boolean): VerifierDrive 
   const verifier = new Verifier({
     aud: AUD,
     state,
-    // VerifierConfig.nonces is nominally required, but the constructor's
-    // exactly-one-nonce-profile check (T8) requires it ABSENT when `durable`
-    // is set — hand the type system the required key with no value.
-    nonces: undefined as unknown as NonceStore,
     ...(refuseNative ? { native: refusingNative as NativeTools } : {}),
     now: harness.config.now,
     durable: new DurableNonceAdmission({ store, now: harness.config.now }),

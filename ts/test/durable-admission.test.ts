@@ -640,21 +640,20 @@ test("durable store: a colliding operation id is retried ONCE before any fence (
     // Reopen with a seam that returns the colliding id exactly once: the
     // second attempt must allocate a NEW id and commit (Go durable/admit.go
     // retries a collision once; without the fix the store fences instead).
+    let calls = 0;
     const reopened = DurableNonceStore.open(path, { deploymentId: DEPLOYMENT, window: WINDOW, now: clock,
-      injectOperationId: (() => {
-        let calls = 0;
-        return () => {
-          calls++;
-          return calls === 1 ? (collidingId as string) : encodeBase64URL(randomBytes(16));
-        };
-      })() });
+      injectOperationId: () => {
+        calls++;
+        return calls === 1 ? (collidingId as string) : encodeBase64URL(randomBytes(16));
+      } });
     const retryAdmission = new DurableNonceAdmission({ store: reopened, now: clock });
     const outcome = retryAdmission.reserveForVerify(seamRequest(freshKey(), 100));
     assert.equal(outcome.accepted, true, "a single collision is retried, not fenced");
-    if (outcome.accepted) {
-      assert.notEqual(outcome.receipt.operationId, collidingId, "the retried id differs from the colliding one");
-      outcome.finish();
-    }
+    if (outcome.accepted) outcome.finish();
+    assert.equal(calls, 2, "the colliding id is replaced by exactly one fresh id");
+    assert.equal(reopened.state().live.some((row) => row.operationId === collidingId), true,
+      "the original record is kept");
+    assert.equal(reopened.state().live.length, 2, "the retried reservation committed beside it");
     assert.equal(reopened.isFenced(), false, "a retried collision never fences");
     reopened.close();
   });
