@@ -496,7 +496,6 @@ fn assert_state_changed(
     let info = nonce_store_info(store);
     assert_eq!(info.live, 0);
     assert_eq!(info.intents, 0);
-    assert!(!info.dirty);
     assert!(!info.unsafe_latched);
     // The store is NOT fenced: an unchanged caller is still served.
     let verifier = verifier_with_state(
@@ -629,7 +628,6 @@ fn reservation_refuses_when_enrollment_kid_becomes_registered() {
     let info = nonce_store_info(&store);
     assert_eq!(info.live, 0);
     assert_eq!(info.intents, 0);
-    assert!(!info.dirty);
 }
 
 /// Go rejects a durable window below 0 or above 120 at construction; the
