@@ -1273,29 +1273,15 @@ fn capacity_refusal_rolls_back_high_water_raise() {
 #[test]
 fn poisoned_lock_fences_the_store() {
     let sandbox = Sandbox::new();
-    DurableNonceStore::initialize_unused(&sandbox.file(), &options(), clock(&[100])).unwrap();
-    // The clock panics on the second sample (the reserve entry sample).
-    let count = Rc::new(RefCell::new(0));
-    let clock_panic = {
-        let count = Rc::clone(&count);
-        move || {
-            *count.borrow_mut() += 1;
-            if *count.borrow() == 2 {
-                panic!("injected clock failure");
-            }
-            100
-        }
-    };
-    let store = DurableNonceStore::open(&sandbox.file(), &options(), clock_panic).unwrap();
-    let (kid, nonce) = pair(1);
+    let store = initialized(&sandbox, &[100]);
+    // A panic while the lock is held poisons it.
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        store.reserve(&admission(&kid, &nonce, 100))
+        store.poison_for_test();
     }));
-    assert!(outcome.is_err(), "the panicking clock must propagate");
+    assert!(outcome.is_err(), "the poisoning panic must propagate");
     // The poisoned lock fences: the next admission is refused, not resumed.
-    let error = store
-        .reserve(&admission(&b64(4, 32), &b64(5, 16), 100))
-        .unwrap_err();
+    let (kid, nonce) = pair(1);
+    let error = store.reserve(&admission(&kid, &nonce, 100)).unwrap_err();
     assert_eq!(error.status, 503);
     assert_eq!(error.code, "durability_unavailable");
     assert!(store.close().is_err());

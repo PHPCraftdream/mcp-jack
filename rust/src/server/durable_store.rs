@@ -911,6 +911,14 @@ impl<C: FnMut() -> i64> DurableNonceStore<C> {
         self.lock().state.metadata.clone()
     }
 
+    /// Test-only: panics while holding the session lock, which poisons it. Kept
+    /// out of the admission path so the unwind leaves no ghost in its coverage counters.
+    #[cfg(test)]
+    pub(crate) fn poison_for_test(&self) {
+        let _session = self.lock();
+        panic!("poison the session lock");
+    }
+
     /// Test/recovery seeding: strictly validated rows inserted through the
     /// normal validation and persistence path (crate-internal only).
     pub(crate) fn seed_records(&self, records: &[DurableRecord]) -> Result<(), DurableStoreError> {
