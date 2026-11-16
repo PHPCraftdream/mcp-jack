@@ -394,34 +394,45 @@ async fn run() -> Result<(), String> {
     let semaphore = Arc::new(tokio::sync::Semaphore::new(64));
     // Serve failures reach the select below via this channel.
     let (serve_err_tx, mut serve_err_rx) = tokio::sync::oneshot::channel::<String>();
-    tokio::task::spawn(async move {
-        loop {
-            let (stream, _) = match listener.accept().await {
-                Ok(accepted) => accepted,
-                Err(e) => {
-                    let _ = serve_err_tx.send(format!("accept: {e}"));
-                    return;
-                }
-            };
-            // Acquired BEFORE spawning; the permit moves into the task and is
-            // dropped at its end.
-            let permit = match semaphore.clone().acquire_owned().await {
-                Ok(p) => p,
-                Err(_) => return, // semaphore closed: never happens here
-            };
-            let service = service.clone();
-            // Fire-and-forget by design: the harness kills the process to stop
-            // us; connection errors are logged to stderr only, never stdout.
-            let _join = tokio::task::spawn(async move {
-                let _permit = permit;
-                let hyper_service = hyper_util::service::TowerToHyperService::new(service);
-                if let Err(e) = hyper::server::conn::http1::Builder::new()
-                    .serve_connection(hyper_util::rt::TokioIo::new(stream), hyper_service)
-                    .await
+    // In-flight connection tasks, tracked so shutdown can drain them (each
+    // entry bounded by the semaphore above). Finished entries are pruned on
+    // push so the list never grows past the live connection count.
+    let inflight: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>> = Arc::default();
+    let accept_task = tokio::task::spawn({
+        let inflight = Arc::clone(&inflight);
+        async move {
+            loop {
+                let (stream, _) = match listener.accept().await {
+                    Ok(accepted) => accepted,
+                    Err(e) => {
+                        let _ = serve_err_tx.send(format!("accept: {e}"));
+                        return;
+                    }
+                };
+                // Acquired BEFORE spawning; the permit moves into the task and is
+                // dropped at its end.
+                let permit = match semaphore.clone().acquire_owned().await {
+                    Ok(p) => p,
+                    Err(_) => return, // semaphore closed: never happens here
+                };
+                let service = service.clone();
+                let inflight = Arc::clone(&inflight);
+                let join = tokio::task::spawn(async move {
+                    let _permit = permit;
+                    let hyper_service = hyper_util::service::TowerToHyperService::new(service);
+                    if let Err(e) = hyper::server::conn::http1::Builder::new()
+                        .serve_connection(hyper_util::rt::TokioIo::new(stream), hyper_service)
+                        .await
+                    {
+                        eprintln!("interop-server: connection: {e}");
+                    }
+                });
                 {
-                    eprintln!("interop-server: connection: {e}");
+                    let mut live = inflight.lock().unwrap_or_else(|e| e.into_inner());
+                    live.retain(|handle| !handle.is_finished());
+                    live.push(join);
                 }
-            });
+            }
         }
     });
 
@@ -471,7 +482,19 @@ async fn run() -> Result<(), String> {
             }
         }
     }
-    // No graceful drain required; the durable store closes first.
+    // Shutdown order: stop accepting, drain in-flight connections (bounded),
+    // then close the durable store so no request ever hits a closed store.
+    accept_task.abort();
+    let _ = accept_task.await;
+    let draining: Vec<tokio::task::JoinHandle<()>> = {
+        let mut live = inflight.lock().unwrap_or_else(|e| e.into_inner());
+        live.drain(..).collect()
+    };
+    for handle in draining {
+        // Bounded per-connection drain: a stuck connection must not delay
+        // the store close (and process exit) indefinitely.
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(500), handle).await;
+    }
     #[cfg(target_os = "linux")]
     if let Some(setup) = &durable {
         // A close error is logged but the process still exits 0.

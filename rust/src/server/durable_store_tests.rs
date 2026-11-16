@@ -16,6 +16,8 @@ use std::fs;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Arc;
 
 const WINDOW: i64 = 30;
 
@@ -1097,4 +1099,204 @@ fn oversized_logical_file_is_rejected() {
     );
     assert!(decode_state(&file).is_err());
     assert!(file.len() > MAX_FILE_BYTES);
+}
+
+// ------------------------------------------------------------------ R2 close
+
+/// A Send/Sync wall clock for cross-thread tests; the sample never changes.
+fn atomic_clock(value: Arc<AtomicI64>) -> impl FnMut() -> i64 + Send {
+    move || value.load(Ordering::SeqCst)
+}
+
+#[test]
+fn close_drains_leases_and_refuses_reserve_while_closing() {
+    let sandbox = Sandbox::new();
+    let current = Arc::new(AtomicI64::new(100));
+    DurableNonceStore::initialize_unused(&sandbox.file(), &options(), {
+        let current = Arc::clone(&current);
+        move || current.load(Ordering::SeqCst)
+    })
+    .unwrap();
+    let store = Arc::new(
+        DurableNonceStore::open(
+            &sandbox.file(),
+            &options(),
+            atomic_clock(Arc::clone(&current)),
+        )
+        .unwrap(),
+    );
+    let (kid, nonce) = pair(1);
+    let (_receipt, lease) = store.reserve(&admission(&kid, &nonce, 100)).unwrap();
+    let (close_tx, close_rx) = std::sync::mpsc::channel();
+    {
+        let store = Arc::clone(&store);
+        std::thread::spawn(move || {
+            let _ = close_tx.send(store.close());
+        });
+    }
+    // The close is now draining while the lease is still held.
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let (probe_tx, probe_rx) = std::sync::mpsc::channel();
+    {
+        let store = Arc::clone(&store);
+        std::thread::spawn(move || {
+            let _ = probe_tx.send(store.reserve(&admission(&b64(4, 32), &b64(5, 16), 100)));
+        });
+    }
+    let probe = probe_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("reserve during closing must return promptly");
+    let error = probe.unwrap_err();
+    assert_eq!(error.status, 503);
+    assert_eq!(error.code, "durability_unavailable");
+    // Releasing the lease lets the drain finish; a closing refusal must not
+    // have fenced the store.
+    drop(lease);
+    let closed = close_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("close must finish after the lease is dropped");
+    closed.unwrap();
+    assert!(!sandbox.file().with_file_name("nonce-store.owner").exists());
+}
+
+// ------------------------------------------------------------------ R3 open
+
+#[test]
+fn open_refuses_clean_file_with_unresolved_intents() {
+    let sandbox = Sandbox::new();
+    let store = initialized(&sandbox, &[100]);
+    store.close().unwrap();
+    let mut metadata = snapshot_metadata_helper(&sandbox);
+    assert!(!metadata.dirty);
+    let (kid, nonce) = pair(1);
+    let record = record_of(
+        &metadata,
+        RecordKind::Intent,
+        &kid,
+        &nonce,
+        [7; 16],
+        100,
+        100,
+    );
+    let mut row = record.key.to_vec();
+    row.extend_from_slice(&seal_payload(&payload_of_record(&record)));
+    metadata.intents = 1;
+    let file = build_file(
+        &encode_metadata(&metadata).unwrap(),
+        &[],
+        &[row],
+        &[],
+        &[],
+        &[(record.receipt.operation_id, record.key)],
+    );
+    fs::write(sandbox.file(), &file).unwrap();
+    assert_eq!(
+        DurableNonceStore::open(&sandbox.file(), &options(), clock(&[100])).unwrap_err(),
+        DurableStoreError::RecoveryRequired
+    );
+    // Recovery inspection still loads the same file.
+    let snapshot = inspect_recovery(&sandbox.file(), &options()).unwrap();
+    assert_eq!(snapshot.intents.len(), 1);
+    assert!(!snapshot.dirty);
+}
+
+#[test]
+fn open_refuses_clean_file_at_tombstone_cap() {
+    let sandbox = Sandbox::new();
+    let store = initialized(&sandbox, &[100]);
+    store.close().unwrap();
+    let mut metadata = snapshot_metadata_helper(&sandbox);
+    assert!(!metadata.dirty);
+    let template = seeded_live(&metadata, 64, RecordKind::Tombstone, 70, 100);
+    let mut rows = Vec::new();
+    let mut operations = Vec::new();
+    for record in &template {
+        let mut row = record.key.to_vec();
+        row.extend_from_slice(&seal_payload(&payload_of_record(record)));
+        rows.push(row);
+        operations.push((record.receipt.operation_id, record.key));
+    }
+    metadata.tombstones = 64;
+    let file = build_file(
+        &encode_metadata(&metadata).unwrap(),
+        &[],
+        &[],
+        &rows,
+        &[],
+        &operations,
+    );
+    fs::write(sandbox.file(), &file).unwrap();
+    assert_eq!(
+        DurableNonceStore::open(&sandbox.file(), &options(), clock(&[100])).unwrap_err(),
+        DurableStoreError::RecoveryRequired
+    );
+    assert!(inspect_recovery(&sandbox.file(), &options()).is_ok());
+}
+
+// ------------------------------------------------------------------ R5 update
+
+#[test]
+fn capacity_refusal_rolls_back_purge_and_high_water_raise() {
+    let sandbox = Sandbox::new();
+    // Samples: open 100; reserve at 200 (entry, intent) hits the combined-row
+    // cap after the staged purge raised H; then two 150 samples prove that a
+    // smaller clock sample still lands in domain.
+    let store = initialized(&sandbox, &[100, 200, 200, 150, 150]);
+    let metadata = store.snapshot_metadata();
+    // 4096 + 128 live rows, all expired at now=200: the purge removes 128 and
+    // raises H, but the cap is still exhausted.
+    let records = seeded_live(&metadata, 4096 + 128, RecordKind::Live, 100, 100);
+    store.seed_records(&records).unwrap();
+    let error = store
+        .reserve(&admission(&b64(6, 32), &b64(7, 16), 200))
+        .unwrap_err();
+    assert_eq!(error.status, 503);
+    assert_eq!(error.code, "capacity_exhausted");
+    // The staged purge and high-water raise are discarded: memory and disk
+    // both keep H=100 and all 4224 rows.
+    assert_eq!(store.snapshot_metadata().high_water.get(), 100);
+    assert_eq!(decoded(&sandbox).metadata.high_water.get(), 100);
+    assert_eq!(decoded(&sandbox).live.len(), 4096 + 128);
+    // A smaller clock sample is still >= the durable H: the store keeps
+    // serving with the same definite, non-fencing refusal (no clock_unsafe).
+    let error = store
+        .reserve(&admission(&b64(8, 32), &b64(9, 16), 150))
+        .unwrap_err();
+    assert_eq!(error.status, 503);
+    assert_eq!(error.code, "capacity_exhausted");
+    assert_eq!(store.snapshot_metadata().high_water.get(), 100);
+    store.close().unwrap();
+}
+
+// ------------------------------------------------------------------ R7 poison
+
+#[test]
+fn poisoned_lock_fences_the_store() {
+    let sandbox = Sandbox::new();
+    DurableNonceStore::initialize_unused(&sandbox.file(), &options(), clock(&[100])).unwrap();
+    // The clock panics on the second sample (the reserve entry sample).
+    let count = Rc::new(RefCell::new(0));
+    let clock_panic = {
+        let count = Rc::clone(&count);
+        move || {
+            *count.borrow_mut() += 1;
+            if *count.borrow() == 2 {
+                panic!("injected clock failure");
+            }
+            100
+        }
+    };
+    let store = DurableNonceStore::open(&sandbox.file(), &options(), clock_panic).unwrap();
+    let (kid, nonce) = pair(1);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        store.reserve(&admission(&kid, &nonce, 100))
+    }));
+    assert!(outcome.is_err(), "the panicking clock must propagate");
+    // The poisoned lock fences: the next admission is refused, not resumed.
+    let error = store
+        .reserve(&admission(&b64(4, 32), &b64(5, 16), 100))
+        .unwrap_err();
+    assert_eq!(error.status, 503);
+    assert_eq!(error.code, "durability_unavailable");
+    assert!(store.close().is_err());
 }

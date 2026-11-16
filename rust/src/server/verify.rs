@@ -12,7 +12,7 @@ use crate::error::{codes, JackError};
 use crate::server::audit::{AuditEvent, AuditSink, AUDIT_FAILURE, AUDIT_SUCCESS};
 #[cfg(target_os = "linux")]
 use crate::server::durable_admission::{
-    reserve_durable, AdmissionFinish, SharedDurableNonceStore, SnapshotWindow,
+    reserve_durable, AdmissionFinish, CallerSnapshot, SharedDurableNonceStore,
 };
 use crate::server::identity::VerifiedIdentity;
 use crate::server::native::invite_id_of;
@@ -158,6 +158,11 @@ pub struct Verifier {
     /// the volatile store. Builder-only for the same static-API reason.
     #[cfg(target_os = "linux")]
     durable: Option<Arc<SharedDurableNonceStore>>,
+    /// Latched construction refusal (Go: NewVerifier rejects a durable window
+    /// below 0 or above 120). The durable profile is attached by an infallible
+    /// builder, so the refusal fails every later request closed.
+    #[cfg(target_os = "linux")]
+    durable_window_invalid: bool,
     /// Highest clock sample seen; request time is monotonic within a process.
     high_water: AtomicI64,
 }
@@ -177,6 +182,8 @@ impl Verifier {
             server_keys: None,
             #[cfg(target_os = "linux")]
             durable: None,
+            #[cfg(target_os = "linux")]
+            durable_window_invalid: false,
             high_water: AtomicI64::new(i64::MIN),
         })
     }
@@ -196,6 +203,10 @@ impl Verifier {
     /// 5). Linux-gated together with the durable store.
     #[cfg(target_os = "linux")]
     pub fn with_durable_nonces(mut self, durable: Arc<SharedDurableNonceStore>) -> Self {
+        // Go rejects a durable window below 0 or above 120 at construction
+        // (server: durable window must be between 1 and 120 seconds); this
+        // builder is infallible, so the refusal latches here.
+        self.durable_window_invalid = self.cfg.window_seconds < 0 || self.cfg.window_seconds > 120;
         self.durable = Some(durable);
         self
     }
@@ -317,12 +328,28 @@ impl Verifier {
         // the HTTP adapter after the response is produced.
         #[cfg(target_os = "linux")]
         if let Some(store) = self.durable.as_ref() {
+            if self.durable_window_invalid {
+                return fail(
+                    VerifyResult::default(),
+                    500,
+                    "internal_error",
+                    "server: durable window must be between 1 and 120 seconds",
+                );
+            }
             let snapshot = match caller.as_ref() {
-                Some(entry) => SnapshotWindow::of_entry(entry.not_before, entry.not_after),
-                None => SnapshotWindow::unbounded(),
+                Some(entry) => CallerSnapshot::registered(entry.clone()),
+                None => CallerSnapshot::enrolled(auth.kid.clone()),
             };
             let window = self.window();
-            let outcome = reserve_durable(store, &auth, &signing, window, snapshot, &self.cfg.now);
+            let outcome = reserve_durable(
+                store,
+                &auth,
+                &signing,
+                window,
+                snapshot,
+                Arc::clone(&self.cfg.state),
+                &self.cfg.now,
+            );
             return match outcome.final_now {
                 Some(final_now) => {
                     self.authorize(req, &auth, final_now, caller.as_ref(), outcome.result)

@@ -283,3 +283,380 @@ fn clock_step_back_after_purge_fails_closed() {
         Err(DurableStoreError::RecoveryRequired)
     ));
 }
+
+// ---------------------------------------------------------------------------
+// Reservation-time registry revalidation (Go: state.WithAdmission +
+// sameEntry/currentKnown at every authoritative sample) and the durable
+// window construction refusal (Go: NewVerifier).
+// ---------------------------------------------------------------------------
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use mcp_jack::encoding::key_id;
+use mcp_jack::error::JackError;
+use mcp_jack::server::durable_admission::nonce_store_info;
+use mcp_jack::server::state::{InviteRecord, StateEdit, StateView};
+use mcp_jack::server::verify::{NativeCall, NativeResult, NativeTools};
+
+/// Mutation applied right before the Nth registry lookup: the reservation
+/// revalidation is the SECOND lookup of a verify pass.
+enum Mutation {
+    Revoke,
+    Demote,
+    Expire,
+    Register,
+}
+
+/// StateStore wrapper that changes the caller entry between the verifier's
+/// lookup and the reservation (the live registry diverges from the snapshot).
+struct MutatingState {
+    inner: Arc<MemoryState>,
+    kid: String,
+    entry: RegistryEntry,
+    lookups: AtomicUsize,
+    mutate_on: usize,
+    kind: Mutation,
+}
+
+impl MutatingState {
+    fn apply(&self) {
+        match self.kind {
+            Mutation::Revoke => {
+                let kid = self.kid.clone();
+                self.inner
+                    .update(&mut |edit| {
+                        edit.remove_key(&kid);
+                        Ok(())
+                    })
+                    .unwrap();
+            }
+            Mutation::Demote | Mutation::Expire => {
+                let kid = self.kid.clone();
+                let demote = matches!(self.kind, Mutation::Demote);
+                self.inner
+                    .update(&mut |edit| {
+                        let mut entry = edit.key(&kid).expect("entry present");
+                        if demote {
+                            entry.admin = false;
+                        } else {
+                            entry.not_after = Some(0);
+                        }
+                        edit.put_key(entry);
+                        Ok(())
+                    })
+                    .unwrap();
+            }
+            Mutation::Register => {
+                let entry = self.entry.clone();
+                self.inner
+                    .update(&mut |edit| {
+                        edit.put_key(entry);
+                        Ok(())
+                    })
+                    .unwrap();
+            }
+        }
+    }
+}
+
+impl StateStore for MutatingState {
+    fn view(&self) -> StateView {
+        self.inner.view()
+    }
+
+    fn lookup(&self, kid: &str) -> Option<RegistryEntry> {
+        if self.lookups.fetch_add(1, Ordering::SeqCst) + 1 == self.mutate_on {
+            self.apply();
+        }
+        self.inner.lookup(kid)
+    }
+
+    fn lookup_invite(&self, invite_id: &str) -> Option<InviteRecord> {
+        self.inner.lookup_invite(invite_id)
+    }
+
+    fn update(
+        &self,
+        f: &mut dyn FnMut(&mut StateEdit) -> Result<(), JackError>,
+    ) -> Result<(), JackError> {
+        self.inner.update(f)
+    }
+}
+
+/// Native handler counting calls, so a test can prove no handler ran.
+struct CountingNative {
+    calls: AtomicUsize,
+}
+
+impl NativeTools for CountingNative {
+    fn call(&self, _c: &mut NativeCall) -> Result<NativeResult, JackError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(NativeResult {
+            structured: serde_json::Value::Null,
+        })
+    }
+}
+
+fn open_store(clock: &ScriptedClock) -> (Sandbox, Arc<SharedDurableNonceStore>) {
+    let sandbox = Sandbox::new();
+    let path = sandbox.file();
+    DurableNonceStore::initialize_unused(&path, &options(), ScriptedClock::new(&[100]).boxed())
+        .unwrap();
+    let store = Arc::new(DurableNonceStore::open(&path, &options(), clock.boxed()).unwrap());
+    (sandbox, store)
+}
+
+fn verifier_with_state(
+    store: &Arc<SharedDurableNonceStore>,
+    state: Arc<dyn StateStore>,
+    clock: &ScriptedClock,
+    native: Option<Arc<dyn NativeTools>>,
+) -> Verifier {
+    let config = Config {
+        aud: AUD.to_owned(),
+        state,
+        nonces: Arc::new(NonceStore::new()),
+        audit: None,
+        native,
+        window_seconds: WINDOW,
+        now: clock.verifier_clock(),
+    };
+    Verifier::new(config)
+        .expect("verifier config")
+        .with_durable_nonces(Arc::clone(store))
+}
+
+fn durable_child(
+    kid_name: &str,
+    nonce_name: &str,
+    ts: i64,
+    mutate_on: usize,
+    kind: Mutation,
+    state: &Arc<MemoryState>,
+) -> (Arc<MutatingState>, Request) {
+    let seed = digest(kid_name);
+    let key = SigningKey::from_bytes(&seed);
+    let public = key.verifying_key().to_bytes();
+    let kid = encode_b64url(&digest(&format!("candidate-vector/kid/{kid_name}")));
+    let entry = RegistryEntry {
+        kid: kid.clone(),
+        public_key: encode_b64url(&public),
+        name: format!("candidate-vector-{kid_name}"),
+        admin: true,
+        not_before: None,
+        not_after: None,
+    };
+    state
+        .update(&mut |edit| {
+            edit.put_key(entry.clone());
+            Ok(())
+        })
+        .unwrap();
+    let nonce = encode_b64url(&digest(&format!("candidate-vector/nonce/{nonce_name}"))[..16]);
+    let signing = request_signing_string("GET", "/mcp", AUD, &kid, ts, &nonce, &[]);
+    let sig = encode_b64url(&key.sign(signing.as_bytes()).to_bytes());
+    let request = Request {
+        method: "GET".to_owned(),
+        target: "/mcp".to_owned(),
+        auth_values: vec![format_request_auth(&RequestAuth {
+            kid: kid.clone(),
+            ts,
+            nonce,
+            sig,
+        })],
+        body: Vec::new(),
+    };
+    (
+        Arc::new(MutatingState {
+            inner: Arc::clone(state),
+            kid,
+            entry,
+            lookups: AtomicUsize::new(0),
+            mutate_on,
+            kind,
+        }),
+        request,
+    )
+}
+
+/// Asserts the 503 state_changed shape of a reservation refused because the
+/// live registry diverged from the captured snapshot: no nonce consumed,
+/// zero committed rows, store not fenced, no authorization effect.
+fn assert_state_changed(
+    result: &mcp_jack::server::verify::VerifyResult,
+    store: &SharedDurableNonceStore,
+    stable_request: &Request,
+    stable_state: &Arc<MemoryState>,
+    clock: &ScriptedClock,
+) {
+    assert!(!result.accepted, "code: {}", result.code);
+    assert_eq!(result.http_status, 503, "code: {}", result.code);
+    assert_eq!(result.code, "state_changed");
+    assert!(!result.nonce_recorded);
+    let info = nonce_store_info(store);
+    assert_eq!(info.live, 0);
+    assert_eq!(info.intents, 0);
+    assert!(!info.dirty);
+    assert!(!info.unsafe_latched);
+    // The store is NOT fenced: an unchanged caller is still served.
+    let verifier = verifier_with_state(
+        store,
+        Arc::clone(stable_state) as Arc<dyn StateStore>,
+        clock,
+        None,
+    );
+    let second = verifier.verify(stable_request);
+    assert!(second.accepted, "store fenced: {}", second.code);
+}
+
+fn snapshot_change_case(kind: Mutation) {
+    let clock = ScriptedClock::new(&[100]);
+    let (_sandbox, store) = open_store(&clock);
+    let inner = Arc::new(MemoryState::new());
+    // A second, untouched caller proves the store stays unfenced.
+    let (stable_wrapper, stable_request) = durable_child(
+        "kid-stable",
+        "stable",
+        100,
+        usize::MAX,
+        Mutation::Revoke,
+        &inner,
+    );
+    let (wrapper, request) = durable_child("kid-alice", "snap", 100, 2, kind, &inner);
+    let verifier = verifier_with_state(
+        &store,
+        Arc::clone(&wrapper) as Arc<dyn StateStore>,
+        &clock,
+        None,
+    );
+    let result = verifier.verify(&request);
+    assert_state_changed(&result, &store, &stable_request, &inner, &clock);
+    drop(stable_wrapper);
+}
+
+#[test]
+fn reservation_refuses_when_caller_is_revoked_before_commit() {
+    snapshot_change_case(Mutation::Revoke);
+}
+
+#[test]
+fn reservation_refuses_when_caller_loses_admin_before_commit() {
+    snapshot_change_case(Mutation::Demote);
+}
+
+#[test]
+fn reservation_refuses_when_caller_validity_changes_before_commit() {
+    snapshot_change_case(Mutation::Expire);
+}
+
+/// Enrollment exception: a kid that becomes REGISTERED between the verifier's
+/// lookup and the reservation must refuse with 503 state_changed and run no
+/// native handler.
+#[test]
+fn reservation_refuses_when_enrollment_kid_becomes_registered() {
+    let clock = ScriptedClock::new(&[100]);
+    let (_sandbox, store) = open_store(&clock);
+    let inner = Arc::new(MemoryState::new());
+    let seed = digest("enroll-key");
+    let signing = SigningKey::from_bytes(&seed);
+    let public = signing.verifying_key().to_bytes();
+    let kid = key_id(&public);
+    let raw_code: [u8; 32] = Sha256::digest(b"invite-code").into();
+    let code = encode_b64url(&raw_code);
+    let invite_id = encode_b64url(&Sha256::digest(&raw_code));
+    inner
+        .update(&mut |edit| {
+            edit.put_invite(InviteRecord {
+                invite_id,
+                admin: false,
+                created_by: "root".to_owned(),
+                created_at: 0,
+                expires_at: 1_000_000_000_000,
+                key_ttl_seconds: None,
+            });
+            Ok(())
+        })
+        .unwrap();
+    let body = format!(
+        r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"jack.enroll","arguments":{{"code":"{code}","public_key":"{}"}}}}}}"#,
+        encode_b64url(&public)
+    )
+    .into_bytes();
+    let nonce = encode_b64url(&digest("candidate-vector/nonce/enroll")[..16]);
+    let request_signing = request_signing_string("POST", "/mcp", AUD, &kid, 100, &nonce, &body);
+    let sig = encode_b64url(&signing.sign(request_signing.as_bytes()).to_bytes());
+    let request = Request {
+        method: "POST".to_owned(),
+        target: "/mcp".to_owned(),
+        auth_values: vec![format_request_auth(&RequestAuth {
+            kid: kid.clone(),
+            ts: 100,
+            nonce,
+            sig,
+        })],
+        body,
+    };
+    let native = Arc::new(CountingNative {
+        calls: AtomicUsize::new(0),
+    });
+    // The wrapper registers the kid on the SECOND lookup (reservation time).
+    let wrapper = Arc::new(MutatingState {
+        inner: Arc::clone(&inner),
+        kid: kid.clone(),
+        entry: RegistryEntry {
+            kid,
+            public_key: encode_b64url(&public),
+            name: "late-registration".to_owned(),
+            admin: false,
+            not_before: None,
+            not_after: None,
+        },
+        lookups: AtomicUsize::new(0),
+        mutate_on: 2,
+        kind: Mutation::Register,
+    });
+    let verifier = verifier_with_state(
+        &store,
+        Arc::clone(&wrapper) as Arc<dyn StateStore>,
+        &clock,
+        Some(Arc::clone(&native) as Arc<dyn NativeTools>),
+    );
+    let result = verifier.verify(&request);
+    assert_eq!(result.http_status, 503, "code: {}", result.code);
+    assert_eq!(result.code, "state_changed");
+    assert!(!result.nonce_recorded);
+    assert_eq!(native.calls.load(Ordering::SeqCst), 0, "handler ran");
+    let info = nonce_store_info(&store);
+    assert_eq!(info.live, 0);
+    assert_eq!(info.intents, 0);
+    assert!(!info.dirty);
+}
+
+/// Go rejects a durable window below 0 or above 120 at construction; the
+/// Rust builder is infallible, so the refusal latches and fails closed.
+#[test]
+fn durable_window_out_of_bounds_fails_closed() {
+    let clock = ScriptedClock::new(&[100]);
+    let (_sandbox, store) = open_store(&clock);
+    let state = Arc::new(MemoryState::new());
+    let request = signed_get(&state, 100, "bad-window");
+    let config = Config {
+        aud: AUD.to_owned(),
+        state: Arc::clone(&state) as Arc<dyn StateStore>,
+        nonces: Arc::new(NonceStore::new()),
+        audit: None,
+        native: None,
+        window_seconds: 121,
+        now: clock.verifier_clock(),
+    };
+    let verifier = Verifier::new(config)
+        .expect("verifier config")
+        .with_durable_nonces(Arc::clone(&store));
+    let result = verifier.verify(&request);
+    assert!(!result.accepted);
+    assert_eq!(result.http_status, 500);
+    assert_eq!(result.code, "internal_error");
+    assert!(!result.nonce_recorded);
+    let info = nonce_store_info(&store);
+    assert_eq!(info.live, 0);
+}

@@ -690,5 +690,130 @@ pub(crate) fn decode_state(bytes: &[u8]) -> Result<DurableState, DurableStoreErr
             }
         }
     }
+    // Canonical round-trip (spec section 3 noncanonical rule): the in-memory
+    // maps re-sort rows, so re-encode and require an exact byte match; any
+    // difference (unsorted rows/index entries, duplicates, trailing bytes)
+    // is a reject. One encode, one compare: linear cost.
+    if encode_state(&state)? != bytes {
+        return Err(DurableStoreError::InvalidStore);
+    }
     Ok(state)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use crate::encoding::{decode_b64url, encode_b64url};
+
+    const WINDOW: i64 = 30;
+
+    fn b64(seed: u8, size: usize) -> String {
+        let bytes: Vec<u8> = (0..size)
+            .map(|i| seed.wrapping_add((i as u8).wrapping_mul(7)))
+            .collect();
+        encode_b64url(&bytes)
+    }
+
+    fn key_of(seed: u8) -> [u8; 48] {
+        let mut key = [0; 48];
+        key[..32].copy_from_slice(&decode_b64url(&b64(seed, 32)).unwrap());
+        key[32..].copy_from_slice(&decode_b64url(&b64(seed.wrapping_add(1), 16)).unwrap());
+        key
+    }
+
+    fn receipt(metadata: &DurableMetadata, seed: u8, ts: i64) -> DurableReceipt {
+        let key = key_of(seed);
+        let signature = decode_b64url(&b64(9, 64)).unwrap();
+        let request_hash = decode_b64url(&b64(10, 32)).unwrap();
+        DurableReceipt {
+            version: FORMAT_VERSION,
+            deployment: metadata.deployment.clone(),
+            store_generation: metadata.generation,
+            owner_generation: metadata.owner,
+            intent_id: intent_id(metadata, &key, &signature, &request_hash, &[seed; 16]),
+            operation_id: [seed; 16],
+            kid: encode_b64url(&key[..32]),
+            nonce: encode_b64url(&key[32..]),
+            signature: b64(9, 64),
+            request_hash: b64(10, 32),
+            timestamp: ts,
+            retain_until: ts + metadata.window,
+            high_water: ts,
+        }
+    }
+
+    /// A clean store with two live rows (keys ascending by seed), fully
+    /// index-consistent, encoded by the normal encoder.
+    fn two_row_file() -> Vec<u8> {
+        let mut state =
+            DurableState::fresh("round-trip-deployment".into(), [9; 16], 3, 5, WINDOW, 100);
+        state.metadata.dirty = false;
+        state.metadata.live = 2;
+        for seed in [1u8, 2] {
+            let receipt = receipt(&state.metadata, seed, 100);
+            state
+                .expiry
+                .insert(expiry_key(receipt.retain_until, &key_of(seed)));
+            state.operations.insert(receipt.operation_id, key_of(seed));
+            state.live.insert(key_of(seed), receipt);
+        }
+        encode_state(&state).unwrap()
+    }
+
+    #[test]
+    fn encoder_output_still_loads() {
+        let bytes = two_row_file();
+        let state = decode_state(&bytes).unwrap();
+        // Positive control: the decoded state re-encodes to the exact bytes.
+        assert_eq!(encode_state(&state).unwrap(), bytes);
+    }
+
+    #[test]
+    fn unsorted_rows_are_rejected() {
+        let bytes = two_row_file();
+        let metadata_offset = FILE_MAGIC.len();
+        let metadata_length =
+            u16::from_be_bytes([bytes[metadata_offset], bytes[metadata_offset + 1]]) as usize;
+        let rows = metadata_offset + 2 + metadata_length + 4;
+        let block = 48 + RECORD_BYTES;
+        let mut tampered = bytes.clone();
+        let first = bytes[rows..rows + block].to_vec();
+        let second = bytes[rows + block..rows + 2 * block].to_vec();
+        tampered[rows..rows + block].copy_from_slice(&second);
+        tampered[rows + block..rows + 2 * block].copy_from_slice(&first);
+        // Every record is individually valid and the maps re-sort, so only the
+        // canonical round-trip can catch the descending row order.
+        assert!(matches!(
+            decode_state(&tampered),
+            Err(DurableStoreError::InvalidStore)
+        ));
+    }
+
+    #[test]
+    fn unsorted_expiry_entries_are_rejected() {
+        let bytes = two_row_file();
+        let metadata_offset = FILE_MAGIC.len();
+        let metadata_length =
+            u16::from_be_bytes([bytes[metadata_offset], bytes[metadata_offset + 1]]) as usize;
+        let expiry = metadata_offset + 2 + metadata_length + 4 + 2 * (48 + RECORD_BYTES) + 4;
+        let mut tampered = bytes.clone();
+        let first = bytes[expiry..expiry + 56].to_vec();
+        let second = bytes[expiry + 56..expiry + 112].to_vec();
+        tampered[expiry..expiry + 56].copy_from_slice(&second);
+        tampered[expiry + 56..expiry + 112].copy_from_slice(&first);
+        assert!(matches!(
+            decode_state(&tampered),
+            Err(DurableStoreError::InvalidStore)
+        ));
+    }
+
+    #[test]
+    fn trailing_bytes_are_rejected() {
+        let mut bytes = two_row_file();
+        bytes.push(b' ');
+        assert!(matches!(
+            decode_state(&bytes),
+            Err(DurableStoreError::InvalidStore)
+        ));
+    }
 }

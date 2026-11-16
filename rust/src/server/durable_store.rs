@@ -369,13 +369,16 @@ impl<C: FnMut() -> i64> Session<C> {
         unavailable()
     }
 
-    fn persist(&mut self) -> Result<(), DurableStoreError> {
-        let bytes = encode_state(&self.state)?;
+    fn persist(&self, state: &DurableState) -> Result<(), DurableStoreError> {
+        let bytes = encode_state(state)?;
         write_snapshot(&self.owner, &bytes)
     }
 
-    /// One durable transaction: apply, then atomically persist. An uncertain
-    /// persist fences the store; callback refusals fence when 503-class.
+    /// One durable transaction: apply to a staged copy and replace the
+    /// in-memory state only after a successful persist (Go: transaction.go
+    /// rolls the tx back and keeps `s.meta` untouched on refusal). A definite
+    /// callback refusal therefore never leaks a purge or high-water raise that
+    /// disk does not hold; an uncertain persist fences the store.
     fn update(
         &mut self,
         apply: impl FnOnce(&mut DurableState) -> Result<(), DurableAdmissionError>,
@@ -383,10 +386,14 @@ impl<C: FnMut() -> i64> Session<C> {
         if self.blocked() {
             return Err(unavailable());
         }
-        match apply(&mut self.state) {
+        let mut staged = self.state.clone();
+        match apply(&mut staged) {
             Err(error) => Err(error),
-            Ok(()) => match self.persist() {
-                Ok(()) => Ok(()),
+            Ok(()) => match self.persist(&staged) {
+                Ok(()) => {
+                    self.state = staged;
+                    Ok(())
+                }
                 Err(_) => Err(self.fence_unavailable()),
             },
         }
@@ -696,10 +703,12 @@ pub struct DurableNonceStore<C: FnMut() -> i64> {
 impl<C: FnMut() -> i64> DurableNonceStore<C> {
     fn lock(&self) -> MutexGuard<'_, Session<C>> {
         // A panic while holding the lock can only come from allocation inside
-        // BTreeMap operations; the store must fence rather than die silently.
-        self.session
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        // BTreeMap operations; the lock is then poisoned and the store must
+        // fence rather than continue (Go fences on any panic: admit.go).
+        self.session.lock().unwrap_or_else(|poisoned| {
+            self.shared.fenced.store(true, Ordering::SeqCst);
+            poisoned.into_inner()
+        })
     }
 
     /// Explicit out-of-band initialization for a proven never-used deployment
@@ -776,6 +785,14 @@ impl<C: FnMut() -> i64> DurableNonceStore<C> {
             if state.metadata.dirty || state.metadata.unsafe_latched {
                 return Err(DurableStoreError::RecoveryRequired);
             }
+            // A clean marker never proves a quiet store: unresolved intents or
+            // a tombstone cap at the recovery boundary still fail closed
+            // (Go: snapshot.go requireReady checks).
+            if state.metadata.intents != 0
+                || counter_to_usize(state.metadata.tombstones) >= MAX_TOMBSTONES
+            {
+                return Err(DurableStoreError::RecoveryRequired);
+            }
             Ok(state)
         })();
         let mut state = match loaded {
@@ -825,14 +842,21 @@ impl<C: FnMut() -> i64> DurableNonceStore<C> {
     /// when not fenced (Go: Close). The owner marker is released either way;
     /// a fenced close still leaves the persisted state fail-closed.
     pub fn close(&self) -> Result<(), DurableStoreError> {
+        {
+            let mut session = self.lock();
+            if session.shared.closed.load(Ordering::SeqCst) {
+                return Ok(());
+            }
+            session.shared.closing.store(true, Ordering::SeqCst);
+        }
+        // Drain leases outside the lock (Go: Close sets `closing` under the
+        // lock and waits via the lease WaitGroup outside it): a lease holder
+        // may need the mutex and the runtime to finish. Short sleeps keep the
+        // drain from burning a core.
+        while self.shared.leases.load(Ordering::SeqCst) != 0 {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         let mut session = self.lock();
-        if session.shared.closed.load(Ordering::SeqCst) {
-            return Ok(());
-        }
-        session.shared.closing.store(true, Ordering::SeqCst);
-        while session.shared.leases.load(Ordering::SeqCst) != 0 {
-            std::thread::yield_now();
-        }
         let mut result = Ok(());
         if session.shared.fenced.load(Ordering::SeqCst) {
             result = Err(DurableStoreError::RecoveryRequired);
@@ -845,7 +869,7 @@ impl<C: FnMut() -> i64> DurableNonceStore<C> {
         }
         if !session.shared.fenced.load(Ordering::SeqCst) {
             session.state.metadata.dirty = false;
-            if session.persist().is_err() {
+            if session.persist(&session.state).is_err() {
                 session.fence();
                 result = Err(DurableStoreError::Unavailable);
             }
@@ -869,8 +893,12 @@ impl<C: FnMut() -> i64> DurableNonceStore<C> {
         // Only a non-definite outcome fences (Go definiteStorageRefusal): a 401, a
         // state_changed or a capacity_exhausted refusal leaves the store serving.
         if let Err(error) = &result {
-            let definite =
-                error.status != 503 || matches!(error.code, "state_changed" | "capacity_exhausted");
+            // A refusal caused by closing/closed is not an uncertainty
+            // (Go: reserveLocked returns plain unavailable while closing).
+            let definite = self.shared.closing.load(Ordering::SeqCst)
+                || self.shared.closed.load(Ordering::SeqCst)
+                || error.status != 503
+                || matches!(error.code, "state_changed" | "capacity_exhausted");
             if !definite {
                 self.shared.fenced.store(true, Ordering::SeqCst);
             }
@@ -922,7 +950,7 @@ impl<C: FnMut() -> i64> DurableNonceStore<C> {
                 RecordKind::Tombstone => session.state.metadata.tombstones += 1,
             }
         }
-        session.persist()
+        session.persist(&session.state)
     }
 }
 

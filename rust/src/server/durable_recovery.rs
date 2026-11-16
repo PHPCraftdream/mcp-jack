@@ -106,6 +106,13 @@ pub fn reconcile_unknown(
     let reconciled = (|| {
         let bytes = read_state_bytes(&owner)?;
         let mut state = decode_state(&bytes)?;
+        // Deployment and window mismatch is ErrInvalidStore for both inspect
+        // and reconcile (Go: readStoreSnapshot via loadRecoverySnapshot).
+        if state.metadata.deployment != options.deployment_id
+            || state.metadata.window != options.window
+        {
+            return Err(DurableStoreError::InvalidStore);
+        }
         if !state.metadata.dirty || snapshot_hash(&state)? != expected_hash {
             return Err(DurableStoreError::RecoveryRequired);
         }
@@ -164,4 +171,155 @@ fn move_row_to_tombstone(
     }
     state.metadata.tombstones += 1;
     Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::{inspect_recovery, reconcile_unknown};
+    use crate::encoding::{decode_b64url_fixed, encode_b64url};
+    use crate::server::durable_format::{
+        intent_id, DurableMetadata, DurableReceipt, DurableRecord, DurableStoreError, RecordKind,
+        FORMAT_VERSION,
+    };
+    use crate::server::durable_store::{DurableNonceStore, DurableStoreOptions};
+    use std::fs;
+    use std::os::unix::fs::DirBuilderExt;
+    use std::path::PathBuf;
+
+    const WINDOW: i64 = 30;
+
+    fn b64(seed: u8, size: usize) -> String {
+        let bytes: Vec<u8> = (0..size)
+            .map(|i| seed.wrapping_add((i as u8).wrapping_mul(7)))
+            .collect();
+        encode_b64url(&bytes)
+    }
+
+    fn options() -> DurableStoreOptions {
+        DurableStoreOptions {
+            deployment_id: "reconcile-guard-deployment".into(),
+            window: WINDOW,
+        }
+    }
+
+    fn clock(samples: &[i64]) -> impl FnMut() -> i64 {
+        let queue = std::cell::RefCell::new(samples.to_vec());
+        move || {
+            let mut queue = queue.borrow_mut();
+            let sample = queue[0];
+            if queue.len() > 1 {
+                queue.remove(0);
+            }
+            sample
+        }
+    }
+
+    struct Sandbox(PathBuf);
+
+    impl Sandbox {
+        fn new() -> Self {
+            let mut random = [0; 16];
+            getrandom::fill(&mut random).unwrap();
+            let path = std::env::temp_dir().join(format!(
+                "jack-rust-durable-recovery-{}",
+                encode_b64url(&random)
+            ));
+            fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
+            Self(path)
+        }
+
+        fn file(&self) -> PathBuf {
+            self.0.join("nonce-store")
+        }
+    }
+
+    impl Drop for Sandbox {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn receipt(metadata: &DurableMetadata, ts: i64) -> DurableReceipt {
+        let kid = b64(3, 32);
+        let nonce = b64(4, 16);
+        let mut key = [0; 48];
+        key[..32].copy_from_slice(&decode_b64url_fixed(&kid, 32).unwrap());
+        key[32..].copy_from_slice(&decode_b64url_fixed(&nonce, 16).unwrap());
+        let signature = decode_b64url_fixed(&b64(9, 64), 64).unwrap();
+        let request_hash = decode_b64url_fixed(&b64(10, 32), 32).unwrap();
+        DurableReceipt {
+            version: FORMAT_VERSION,
+            deployment: metadata.deployment.clone(),
+            store_generation: metadata.generation,
+            owner_generation: metadata.owner,
+            intent_id: intent_id(metadata, &key, &signature, &request_hash, &[7; 16]),
+            operation_id: [7; 16],
+            kid,
+            nonce,
+            signature: b64(9, 64),
+            request_hash: b64(10, 32),
+            timestamp: ts,
+            retain_until: ts + metadata.window,
+            high_water: ts,
+        }
+    }
+
+    /// Builds a dirty store holding one unresolved intent; reconcile is the
+    /// only way back (mirrors the Go ReconcileUnknown test setup).
+    fn dirty_intent_store(sandbox: &Sandbox) -> (String, DurableReceipt) {
+        DurableNonceStore::initialize_unused(&sandbox.file(), &options(), clock(&[100])).unwrap();
+        let store = DurableNonceStore::open(&sandbox.file(), &options(), clock(&[100])).unwrap();
+        let metadata = store.snapshot_metadata();
+        let claim = receipt(&metadata, 100);
+        store
+            .seed_records(&[DurableRecord {
+                kind: RecordKind::Intent,
+                key: {
+                    let mut key = [0; 48];
+                    key[..32].copy_from_slice(&decode_b64url_fixed(&claim.kid, 32).unwrap());
+                    key[32..].copy_from_slice(&decode_b64url_fixed(&claim.nonce, 16).unwrap());
+                    key
+                },
+                store_id: metadata.store_id,
+                receipt: claim.clone(),
+            }])
+            .unwrap();
+        // The outstanding intent keeps the dirty epoch: close is fenced.
+        assert_eq!(
+            store.close().unwrap_err(),
+            DurableStoreError::RecoveryRequired
+        );
+        let snapshot = inspect_recovery(&sandbox.file(), &options()).unwrap();
+        assert_eq!(snapshot.intents.len(), 1);
+        (snapshot.hash, claim)
+    }
+
+    #[test]
+    fn reconcile_refuses_deployment_or_window_mismatch() {
+        let sandbox = Sandbox::new();
+        let (hash, claim) = dirty_intent_store(&sandbox);
+
+        // Deployment mismatch: ErrInvalidStore (Go: readStoreSnapshot), not a
+        // silent reconcile under foreign identity options.
+        let mut wrong = options();
+        wrong.deployment_id = "other-deployment".into();
+        assert_eq!(
+            reconcile_unknown(&sandbox.file(), &wrong, &hash, &claim).unwrap_err(),
+            DurableStoreError::InvalidStore
+        );
+
+        // Window mismatch: same ErrInvalidStore refusal.
+        let mut wrong = options();
+        wrong.window = 60;
+        assert_eq!(
+            reconcile_unknown(&sandbox.file(), &wrong, &hash, &claim).unwrap_err(),
+            DurableStoreError::InvalidStore
+        );
+
+        // Matching options still reconcile the exact row to a tombstone.
+        reconcile_unknown(&sandbox.file(), &options(), &hash, &claim).unwrap();
+        let after = inspect_recovery(&sandbox.file(), &options()).unwrap();
+        assert_eq!(after.tombstones.len(), 1);
+        assert!(after.intents.is_empty() && after.live.is_empty());
+    }
 }
