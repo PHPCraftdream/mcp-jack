@@ -11,5 +11,16 @@ pub mod state;
 pub mod state_file;
 pub mod verify;
 
+#[cfg(target_os = "linux")]
+pub mod durable_admission;
+#[cfg(target_os = "linux")]
+pub mod durable_format;
+#[cfg(target_os = "linux")]
+pub mod durable_recovery;
+#[cfg(target_os = "linux")]
+pub mod durable_store;
+#[cfg(all(test, target_os = "linux"))]
+mod durable_store_tests;
+
 #[cfg(feature = "http")]
 pub mod http;

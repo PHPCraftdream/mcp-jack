@@ -389,13 +389,18 @@ where
             body: buffered.to_vec(),
         };
         let res = self.verifier.verify(&vreq);
-        if !res.accepted {
-            return Ok(self.reject(&res));
-        }
-        if res.native {
-            return Ok(self.native(&res));
-        }
-        self.forward(parts, buffered, &res).await
+        let response = if !res.accepted {
+            self.reject(&res)
+        } else if res.native {
+            self.native(&res)
+        } else {
+            self.forward(parts, buffered, &res).await?
+        };
+        // The durable admission is finished only after the response is
+        // produced, on every path (Go middleware: `defer res.Done()`).
+        #[cfg(target_os = "linux")]
+        drop(res.admission);
+        Ok(response)
     }
 
     /// Reads the whole body into memory enforcing `limit` on the fly
