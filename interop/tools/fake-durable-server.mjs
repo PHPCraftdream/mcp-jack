@@ -5,7 +5,8 @@
 // The dirty gate is {clean:false}, written at startup BEFORE the ready line and
 // rewritten {clean:true} only on a clean stop (stdin EOF / SIGTERM); SIGKILL
 // therefore leaves the store dirty and the next start refuses.
-// With JACK_FAKE_DEVIATE set, every request is refused 401 bad_signature.
+// With JACK_FAKE_DEVIATE=forget the server never records a committed nonce, so a
+// byte-identical replay after a restart is accepted (a scenario failure, exit 1).
 import { createHash, createPrivateKey, createPublicKey } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -97,12 +98,10 @@ const server = http.createServer((req, res) => {
   if (!m) return send(401, '{"error":{"code":"missing_auth"}}');
   const ts = parseInt(m[1], 10);
   const key = `${ts}:${m[2]}`;
-  // Deviation control: emulate an invalid signature; no reservation is made.
-  if (process.env.JACK_FAKE_DEVIATE) return send(401, '{"error":{"code":"bad_signature"}}');
   const now = nowSec();
   if (committed[key]) return send(401, '{"error":{"code":"replayed_nonce"}}');
   // Expired pair: retention lapsed inclusively, allow and re-commit.
-  committed[key] = true;
+  if (process.env.JACK_FAKE_DEVIATE !== 'forget') committed[key] = true;
   send(200, '{"jsonrpc":"2.0","id":null,"result":{}}');
 });
 server.listen(0, '127.0.0.1', () => {

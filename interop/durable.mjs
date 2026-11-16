@@ -638,7 +638,7 @@ async function selfTest() {
   try {
     const negative = await new Promise((res2) => {
       const child = spawn(process.execPath, [join(SCRIPT_DIR, 'durable.mjs'), '--targets', targetsPath, '--servers', 'fake', '--clients', 'fake'], {
-        cwd: REPO_ROOT, env: { ...process.env, JACK_FAKE_DEVIATE: '1' }, stdio: ['ignore', 'pipe', 'pipe'],
+        cwd: REPO_ROOT, env: { ...process.env, JACK_FAKE_DEVIATE: 'forget' }, stdio: ['ignore', 'pipe', 'pipe'],
       });
       let out = '';
       child.stdout.on('data', (d) => { out += d; });
