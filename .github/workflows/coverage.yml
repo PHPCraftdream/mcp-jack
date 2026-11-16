@@ -79,10 +79,8 @@ jobs:
         run: node --test ../tools/coverage/lcov-summary.test.mjs
       - name: Create the coverage output directory
         run: mkdir -p ../coverage/rust
-      # One test thread: LLVM profile counters are not atomic, so parallel tests lose
-      # increments and a derived line count can underflow (lcov-summary rejects it).
       - name: Run the Rust test suite with LLVM coverage (all features)
-        run: cargo llvm-cov --locked --all-features --lcov --output-path ../coverage/rust/lcov.info -- --test-threads=1
+        run: cargo llvm-cov --locked --all-features --lcov --output-path ../coverage/rust/lcov.info
       - name: Annotated line report
         run: cargo llvm-cov report --text --output-path ../coverage/rust/report.txt
       - name: Partitioned product/helper summary
