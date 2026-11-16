@@ -136,7 +136,7 @@ The server can rotate its response-signing key without re-pinning clients. One `
 
 | # | Limitation |
 |---|---|
-| 1 | No operator recovery command after an abnormal stop (kill, OOM, power loss): nonce and ring stores stay dirty/unknown and every entry point refuses to serve (fail closed). Recovery is a manual operator procedure ([docs/operations.md](docs/operations.md)). |
+| 1 | Recovery after an abnormal stop (kill, OOM, power loss) is a manual operator procedure: nonce and ring stores stay dirty/unknown and every entry point refuses to serve (fail closed) until it completes. The Go CLI ships `nonce-inspect` and `nonce-reconcile-terminal`; Rust and TypeScript expose library recovery functions only ([docs/operations.md](docs/operations.md)). |
 | 2 | One owner of the nonce/ring state per deployment; no cluster or HA mode. |
 | 3 | Upstream servers that answer with SSE are unsupported: the gateway closes the stream and answers a signed 501 (the official TypeScript MCP server 2.4.0 answers initialize with text/event-stream even in JSON response mode). |
 | 4 | Bounded MCP profile: legacy Streamable HTTP 2025-11-25 entered through stdio, one JSON-RPC object per POST, no sessions, no GET stream. |
@@ -145,8 +145,8 @@ The server can rotate its response-signing key without re-pinning clients. One `
 | 7 | Audit delivery is best effort. |
 | 8 | Rust and TypeScript are covered by deterministic property/mutation tests and a shared corpus, not coverage-guided fuzzing (Go has a bounded fuzz campaign). |
 | 9 | The release has had no human or third-party audit. It has had an internal pre-review ([docs/security-review-package.md](docs/security-review-package.md)) and an independent AI review that read the source without running it ([docs/independent-review.md](docs/independent-review.md)). |
-| 10 | Only the Go SDK and the CLI gateway have the durable nonce store; Rust and TypeScript servers keep nonces in memory. |
-| 11 | A forward clock jump latches the durable stores unsafe for good and there is no recovery command, and unauthenticated load is limited only by the gateway's global admission limits; see "Operational limits to plan for" in [docs/operations.md](docs/operations.md). |
+| 10 | All three SDKs ship the durable nonce store (Linux-only file-backed stores, explicit opt-in). The operator recovery CLI commands exist only in the Go `jack` CLI; Rust and TypeScript expose library recovery functions only. |
+| 11 | A forward clock jump latches the durable stores unsafe for good and no command in any SDK clears the latch, and unauthenticated load is limited only by the gateway's global admission limits; see "Operational limits to plan for" in [docs/operations.md](docs/operations.md). |
 
 See also [docs/operations.md](docs/operations.md) and [docs/threat-model.md](docs/threat-model.md).
 
