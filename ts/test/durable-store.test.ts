@@ -13,7 +13,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { bodyHash, decodeBase64URLFixed, encodeBase64URL } from "../src/encoding.js";
 import { DurableNonceStore } from "../src/server/durable-store.js";
 import { intentIdOf, pairKeyOf } from "../src/server/durable-format.js";
-import type { DurableStoreOptions } from "../src/server/durable-store.js";
+import type { DurableStoreOptions as RootDurableStoreOptions } from "../src/index.js";
+import type { DurableStoreInternalOptions } from "../src/server/durable-store-internal.js";
 import type { DurableDocument, DurableMetadata, DurableReceipt } from "../src/server/durable-format.js";
 import { JackError } from "../src/errors.js";
 
@@ -22,6 +23,22 @@ const DEPLOYMENT = "durable-store-test-deployment";
 const WINDOW = 30;
 
 type Inject = (phase: "intent" | "final") => "commit" | "abort" | undefined;
+type Same<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Check<T extends true> = T;
+type RootOptionsKeysAreBounded = Check<Same<keyof RootDurableStoreOptions, "deploymentId" | "window" | "now">>;
+
+const transactionInjectionIsInternal: RootDurableStoreOptions = {
+  deploymentId: DEPLOYMENT,
+  window: WINDOW,
+  // @ts-expect-error transaction injection is not part of the package-root options.
+  injectTransactionFailure: () => undefined,
+};
+const operationIdInjectionIsInternal: RootDurableStoreOptions = {
+  deploymentId: DEPLOYMENT,
+  window: WINDOW,
+  // @ts-expect-error operation-id injection is not part of the package-root options.
+  injectOperationId: () => "test-operation",
+};
 
 function directory(): { dir: string; path: string } {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "mcp-jack-durable-store-")));
@@ -39,7 +56,7 @@ function scriptClock(...values: number[]): () => number {
   };
 }
 
-function options(now: () => number, inject?: Inject): DurableStoreOptions {
+function options(now: () => number, inject?: Inject): DurableStoreInternalOptions {
   return inject === undefined
     ? { deploymentId: DEPLOYMENT, window: WINDOW, now }
     : { deploymentId: DEPLOYMENT, window: WINDOW, now, injectTransactionFailure: inject };
@@ -254,7 +271,7 @@ test("durable store: unknown final commit fences and reconciles found and absent
     }
   });
 
-test("durable store: reconcile refuses clean stores and wrong hashes; inspect refuses an open owner",
+test("durable store: reconcile refuses clean stores and stale dirty snapshot hashes; inspect refuses an open owner",
   { skip: !linux }, (context) => {
     const { dir, path } = directory();
     context.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -268,12 +285,32 @@ test("durable store: reconcile refuses clean stores and wrong hashes; inspect re
     // Inspection requires the exclusive owner to be gone.
     assert.throws(() => DurableNonceStore.inspectRecovery(path, config), unavailable);
     store.close();
-    const snapshot = DurableNonceStore.inspectRecovery(path, config);
-    assert.equal(snapshot.dirty, false);
-    assert.throws(() => DurableNonceStore.reconcileUnknown(path, config, snapshot.hash,
-      snapshot.live[0] as DurableReceipt), unavailable, "a clean store is not reconcilable");
-    assert.throws(() => DurableNonceStore.reconcileUnknown(path, config, "wrong-hash",
-      snapshot.live[0] as DurableReceipt), unavailable, "a stale hash is not reconcilable");
+    const clean = DurableNonceStore.inspectRecovery(path, config);
+    assert.equal(clean.dirty, false);
+    assert.throws(() => DurableNonceStore.reconcileUnknown(path, config, clean.hash,
+      clean.live[0] as DurableReceipt), unavailable, "a clean store is not reconcilable");
+
+    const dirtyPath = join(dir, "dirty-hash-change");
+    const intent = rowFor("reconcile-hash-change", 0);
+    DurableNonceStore.seedDocumentForTest(dirtyPath, doc(meta({ dirty: true }), [], [intent], []));
+    const before = DurableNonceStore.inspectRecovery(dirtyPath, config);
+    assert.equal(before.dirty, true);
+    const changedMeta = meta({ dirty: true, highWater: 101, storeId: before.storeId });
+    DurableNonceStore.seedDocumentForTest(dirtyPath, doc(changedMeta, [], [intent], []));
+    const changed = DurableNonceStore.inspectRecovery(dirtyPath, config);
+    // Go durable/recovery_snapshot.go and recovery_reconcile.go:86; spec/candidate/durable-nonces.md §3/§4.
+    assert.notEqual(changed.hash, before.hash, "a legitimate metadata change changes the recovery snapshot hash");
+    assert.equal(changed.dirty, true, "snapshot mutation keeps the recovery fence");
+    assert.deepEqual(changed.intents[0], intent, "the exact intent receipt remains valid after snapshot mutation");
+    assert.throws(() => DurableNonceStore.reconcileUnknown(dirtyPath, config, before.hash, intent),
+      (error: unknown) => error instanceof JackError && error.httpStatus === 503 &&
+        error.message === "durable: recovery required",
+      "a stale snapshot hash is rejected even when its receipt remains exact");
+    DurableNonceStore.reconcileUnknown(dirtyPath, config, changed.hash, intent);
+    const reconciled = DurableNonceStore.inspectRecovery(dirtyPath, config);
+    assert.equal(reconciled.dirty, true, "reconciliation does not clear the dirty epoch");
+    assert.equal(reconciled.intents.length, 0);
+    assert.equal(reconciled.tombstones.length, 1, "the exact intent becomes terminal");
   });
 
 test("durable store: conversion at 4096 combined entries is permitted; over-cap loads reject", { skip: !linux },
@@ -442,8 +479,8 @@ test("durable store: strict loading rejects tampered and noncanonical documents"
   writeFileSync(tamperedPath, tampered, { mode: 0o600 });
   assert.throws(() => DurableNonceStore.open(tamperedPath, config), unavailable);
 
-  // Trailing bytes are foreign: load refuses.
-  const trailing = Buffer.concat([good, Buffer.from(" junk", "utf8")]);
+  // A second JSON document is trailing input (Go exact stream consumption; spec/candidate/durable-nonces.md §3).
+  const trailing = Buffer.concat([good, Buffer.from("{}", "utf8")]);
   const trailingPath = join(dir, "trailing");
   writeFileSync(trailingPath, trailing, { mode: 0o600 });
   assert.throws(() => DurableNonceStore.open(trailingPath, config), unavailable);

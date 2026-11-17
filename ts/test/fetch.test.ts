@@ -15,8 +15,9 @@ import { MemoryState } from "../src/server/state.js";
 import { Verifier } from "../src/server/verify.js";
 import type { VerifyResult } from "../src/server/verify.js";
 import { jackFetchHandler, jackIdentity, RAW_TARGET_SYMBOL } from "../src/server/fetch.js";
-import type { HandlerConfig, JackRequest } from "../src/server/fetch.js";
+import type { HandlerConfig, JackRequest, ResponseKeyProvider } from "../src/server/fetch.js";
 import type { JackIdentity } from "../src/server/verify.js";
+import type { RotationResponseKeyRequest } from "../src/rotation-server-provider.js";
 import { loadKeys, loadRegistry, type RegistryEntry as FixtureRegistryEntry } from "./fixtures.js";
 import { fixtureAud, fixtureNow, seedSignerByName } from "./client-harness.js";
 
@@ -879,6 +880,81 @@ test("response cap: null and empty bodies are signed 200 with no bytes", async (
     const r = await answer(8, make);
     assert.equal(r.response.status, 200);
     assert.equal((await assertSigned(r.response, r.harness.serverPub, r.sig)).length, 0);
+  }
+});
+
+/** Nonstandard upstream: give a body-bearing Response a no-body status after construction. */
+function nonstandardNoBodyStatus(status: 204 | 205 | 304, withBody = true): { response: Response; upstreamBytes: Uint8Array } {
+  const upstreamBytes = withBody ? utf8(`upstream-${status}`) : new Uint8Array(0);
+  const response = new Response(withBody ? upstreamBytes : null, { headers: UPSTREAM_HEADERS });
+  Object.defineProperty(response, "status", { value: status });
+  return { response, upstreamBytes };
+}
+
+// Spec 01 section 5 binds the signature to the exact transmitted bytes; Fetch drops
+// bodies for these statuses, so the signature input and declared length must be empty.
+test("no-body statuses sign and return only transmitted bytes on static and rotation profiles", async () => {
+  for (const status of [204, 205, 304] as const) {
+    for (const withUpstreamBody of [false, true]) {
+      const expectedUpstreamBytes = withUpstreamBody ? utf8(`upstream-${status}`) : new Uint8Array(0);
+      let observedUpstreamBytes: Uint8Array | undefined;
+      const next = (): Response => {
+        const upstream = nonstandardNoBodyStatus(status, withUpstreamBody);
+        observedUpstreamBytes = upstream.upstreamBytes;
+        return upstream.response;
+      };
+      const r = await answer(undefined, next);
+      assert.equal(r.response.status, status);
+      assert.equal(r.response.headers.get("content-length"), "0");
+      if (withUpstreamBody) {
+        assert.ok(observedUpstreamBytes !== undefined && observedUpstreamBytes.length > 0, "nonstandard upstream body must be present");
+        assert.deepEqual(observedUpstreamBytes, expectedUpstreamBytes);
+      }
+      assert.equal(r.response.body, null);
+      assert.deepEqual(await assertSigned(r.response, r.harness.serverPub, r.sig), new Uint8Array(0));
+    }
+  }
+
+  const server = seedByName("svc").signer;
+  for (const status of [204, 205, 304] as const) {
+    for (const withUpstreamBody of [false, true]) {
+      const requested: RotationResponseKeyRequest[] = [];
+      const provider: ResponseKeyProvider = {
+        authorizeResponse(input) {
+          requested.push({ ...input, body: Uint8Array.from(input.body) });
+          return {
+            signer: {
+              publicKeyB64u: encodeBase64URL(server.publicKey()),
+              publicKey: () => server.publicKey(),
+              sign: (message: Uint8Array) => server.sign(message),
+            },
+            timestamp: fixtureNow,
+            final: (): void => {},
+            release: (): void => {},
+          };
+        },
+      };
+      const verifier = new Verifier({
+        aud: fixtureAud,
+        state: newRegistryState(),
+        nonces: new NonceStore(),
+        now: () => fixtureNow,
+      });
+      const handle = jackFetchHandler({ verifier, rotationKeys: provider }, async () => {
+        const upstream = nonstandardNoBodyStatus(status, withUpstreamBody);
+        assert.equal(upstream.upstreamBytes.length > 0, withUpstreamBody, "upstream body setup matches this case");
+        return upstream.response;
+      });
+      const { request, sig } = signedRequest(aliceSigner(), "GET", "/mcp", new Uint8Array(0));
+      const response = await handle(request);
+      assert.equal(response.status, status);
+      assert.equal(response.headers.get("content-length"), "0");
+      assert.equal(response.body, null);
+      assert.deepEqual(await assertSigned(response, server.publicKey(), sig), new Uint8Array(0));
+      assert.equal(requested.length, 1);
+      assert.equal(requested[0]?.status, status);
+      assert.deepEqual(requested[0]?.body, new Uint8Array(0), "rotation authorization receives the transmitted body bytes");
+    }
   }
 });
 

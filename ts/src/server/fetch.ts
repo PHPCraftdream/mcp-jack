@@ -254,12 +254,15 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
   }
 
   // Signs the response over its status, the request signature and the exact
-  // body bytes (spec 01 section 5) — with the INJECTED verifier clock on the
-  // static profile, with the rotation profile's selected signer, fresh-sample
-  // timestamp and final gate otherwise — and writes it.
+  // body bytes that can be transmitted (spec 01 section 5). Fetch forbids
+  // response bodies for 204/205/304, so normalize before static signing or
+  // rotation authorization can observe the bytes. The static profile uses the
+  // INJECTED verifier clock; rotation uses its selected signer, fresh-sample
+  // timestamp and final gate otherwise.
   function writeSigned(status: number, headers: Headers, body: Uint8Array, requestSig: string, tool: string, statusText = ""): Response {
+    const transmittedBody = status === 204 || status === 205 || status === 304 ? new Uint8Array(0) : body;
     if (rotation !== undefined) {
-      return writeAuthorized(rotation, status, headers, body, requestSig, tool, statusText);
+      return writeAuthorized(rotation, status, headers, transmittedBody, requestSig, tool, statusText);
     }
     if (priv === undefined) {
       // Unreachable: the rotation profile owns every response when configured;
@@ -267,10 +270,10 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
       return writeError(500, "internal_error", "internal error");
     }
     const now = config.verifier.clock();
-    const signing = responseSigningString(status, requestSig, kid, now, body);
+    const signing = responseSigningString(status, requestSig, kid, now, transmittedBody);
     const sig = sign(null, Buffer.from(signing, "utf-8"), priv);
     headers.set("jack-auth", formatResponseAuth({ kid, ts: now, sig: encodeBase64URL(sig) }));
-    return writeRaw(status, headers, body, statusText);
+    return writeRaw(status, headers, transmittedBody, statusText);
   }
 
   // Rotation profile (Go writeAuthorized): the signer is selected and the
