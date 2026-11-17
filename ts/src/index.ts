@@ -1,4 +1,4 @@
-/** mcp-jack TypeScript server SDK entry point; the modules below mirror the Go jack and server packages. */
+/** SDK entry point (server and namespaced client). */
 export { Code, JackError } from "./errors.js";
 export * from "./auth-header.js";
 export * from "./ed25519.js";
@@ -9,6 +9,10 @@ export * from "./user-key.js";
 export * from "./user-key-transfer.js";
 export * from "./server/audit.js";
 export * from "./server/durable-admission.js";
+export { DurableNonceStore } from "./server/durable-store.js";
+export type { DurableNonceAdmission as DurableNonceStoreRequest, DurableNonceReservation, DurableRecoverySnapshot,
+  DurableStoreOptions, DocView as DurableDocView } from "./server/durable-store.js";
+export type { DurableDocument, DurableMetadata, DurableReceipt } from "./server/durable-format.js";
 export * from "./server/fetch.js";
 export * from "./server/native.js";
 export * from "./server/node.js";

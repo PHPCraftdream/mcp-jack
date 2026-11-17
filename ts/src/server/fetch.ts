@@ -9,7 +9,7 @@ import type { RotationResponseAuthorization, RotationResponseKeyRequest } from "
 import { responseSigningString } from "../signing.js";
 import type { Verifier, VerifyResult } from "./verify.js";
 import type { JackIdentity } from "./verify.js";
-import { markResponseFinish, takeResultFinish } from "./durable-admission.js";
+import { markResponseFinish, takeResultFinish } from "./durable-finish.js";
 
 // Go NewHandler returns errors; the Fetch-standard API has no error return in
 // its factory shape, so configuration problems THROW a plain Error instead.

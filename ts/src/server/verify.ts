@@ -26,7 +26,7 @@ import type { AuditEvent, AuditSink } from "./audit.js";
 import { AUDIT_FAILURE, AUDIT_SUCCESS } from "./audit.js";
 import type { NonceStore } from "./nonce.js";
 import type { DurableAdmission } from "./durable-admission.js";
-import { rememberResultFinish } from "./durable-admission.js";
+import { rememberResultFinish } from "./durable-finish.js";
 import type { RegistryEntry, StateStore } from "./state.js";
 import { inviteIdOf } from "./state.js";
 import { parseJsonRaw } from "../json-raw.js";
