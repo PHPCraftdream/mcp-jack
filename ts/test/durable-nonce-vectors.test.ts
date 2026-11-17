@@ -31,6 +31,7 @@ import { formatRequestAuth } from "../src/auth-header.js";
 import { createPrivateKey, createPublicKey, sign as nodeSign } from "node:crypto";
 import type { KeyObject } from "node:crypto";
 import { DurableNonceStore } from "../src/server/durable-store.js";
+import type { DurableStoreInternalOptions } from "../src/server/durable-store-internal.js";
 import { MemoryState } from "../src/server/state.js";
 import { Verifier } from "../src/server/verify.js";
 import type { NativeCall, NativeResult, NativeTools, VerifyRequest, VerifyResult } from "../src/server/verify.js";
@@ -309,8 +310,7 @@ interface Outcome {
 
 interface Harness {
   readonly path: string;
-  readonly config: { deploymentId: string; window: number; now: () => number;
-    injectTransactionFailure: (phase: "intent" | "final") => "commit" | "abort" | undefined };
+  readonly config: DurableStoreInternalOptions;
   queue(value: number): void;
   store: DurableNonceStore | undefined;
 }

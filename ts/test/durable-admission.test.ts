@@ -28,6 +28,7 @@ import type { VerifyRequest } from "../src/server/verify.js";
 import { jackFetchHandler } from "../src/server/fetch.js";
 import { serveNode } from "../src/server/node.js";
 import { DurableNonceStore } from "../src/server/durable-store.js";
+import type { DurableStoreInternalOptions } from "../src/server/durable-store-internal.js";
 import { DurableNonceAdmission } from "../src/server/durable-admission.js";
 import { takeResultFinish } from "../src/server/durable-finish.js";
 
@@ -663,11 +664,12 @@ test("durable store: a colliding operation id is retried ONCE before any fence (
     // second attempt must allocate a NEW id and commit (Go durable/admit.go
     // retries a collision once; without the fix the store fences instead).
     let calls = 0;
-    const reopened = DurableNonceStore.open(path, { deploymentId: DEPLOYMENT, window: WINDOW, now: clock,
+    const retryOptions: DurableStoreInternalOptions = { deploymentId: DEPLOYMENT, window: WINDOW, now: clock,
       injectOperationId: () => {
         calls++;
         return calls === 1 ? (collidingId as string) : encodeBase64URL(randomBytes(16));
-      } });
+      } };
+    const reopened = DurableNonceStore.open(path, retryOptions);
     const retryAdmission = new DurableNonceAdmission({ store: reopened, now: clock });
     const outcome = retryAdmission.reserveForVerify(seamRequest(freshKey(), 100));
     assert.equal(outcome.accepted, true, "a single collision is retried, not fenced");
@@ -693,8 +695,9 @@ test("durable store: two colliding operation ids still fence (retry is once, not
     const collidingId = first.state().live[0]?.operationId as string;
     first.close();
 
-    const reopened = DurableNonceStore.open(path, { deploymentId: DEPLOYMENT, window: WINDOW, now: clock,
-      injectOperationId: () => collidingId });
+    const collisionOptions: DurableStoreInternalOptions = { deploymentId: DEPLOYMENT, window: WINDOW, now: clock,
+      injectOperationId: () => collidingId };
+    const reopened = DurableNonceStore.open(path, collisionOptions);
     const retryAdmission = new DurableNonceAdmission({ store: reopened, now: clock });
     const outcome = retryAdmission.reserveForVerify(seamRequest(freshKey(), 100));
     assert.equal(outcome.accepted, false, "a persistent collision cannot commit");
