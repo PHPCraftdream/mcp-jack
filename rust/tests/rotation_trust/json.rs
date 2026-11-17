@@ -182,14 +182,24 @@ fn local_codec_rejects_duplicate_escaped_members_and_noncanonical_numeric_lexeme
     ] {
         assert!(text.contains(fragment));
         let duplicate = text.replacen(fragment, &format!("{fragment},{fragment}"), 1);
-        assert!(decode(duplicate.as_bytes(), &corpus).is_err());
+        assert_eq!(
+            decode(duplicate.as_bytes(), &corpus)
+                .expect_err("duplicate field accepted")
+                .code,
+            "rotation_state_unknown"
+        );
     }
     let escaped = text.replacen(
         "\"fenced\":false",
         "\"fenced\":false,\"fenc\\u0065d\":false",
         1,
     );
-    assert!(decode(escaped.as_bytes(), &corpus).is_err());
+    assert_eq!(
+        decode(escaped.as_bytes(), &corpus)
+            .expect_err("escaped duplicate field accepted")
+            .code,
+        "rotation_state_unknown"
+    );
     for path in [
         "/format_version",
         "/window",
@@ -233,20 +243,38 @@ fn local_codec_rejects_duplicate_escaped_members_and_noncanonical_numeric_lexeme
             );
         }
     }
-    assert!(decode(
-        text.replace("\"fenced\":false", "\"fenced\":null")
-            .as_bytes(),
-        &corpus
-    )
-    .is_err());
-    assert!(decode(format!("{text}0").as_bytes(), &corpus).is_err());
-    assert!(decode(b"\xff", &corpus).is_err());
-    assert!(decode(
-        text.replace("\"fenced\":false", "\"fenced\":\"\\ud800\"")
-            .as_bytes(),
-        &corpus
-    )
-    .is_err());
+    assert_eq!(
+        decode(
+            text.replace("\"fenced\":false", "\"fenced\":null")
+                .as_bytes(),
+            &corpus
+        )
+        .expect_err("invalid fenced type accepted")
+        .code,
+        "rotation_state_unknown"
+    );
+    assert_eq!(
+        decode(format!("{text}0").as_bytes(), &corpus)
+            .expect_err("trailing JSON data accepted")
+            .code,
+        "rotation_state_unknown"
+    );
+    assert_eq!(
+        decode(b"\xff", &corpus)
+            .expect_err("invalid UTF-8 accepted")
+            .code,
+        "rotation_state_unknown"
+    );
+    assert_eq!(
+        decode(
+            text.replace("\"fenced\":false", "\"fenced\":\"\\ud800\"")
+                .as_bytes(),
+            &corpus
+        )
+        .expect_err("invalid surrogate accepted")
+        .code,
+        "rotation_state_unknown"
+    );
 }
 
 #[test]
@@ -254,25 +282,40 @@ fn local_codec_requires_independent_oob_and_validates_before_encode() {
     let corpus = corpus();
     let input = example(&corpus);
     let bytes = serde_json::to_vec(&document(&input)).expect("reference JSON");
-    assert!(
+    // The snapshot-window mismatch precedes clock-tuple validation.
+    assert_eq!(
         rotation::decode_trust_snapshot(&bytes, binding(&corpus), 31, &checkpoint(&corpus))
-            .is_err()
+            .expect_err("window mismatch accepted")
+            .code,
+        "rotation_state_unknown"
     );
     let wrong_binding = rotation::Binding {
         endpoint: &corpus.binding.endpoint,
         aud: "other",
     };
-    assert!(
-        rotation::decode_trust_snapshot(&bytes, wrong_binding, 30, &checkpoint(&corpus)).is_err()
+    // Snapshot binding mismatch is checked before chain signatures.
+    assert_eq!(
+        rotation::decode_trust_snapshot(&bytes, wrong_binding, 30, &checkpoint(&corpus))
+            .expect_err("binding mismatch accepted")
+            .code,
+        "rotation_state_unknown"
     );
     let mut wrong_root = checkpoint(&corpus);
     wrong_root.published_at = 1;
-    assert!(rotation::decode_trust_snapshot(&bytes, binding(&corpus), 30, &wrong_root).is_err());
+    // Mismatched snapshot/checkpoint identity is checked before timestamp limits.
+    assert_eq!(
+        rotation::decode_trust_snapshot(&bytes, binding(&corpus), 30, &wrong_root)
+            .expect_err("checkpoint mismatch accepted")
+            .code,
+        "rotation_state_unknown"
+    );
     let mut invalid = input;
     invalid.records[0].push('\n');
-    assert!(
+    assert_eq!(
         rotation::encode_trust_snapshot(&invalid, binding(&corpus), 30, &checkpoint(&corpus))
-            .is_err()
+            .expect_err("invalid snapshot encoded")
+            .code,
+        "rotation_state_unknown"
     );
 }
 
@@ -288,8 +331,18 @@ fn local_codec_obeys_inclusive_16mib_bound_and_collection_caps() {
         reference
     );
     bytes.push(b' ');
-    assert!(decode(&bytes, &corpus).is_err());
-    assert!(decode(&[], &corpus).is_err());
+    assert_eq!(
+        decode(&bytes, &corpus)
+            .expect_err("oversized snapshot accepted")
+            .code,
+        "rotation_state_unknown"
+    );
+    assert_eq!(
+        decode(&[], &corpus)
+            .expect_err("empty snapshot accepted")
+            .code,
+        "rotation_state_unknown"
+    );
     for field in ["keys", "records"] {
         let mut oversized = reference.clone();
         let member = oversized[field][0].clone();

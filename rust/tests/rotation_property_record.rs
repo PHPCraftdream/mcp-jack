@@ -4,7 +4,7 @@
 mod common;
 
 use mcp_jack::client::{InMemorySigner, Signer};
-use mcp_jack::encoding::{body_hash, encode_b64url, key_id};
+use mcp_jack::encoding::{body_hash, decode_b64url, decode_b64url_fixed, encode_b64url, key_id};
 use mcp_jack::rotation::{self, Binding, Checkpoint, Record, RotationError};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -124,6 +124,149 @@ fn generated_chain(
     (root, records)
 }
 
+fn expected_mutation_code(
+    original: &[u8],
+    mutated: &[u8],
+    byte_index: usize,
+    binding: Binding<'_>,
+    authorizers: &BTreeMap<String, [u8; 32]>,
+) -> &'static str {
+    fn decimal(text: &str, maximum: u64) -> Option<u64> {
+        if text.is_empty()
+            || (text.len() > 1 && text.starts_with('0'))
+            || !text.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return None;
+        }
+        text.parse::<u64>().ok().filter(|value| *value <= maximum)
+    }
+
+    if mutated.is_empty() || mutated.len() > rotation::MAX_RECORD_BYTES {
+        return "record_size";
+    }
+    // Keep expectations in parse_record's framing, field, then proof order.
+    if !mutated.is_ascii() {
+        return "non_ascii";
+    }
+    let text = std::str::from_utf8(mutated).expect("ASCII mutation");
+    if text.ends_with('\n') {
+        return "trailing_lf";
+    }
+    let lines: Vec<&str> = text.split('\n').collect();
+    if lines.len() != 12 {
+        return "line_count";
+    }
+    let line = original[..byte_index]
+        .iter()
+        .filter(|byte| **byte == b'\n')
+        .count();
+    match line {
+        0 => "domain",
+        1 | 2 => {
+            let Ok(decoded) = decode_b64url(lines[line]) else {
+                return "binding_encoding";
+            };
+            let limit = if line == 1 { 2048 } else { 1024 };
+            if decoded.is_empty() || decoded.len() > limit {
+                return "binding_encoding";
+            }
+            let Ok(decoded) = std::str::from_utf8(&decoded) else {
+                return "utf8";
+            };
+            let expected = if line == 1 {
+                binding.endpoint
+            } else {
+                binding.aud
+            };
+            if decoded == expected {
+                "new_proof"
+            } else {
+                "binding"
+            }
+        }
+        3 => match decimal(lines[3], rotation::MAX_ORDINAL) {
+            Some(ordinal) if ordinal != 0 => "new_proof",
+            _ => "ordinal",
+        },
+        4 => "new_proof",
+        5 => {
+            if decode_b64url_fixed(lines[5], 32).is_err() {
+                return "key_id";
+            }
+            let Some(public) = authorizers.get(lines[5]) else {
+                return "unknown_authorizer";
+            };
+            if key_id(public) != lines[5] || mcp_jack::ed25519::validate_public_key(public).is_err()
+            {
+                "unknown_authorizer"
+            } else {
+                "new_proof"
+            }
+        }
+        6 => {
+            if decode_b64url_fixed(lines[6], 32).is_err() {
+                return "key_id";
+            }
+            let Ok(public) = decode_b64url_fixed(lines[7], 32) else {
+                return "new_key";
+            };
+            if key_id(&public) != lines[6] {
+                "new_key_id"
+            } else {
+                "new_proof"
+            }
+        }
+        7 => {
+            if lines[7].len() != 43 {
+                return "base64url";
+            }
+            let Ok(public) = decode_b64url_fixed(lines[7], 32) else {
+                return "new_key";
+            };
+            if mcp_jack::ed25519::validate_public_key(&public).is_err() {
+                return "new_key";
+            }
+            if key_id(&public) != lines[6] {
+                "new_key_id"
+            } else {
+                "new_proof"
+            }
+        }
+        8 | 9 => {
+            let Some(published_at) = decimal(lines[8], rotation::MAX_TIMESTAMP) else {
+                return "timestamp";
+            };
+            let Some(activates_at) = decimal(lines[9], rotation::MAX_TIMESTAMP) else {
+                return "timestamp";
+            };
+            if published_at
+                .checked_add(rotation::GRACE_SECONDS)
+                .filter(|value| *value <= rotation::MAX_TIMESTAMP)
+                != Some(activates_at)
+            {
+                "activation"
+            } else {
+                "new_proof"
+            }
+        }
+        10 => {
+            if decode_b64url_fixed(lines[10], 64).is_err() {
+                "proof_encoding"
+            } else {
+                "new_proof"
+            }
+        }
+        11 => {
+            if decode_b64url_fixed(lines[11], 64).is_err() {
+                "proof_encoding"
+            } else {
+                "old_authorization"
+            }
+        }
+        _ => unreachable!("12-line record has no other line index"),
+    }
+}
+
 // Every old_kid belongs to signer(index - 1) of the same chain.
 fn chain_authorizers(records: &[Record]) -> BTreeMap<String, [u8; 32]> {
     let mut authorizers = BTreeMap::new();
@@ -235,10 +378,16 @@ fn every_single_byte_mutation_of_a_generated_record_is_rejected() {
         let mut mutated = full.wire.as_bytes().to_vec();
         mutated[byte_index] = *byte ^ 1;
         let label = format!("seed {SEED:#x} record {full_index} byte {byte_index} xor 1");
-        assert!(
-            rotation::parse_record(&mutated, binding(&corpus), &authorizers4).is_err(),
-            "{label}"
+        let expected = expected_mutation_code(
+            full.wire.as_bytes(),
+            &mutated,
+            byte_index,
+            binding(&corpus),
+            &authorizers4,
         );
+        let error =
+            rotation::parse_record(&mutated, binding(&corpus), &authorizers4).expect_err(&label);
+        assert_eq!(error.code, expected, "{label}");
         let reparsed =
             rotation::parse_record(full.wire.as_bytes(), binding(&corpus), &authorizers4)
                 .expect(&label);
@@ -258,10 +407,16 @@ fn every_single_byte_mutation_of_a_generated_record_is_rejected() {
         let mut mutated = full.wire.as_bytes().to_vec();
         mutated[index] ^= 0x80;
         let label = format!("seed {SEED:#x} record {full_index} sample {sample} byte {index}");
-        assert!(
-            rotation::parse_record(&mutated, binding(&corpus), &authorizers4).is_err(),
-            "{label} xor 128"
+        let expected = expected_mutation_code(
+            full.wire.as_bytes(),
+            &mutated,
+            index,
+            binding(&corpus),
+            &authorizers4,
         );
+        let error =
+            rotation::parse_record(&mutated, binding(&corpus), &authorizers4).expect_err(&label);
+        assert_eq!(error.code, expected, "{label} xor 128");
     }
     for sample in 0..16_u64 {
         let byte_index = prng.below(u64::try_from(other.wire.len()).expect("wire length"));
@@ -269,10 +424,16 @@ fn every_single_byte_mutation_of_a_generated_record_is_rejected() {
         let mut mutated = other.wire.as_bytes().to_vec();
         mutated[index] ^= 0x80;
         let label = format!("seed {SEED:#x} record {other_index} sample {sample} byte {index}");
-        assert!(
-            rotation::parse_record(&mutated, binding(&corpus), &authorizers2).is_err(),
-            "{label} xor 128"
+        let expected = expected_mutation_code(
+            other.wire.as_bytes(),
+            &mutated,
+            index,
+            binding(&corpus),
+            &authorizers2,
         );
+        let error =
+            rotation::parse_record(&mutated, binding(&corpus), &authorizers2).expect_err(&label);
+        assert_eq!(error.code, expected, "{label} xor 128");
     }
     assert_eq!(
         baseline_other.ordinal,

@@ -232,10 +232,55 @@ mod tests {
             ("trailing data", format!("{} {{}}", doc(&p))),
         ];
         for (name, d) in cases {
-            assert!(
-                load_profile(&d).is_err(),
+            let err = load_profile(&d).expect_err(&format!(
                 "{name}: LoadProfile accepted invalid document {d}"
-            );
+            ));
+            match name {
+                "server key wrong length" | "padded server key" => assert_eq!(
+                    err,
+                    ClientError::Client(
+                        "jack client: profile server_public_key: jack: invalid base64url"
+                            .to_string()
+                    )
+                ),
+                "kid not 32-byte base64url" => assert_eq!(
+                    err,
+                    ClientError::Client("jack client: profile kid: jack: invalid base64url".to_string())
+                ),
+                "url missing host" | "url with userinfo" => assert_eq!(
+                    err,
+                    ClientError::Client(
+                        "jack client: profile url must be an absolute http/https URL with a host"
+                            .to_string()
+                    )
+                ),
+                "url plain http to a remote host" => assert_eq!(
+                    err,
+                    ClientError::Client(
+                        "jack client: profile url: jack client: https required for non-loopback host (plain http is allowed only for 127.x.y.z or [::1])"
+                            .to_string()
+                    )
+                ),
+                "aud empty" => assert_eq!(
+                    err,
+                    ClientError::Client("jack client: profile aud must be non-empty".to_string())
+                ),
+                "unknown field" => match err {
+                    ClientError::Client(message) => assert!(
+                        message.starts_with("jack client: profile: unknown field"),
+                        "{name}: expected unknown-field parse error, got {message:?}"
+                    ),
+                    other => panic!("{name}: expected ClientError::Client, got {other:?}"),
+                },
+                "trailing data" => match err {
+                    ClientError::Client(message) => assert!(
+                        message.starts_with("jack client: profile: trailing characters"),
+                        "{name}: expected trailing-data parse error, got {message:?}"
+                    ),
+                    other => panic!("{name}: expected ClientError::Client, got {other:?}"),
+                },
+                _ => unreachable!("all test cases are enumerated"),
+            }
         }
     }
 
@@ -296,9 +341,13 @@ mod tests {
             server_public_key: encode_b64url(&[0u8; 16]),
             ..p
         };
-        assert!(
-            Client::from_profile(&bad, signer, Arc::new(UnreachableTransport)).is_err(),
-            "expected error for invalid server public key"
+        let err = Client::from_profile(&bad, signer, Arc::new(UnreachableTransport))
+            .expect_err("expected error for invalid server public key");
+        assert_eq!(
+            err,
+            ClientError::Client(
+                "jack client: profile server_public_key: jack: invalid base64url".to_string()
+            )
         );
     }
 }

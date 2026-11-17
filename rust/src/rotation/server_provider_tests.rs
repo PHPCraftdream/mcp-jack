@@ -224,18 +224,26 @@ fn missing_pending_or_current_signer_never_falls_back() {
     let provider = new_provider(&f, [None, None, None]);
     let first = provider.announce("next", f.keys[1].kid()).unwrap();
     // Before activation a pending handle is required.
-    assert!(RotationServerProvider::new(
-        Arc::clone(&f.store),
-        vec![entry(&f.keys, "anchor", 0, None)]
-    )
-    .is_err());
+    assert!(matches!(
+        RotationServerProvider::new(
+            Arc::clone(&f.store),
+            vec![entry(&f.keys, "anchor", 0, None)]
+        ),
+        Err(RotationError {
+            code: "rotation_state_unavailable"
+        })
+    ));
     f.now.store(first.record.activates_at, Ordering::SeqCst);
     // After activation, absence of the current signer does not fall back to the retired anchor.
-    assert!(RotationServerProvider::new(
-        Arc::clone(&f.store),
-        vec![entry(&f.keys, "anchor", 0, None)]
-    )
-    .is_err());
+    assert!(matches!(
+        RotationServerProvider::new(
+            Arc::clone(&f.store),
+            vec![entry(&f.keys, "anchor", 0, None)]
+        ),
+        Err(RotationError {
+            code: "rotation_state_unavailable"
+        })
+    ));
     // The retired anchor handle is optional.
     let provider =
         RotationServerProvider::new(Arc::clone(&f.store), vec![entry(&f.keys, "next", 1, None)])
@@ -285,7 +293,12 @@ fn freshness_equality_and_release_idempotence() {
             .close()
             .expect("lease must be released before clean close");
     }
-    assert!(provider.authorize_response(&selector_request()).is_err());
+    assert!(matches!(
+        provider.authorize_response(&selector_request()),
+        Err(RotationError {
+            code: "rotation_state_unavailable"
+        })
+    ));
 }
 
 #[test]
@@ -311,11 +324,21 @@ fn announce_single_fixed_sample_and_refusals() {
     assert_eq!(f.samples.load(Ordering::SeqCst), 2);
     assert_eq!(sign_counts(&signs), [1, 2, 1]);
     // A retained kid refuses before the clock sample and before any callback.
-    assert!(provider.announce("next", &first.record.new_kid).is_err());
+    assert!(matches!(
+        provider.announce("next", &first.record.new_kid),
+        Err(RotationError {
+            code: "rotation_state_unavailable"
+        })
+    ));
     assert_eq!(f.samples.load(Ordering::SeqCst), 2);
     assert_eq!(sign_counts(&signs), [1, 2, 1]);
     // Unknown inventory entry refuses before the store.
-    assert!(provider.announce("unknown", &first.record.new_kid).is_err());
+    assert!(matches!(
+        provider.announce("unknown", &first.record.new_kid),
+        Err(RotationError {
+            code: "rotation_state_unavailable"
+        })
+    ));
     assert_eq!(f.samples.load(Ordering::SeqCst), 2);
     assert_eq!(sign_counts(&signs), [1, 2, 1]);
     let mut store = lock(&f);
@@ -420,7 +443,12 @@ fn announce_invalid_proof_never_invokes_old_authorization() {
 fn constructor_inventory_validation() {
     let sandbox = Sandbox::new();
     let f = setup(&sandbox);
-    assert!(RotationServerProvider::new(Arc::clone(&f.store), Vec::new()).is_err());
+    assert!(matches!(
+        RotationServerProvider::new(Arc::clone(&f.store), Vec::new()),
+        Err(RotationError {
+            code: "rotation_state_unavailable"
+        })
+    ));
     // 1154 entries: the length check fires before identity work; clones of one signer are cheap.
     let shared = Arc::new(f.keys[0].clone());
     let oversized: Vec<RotationServerKey> = (0..=MAX_RETAINED_KEYS)
@@ -430,16 +458,25 @@ fn constructor_inventory_validation() {
         })
         .collect();
     assert_eq!(oversized.len(), MAX_RETAINED_KEYS + 1);
-    assert!(RotationServerProvider::new(Arc::clone(&f.store), oversized).is_err());
+    assert!(matches!(
+        RotationServerProvider::new(Arc::clone(&f.store), oversized),
+        Err(RotationError {
+            code: "rotation_state_unavailable"
+        })
+    ));
     for reference in [String::new(), "x".repeat(MAX_SIGNER_REFERENCE_BYTES + 1)] {
-        assert!(RotationServerProvider::new(
-            Arc::clone(&f.store),
-            vec![RotationServerKey {
-                reference,
-                signer: Arc::new(f.keys[0].clone()),
-            }]
-        )
-        .is_err());
+        assert!(matches!(
+            RotationServerProvider::new(
+                Arc::clone(&f.store),
+                vec![RotationServerKey {
+                    reference,
+                    signer: Arc::new(f.keys[0].clone()),
+                }]
+            ),
+            Err(RotationError {
+                code: "rotation_state_unavailable"
+            })
+        ));
     }
     let duplicate = vec![
         RotationServerKey {
@@ -451,7 +488,12 @@ fn constructor_inventory_validation() {
             signer: Arc::new(f.keys[0].clone()),
         },
     ];
-    assert!(RotationServerProvider::new(Arc::clone(&f.store), duplicate).is_err());
+    assert!(matches!(
+        RotationServerProvider::new(Arc::clone(&f.store), duplicate),
+        Err(RotationError {
+            code: "rotation_state_unavailable"
+        })
+    ));
 }
 
 /// A ring that after announcement cannot be served: all keys except the newest

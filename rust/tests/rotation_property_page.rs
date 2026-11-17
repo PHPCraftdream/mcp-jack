@@ -617,7 +617,8 @@ fn canonical_result_bodies_reject_every_single_byte_mutation() {
         let mut mutated = exact.as_bytes().to_vec();
         mutated[byte_index] = *byte ^ 1;
         let label = format!("seed {SEED:#x} byte {byte_index} xor 1");
-        assert!(rotation::decode_result(&mutated, b"7").is_err(), "{label}");
+        let error = rotation::decode_result(&mutated, b"7").expect_err(&label);
+        assert_eq!(error.code, "rotation_result_invalid", "{label}");
     }
     let label = format!("seed {SEED:#x} positive control");
     let decoded = rotation::decode_result(exact.as_bytes(), b"7").expect(&label);

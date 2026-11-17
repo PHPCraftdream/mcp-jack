@@ -137,7 +137,7 @@ func TestSignRequestTamperDetection(t *testing.T) {
 		tc := cases[0]
 		mc := matched[0]
 		if len(mc.Body) == 0 {
-			t.Skipf("%s: empty body, tamper case skipped", tc.ID)
+			t.Fatalf("%s: first matched case has an empty body; the tamper check needs a body byte", tc.ID)
 		}
 		body2 := make([]byte, len(mc.Body))
 		copy(body2, mc.Body)
@@ -201,5 +201,5 @@ func TestSignRequestTamperDetection(t *testing.T) {
 		t.Logf("reject case %s not reproducible (as expected)", tc.ID)
 		return
 	}
-	t.Skipf("no derivable reject case found")
+	t.Fatalf("no derivable bad_signature reject case found in the request vectors")
 }

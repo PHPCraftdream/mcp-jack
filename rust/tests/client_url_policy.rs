@@ -494,7 +494,14 @@ fn percent_encoded_path_and_query_are_accepted_verbatim() {
     validate_base_url(url).expect("percent-encoded path/query is accepted");
     assert_eq!(request_target(url).expect("target"), "/a%20b?x=%2F");
     assert_eq!(signed_round_trip(url), "/a%20b?x=%2F");
-    assert!(validate_base_url("https://svc.example.test%2e/a").is_err());
+    let err = validate_base_url("https://svc.example.test%2e/a")
+        .expect_err("percent escape in URL authority must be rejected");
+    assert_eq!(
+        err,
+        ClientError::Client(
+            "jack client: base url must be an absolute http/https URL with a host".to_string()
+        )
+    );
 }
 
 #[test]

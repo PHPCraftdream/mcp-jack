@@ -191,23 +191,37 @@ fn whole_trust_rejects_every_redundant_identity_time_or_shape_mutation() {
         assert_eq!(error.code, "rotation_state_unknown", "mutation {index}");
     }
     let input = example(&corpus);
-    assert!(rotation::validate_trust_snapshot(
-        &input,
-        Binding {
-            endpoint: &corpus.binding.endpoint,
-            aud: "other"
-        },
-        30,
-        &checkpoint(&corpus),
-    )
-    .is_err());
-    assert!(
+    // Snapshot binding mismatch is checked before chain signatures.
+    assert_eq!(
+        rotation::validate_trust_snapshot(
+            &input,
+            Binding {
+                endpoint: &corpus.binding.endpoint,
+                aud: "other"
+            },
+            30,
+            &checkpoint(&corpus),
+        )
+        .expect_err("binding mismatch")
+        .code,
+        "rotation_state_unknown"
+    );
+    // The snapshot-window mismatch precedes clock-tuple validation.
+    assert_eq!(
         rotation::validate_trust_snapshot(&input, binding(&corpus), 31, &checkpoint(&corpus))
-            .is_err()
+            .expect_err("window mismatch")
+            .code,
+        "rotation_state_unknown"
     );
     let mut root = checkpoint(&corpus);
     root.hash = "other".to_owned();
-    assert!(rotation::validate_trust_snapshot(&input, binding(&corpus), 30, &root).is_err());
+    // Checkpoint equality is checked before the chain's previous-hash validation.
+    assert_eq!(
+        rotation::validate_trust_snapshot(&input, binding(&corpus), 30, &root)
+            .expect_err("checkpoint mismatch")
+            .code,
+        "rotation_state_unknown"
+    );
     let mut oversized = input;
     oversized.records = vec!["invalid".to_owned(); rotation::MAX_RETAINED_KEYS];
     assert_eq!(
@@ -342,12 +356,22 @@ fn independently_provisioned_nonzero_checkpoint_has_checked_activation_and_ordin
     assert_eq!(output.keys[0].known_cutoff, None);
     root.published_at += 1;
     let too_late = snapshot_from(binding(&corpus), &root, &[], rotation::MAX_TIMESTAMP);
-    assert!(rotation::validate_trust_snapshot(&too_late, binding(&corpus), 30, &root).is_err());
+    // The matching checkpoint is refused at the timestamp-domain boundary.
+    assert_eq!(
+        rotation::validate_trust_snapshot(&too_late, binding(&corpus), 30, &root)
+            .expect_err("late checkpoint")
+            .code,
+        "rotation_state_unknown"
+    );
     root.published_at -= 1;
     root.ordinal += 1;
     let overflow_ordinal = snapshot_from(binding(&corpus), &root, &[], rotation::MAX_TIMESTAMP);
-    assert!(
-        rotation::validate_trust_snapshot(&overflow_ordinal, binding(&corpus), 30, &root).is_err()
+    // verify_chain's ordinal refusal is mapped to rotation_state_unknown.
+    assert_eq!(
+        rotation::validate_trust_snapshot(&overflow_ordinal, binding(&corpus), 30, &root)
+            .expect_err("overflow checkpoint ordinal")
+            .code,
+        "rotation_state_unknown"
     );
 }
 
