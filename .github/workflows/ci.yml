@@ -165,7 +165,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cargo test --locked --all-features --test durable_nonce_vectors --test rotation_state_vectors -- --nocapture --test-threads=1 | tee vector-summary.log
+          cargo test --locked --all-features --test durable_nonce_vectors --test rotation_state_vectors -- --nocapture --test-threads=1 2>&1 | tee vector-summary.log
           test "$(grep -c VECTOR-SUMMARY vector-summary.log)" -ge 2
       - name: Core without the http feature
         if: runner.os == 'Linux'
