@@ -141,7 +141,7 @@ fn tls_server_config(
 }
 
 // ---------------------------------------------------------------------------
-// Live hyper 1.x server (mirrors src/bin/interop_server.rs lines ~311-360).
+// Live hyper 1.x server (mirrors interop/rust/src/bin/interop_server.rs).
 // ---------------------------------------------------------------------------
 
 /// One server response as plain data; handlers build these.

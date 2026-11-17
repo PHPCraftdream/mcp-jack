@@ -1,0 +1,35 @@
+[package]
+name = "mcp-jack-interop"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "interop-server"
+path = "src/bin/interop_server.rs"
+
+[[bin]]
+name = "interop-client"
+path = "src/bin/interop_client.rs"
+
+[[bin]]
+name = "interop-transfer"
+path = "src/bin/interop_transfer.rs"
+
+[dependencies]
+mcp-jack = { path = "../../rust", features = ["http", "client-http"] }
+bytes = { version = "1" }
+ed25519-dalek = { version = "2.2", features = ["std"] }
+http = { version = "1" }
+http-body-util = { version = "0.1", features = ["channel"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "service"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "net", "sync", "io-util", "signal"] }
+tower-layer = { version = "0.3" }
+tower-service = { version = "0.3" }

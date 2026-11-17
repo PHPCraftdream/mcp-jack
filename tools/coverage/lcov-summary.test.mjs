@@ -6,12 +6,31 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseLcov, groupFor, normalizeSf } from "./lcov-summary.mjs";
 
-test("Rust src/bin interop paths classify correctly in relative and absolute forms", () => {
-  assert.equal(groupFor("src/bin/interop_server.rs"), "interop");
-  assert.equal(groupFor("src/bin/interop/scenarios.rs"), "interop");
+test("Rust product, helper, and external harness paths stay in their proper scope", () => {
   assert.equal(groupFor("src/client/auth.rs"), "product");
-  assert.equal(normalizeSf("/workspace/project/rust/src/bin/interop_server.rs"), "src/bin/interop_server.rs");
-  assert.equal(groupFor(normalizeSf("D:\\work\\project\\rust\\src\\bin\\interop_transfer.rs")), "interop");
+  assert.equal(normalizeSf("/workspace/project/rust/src/client/auth.rs"), "src/client/auth.rs");
+  assert.equal(groupFor(normalizeSf("/workspace/project/rust/src/client/auth.rs")), "product");
+  assert.equal(
+    normalizeSf("\\workspace\\project\\rust\\src\\client\\auth.rs"),
+    "src/client/auth.rs",
+  );
+  assert.equal(
+    groupFor(normalizeSf("\\workspace\\project\\rust\\src\\client\\auth.rs")),
+    "product",
+  );
+  assert.equal(groupFor("tests/support.rs"), "helper");
+  assert.equal(normalizeSf("/workspace/project/rust/tests/support.rs"), "tests/support.rs");
+  assert.equal(groupFor(normalizeSf("/workspace/project/rust/tests/support.rs")), "helper");
+
+  const external = "/workspace/project/interop/rust/src/bin/interop_server.rs";
+  assert.equal(normalizeSf(external), "interop/rust/src/bin/interop_server.rs");
+  assert.equal(groupFor(normalizeSf(external)), null);
+  const externalWindows = "\\workspace\\project\\interop\\rust\\src\\bin\\interop_transfer.rs";
+  assert.equal(normalizeSf(externalWindows), "interop/rust/src/bin/interop_transfer.rs");
+  assert.equal(groupFor(normalizeSf(externalWindows)), null);
+  const externalRelative = "interop/rust/src/bin/interop/scenarios.rs";
+  assert.equal(normalizeSf(externalRelative), externalRelative);
+  assert.equal(groupFor(normalizeSf(externalRelative)), null);
 });
 
 test("valid single record with two DA lines parses", () => {

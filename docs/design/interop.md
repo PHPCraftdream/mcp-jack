@@ -19,7 +19,7 @@ The current server CLI is `interop-server --aud <aud> --state <file> --server-se
 
 ## Layout and independent transfer contract
 
-Language harness sources are `interop/go/{server,client,transfer}/`, `rust/src/bin/interop*.rs`, and `ts/src/interop/`. They are outside the public SDK APIs. `interop/run.mjs` coordinates request scenarios and signing controls; `interop/transfer.mjs` separately coordinates user-key transfer. The latter's envelope, strict import, independent trust tuple, and role-isolated key surfaces remain governed by [user-keys.md](user-keys.md) and its fixtures. Do not conflate its envelope `type` discriminator with the removed user `kind` field.
+Language harness sources are `interop/go/{server,client,transfer}/`, `interop/rust/src/bin/interop*.rs`, and `ts/src/interop/`. The Rust binaries are built from the separate unpublished crate in `interop/rust/`, outside the product SDK crate in `rust/`. They are outside the public SDK APIs. `interop/run.mjs` coordinates request scenarios and signing controls; `interop/transfer.mjs` separately coordinates user-key transfer. The latter's envelope, strict import, independent trust tuple, and role-isolated key surfaces remain governed by [user-keys.md](user-keys.md) and its fixtures. Do not conflate its envelope `type` discriminator with the removed user `kind` field.
 
 Shared harness matrix acceptance, packaged-consumer checks, and coverage/fuzz evidence for baseline `b13b972` were verified in GitHub CI on `444c69b` (see readiness evidence). Q1 session-channel work is future v0.2 design, not implemented. Q3 server-key rotation requires a separate exact design and is not implemented.
 

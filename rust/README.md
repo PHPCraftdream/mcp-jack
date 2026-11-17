@@ -2,7 +2,7 @@ This crate is the Rust SDK for mcp-jack, the secure transport protocol wrapping 
 
 ## Rust compatibility and security migration
 
-The crate's current minimum supported Rust version is **1.88**. This is required by the pinned Hickory 0.26.1 DNS crates and the development-time `time` 0.3.47 parser fix; the crate remains edition 2021, version 0.1.0, and unpublished (`publish = false`). The default feature set remains empty. Hickory resolver, network, and protocol dependencies are optional and activated only by `client-http`; the exact lower bounds protect fresh downstream resolutions from upstream `^0.26.0` dependency ranges. See [the Rust security upgrade record](../docs/design/rust-security-upgrade.md) for advisory scope, upstream provenance, limitations, and validation status. The dependency inventory later in this README is an explicitly historical snapshot from the original HTTP transport integration, not the current graph or MSRV.
+The crate's current minimum supported Rust version is **1.88**. This is required by the pinned Hickory 0.26.3 DNS crates and the development-time `time` 0.3.47 parser fix; the crate remains edition 2021, version 0.1.0, and unpublished (`publish = false`). The default feature set remains empty. Hickory resolver, network, and protocol dependencies are optional and activated only by `client-http`; the exact lower bounds protect fresh downstream resolutions from upstream `^0.26.0` dependency ranges. See [the Rust security upgrade record](../docs/design/rust-security-upgrade.md) for advisory scope, upstream provenance, limitations, and validation status. The dependency inventory later in this README is an explicitly historical snapshot from the original HTTP transport integration, not the current graph or MSRV.
 
 ## Tower HTTP adapter (feature `http`)
 
@@ -56,7 +56,7 @@ Transport obligations: an implementation must use TLS with certificate validatio
 
 ### Optional HTTP transport (feature `client-http`)
 
-`client-http` enables `HttpTransport`, a blocking HTTP/HTTPS `Transport` implemented with Hyper's low-level HTTP/1 client, a current-thread Tokio runtime, rustls with the ring provider, and Hickory DNS. Each round trip runs on its own joined standard thread; its registered DNS and HTTP-driver tasks are closed, aborted, and awaited before return. The builder snapshots system DNS configuration, hosts, and certificate roots during `build()`, outside the round-trip deadline. Those local file/registry reads are not interruptible and construction can fail because of the environment; `HttpTransport::new()` returns a `Result`, and `Default` currently panics if construction fails. The default deadline is 15 seconds. The runtime deadline bounds asynchronous round-trip work, not exact wall-clock return. No claim is made that all runtime properties have been verified.
+`client-http` enables `HttpTransport`, a blocking HTTP/HTTPS `Transport` implemented with Hyper's low-level HTTP/1 client, a current-thread Tokio runtime, rustls with the ring provider, and Hickory DNS. Each round trip runs on its own joined standard thread; its registered DNS and HTTP-driver tasks are closed, aborted, and awaited before return. The builder snapshots system DNS configuration, hosts, and certificate roots during `build()`, outside the round-trip deadline. Those local file/registry reads are not interruptible and construction can fail because of the environment; both `HttpTransport::new()` and `HttpTransportBuilder::build()` are fallible. The default deadline is 15 seconds. The runtime deadline bounds asynchronous round-trip work, not exact wall-clock return. No claim is made that all runtime properties have been verified.
 
 Pass the RAW transport to `Config.transport: Arc<dyn Transport>`; `Client` wraps it in `SigningTransport` exactly once. For standalone signing use, wrap it in `SigningTransport` yourself. Caller headers (including repeated `Jack-Auth` values) are sent as given. CONNECT, caller framing headers (`Content-Length`/`Transfer-Encoding`), duplicate `Host`, non-UTF-8 `Host`/`Authorization`, and nonempty bodies on methods other than POST/PUT/PATCH are refused locally. Any valid HTTP token method (e.g. `PROPFIND`) is transmitted byte-exactly.
 
@@ -205,13 +205,20 @@ Retained optional TLS/core packages from the prior client-http graph: `rustls@0.
 License-policy notes: the existing global allowlist is Apache-2.0, MIT, BSD-3-Clause, Unlicense, and Unicode-3.0. Expressions with OR alternatives are satisfied through their permitted MIT/Apache-2.0 or Unicode-3.0 branches; this is not a claim that BSD-2-Clause, LGPL, or Zlib is allowlisted. The four existing approved, version-bounded exceptions are unchanged: `ring@0.17.x` (ISC), `untrusted@0.9` (ISC), `rustls-webpki@0.103.x` (ISC), and `webpki-roots@1.0.x` (CDLA-Permissive-2.0). The CDLA-licensed WebPKI root data requires retaining its license text when redistributing bundled roots. No license-policy tool or advisory check was run; advisory status is UNKNOWN. This is metadata-based inventory, not legal advice or license-text audit. The existing TLS 1.2/1.3 feature configuration is unchanged.
 
 
-## Interop executables (feature `interop`)
+## Rust interop harness
 
-`cargo build --release --features interop` builds the harness executables `interop-server` and `interop-client` (`--features interop,http` also works, since `interop` enables `http`); the feature gates the optional HTTP dependencies (hyper/tokio) so the default library build is unaffected. The interop harness (`interop/targets.json`) expects the release paths below, with `.exe` appended automatically on Windows by the harness (interop/README.md section 2). Run `node interop/run.mjs` to drive them, or `node interop/run.mjs --clients rust --servers rust` for just the Rust pair (interop/README.md section 3); the `--verify-only` and `--bootstrap-ttl` contract lives in interop/README.md section 4.
+The Rust interop harness is a separate, unpublished crate at `interop/rust/Cargo.toml`, outside the product SDK crate in `rust/`. From the repository root, build the harness with:
+
+```sh
+cargo build --manifest-path interop/rust/Cargo.toml --locked --release
+```
+
+This builds the `interop-server`, `interop-client`, and `interop-transfer` harness binaries. The `server` and `client` binaries also implement the rotation roles through `--mode rotation-server` and `--mode rotation-client`. The harness expects the release paths below, with `.exe` appended automatically on Windows (see [the interop README](../interop/README.md), section 2). Run `node interop/run.mjs` to drive the matrix, or `node interop/run.mjs --clients rust --servers rust` for just the Rust pair (interop/README.md section 3); the `--verify-only` and `--bootstrap-ttl` contract lives in interop/README.md section 4.
 
 ```text
-rust/target/release/interop-server
-rust/target/release/interop-client
+interop/rust/target/release/interop-server
+interop/rust/target/release/interop-client
+interop/rust/target/release/interop-transfer
 ```
 
 ## User-key transfer (mcp_jack::user_key)
@@ -288,7 +295,7 @@ node tools/consumer/package-rust.mjs tools/consumer/.scratch/rust-consumer
 node tools/consumer/verify-rust.mjs tools/consumer/.scratch/rust-consumer
 ```
 
-The stage is a fresh direct child of `tools/consumer/.scratch/`; both drivers are restricted to GitHub Actions. The packaged `.crate` contains the crate sources (`src/`, including `src/bin/**`), the tests, this README, and byte-exact copies of `LICENSE-MIT` and `LICENSE-APACHE` committed under `rust/`; CI byte-compares the packaged licence files against the repository root copies, so licence-text drift fails the run.
+The stage is a fresh direct child of `tools/consumer/.scratch/`; both drivers are restricted to GitHub Actions. The packaged `.crate` contains the product SDK crate sources (`src/`), the tests, this README, and byte-exact copies of `LICENSE-MIT` and `LICENSE-APACHE` committed under `rust/`; the separate Rust interop harness is not part of this SDK package. CI byte-compares the packaged licence files against the repository root copies, so licence-text drift fails the run.
 
 The consumer is a standalone edition-2024, rust-version-1.88 crate whose SDK dependency is only the extracted `.crate` — never the checkout (the adapter-driving harness crates named below are optional, feature-gated supporting dependencies). It resolves its dependency graph FRESH on Rust 1.88: no product lockfile is copied in, and the consumer-generated `Cargo.lock` must exist and differ byte-wise from the product `rust/Cargo.lock`, proving independent resolution (Cargo ignores a path-dependency's own lockfile). The feature matrix: the default features build first; `client-http` runs a real signed loopback request over a socket, and an unsigned 401 from the server must surface as `Unauthenticated`; `server-http` drives the real packaged adapter — the consumer constructs `JackLayer` from `HandlerConfig`, wraps an in-process inner service, and drives it through the SDK client, with wrong-pin and tampered-body refusals running through the same adapter. The adapter-only supporting crates `ed25519-dalek`/`getrandom`/`http`/`bytes`/`http-body-util`/`tower`/`futures` are optional harness-only deps behind the consumer's own `server-http` feature; the SDK dependency itself remains only the extracted `.crate`. CI uploads the `.crate` and inventory.json as workflow artifacts for parent inspection. This consumer run validates the packaged artifact on the declared MSRV with a fresh dependency resolution; it does not prove vulnerability-free dependencies or replace the locked product CI graph.
 

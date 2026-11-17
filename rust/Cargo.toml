@@ -17,23 +17,7 @@ name = "mcp_jack"
 [features]
 default = []
 http = ["dep:http", "dep:bytes", "dep:http-body-util", "dep:tower-service", "dep:tower-layer"]
-interop = ["http", "dep:hyper", "dep:hyper-util", "dep:tokio"]
 client-http = ["dep:http", "dep:bytes", "dep:http-body-util", "dep:hyper", "hyper/client", "dep:hyper-util", "dep:tokio", "tokio/rt", "tokio/time", "tokio/sync", "tokio/io-util", "dep:tokio-rustls", "dep:webpki-roots", "dep:hickory-resolver", "dep:hickory-net", "dep:hickory-proto"]
-
-[[bin]]
-name = "interop-server"
-path = "src/bin/interop_server.rs"
-required-features = ["interop"]
-
-[[bin]]
-name = "interop-client"
-path = "src/bin/interop_client.rs"
-required-features = ["interop"]
-
-[[bin]]
-name = "interop-transfer"
-path = "src/bin/interop_transfer.rs"
-required-features = ["interop"]
 
 [dependencies]
 ed25519-dalek = { version = "2.2", features = ["std"] }
@@ -50,7 +34,7 @@ http-body-util = { version = "0.1", optional = true, features = ["channel"] }
 tower-service = { version = "0.3", optional = true }
 tower-layer = { version = "0.3", optional = true }
 
-# Shared transport dependencies are optional for the client and interop features.
+# Shared transport dependencies are optional for the client HTTP feature.
 hyper = { version = "1", optional = true, features = ["server", "http1"] }
 # TokioIo adapter and Tower service bridge.
 hyper-util = { version = "0.1", optional = true, features = ["tokio", "service"] }

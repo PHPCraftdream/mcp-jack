@@ -6,13 +6,11 @@ import { fileURLToPath } from "node:url";
 // Packages the Rust SDK crate (rust/) as a .crate artifact for the standalone
 // Rust consumer. CI-only, same stage discipline as package-ts.mjs.
 //
-// NOTE ON Cargo.lock: `cargo package` auto-includes the crate's Cargo.lock
-// because the package defines bins (cargo requirement). This is expected and
-// harmless: when a downstream crate depends on mcp-jack as a path/git/registry
-// dependency, Cargo IGNORES the dependency's own lockfile and resolves the
-// consumer's dependency graph fresh, so the consumer boundary stays real.
-// verify-rust.mjs proves this by byte-comparing the consumer-generated
-// Cargo.lock against rust/Cargo.lock (they must differ).
+// NOTE ON Cargo.lock: a lib-only package may or may not include the crate's
+// Cargo.lock. Either way it is source-package metadata, not the downstream
+// consumer's lockfile: Cargo ignores dependency lockfiles and freshly resolves
+// the consumer's graph. verify-rust.mjs proves this by byte-comparing the
+// consumer-generated Cargo.lock against rust/Cargo.lock (they must differ).
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
@@ -94,8 +92,7 @@ const inventory = {
 await writeFile(path.join(stageDir, "inventory.json"), `${JSON.stringify(inventory, null, 2)}\n`, "utf8");
 
 // Required members: manifest, lib entrypoint, readme, both licenses, and
-// every Rust source file currently under rust/src (recursively, including
-// src/bin/**).
+// every Rust source file currently under rust/src (recursively).
 const required = ["Cargo.toml", "src/lib.rs", "README.md", "LICENSE-MIT", "LICENSE-APACHE"];
 async function repoRustSources(directory, relative = "") {
   const entries = await readdir(path.join(directory, relative), { withFileTypes: true });
@@ -114,9 +111,11 @@ for (const rel of await repoRustSources(path.join(rustRoot, "src"))) {
   if (!members.includes(rel)) fail(`cargo package omitted packaged source file: ${rel}`);
 }
 
-// Forbidden members: build output, VCS metadata, foreign archives.
+// Forbidden members: build output, VCS metadata, foreign archives, and Rust
+// executable sources (the SDK package is lib-only).
 const forbidden = /(?:^|\/)(?:target\/|\.git(?:\/|$)|.*\.tgz$|.*\.crate$)/u;
 for (const member of members) {
+  if (member.startsWith("src/bin/")) fail(`cargo package included a forbidden Rust executable source: ${member}`);
   if (forbidden.test(member)) fail(`cargo package included a forbidden member: ${member}`);
 }
 

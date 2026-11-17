@@ -1,7 +1,6 @@
 //! Minimal blocking HTTP/1.1 client transport for the interop client, built
-//! directly on std::net::TcpStream (no HTTP crate: keeping the interop
-//! feature's dependency graph within the crate's 1.85 MSRV). Design doc
-//! interop.md section 8: blocking, small, no async runtime.
+//! directly on std::net::TcpStream; this standalone harness transport stays
+//! plain and blocking. Design doc interop.md section 8: small, no async runtime.
 
 use std::io::{BufRead, BufReader, Read as _, Write as _};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};

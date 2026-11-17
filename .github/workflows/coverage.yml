@@ -83,7 +83,7 @@ jobs:
         run: cargo llvm-cov --locked --all-features --lcov --output-path ../coverage/rust/lcov.info
       - name: Annotated line report
         run: cargo llvm-cov report --text --output-path ../coverage/rust/report.txt
-      - name: Partitioned product/helper summary
+      - name: Partitioned Rust product/helper summary (external harness excluded)
         run: node ../tools/coverage/lcov-summary.mjs ../coverage/rust/lcov.info ../coverage/rust/summary.json ../coverage/rust/summary.txt
       - name: Show the summary in the job log
         run: cat ../coverage/rust/summary.txt

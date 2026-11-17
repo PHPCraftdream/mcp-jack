@@ -42,6 +42,7 @@ if (inventory.artifact !== "mcp-jack-0.1.0.crate" || inventory.version !== "0.1.
 if (!Array.isArray(inventory.members)) throw new Error("staged package inventory is incomplete");
 for (const member of inventory.members) {
   if (typeof member !== "string" || !allowed.test(member)) throw new Error(`forbidden staged package member: ${String(member)}`);
+  if (member.startsWith("src/bin/")) throw new Error(`forbidden staged Rust executable source: ${member}`);
   if (forbidden.test(member)) throw new Error(`forbidden staged package member: ${member}`);
 }
 for (const member of ["Cargo.toml", "src/lib.rs", "README.md", "LICENSE-MIT", "LICENSE-APACHE"]) {
@@ -76,6 +77,7 @@ async function enumerateFiles(directory, relative = "") {
 const extractedMembers = (await enumerateFiles(packageRoot)).sort();
 for (const member of extractedMembers) {
   if (!allowed.test(member) || forbidden.test(member)) throw new Error(`forbidden extracted archive member: ${member}`);
+  if (member.startsWith("src/bin/")) throw new Error(`forbidden extracted Rust executable source: ${member}`);
 }
 if (JSON.stringify(extractedMembers) !== JSON.stringify([...inventory.members].sort())) throw new Error("extracted archive members differ from the saved cargo package inventory");
 if (!extractedMembers.includes(".gitignore")) throw new Error("extracted archive is missing the packaged .gitignore");
@@ -98,9 +100,10 @@ if (!/^publish\s*=\s*false$/m.test(packagedManifest)) throw new Error("packaged 
 if (!/^version\s*=\s*"0\.1\.0"$/m.test(packagedManifest)) throw new Error('packaged Cargo.toml lost version "0.1.0"');
 if (!/^rust-version\s*=\s*"1\.88"$/m.test(packagedManifest)) throw new Error('packaged Cargo.toml lost rust-version "1.88"');
 if (!/^license\s*=\s*"MIT OR Apache-2\.0"$/m.test(packagedManifest)) throw new Error('packaged Cargo.toml lost license "MIT OR Apache-2.0"');
-for (const feature of ["default", "http", "client-http", "interop"]) {
+for (const feature of ["default", "http", "client-http"]) {
   if (!new RegExp(`^${feature}\\s*=`, "mu").test(packagedManifest)) throw new Error(`packaged Cargo.toml lost feature ${feature}`);
 }
+if (/^interop\s*=/mu.test(packagedManifest)) throw new Error("packaged Cargo.toml must not define the interop feature");
 
 const consumerDir = path.join(stageDir, "consumer");
 await mkdir(consumerDir);

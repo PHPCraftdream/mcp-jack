@@ -7,11 +7,11 @@
     "rotation_client": ["interop/bin/go-rotation-client"]
   },
   "rust": {
-    "server": ["rust/target/release/interop-server"],
-    "client": ["rust/target/release/interop-client"],
-    "transfer": ["rust/target/release/interop-transfer"],
-    "rotation_server": ["rust/target/release/interop-server", "--mode", "rotation-server"],
-    "rotation_client": ["rust/target/release/interop-client", "--mode", "rotation-client"]
+    "server": ["interop/rust/target/release/interop-server"],
+    "client": ["interop/rust/target/release/interop-client"],
+    "transfer": ["interop/rust/target/release/interop-transfer"],
+    "rotation_server": ["interop/rust/target/release/interop-server", "--mode", "rotation-server"],
+    "rotation_client": ["interop/rust/target/release/interop-client", "--mode", "rotation-client"]
   },
   "typescript": {
     "server": ["node", "ts/dist/interop/server.js"],

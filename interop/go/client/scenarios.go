@@ -48,7 +48,7 @@ type env struct {
 // SDK never exposes the body of an unsigned 401 (spec 01 section 5), but
 // interop outcomes must still report that response's wire code, so the raw
 // body bytes are captured here — the Go mirror of the Rust interop client's
-// TcpTransport response stash (rust/src/bin/interop/net.rs).
+// TcpTransport response stash (interop/rust/src/bin/interop/net.rs).
 type wireStash struct {
 	inner http.RoundTripper
 

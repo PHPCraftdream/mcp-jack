@@ -1,6 +1,7 @@
 // Summarizes a cargo-llvm-cov lcov tracefile into machine-readable JSON and a
-// human-readable TXT, partitioned into product / helper / interop groups.
-// No thresholds, no invented metrics.
+// human-readable TXT, partitioned into product / helper groups.
+// The interop harness is an external crate at interop/rust and is not part
+// of this rust-package product report. No thresholds, no invented metrics.
 // Usage: node tools/coverage/lcov-summary.mjs <lcov.info> <out.json> <out.txt>
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -8,14 +9,13 @@ import { fileURLToPath } from "node:url";
 
 const GENERATED_BY = "tools/coverage/lcov-summary.mjs";
 const MAX_UNCOVERED = 200;
-const GROUPS = ["product", "helper", "interop"];
+const GROUPS = ["product", "helper"];
 
-// Group rules: src/bin/* are the interop executables (helper code, not
-// published API); tests/ is test support (cargo-llvm-cov excludes tests/ by
+// Group rules: tests/ is test support (cargo-llvm-cov excludes tests/ by
 // default anyway — classify defensively, never invent); everything under
-// src/ is product.
+// src/ is product. The separate interop/rust crate is outside this report.
 export function groupFor(filePath) {
-  if (filePath.startsWith("src/bin/")) return "interop";
+  if (filePath.startsWith("interop/rust/")) return null;
   if (filePath.startsWith("tests/")) return "helper";
   if (filePath.startsWith("src/")) return "product";
   return null;
@@ -26,12 +26,15 @@ function roundPct(covered, total) {
   return Math.round((100 * covered) / total * 100) / 100;
 }
 
-// cargo-llvm-cov usually writes workspace-relative SF paths
-// (src/client/auth.rs) but absolute paths appear on some setups; normalize by
-// keeping everything after the last `rust/` segment, then classify on
-// forward slashes.
+// cargo-llvm-cov writes source paths relative to the rust package (for example
+// src/client/auth.rs), though absolute paths appear on some setups. Strip the
+// rust/ package root for product paths, but retain interop/rust/ paths so the
+// external harness cannot be normalized into and misclassified as product.
 export function normalizeSf(sfPath) {
   const normalized = sfPath.replaceAll("\\", "/");
+  const externalMarker = "interop/rust/";
+  const externalIndex = normalized.lastIndexOf(externalMarker);
+  if (externalIndex !== -1) return normalized.slice(externalIndex);
   const marker = "rust/";
   const index = normalized.lastIndexOf(marker);
   return index === -1 ? normalized : normalized.slice(index + marker.length);
@@ -113,8 +116,8 @@ function groupSummary(files) {
 function renderTxt(json) {
   const lines = [
     "Rust line/region coverage via cargo-llvm-cov (LLVM source-based coverage); branch coverage requires an unstable nightly flag and is not reported.",
-    "cargo-llvm-cov excludes vendored sources and tests/ by default; rust/src/bin/interop/* binaries are included when built by the all-features coverage run and their LCOV source records are grouped as interop.",
-    "Scope: only SF records emitted for the rust package are measured; separate Go and TypeScript interop executables and external processes are not measured by this report.",
+    "cargo-llvm-cov excludes vendored sources and tests/ by default; all-features coverage measures Rust SDK sources under rust/src, not binaries from the separate interop/rust harness crate.",
+    "Scope: only SF records emitted for the rust package are measured; the external interop/rust harness, Go and TypeScript executables, and external processes are not measured by this report.",
   ];
   for (const group of GROUPS) {
     const g = json.groups[group];
@@ -153,7 +156,7 @@ if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === path.res
     mode: null,
     generatedBy: GENERATED_BY,
     coverageScope:
-      "Only SF records emitted by cargo-llvm-cov for the rust package are measured. rust/src/bin/interop/* paths emitted by the all-features run are grouped as interop; separate Go and TypeScript executables and external processes are not measured by this report.",
+      "Only SF records emitted by cargo-llvm-cov for the rust package are measured. The separate interop/rust harness crate, Go and TypeScript executables, and external processes are not measured by this report.",
     groups: groupSummary(files),
     total: { ...allTotal, pct: roundPct(allTotal.linesCovered, allTotal.linesTotal) },
     files,
