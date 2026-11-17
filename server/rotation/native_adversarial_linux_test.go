@@ -79,9 +79,9 @@ func TestNativeServerKeyCallRejectsRoutesCursorsAndClockFailures(t *testing.T) {
 	if refusal := valid(`{"after_ordinal":1,"after_hash":"`+strings.Repeat("A", 43)+`"}`, "provider-test"); refusal == nil || refusal.HTTPStatus != 409 || refusal.Code != "rotation_checkpoint_unavailable" {
 		t.Fatalf("cursor beyond head refusal = %+v", refusal)
 	}
-	// snapshot state invariants establish headOrdinal == checkpointOrdinal+len(records), so offset>len(records) is excluded before selection.
-	if refusal := valid(`{"after_ordinal":0,"after_hash":"`+strings.Repeat("A", 43)+`"}`, "provider-test"); refusal == nil || refusal.HTTPStatus != 409 || refusal.Code != "rotation_checkpoint_unavailable" {
-		t.Fatalf("checkpoint hash mismatch refusal = %+v", refusal)
+	// rotation/arguments.go:DecodeServerKeyArguments requires the literal "-" hash for ordinal 0, so this cursor is malformed before any checkpoint lookup.
+	if refusal := valid(`{"after_ordinal":0,"after_hash":"`+strings.Repeat("A", 43)+`"}`, "provider-test"); refusal == nil || refusal.HTTPStatus != 400 || refusal.Code != jack.CodeInvalidParams {
+		t.Fatalf("genesis cursor with a non-dash hash refusal = %+v", refusal)
 	}
 	if err := f.store.Close(); err != nil {
 		t.Fatal("close before post-close route check:", err)
@@ -211,8 +211,19 @@ func TestNativeResponseParsingAndSnapshotParityAreAuthoritative(t *testing.T) {
 	}
 
 	// native.go:matchesNativeResponse uses the returned identity, head, page bounds, and exact committed record order as its oracle.
-	if !bytes.Contains(payload, []byte(first.Record.Wire)) || !bytes.Contains(payload, []byte(second.Record.Wire)) {
-		t.Fatal("valid page does not contain the committed publication chain")
+	// The payload is JSON, so record LFs appear as escapes: compare the decoded records, in committed order.
+	pageRecords, _ := decoded["records"].([]any)
+	firstAt, secondAt := -1, -1
+	for i, record := range pageRecords {
+		switch record {
+		case first.Record.Wire:
+			firstAt = i
+		case second.Record.Wire:
+			secondAt = i
+		}
+	}
+	if firstAt < 0 || secondAt != firstAt+1 {
+		t.Fatalf("valid page does not contain the committed publication chain in order: first at %d, second at %d", firstAt, secondAt)
 	}
 	if authorization, err := provider.AuthorizeResponse(server.ResponseKeyRequest{Tool: server.ToolServerKey, Status: 200, Body: validBody}); err != nil {
 		t.Fatalf("exact committed page refused: %v", err)

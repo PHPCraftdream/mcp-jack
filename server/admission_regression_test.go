@@ -143,15 +143,17 @@ func TestDurableAdmissionStateGateRejectsChangedRepeatedAndMissingCallbacks(t *t
 				}
 				return
 			}
-			// admission.go:reserveDurable normalizes a plain pre-receipt state error without fencing; an omitted callback is fenced below.
-			if storage.calls != 0 || storage.fences != 0 {
-				t.Fatalf("pre-reservation callback error outcome: storage=%+v", storage)
+			// No receipt exists in either case, so storage is never reserved.
+			if storage.calls != 0 {
+				t.Fatalf("pre-reservation callback error reached storage: storage=%+v", storage)
 			}
-			// A missing callback violates AdmissionStateStore's synchronous exactly-once contract; reserveDurable fences without dispatch.
-			if scenario == "missing" {
-				if storage.fences != 1 {
-					t.Fatalf("missing callback did not fence: storage=%+v", storage)
-				}
+			// admission.go:reserveDurable normalizes a plain pre-receipt state error (storageRejection) without fencing.
+			if scenario == "plain-error" && storage.fences != 0 {
+				t.Fatalf("plain pre-reservation error fenced the store: storage=%+v", storage)
+			}
+			// A missing callback violates AdmissionStateStore's synchronous exactly-once contract: the `!called.Load()` branch fences.
+			if scenario == "missing" && storage.fences != 1 {
+				t.Fatalf("missing callback did not fence: storage=%+v", storage)
 			}
 		})
 	}
@@ -190,8 +192,9 @@ func TestDurableAdmissionCallbackErrorAfterSuccessFencesDiscardedReceipt(t *test
 	storage := &admissionSpy{}
 	result := durableVerifier(t, state, storage, func() int64 { return 100 }).Verify(request)
 	defer result.Done()
-	// admission.go:240-250: a WithAdmission error after a successful callback fences the durable store and rejects via durableFailure, discarding the receipt.
-	if result.HTTPStatus != 503 || result.Code != "durability_unavailable" || result.Message != "durable admission is unavailable" || result.Accepted || !result.NonceRecorded {
+	// admission.go:reserveDurable: a WithAdmission error after a successful callback fences the durable store and returns a fresh
+	// rejectionFrom(durableFailure()), discarding the receipt, so the result does not claim NonceRecorded.
+	if result.HTTPStatus != 503 || result.Code != "durability_unavailable" || result.Message != "durable admission is unavailable" || result.Accepted || result.NonceRecorded {
 		t.Fatalf("post-callback callback error did not reject durably: %+v", result)
 	}
 	if storage.fences != 1 || storage.lease == nil || storage.lease.releases != 1 {
@@ -311,10 +314,14 @@ func TestDurableAdmissionBoundsTimestampBeforeReserveAndRechecksLease(t *testing
 		request := admissionRequest(t, state, 100)
 		storage := &admissionSpy{lease: &leaseSpy{valid: false}}
 		result := durableVerifier(t, state, storage, func() int64 { return 100 }).Verify(request)
-		defer result.Done()
 		// admission.go:reserveDurable requires lease.Valid and request.Validate while WithAdmission holds the registry snapshot.
-		if result.HTTPStatus != 503 || result.Code != "state_changed" || !result.NonceRecorded || result.Accepted || storage.fences != 0 || storage.lease.releases != 1 {
-			t.Fatalf("invalid serving lease authorized request or leaked: %+v storage=%+v", result, storage)
+		if result.HTTPStatus != 503 || result.Code != "state_changed" || !result.NonceRecorded || result.Accepted || storage.fences != 0 {
+			t.Fatalf("invalid serving lease authorized request: %+v storage=%+v", result, storage)
+		}
+		// The serving lease is released by Result.Done (the middleware's deferred call).
+		result.Done()
+		if storage.lease.releases != 1 {
+			t.Fatalf("invalid serving lease releases=%d, want exactly one", storage.lease.releases)
 		}
 	})
 }

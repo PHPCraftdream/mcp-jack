@@ -175,8 +175,11 @@ func TestServerOwnedGuardAndCorruptSnapshotFailures(t *testing.T) {
 		if _, _, err := store.Snapshot(); !errors.Is(err, ErrUnavailable) {
 			t.Fatalf("Snapshot with changed owner: %v", err)
 		}
-		if _, err := store.AdvanceAndCheck(); !errors.Is(err, ErrUnavailable) || !store.fenced.Load() {
-			t.Fatal("owned guard failure did not deny clock authority")
+		// server_operations.go:advanceServerClock maps a failed owned guard to rotation_clock_unavailable and fences the store.
+		_, advanceErr := store.AdvanceAndCheck()
+		requireServerCode(t, advanceErr, "rotation_clock_unavailable")
+		if !store.fenced.Load() {
+			t.Fatal("owned guard failure did not fence the store")
 		}
 		if err := store.Close(); !errors.Is(err, ErrUnavailable) {
 			t.Fatalf("fenced close: %v", err)

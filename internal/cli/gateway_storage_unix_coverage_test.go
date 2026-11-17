@@ -25,12 +25,26 @@ import (
 	"github.com/PHPCraftdream/mcp-jack/server"
 )
 
-func gatewayCoverageSocket(t *testing.T, dir string) string {
+// gatewayCoverageSocket listens on a Unix socket in a short private directory: sockaddr_un paths are limited
+// to about 104 bytes on macOS, which the long t.TempDir path would exceed (as in unixUpstream).
+func gatewayCoverageSocket(t *testing.T, _ string) string {
 	t.Helper()
-	path := filepath.Join(dir, "coverage.sock")
+	short, err := os.MkdirTemp("", "jack-cov-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	short, err = filepath.EvalSymlinks(short)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(short) })
+	if err := os.Chmod(short, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(short, "coverage.sock")
 	listener, err := net.Listen("unix", path)
 	if err != nil {
-		t.Fatal("could not create Unix socket fixture")
+		t.Fatalf("could not create Unix socket fixture: %v", err)
 	}
 	if err := os.Chmod(path, 0600); err != nil {
 		_ = listener.Close()
