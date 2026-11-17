@@ -182,7 +182,10 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	// The request signature binds the response signing string (spec 01 section 5).
-	auth, _ := jack.ParseRequestAuth([]string{headerVal})
+	auth, err := jack.ParseRequestAuth([]string{headerVal})
+	if err != nil {
+		return nil, fmt.Errorf("jack client: parsing signed request auth header: %w", err)
+	}
 
 	clone := req.Clone(req.Context())
 	clone.Header.Set("Jack-Auth", headerVal)
