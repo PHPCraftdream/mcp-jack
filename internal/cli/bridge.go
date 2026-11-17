@@ -79,6 +79,106 @@ func bridge(ctx context.Context, configPath string, streams IO) error {
 	return bridgeWithObserver(ctx, configPath, streams, nil)
 }
 
+// bridgeRuntime holds the mutable state shared by the relay loop and its
+// launched workers. Owned only by the loop goroutine.
+type bridgeRuntime struct {
+	ctx       context.Context
+	cancel    context.CancelFunc
+	conn      *connection
+	streams   IO
+	completed chan error
+	workers   sync.WaitGroup
+	admission bridgeAdmission
+	state     int
+	timer     *time.Timer
+}
+
+// startBridgeReader spawns the frame reader and returns the channels it feeds.
+func startBridgeReader(ctx context.Context, in io.Reader, workers *sync.WaitGroup) (<-chan frame, <-chan error) {
+	frames := make(chan frame)
+	terminal := make(chan error)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		readFrames(ctx, in, frames, terminal)
+	}()
+	return frames, terminal
+}
+
+// reset restarts the idle timer, draining any pending tick first.
+func (r *bridgeRuntime) reset() {
+	if !r.timer.Stop() {
+		select {
+		case <-r.timer.C:
+		default:
+		}
+	}
+	r.timer.Reset(r.conn.timeout)
+}
+
+// launch marks admission busy and relays one frame in a tracked worker.
+func (r *bridgeRuntime) launch(b []byte) {
+	r.admission.busy = true
+	r.reset()
+	r.workers.Add(1)
+	go func() {
+		defer r.workers.Done()
+		callCtx, stop := context.WithTimeout(r.ctx, r.conn.timeout)
+		defer stop()
+		r.completed <- relayFrame(callCtx, r.conn, r.streams.Out, b, &r.state)
+	}()
+}
+
+// relayLoop admits input and dispatches workers until a terminal event, the
+// idle timer, or cancellation ends the bridge. The observer, when present, sees
+// the ordinary-input candidate immediately before each select and must not
+// block or mutate admission.
+func (r *bridgeRuntime) relayLoop(frames <-chan frame, terminal <-chan error, observe func(<-chan frame, bridgeAdmission)) error {
+	for {
+		if !r.admission.busy && r.admission.pending != nil {
+			r.launch(r.admission.pending.body)
+			r.admission.pending = nil
+		}
+		input := r.admission.input(frames)
+		if observe != nil {
+			observe(input, r.admission)
+		}
+		select {
+		case <-r.ctx.Done():
+			return r.ctx.Err()
+		case <-r.timer.C:
+			return context.DeadlineExceeded
+		case err := <-terminal:
+			if err != io.EOF || r.admission.pending != nil {
+				return errProtocol
+			}
+			if r.admission.busy {
+				// A finished write may beat EOF, but EOF with an accepted
+				// pending frame must fail even if the worker returns nil.
+				select {
+				case err := <-r.completed:
+					return err
+				default:
+				}
+				r.cancel()
+				_ = r.streams.Out.Close()
+				return <-r.completed
+			}
+			return nil
+		case f := <-input:
+			if next := r.admission.accept(f); next != nil {
+				r.launch(next.body)
+			}
+		case err := <-r.completed:
+			r.admission.busy = false
+			if err != nil {
+				return err
+			}
+			r.reset()
+		}
+	}
+}
+
 // bridgeWithObserver runs the same loop as bridge. The optional internal observer
 // sees the evaluated ordinary-input candidate immediately before the select;
 // it must not block or mutate admission. Production callers pass nil.
@@ -93,88 +193,16 @@ func bridgeWithObserver(ctx context.Context, configPath string, streams IO, obse
 		return err
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	var workers sync.WaitGroup
+	r := &bridgeRuntime{ctx: ctx, cancel: cancel, conn: conn, streams: streams, completed: make(chan error, 1), timer: time.NewTimer(conn.timeout)}
 	defer func() {
 		cancel()
 		_ = streams.In.Close()
 		_ = streams.Out.Close()
-		workers.Wait()
+		r.workers.Wait()
 	}()
-	frames := make(chan frame)
-	terminal := make(chan error)
-	workers.Add(1)
-	go func() {
-		defer workers.Done()
-		readFrames(ctx, streams.In, frames, terminal)
-	}()
-	completed := make(chan error, 1)
-	admission := bridgeAdmission{}
-	state := 0
-	timer := time.NewTimer(conn.timeout)
-	defer timer.Stop()
-	reset := func() {
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
-		timer.Reset(conn.timeout)
-	}
-	launch := func(b []byte) {
-		admission.busy = true
-		reset()
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			callCtx, stop := context.WithTimeout(ctx, conn.timeout)
-			defer stop()
-			completed <- relayFrame(callCtx, conn, streams.Out, b, &state)
-		}()
-	}
-	for {
-		if !admission.busy && admission.pending != nil {
-			launch(admission.pending.body)
-			admission.pending = nil
-		}
-		input := admission.input(frames)
-		if observe != nil {
-			observe(input, admission)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-timer.C:
-			return context.DeadlineExceeded
-		case err := <-terminal:
-			if err != io.EOF || admission.pending != nil {
-				return errProtocol
-			}
-			if admission.busy {
-				// A finished write may beat EOF, but EOF with an accepted
-				// pending frame must fail even if the worker returns nil.
-				select {
-				case err := <-completed:
-					return err
-				default:
-				}
-				cancel()
-				_ = streams.Out.Close()
-				return <-completed
-			}
-			return nil
-		case f := <-input:
-			if next := admission.accept(f); next != nil {
-				launch(next.body)
-			}
-		case err := <-completed:
-			admission.busy = false
-			if err != nil {
-				return err
-			}
-			reset()
-		}
-	}
+	defer r.timer.Stop()
+	frames, terminal := startBridgeReader(ctx, streams.In, &r.workers)
+	return r.relayLoop(frames, terminal, observe)
 }
 
 func relayFrame(ctx context.Context, c *connection, out io.Writer, b []byte, state *int) error {
