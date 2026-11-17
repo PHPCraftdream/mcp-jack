@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-//! Server-side Rust SDK for mcp-jack, the secure transport protocol wrapping
+//! Client and server Rust SDK for mcp-jack, the secure transport protocol wrapping
 //! MCP: authentication, the admin flag and audit. The JSON fixtures under
 //! ../spec/fixtures are the conformance source of truth; this crate mirrors
 //! the Go jack + server packages.

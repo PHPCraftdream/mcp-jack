@@ -203,7 +203,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust
+          workspaces: |
+            rust
+            interop/rust
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -212,8 +214,8 @@ jobs:
           go build -o interop/bin/go-server ./interop/go/server
           go build -o interop/bin/go-client ./interop/go/client
       - name: Build Rust executables
-        working-directory: rust
-        run: cargo build --locked --release --features interop
+        working-directory: interop/rust
+        run: cargo build --locked --release
       - name: Build TypeScript executables
         working-directory: ts
         run: |
@@ -236,7 +238,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust
+          workspaces: |
+            rust
+            interop/rust
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -245,8 +249,8 @@ jobs:
           go build -o interop/bin/go-rotation-server ./interop/go/rotationserver
           go build -o interop/bin/go-rotation-client ./interop/go/rotationclient
       - name: Build Rust executables
-        working-directory: rust
-        run: cargo build --locked --release --features interop
+        working-directory: interop/rust
+        run: cargo build --locked --release
       - name: Build TypeScript executables
         working-directory: ts
         run: |
@@ -269,7 +273,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust
+          workspaces: |
+            rust
+            interop/rust
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -278,8 +284,8 @@ jobs:
           go build -o interop/bin/go-server ./interop/go/server
           go build -o interop/bin/go-client ./interop/go/client
       - name: Build Rust executables
-        working-directory: rust
-        run: cargo build --locked --release --features interop
+        working-directory: interop/rust
+        run: cargo build --locked --release
       - name: Build TypeScript executables
         working-directory: ts
         run: |
@@ -349,15 +355,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust
+          workspaces: |
+            rust
+            interop/rust
       - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Build Go transfer executable
         run: go build -o interop/bin/go-transfer ./interop/go/transfer
       - name: Build Rust transfer executable
-        working-directory: rust
-        run: cargo build --locked --release --features interop --bin interop-transfer
+        working-directory: interop/rust
+        run: cargo build --locked --release --bin interop-transfer
       - name: Build TypeScript transfer executable
         working-directory: ts
         run: |

@@ -4,6 +4,8 @@ This file records repository history. The `0.1.0 (unreleased)` section describes
 
 ## 0.1.0 (unreleased)
 
+- Removed the panicking `HttpTransport` default and moved the Rust interop harness outside the SDK crate into its own unpublished crate.
+
 ### What ships
 
 - Wire freeze: the 0.1.x wire profile (the base protocol, durable nonce admission and server-key rotation) is frozen; the repository owner accepted the freeze on 2026-11-16 at commit `c8ea1a0b37e68ab6dcdfb19fd0e427668cf1f343`. Evidence at that commit: all CI jobs green, the 3x3 request/response, rotation, durable-restart and credential-transfer matrices (9 client x server pairs each) passing. No release-candidate run was required for the freeze. The freeze is not a release, a version change or a publication.

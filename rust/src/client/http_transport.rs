@@ -123,11 +123,6 @@ impl HttpTransport {
         HttpTransportBuilder::new()
     }
 }
-impl Default for HttpTransport {
-    fn default() -> Self {
-        Self::new().expect("default HttpTransport configuration is valid")
-    }
-}
 
 #[derive(Clone)]
 struct TaskHandle(Arc<Mutex<TaskState>>);

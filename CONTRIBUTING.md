@@ -24,7 +24,7 @@ CI runs all of these; run what applies to your change before opening a pull requ
 
 ### Licence checks
 
-The `license` workflow enforces dependency licence compatibility for all three SDKs against the allowlists in `tools/license/`: Go (module plus all dependencies, test imports included), Rust (the whole `Cargo.lock` graph, including optional `http`/`interop` features, dev, build and platform-specific crates), and TypeScript (installed tree, dev dependencies included). It also verifies that the repository itself consistently declares the dual licence. Unknown or unlisted licences fail the build; see `tools/license/README.md` for the policy, the allowed licence categories and the exception process.
+The `license` workflow enforces dependency licence compatibility for all three SDKs against the allowlists in `tools/license/`: Go (module plus all dependencies, test imports included), Rust (the whole `Cargo.lock` graph, including optional `http`/`client-http` features, dev, build and platform-specific crates; the separate interop harness crate is outside the product crate), and TypeScript (installed tree, dev dependencies included). It also verifies that the repository itself consistently declares the dual licence. Unknown or unlisted licences fail the build; see `tools/license/README.md` for the policy, the allowed licence categories and the exception process.
 
 ## Licence
 

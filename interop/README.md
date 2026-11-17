@@ -30,11 +30,11 @@ interop/
   tools/fake-rotation-{server,client}.mjs  rotation self-test fakes; not SDKs
   go/{server,client,transfer}/       Go integration executable sources
   go/{rotationserver,rotationclient}/  Go rotation executable sources
-  ../rust/src/bin/interop*.rs        Rust integration executable sources
+  rust/src/bin/interop*.rs           Rust integration executable sources
   ../ts/src/interop/*.ts             TypeScript integration executable sources
 ```
 
-`targets.json` currently maps Go to `interop/bin/go-{server,client,transfer}`, Rust to `rust/target/release/interop-{server,client,transfer}`, and TypeScript to `node ts/dist/interop/{server,client,transfer}.js`. The `rotation_server`/`rotation_client` roles map to the same Go, Rust and TypeScript rotation executables (`interop/bin/go-rotation-{server,client}`, the Rust `interop-server`/`interop-client` binaries with `--mode rotation-server|rotation-client` pre-args, and `ts/dist/interop/rotation-{server,client}.js`). These are build/output paths, not claims that binaries currently exist. On Windows, the request harness tries `.exe` for a missing binary path. Target-file relative paths resolve from the repository root; a bare command is resolved on `PATH`.
+`targets.json` maps Go to `interop/bin/go-{server,client,transfer}`, Rust to `interop/rust/target/release/interop-{server,client,transfer}`, and TypeScript to `node ts/dist/interop/{server,client,transfer}.js`. The `rotation_server`/`rotation_client` roles use the same Go, Rust and TypeScript rotation executables (`interop/bin/go-rotation-{server,client}`, the Rust `interop-server`/`interop-client` binaries with `--mode rotation-server|rotation-client` pre-args, and `ts/dist/interop/rotation-{server,client}.js`). These are build/output paths, not claims that binaries currently exist. On Windows, the request harness tries `.exe` for a missing binary path. Target-file relative paths resolve from the repository root; a bare command is resolved on `PATH`.
 
 Build instructions (not executed for this documentation update):
 
@@ -44,11 +44,11 @@ go build -o interop/bin/go-client ./interop/go/client
 go build -o interop/bin/go-transfer ./interop/go/transfer
 go build -o interop/bin/go-rotation-server ./interop/go/rotationserver
 go build -o interop/bin/go-rotation-client ./interop/go/rotationclient
-cargo build --manifest-path rust/Cargo.toml --locked --release --features interop --bin interop-server --bin interop-client --bin interop-transfer
+cargo build --manifest-path interop/rust/Cargo.toml --locked --release
 npm --prefix ts run build
 ```
 
-Rust's `interop` feature enables the interop binaries/dependencies; the transfer binary is behind that feature. TypeScript output is built from `ts/src/interop/`. Go outputs must be placed where `targets.json` points (or the targets file adjusted). The Rust `--features interop` build above already produces the `--mode rotation-server|rotation-client` binaries, and `npm run build` already covers `ts/dist/interop/rotation-{server,client}.js`. The rotation harness runs on Linux only: the rotation private-file stores in all three SDKs refuse other platforms.
+The Rust harness is a separate, unpublished crate in `interop/rust/`, not part of the product SDK crate in `rust/`; the product crate has no `interop` feature. Building the harness crate directly produces the server, client, and transfer executables at `interop/rust/target/release/interop-{server,client,transfer}`. The same server/client binaries run the rotation modes listed above. TypeScript output is built from `ts/src/interop/`. Go outputs must be placed where `targets.json` points (or the targets file adjusted). The rotation harness runs on Linux only: the rotation private-file stores in all three SDKs refuse other platforms.
 
 ## 3. Running
 
