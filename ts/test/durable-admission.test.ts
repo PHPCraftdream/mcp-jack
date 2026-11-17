@@ -565,20 +565,40 @@ test("verifier constructor: selecting BOTH a volatile and a durable nonce store 
   );
 });
 
-test("verifier constructor: durable window 121 throws", () => {
+test("verifier constructor: durable bounds keep their established error", () => {
   const key = freshKey();
-  assert.throws(
-    () => new Verifier({
-      aud: AUD,
-      state: registryWith({ kid: key.kid, publicKey: encodeBase64URL(key.pub), name: "svc" }),
-      durable: stubDurable,
-      native: new Native(),
-      now: () => 100,
-      window: 121,
-    }),
-    /durable window must be between 1 and 120 seconds/,
-    "durable window above 120 must be rejected",
-  );
+  for (const window of [-1, 121]) {
+    assert.throws(
+      () => new Verifier({
+        aud: AUD,
+        state: registryWith({ kid: key.kid, publicKey: encodeBase64URL(key.pub), name: "svc" }),
+        durable: stubDurable,
+        native: new Native(),
+        now: () => 100,
+        window,
+      }),
+      /durable window must be between 1 and 120 seconds/,
+      `durable window ${window} must retain the durable bound error`,
+    );
+  }
+});
+
+test("verifier constructor: durable window fractions and unsafe integers use shared validation", () => {
+  const key = freshKey();
+  for (const window of [1.5, 2 ** 53]) {
+    assert.throws(
+      () => new Verifier({
+        aud: AUD,
+        state: registryWith({ kid: key.kid, publicKey: encodeBase64URL(key.pub), name: "svc" }),
+        durable: stubDurable,
+        native: new Native(),
+        now: () => 100,
+        window,
+      }),
+      /server: window must be 0 \(default 30\) or an integer between 1 and 120 seconds/,
+      `durable window ${window} must be rejected`,
+    );
+  }
 });
 
 test("verifier constructor: durable window 120 is accepted (and 0 falls back to the default)", () => {
@@ -607,22 +627,21 @@ test("verifier constructor: durable window 120 is accepted (and 0 falls back to 
   );
 });
 
-test("verifier constructor: a volatile window above 120 stays allowed when durable is absent", () => {
+test("verifier constructor: a volatile window above 120 is rejected", () => {
   const key = freshKey();
-  const verifier = new Verifier({
-    aud: AUD,
-    state: registryWith({ kid: key.kid, publicKey: encodeBase64URL(key.pub), name: "svc" }),
-    nonces: new NonceStore(),
-    native: new Native(),
-    now: () => 100,
-    window: 500,
-  });
-  const nonce = encodeBase64URL(randomNonce());
-  const msg = requestSigningString("POST", TARGET, AUD, key.kid, 100, nonce, utf8(PING));
-  const sig = encodeBase64URL(new Uint8Array(nodeSign(null, Buffer.from(msg), key.priv)));
-  const res = verifier.verify({ method: "POST", target: TARGET,
-    authValues: [formatRequestAuth({ kid: key.kid, ts: 100, nonce, sig })], body: utf8(PING) });
-  assert.equal(res.accepted, true, "volatile profile keeps its own window semantics");
+  // spec 01 section 4/task165: volatile and durable profiles share the 1..120-second window bound.
+  assert.throws(
+    () => new Verifier({
+      aud: AUD,
+      state: registryWith({ kid: key.kid, publicKey: encodeBase64URL(key.pub), name: "svc" }),
+      nonces: new NonceStore(),
+      native: new Native(),
+      now: () => 100,
+      window: 121,
+    }),
+    /server: window must be 0 \(default 30\) or an integer between 1 and 120 seconds/,
+    "volatile profile shares the 120 second bound",
+  );
 });
 
 test("durable store: a colliding operation id is retried ONCE before any fence (Go parity)",

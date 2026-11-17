@@ -974,15 +974,42 @@ test("a broken injected clock fails closed with 500 and records no nonce", () =>
   }
 });
 
-test("verifier constructor rejects a non-finite window", () => {
+test("verifier constructor validates shared window bounds and safe integers", () => {
   const base = (): VerifierConfig => ({
     aud: loadRegistry().aud,
     state: new MemoryState(),
     nonces: new NonceStore(),
     now: () => NOW,
   });
-  assert.throws(() => new Verifier({ ...base(), window: Number.NaN }), /window must be a finite number/);
-  assert.throws(() => new Verifier({ ...base(), window: Number.POSITIVE_INFINITY }), /window must be a finite number/);
+  assert.throws(
+    () => new Verifier({ ...base(), window: Number.NaN }),
+    /server: window must be 0 \(default 30\) or an integer between 1 and 120 seconds/,
+  );
+  assert.throws(
+    () => new Verifier({ ...base(), window: Number.POSITIVE_INFINITY }),
+    /server: window must be 0 \(default 30\) or an integer between 1 and 120 seconds/,
+  );
+  for (const window of [-1, 121, 1.5, 2 ** 53]) {
+    assert.throws(
+      () => new Verifier({ ...base(), window }),
+      /server: window must be 0 \(default 30\) or an integer between 1 and 120 seconds/,
+      `invalid volatile window ${window}`,
+    );
+  }
+  const alice = materialFor(ALICE);
+  const maxWindowHarness = harness();
+  const verifier120 = new Verifier({
+    aud: maxWindowHarness.aud,
+    state: maxWindowHarness.state,
+    nonces: maxWindowHarness.nonces,
+    now: () => NOW,
+    window: 120,
+  });
+  const { req: req120 } = signed(alice, { body: encoder.encode(PING), ts: NOW + 120 });
+  const { req: req121 } = signed(alice, { body: encoder.encode(PING), ts: NOW + 121 });
+  // spec 01 section 4/task165: inclusive window edge accepts; one second beyond rejects.
+  assert.equal(verifier120.verify(req120).accepted, true, "window 120 boundary accepted");
+  assert.equal(verifier120.verify(req121).code, Code.TIMESTAMP_OUT_OF_WINDOW, "window 121 boundary rejected");
 });
 
 test("verifier constructor rejects aud control characters; ordinary aud accepted", () => {
@@ -1006,11 +1033,24 @@ test("verifier constructor rejects aud control characters; ordinary aud accepted
 const ping = encoder.encode(PING);
 
 /** Harness whose injected clock is steered by the test through the returned setter. */
-function steppedHarness(): { verifier: Verifier; setClock: (t: number) => void } {
-  const base = harness();
+function steppedHarness(opts?: { native?: NativeTools; withAudit?: boolean }): {
+  verifier: Verifier;
+  setClock: (t: number) => void;
+  state: MemoryState;
+  nonces: NonceStore;
+  audit: MemoryAuditSink | undefined;
+} {
+  const base = harness(opts);
   let clock = NOW;
-  const verifier = new Verifier({ aud: base.aud, state: base.state, nonces: base.nonces, now: () => clock });
-  return { verifier, setClock: (t) => void (clock = t) };
+  const verifier = new Verifier({
+    aud: base.aud,
+    state: base.state,
+    nonces: base.nonces,
+    now: () => clock,
+    ...(opts?.native !== undefined ? { native: opts.native } : {}),
+    ...(base.audit !== undefined ? { audit: base.audit } : {}),
+  });
+  return { verifier, setClock: (t) => void (clock = t), state: base.state, nonces: base.nonces, audit: base.audit };
 }
 
 test("clock step forward then back: the replay is refused and old timestamps are out of window", () => {
@@ -1044,9 +1084,76 @@ test("clock high-water mark: a request ahead of the raw clock is judged against 
   setClock(jump);
   assert.equal(verifier.verify(signed(alice, { ts: jump, body: ping }).req).accepted, true, "forward movement");
   setClock(NOW);
+  assert.equal(verifier.clock(), NOW, "clock getter continues to expose the raw injected sample");
   assert.equal(verifier.verify(signed(alice, { ts: jump, body: ping }).req).accepted, true, "ts=T+1000 at raw T");
   setClock(jump + 5);
   assert.equal(verifier.verify(signed(alice, { ts: jump + 5, body: ping }).req).accepted, true, "moving on");
+});
+
+test("clock high-water mark applies to key validity even after raw clock moves back", () => {
+  const { verifier, setClock, state } = steppedHarness();
+  const alice = materialFor(ALICE);
+  const expiring = randomKey();
+  const jump = NOW + 1000;
+  state.update((edit) => edit.putKey({
+    kid: expiring.kid,
+    publicKey: encodeBase64URL(expiring.pub),
+    name: "expiring",
+    notAfter: jump - 10,
+  }));
+
+  setClock(jump);
+  assert.equal(verifier.verify(signed(alice, { ts: jump, body: ping }).req).accepted, true, "advance high-water mark");
+  setClock(jump - 20); // Raw time is still before notAfter; effective time is not.
+  const { req } = signed(expiring, { ts: jump, body: ping });
+  const res = verifier.verify(req);
+  // spec 01 section 4/task165: key activity uses effective, not raw, request time.
+  assert.equal(res.code, Code.KEY_INACTIVE, "expired at high-water mark stays inactive");
+  assert.equal(res.nonceRecorded, false, "inactive key fails before nonce recording");
+});
+
+test("clock high-water mark applies to enrollment invite expiry before nonce/audit/consumption", () => {
+  const { verifier, setClock, state, nonces, audit } = steppedHarness({ native: new Native(), withAudit: true });
+  const alice = materialFor(ALICE);
+  const enrolling = randomKey();
+  const jump = NOW + 1000;
+  const code = encodeBase64URL(ENROLL_CODE_RAW);
+  state.update((edit) => {
+    edit.putInvite({ inviteId: inviteIdOf(ENROLL_CODE_RAW), createdBy: ROOT, createdAt: NOW - 1, expiresAt: jump - 10 });
+  });
+
+  setClock(jump);
+  assert.equal(verifier.verify(signed(alice, { ts: jump, body: ping }).req).accepted, true, "advance high-water mark");
+  setClock(jump - 20); // Raw time sees a live invite; effective time sees it expired.
+  const { req } = signed(enrolling, { ts: jump, body: enrollBody(enrolling, code) });
+  const res = verifier.verify(req);
+  // spec 01 section 4/task165: a stale invite remains unknown_key with no auth side effects.
+  assert.equal(res.code, Code.UNKNOWN_KEY, "expired invite stays unknown_key");
+  assert.equal(res.nonceRecorded, false, "expired invite does not record nonce");
+  assert.equal(nonces.len(), 1, "only the earlier valid request is in the volatile store");
+  assert.equal(audit?.events().length, 0, "expired invite does not audit");
+  assert.notEqual(state.lookupInvite(inviteIdOf(ENROLL_CODE_RAW)), undefined, "verifier does not consume invite");
+});
+
+test("native handler and audit receive effective request time", () => {
+  const native = new RecordingNative();
+  const { verifier, setClock, audit } = steppedHarness({ native, withAudit: true });
+  const alice = materialFor(ROOT);
+  const jump = NOW + 1000;
+
+  setClock(jump);
+  assert.equal(verifier.verify(signed(alice, { ts: jump, body: ping }).req).accepted, true, "advance high-water mark");
+  setClock(jump - 20);
+  const body = encoder.encode(JSON.stringify({
+    jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: TOOL_ADMIN_USER_LIST, arguments: {} },
+  }));
+  const res = verifier.verify(signed(alice, { ts: jump, body }).req);
+  // spec 01 section 4/task165: native Now and audit time use effective request time.
+  assert.equal(res.accepted, true, "native call accepted");
+  assert.equal(native.calls.length, 1, "native handler called once");
+  assert.equal(native.calls[0]?.now, jump, "native receives high-water time");
+  assert.equal(res.audit?.time, jump, "result audit uses high-water time");
+  assert.equal(audit?.events()[0]?.time, jump, "audit sink uses high-water time");
 });
 
 test("invalid clock sample stays fail-closed and does not corrupt the high-water mark", () => {

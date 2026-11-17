@@ -630,14 +630,13 @@ fn reservation_refuses_when_enrollment_kid_becomes_registered() {
     assert_eq!(info.intents, 0);
 }
 
-/// Go rejects a durable window below 0 or above 120 at construction; the
-/// Rust builder is infallible, so the refusal latches and fails closed.
+/// Invalid windows are rejected by Verifier::new before a durable profile can
+/// be attached; the private builder-latch regression lives beside Verifier.
 #[test]
-fn durable_window_out_of_bounds_fails_closed() {
+fn durable_window_out_of_bounds_rejected_at_construction() {
     let clock = ScriptedClock::new(&[100]);
     let (_sandbox, store) = open_store(&clock);
     let state = Arc::new(MemoryState::new());
-    let request = signed_get(&state, 100, "bad-window");
     let config = Config {
         aud: AUD.to_owned(),
         state: Arc::clone(&state) as Arc<dyn StateStore>,
@@ -647,14 +646,13 @@ fn durable_window_out_of_bounds_fails_closed() {
         window_seconds: 121,
         now: clock.verifier_clock(),
     };
-    let verifier = Verifier::new(config)
-        .expect("verifier config")
-        .with_durable_nonces(Arc::clone(&store));
-    let result = verifier.verify(&request);
-    assert!(!result.accepted);
-    assert_eq!(result.http_status, 500);
-    assert_eq!(result.code, "internal_error");
-    assert!(!result.nonce_recorded);
-    let info = nonce_store_info(&store);
-    assert_eq!(info.live, 0);
+    let error = match Verifier::new(config) {
+        Err(error) => error,
+        Ok(_) => panic!("out-of-range window must be rejected"),
+    };
+    assert_eq!(
+        error,
+        "server: window must be 0 (default 30) or an integer between 1 and 120 seconds"
+    );
+    store.close().expect("close unused durable store");
 }
