@@ -244,7 +244,7 @@ Consequences for clients: a new ring needs a checkpoint clients already trust or
 
 ## Monitoring and audit
 
-- Audit delivery is best effort: the SDK audit sink is optional and `Record` errors are ignored. The `jack gateway` does not configure a sink yet, so admin and enrollment calls through the gateway leave no audit record; capture the gateway's access at your reverse proxy until that is added (tracked, see [independent-review.md](independent-review.md)).
+- The CLI gateway writes best-effort JSON-lines audit events to process stderr for audited native calls that reach the tool; pre-tool refusals emit no event. `Record`/write errors are ignored, so these events are not complete or durable proof; capture stderr for retention.
 - Plan a second administrator key: if the only administrator key expires there is no in-band recovery, and a crash can leave a stale `<state>.owner` marker that blocks the gateway until it is removed by hand (see the crash recovery runbook).
 - Stderr diagnostics are fixed secret-free strings; no command prints a seed, invite code, or supplied path/URL.
 - Bridge stdout carries only verified protocol frames.

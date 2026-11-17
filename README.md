@@ -23,7 +23,7 @@ The repository-root Go package `jack` contains shared protocol primitives only; 
 
 ## Contract
 
-Authenticated ordinary MCP requests pass through unchanged. The application authorizes them using the immutable verified caller identity `{kid, name, admin}` supplied by the server SDK; request headers and bodies cannot supply that identity. The strict-boolean `admin` flag (false by default) gates reserved `jack.admin.*` tools only. Protocol operations are audited by the SDKs through an optional sink; the CLI gateway does not configure one yet (see [docs/independent-review.md](docs/independent-review.md)). User `kind`, scopes, and the policy engine are removed; legacy registry/state records containing `kind` or `scopes` are rejected without migration or rewrite.
+Authenticated ordinary MCP requests pass through unchanged. The application authorizes them using the immutable verified caller identity `{kid, name, admin}` supplied by the server SDK; request headers and bodies cannot supply that identity. The strict-boolean `admin` flag (false by default) gates reserved `jack.admin.*` tools only. Protocol operations are audited by the SDKs through an optional sink; the CLI gateway writes best-effort JSON-lines audit events for audited native calls that reach the tool to process stderr (`Record`/write errors are ignored; capture stderr for retention; see [operations](docs/operations.md)). User `kind`, scopes, and the policy engine are removed; legacy registry/state records containing `kind` or `scopes` are rejected without migration or rewrite.
 
 User-key rotation, server response-key rotation (`spec/candidate/server-key-rotation.md`), and the optional durable nonce profile are implemented. An authenticated session channel is future v0.2 direction.
 
