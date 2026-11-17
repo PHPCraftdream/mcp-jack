@@ -29,6 +29,54 @@ func newTransport(t *testing.T, srv *testServer) *Transport {
 	}
 }
 
+type shortSignatureSigner struct{ inner *InMemorySigner }
+
+func (s shortSignatureSigner) Sign([]byte) ([]byte, error) { return []byte{1, 2, 3}, nil }
+func (s shortSignatureSigner) PublicKey() []byte           { return s.inner.PublicKey() }
+func (s shortSignatureSigner) KID() string                 { return s.inner.KID() }
+
+func TestTransportRejectsMalformedOwnAuthHeader(t *testing.T) {
+	base := &spyBase{}
+	body := &closeSpyBody{Reader: strings.NewReader(`{"ping":1}`)}
+	tr := &Transport{
+		Base:      base,
+		Aud:       fixtureAud,
+		Signer:    shortSignatureSigner{inner: seedSignerByName(t, "alice")},
+		Now:       fixedClock(fixtureNow),
+		Nonce:     func() ([]byte, error) { return make([]byte, 16), nil },
+		ServerKey: make([]byte, ed25519.PublicKeySize),
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, fixtureAud+"/mcp", nil)
+	if err != nil {
+		t.Fatalf("http.NewRequestWithContext: %v", err)
+	}
+	req.Body = body
+
+	resp, err := tr.RoundTrip(req)
+	if err == nil {
+		t.Fatal("RoundTrip err = nil, want malformed own auth header")
+	}
+	if resp != nil {
+		t.Fatalf("resp = %+v, want nil", resp)
+	}
+	if !strings.Contains(err.Error(), "jack client: parsing signed request auth header:") {
+		t.Fatalf("err = %q, want descriptive client wrapper", err)
+	}
+	var jErr *jack.Error
+	if !errors.As(err, &jErr) {
+		t.Fatalf("err = %T (%v), want wrapped *jack.Error", err, err)
+	}
+	if jErr.Code != jack.CodeMalformedAuth {
+		t.Fatalf("Code = %q, want %q", jErr.Code, jack.CodeMalformedAuth)
+	}
+	if base.calls != 0 {
+		t.Fatalf("base calls = %d, want 0", base.calls)
+	}
+	if !body.closed {
+		t.Fatal("request body was not closed")
+	}
+}
+
 // postMCP issues a signed POST to srv at path /mcp with the given body.
 func postMCP(t *testing.T, httpc *http.Client, srvURL string, body []byte) (*http.Response, error) {
 	t.Helper()
