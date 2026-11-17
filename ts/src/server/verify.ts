@@ -447,7 +447,7 @@ export interface VerifierConfig {
    * allowlist checked by isNativeTool is unchanged.
    */
   readonly serverKeys?: NativeTools;
-  /** Seconds; undefined or <= 0 => DEFAULT_WINDOW. */
+  /** Seconds; undefined or 0 => DEFAULT_WINDOW; otherwise a safe integer from 1 through 120. */
   readonly window?: number;
   /**
    * REQUIRED injected clock in Unix seconds; the verifier never reads the
@@ -514,13 +514,23 @@ export class Verifier {
       throw new Error("server: VerifierConfig.nonces must be set");
     }
     if (cfg.now === undefined) throw new Error("server: VerifierConfig.now must be set");
-    // Go NewVerifier parity: exactly one nonce profile, and the durable
-    // profile bounds the window (server/verify.go: durable window <= 120).
+    // Go NewVerifier parity: exactly one nonce profile. Both profiles share
+    // the bounded integer window; preserve the durable profile's established
+    // bound error for safe-integer values outside that range.
     if (cfg.nonces !== undefined && cfg.durable !== undefined) {
       throw new Error("server: VerifierConfig: select exactly one nonce profile");
     }
-    if (cfg.durable !== undefined && cfg.window !== undefined && (cfg.window < 0 || cfg.window > 120)) {
-      throw new Error("server: VerifierConfig.durable window must be between 1 and 120 seconds");
+    const configuredWindow = cfg.window;
+    if (configuredWindow !== undefined && configuredWindow !== 0) {
+      if (!Number.isSafeInteger(configuredWindow)) {
+        throw new Error("server: window must be 0 (default 30) or an integer between 1 and 120 seconds");
+      }
+      if (cfg.durable !== undefined && (configuredWindow < 0 || configuredWindow > 120)) {
+        throw new Error("server: VerifierConfig.durable window must be between 1 and 120 seconds");
+      }
+      if (configuredWindow < 1 || configuredWindow > 120) {
+        throw new Error("server: window must be 0 (default 30) or an integer between 1 and 120 seconds");
+      }
     }
     this.aud = cfg.aud;
     this.state = cfg.state;
@@ -529,12 +539,9 @@ export class Verifier {
     this.audit = cfg.audit;
     this.native = cfg.native;
     this.serverKeys = cfg.serverKeys;
-    if (cfg.window !== undefined && !Number.isFinite(cfg.window)) {
-      throw new Error("server: VerifierConfig.window must be a finite number of seconds");
-    }
-    // NaN would slip the old `<= 0` default and poison the timestamp compare;
-    // non-finite windows are rejected outright, <= 0 keeps the DEFAULT_WINDOW fallback.
-    this.window = cfg.window === undefined || cfg.window <= 0 ? DEFAULT_WINDOW : cfg.window;
+    // A window is either zero/omitted (the default) or a safe integer in
+    // [1, 120]; constructor validation keeps malformed values out of compares.
+    this.window = configuredWindow === undefined || configuredWindow === 0 ? DEFAULT_WINDOW : configuredWindow;
     this.now = cfg.now;
   }
 
@@ -569,8 +576,8 @@ export class Verifier {
     if (!Number.isSafeInteger(now) || now < 0) {
       return rejected(500, "internal_error", "internal error");
     }
-    // Defense in depth: the constructor already rejects a non-finite window.
-    if (!Number.isFinite(this.window) || this.window <= 0) {
+    // Defense in depth: constructor validation requires the shared safe-integer range.
+    if (!Number.isSafeInteger(this.window) || this.window < 1 || this.window > 120) {
       return rejected(500, "internal_error", "internal error");
     }
     const effective = this.effectiveNow(now);
@@ -593,7 +600,7 @@ export class Verifier {
     let key: Uint8Array;
     let caller: RegistryEntry | undefined;
     if (entry !== undefined) {
-      if (!entryActive(entry, now)) {
+      if (!entryActive(entry, effective)) {
         return rejected(401, Code.KEY_INACTIVE, "key is not active");
       }
       try {
@@ -607,7 +614,7 @@ export class Verifier {
       }
       caller = entry;
     } else {
-      const enrolled = this.enrollmentKey(req, auth.kid, now);
+      const enrolled = this.enrollmentKey(req, auth.kid, effective);
       if ("rejection" in enrolled) {
         return enrolled.rejection;
       }
@@ -715,7 +722,7 @@ export class Verifier {
       identity: undefined,
       audit: undefined,
     };
-    const done = this.authorize(req, auth, now, caller, b);
+    const done = this.authorize(req, auth, effective, caller, b);
     return {
       accepted: done.accepted,
       kid: auth.kid,
