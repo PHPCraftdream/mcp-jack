@@ -708,11 +708,12 @@ fn guard_every_vector_is_classified() {
             "EXCLUDED names unknown vector {excluded_id}"
         );
     }
+    // pass counts the vectors driven without a recorded deviation.
     eprintln!(
-        "verdict: {} driven-full, {} driven-with-deviation, {} excluded",
+        "VECTOR-SUMMARY corpus=rotation-state sdk=rust pass={} excluded={} deviation={}",
         DRIVEN_FULL.len(),
-        DRIVEN_WITH_DEVIATION.len(),
-        EXCLUDED.len()
+        EXCLUDED.len(),
+        DRIVEN_WITH_DEVIATION.len()
     );
 }
 

@@ -269,7 +269,7 @@ async function runMatrix(opts) {
     }
     allChildren.delete(child);
     if (code !== 0) {
-      return { failed: true, reason: `client ${label} exited ${code} (expected 0)`, exitCode: code, stderr: child._stderrTail(), result: null };
+      return { failed: true, reason: `client ${label} exited ${code} (expected 0)`, exitCode: code, stderr: child._stderrTail(), stdout: child._stdoutText(), result: null };
     }
     const lines = child._stdoutText().split('\n').filter((l) => l.trim() !== '');
     if (lines.length === 0) {
@@ -314,20 +314,91 @@ async function runMatrix(opts) {
     return false;
   }
 
-  // G9 refusals where the exact code is not uniformly observable (see
-  // checkRefused / r-checks): any non-ok outcome counts as refused.
-  function checkRefused(id, pairLabel, run) {
-    if (run.failed) { recordFailure(id, pairLabel, { refused: true }, run); return false; }
-    if (run.result.outcome === 'rejected' || run.result.outcome === 'client_error') return true;
-    recordFailure(id, pairLabel, { refused: true }, run, `outcome ${JSON.stringify(run.result.outcome)} is not a refusal`);
-    return false;
+  // Per-SDK refused-reply surface for r1/r2. Each rotation client verifies
+  // the response before trusting its body; an unsigned 503 therefore becomes
+  // missing_auth (Go client/rotation/controller.go + client/rotation_auth.go,
+  // Rust interop/rotation_client.rs:127-152, TS client/rotation-auth.ts:41-46).
+  const R1_EXPECTED_BY_SDK = Object.freeze({
+    go: Object.freeze({ outcome: 'client_error', http_status: null, code: 'missing_auth', data: null }),
+    rust: Object.freeze({ outcome: 'client_error', http_status: null, code: 'missing_auth', data: null }),
+    typescript: Object.freeze({ outcome: 'client_error', http_status: null, code: 'missing_auth', data: null }),
+    // The fake client cannot emit missing_auth for clock-rollback mode; its
+    // exact actual refusal outcome is asserted instead (never weaken real SDKs).
+    fake: Object.freeze({ outcome: 'rejected', http_status: 503, code: 'rotation_state_unavailable', data: null }),
+  });
+  const ROTATION_RECOVERY_DIAGNOSTICS = Object.freeze({
+    go: Object.freeze({
+      // Go opens a latched (unsafe) server ring as an invalid store, not as recovery-required.
+      server: 'rotation-server: rotation store open: durable: invalid store',
+      clientRollback: 'rotation-client: rotation store open: rotation: rotation_clock_unsafe',
+      clientRestart: 'rotation-client: rotation store open: durable: explicit recovery required',
+    }),
+    rust: Object.freeze({
+      server: 'interop-server: rotation store: rotation_state_unavailable',
+      clientRollback: 'interop-client: rotation store: rotation_clock_unsafe',
+      clientRestart: 'interop-client: rotation store: rotation_state_unavailable',
+    }),
+    typescript: Object.freeze({
+      server: 'rotation-server: opening rotation store: jack: candidate rotation rotation_state_unavailable',
+      clientRollback: 'rotation-client: opening trust store: jack: candidate rotation rotation_clock_unsafe',
+      clientRestart: 'rotation-client: opening trust store: jack: candidate rotation rotation_state_unavailable',
+    }),
+    fake: Object.freeze({
+      server: 'rotation store: rotation_clock_unsafe (latched)',
+      clientRollback: 'rotation store: rotation_clock_unsafe',
+      clientRestart: 'rotation store: rotation_clock_unsafe',
+    }),
+  });
+
+  // Reads the status and the protocol error code of a raw HTTP response (as interop/durable.mjs does).
+  function parseResponse(raw) {
+    const m = /^HTTP\/1\.[01] (\d{3})/.exec(raw.text);
+    if (!m) return { failed: true, reason: `no HTTP response (${raw.err ?? 'empty'})` };
+    const status = parseInt(m[1], 10);
+    const bodyStart = raw.text.indexOf('\r\n\r\n');
+    const c = bodyStart === -1 ? null : /"code"\s*:\s*"([a-z_]+)"/.exec(raw.text.slice(bodyStart));
+    return { failed: false, status, code: status === 200 ? null : (c ? c[1] : null) };
   }
 
-  // G9 process-level refusals (client store latched unsafe at open: the
-  // executables exit nonzero without emitting a JSON line).
-  function checkProcessRefused(id, pairLabel, run) {
-    if (run.failed && run.exitCode !== null && run.exitCode !== 0) return true;
-    recordFailure(id, pairLabel, { exit_nonzero: true }, run);
+  // A bounded, unauthenticated GET / only tests that the listening HTTP server
+  // responds. It never signs or invokes jack.server.key, and no response is a
+  // hard failure (not a refusal/pass).
+  async function probeLiveRotationServer(port, label) {
+    return new Promise((resolveProbe) => {
+      const chunks = [];
+      let bytes = 0;
+      let settled = false;
+      const finish = (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        socket.destroy();
+        const text = Buffer.concat(chunks).toString('utf8');
+        const parsed = parseResponse({ err: error, text });
+        const headersEnd = text.indexOf('\r\n\r\n');
+        const hasJackAuth = headersEnd >= 0 && /\r\njack-auth\s*:/i.test(text.slice(0, headersEnd));
+        const ok = !error && !parsed.failed && parsed.status === 401 && parsed.code === 'missing_auth' && !hasJackAuth;
+        resolveProbe({ ok, status: parsed.status ?? null, code: parsed.code ?? null, reason: ok ? '' : `expected unsigned HTTP 401 missing_auth from live server; got ${parsed.failed ? parsed.reason : `HTTP ${parsed.status} ${parsed.code}`} (jack-auth=${hasJackAuth})` });
+      };
+      const socket = net.connect({ host: '127.0.0.1', port }, () => {
+        socket.write(`GET / HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`);
+      });
+      const timer = setTimeout(() => finish('probe timeout'), 1500);
+      socket.on('data', (data) => {
+        bytes += data.length;
+        if (bytes > 8192) return finish('probe response exceeded 8192 bytes');
+        chunks.push(data);
+      });
+      socket.on('end', () => finish(null));
+      socket.on('close', () => finish(null));
+      socket.on('error', (error) => finish(error.message));
+    });
+  }
+
+  function checkProcessRefused(id, pairLabel, run, expectedDiagnostic) {
+    const ok = run.failed && run.exitCode === 1 && run.stdout === '' && run.stderr.includes(expectedDiagnostic);
+    if (ok) return true;
+    recordFailure(id, pairLabel, { exit: 1, stdout: '', stderr_contains: expectedDiagnostic }, run, 'process failure must be the SDK recovery diagnostic');
     return false;
   }
 
@@ -357,31 +428,47 @@ async function runMatrix(opts) {
     return { child, port: ready.port, ready };
   }
 
-  // Spawn the rotation server expecting a fail-closed startup (G9 r3): resolves
-  // started=false only when the process exits without ever printing a ready
-  // line. Uses a fresh port so an environment port race cannot fake a pass of
-  // a healthy server; a startup port race here is reported as refusal, which
-  // is why the probe always targets a latched store.
+  // A refusing startup counts only after an actual, bounded process close.
+  // Spawn errors, ready lines, wrong ports and timeout/kills are never a refusal.
   async function probeRotationServerStart(lang, args, env, label) {
     const t = resolveTarget(targets[lang].rotation_server, 'rotation_server', `server=${lang}`);
     let child;
     try {
       child = makeChild(t.cmd, [...t.args, ...args], env);
     } catch (e) {
-      return { started: false, stderr: String(e.message), closeCode: null };
+      return { started: false, spawnError: String(e.message), closeCode: null, signal: null, stdout: '', stderr: '' };
     }
     allChildren.add(child);
     processesSpawned++;
-    try {
-      const line = await child._nextLine(10000, `rotation_server ${label}`);
+    const next = child._nextLine(10000, `rotation_server ${label}`).then((line) => ({ line }), (error) => ({ error }));
+    const first = await Promise.race([
+      next,
+      child._closeOutcome.then((outcome) => ({ outcome })),
+    ]);
+    let timedOut = false;
+    let readyLine = null;
+    if ('line' in first) {
+      readyLine = first.line;
       killTree(child);
-      allChildren.delete(child);
-      return { started: true, stderr: line, closeCode: null };
-    } catch {
-      const close = await child._closeOutcome;
-      allChildren.delete(child);
-      return { started: false, stderr: child._stderrTail(), closeCode: close.code };
+    } else if ('error' in first) {
+      timedOut = /timeout after 10000ms/.test(first.error?.message ?? '');
     }
+    const outcome = await Promise.race([
+      child._closeOutcome,
+      new Promise((resolveClose) => setTimeout(() => resolveClose(null), 3000)),
+    ]);
+    if (outcome === null) killTree(child);
+    allChildren.delete(child);
+    return {
+      started: readyLine !== null,
+      readyLine,
+      timedOut,
+      closeCode: outcome?.code ?? null,
+      signal: outcome?.signal ?? null,
+      stdout: child._stdoutText(),
+      stderr: child._stderrTail(),
+      spawnError: null,
+    };
   }
 
   const matrixCells = {};
@@ -649,24 +736,38 @@ async function runMatrix(opts) {
       }
 
       // ---- G9 durability family ----
-      // r1: a server clock BELOW its durable high water latches unsafe and the
-      // next response is refused. The exact SDK code is rotation_clock_unsafe
-      // in all three durable layers, but the interop executables surface it
-      // differently (Go maps open/authorization failure to recovery-required /
-      // unsigned 503), so the wire assertion here is refusal, not one code.
+      // r1/r2: a server clock BELOW its durable high water latches unsafe and
+      // the next response is refused. On the wire all three SDKs surface the
+      // same shape: outcome=client_error, http_status=null, code=missing_auth
+      // (the interop clients verify the response signature before trusting the
+      // body, so the server's unsigned 503 is classified as missing_auth).
+      // The per-SDK divergence is in open-path recovery only: Go additionally
+      // maps the open-path recovery failure to 'durable: explicit recovery
+      // required', while Rust/TS surface rotation_state_unavailable diagnostics
+      // there (see ROTATION_RECOVERY_DIAGNOSTICS). The fake client cannot emit
+      // missing_auth for this mode; its exact actual refusal outcome is asserted
+      // instead (R1_EXPECTED_BY_SDK.fake).
       writeFileSync(modePath, 'clock-rollback\n');
       setClock(clkCliMain, A);
       setClock(clkSrvPri, A - 1);
       {
         const r = await runClientStep(client, mainClient('call'), clientEnv, `r1 ${pairLabel}`, pairLabel);
-        results['r1-server-rollback-refused'] = checkRefused('r1-server-rollback-refused', pairLabel, r);
+        results['r1-server-rollback-refused'] = checkResult('r1-server-rollback-refused', pairLabel, R1_EXPECTED_BY_SDK[client], r);
       }
       // r2: the latch persists even once the clock is back at the high water:
       // the guard skips sampling while unsafe and never clears the latch.
-      setClock(clkSrvPri, A);
+      // First verify the primary server is still live so r2 cannot pass
+      // vacuously on a connection error that coincidentally looks like refusal.
       {
-        const r = await runClientStep(client, mainClient('call'), clientEnv, `r2 ${pairLabel}`, pairLabel);
-        results['r2-server-latch-fail-closed'] = checkRefused('r2-server-latch-fail-closed', pairLabel, r);
+        const probe = await probeLiveRotationServer(pri.port, `${pairLabel} r2 liveness`);
+        if (!probe.ok) {
+          recordFailure('r2-server-latch-fail-closed', pairLabel, { primary_server_live: true }, { failed: true, reason: probe.reason, result: null }, 'primary server not live before r2; r2 would be vacuous');
+          results['r2-server-latch-fail-closed'] = false;
+        } else {
+          setClock(clkSrvPri, A);
+          const r = await runClientStep(client, mainClient('call'), clientEnv, `r2 ${pairLabel}`, pairLabel);
+          results['r2-server-latch-fail-closed'] = checkResult('r2-server-latch-fail-closed', pairLabel, R1_EXPECTED_BY_SDK[client], r);
+        }
       }
       // r4/r5: the fake-peer client store holds a durable high water of A (left
       // by s5). A clock below it latches the store fail-closed; a restart with
@@ -676,16 +777,19 @@ async function runMatrix(opts) {
       setClock(clkCliFake, A - 100);
       {
         const r4 = await runClientStep(client, fakeClient('call'), clientEnv, `r4 ${pairLabel}`, pairLabel);
-        results['r4-client-rollback-refused'] = checkProcessRefused('r4-client-rollback-refused', pairLabel, r4);
+        results['r4-client-rollback-refused'] = checkProcessRefused('r4-client-rollback-refused', pairLabel, r4, ROTATION_RECOVERY_DIAGNOSTICS[client].clientRollback);
       }
       setClock(clkCliFake, A + 1000);
       {
         const r5 = await runClientStep(client, fakeClient('state'), clientEnv, `r5 ${pairLabel}`, pairLabel);
-        results['r5-client-restart-no-recovery'] = checkProcessRefused('r5-client-restart-no-recovery', pairLabel, r5);
+        results['r5-client-restart-no-recovery'] = checkProcessRefused('r5-client-restart-no-recovery', pairLabel, r5, ROTATION_RECOVERY_DIAGNOSTICS[client].clientRestart);
       }
       // r3: a fresh server process on the now-latched store must fail closed
       // at startup (never prints a ready line) in every language. Runs last:
-      // it stops the primary server.
+      // it stops the primary server. A spawn error, ready line, timeout or
+      // kill is a FAILURE, not a refusal; a refusal is exactly: no start, no
+      // spawn error, no timeout, close code 1, no ready line, empty stdout,
+      // and the SDK's server recovery diagnostic on stderr.
       {
         await stopChild(pri.child);
         allChildren.delete(pri.child);
@@ -695,12 +799,11 @@ async function runMatrix(opts) {
           ...serverArgs(portR, 'server-pri.store', clkSrvPri),
           '--ring-seed', `ring-1=${keys.erin.seed_hex}`,
         ], { JACK_ROTATION_MODE_FILE: modePath }, `${pairLabel} restart`);
-        if (probe.started) {
-          recordFailure('r3-server-restart-still-latched', pairLabel, { started: false }, { failed: false, result: { started: true, line: probe.stderr }, exitCode: null, stderr: probe.stderr });
-          results['r3-server-restart-still-latched'] = false;
-        } else {
-          results['r3-server-restart-still-latched'] = true;
+        const refused = !probe.started && probe.spawnError === null && !probe.timedOut && probe.closeCode === 1 && probe.readyLine === null && probe.stdout === '' && probe.stderr.includes(ROTATION_RECOVERY_DIAGNOSTICS[server].server);
+        if (!refused) {
+          recordFailure('r3-server-restart-still-latched', pairLabel, { started: false, spawnError: null, timedOut: false, closeCode: 1, readyLine: null, stdout: '', stderr_contains: ROTATION_RECOVERY_DIAGNOSTICS[server].server }, { failed: true, reason: `started=${probe.started} spawnError=${JSON.stringify(probe.spawnError)} timedOut=${probe.timedOut} closeCode=${probe.closeCode} signal=${probe.signal ?? null} readyLine=${JSON.stringify(probe.readyLine)}`, result: null, stderr: probe.stderr }, 'latched startup must fail closed with the SDK server diagnostic');
         }
+        results['r3-server-restart-still-latched'] = refused;
       }
     } finally {
       await stopAll();

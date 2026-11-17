@@ -1080,6 +1080,7 @@ var candidateVectorPlans = map[string]vectorPlan{
 
 func TestCandidateNonceVectors(t *testing.T) {
 	fixture := loadVectorFixture(t)
+	var summaryPass, summaryExcluded, summaryDeviation int
 	for _, fc := range fixture.Cases {
 		_, driven := candidateVectorPlans[fc.ID]
 		_, excluded := vectorExclusions[fc.ID]
@@ -1118,6 +1119,7 @@ func TestCandidateNonceVectors(t *testing.T) {
 		t.Run(fc.ID, func(t *testing.T) {
 			if exclusion, ok := vectorExclusions[fc.ID]; ok {
 				t.Logf("excluded %s: %s; spec: %s", fc.ID, exclusion.reason, exclusion.spec)
+				summaryExcluded++
 				return
 			}
 			plan := candidateVectorPlans[fc.ID]
@@ -1125,6 +1127,12 @@ func TestCandidateNonceVectors(t *testing.T) {
 				plan.openNow = openNowFor(fc)
 			}
 			plan.run(t, fc, plan)
+			if _, deviated := vectorDeviations[fc.ID]; deviated {
+				summaryDeviation++
+			} else {
+				summaryPass++
+			}
 		})
 	}
+	t.Logf("VECTOR-SUMMARY corpus=nonce sdk=go pass=%d excluded=%d deviation=%d", summaryPass, summaryExcluded, summaryDeviation)
 }

@@ -1477,12 +1477,16 @@ fn candidate_nonce_vectors() {
     }
     assert_eq!(fixture.cases.len(), 24, "exactly 24 candidate vectors");
 
+    let mut summary_pass = 0usize;
+    let mut summary_excluded = 0usize;
+    let mut summary_deviation = 0usize;
     for case in &fixture.cases {
         if let Some(exclusion) = exclusions.get(case.id.as_str()) {
             println!(
                 "excluded {}: {}; spec: {}",
                 case.id, exclusion.reason, exclusion.spec
             );
+            summary_excluded += 1;
             continue;
         }
         let plan = plan_of(&case.id).expect("planned case");
@@ -1495,7 +1499,13 @@ fn candidate_nonce_vectors() {
             Plan::UnknownIntent => run_unknown_intent(case, plan),
             Plan::Capacity => run_capacity(case, plan),
         }
+        if deviations.contains_key(case.id.as_str()) {
+            summary_deviation += 1;
+        } else {
+            summary_pass += 1;
+        }
     }
+    println!("VECTOR-SUMMARY corpus=nonce sdk=rust pass={summary_pass} excluded={summary_excluded} deviation={summary_deviation}");
 }
 
 fn plan_ids() -> Vec<&'static str> {
@@ -1508,6 +1518,7 @@ fn plan_ids() -> Vec<&'static str> {
         "expiry-plus-one-fresh-timestamp",
         "delayed-crypto-final-freshness",
         "delayed-final-after-confirmed-intent",
+        "definite-abort-confirmed-cleanup",
         "purge-highwater-rollback",
         "window-decrease-refused",
         "window-increase-refused",

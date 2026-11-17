@@ -492,11 +492,21 @@ test("shared nonce vectors: verdict table drives every case", { skip: !linux }, 
   chmodSync(root, 0o700);
   context.after(() => rmSync(root, { recursive: true, force: true }));
 
+  // Corpus totals across every vector: one classification per completed vector.
+  let summaryPass = 0;
+  let summaryExcluded = 0;
+  let summaryDeviation = 0;
+  const recordCompleted = (kind: string): void => {
+    if (kind === "deviation") summaryDeviation += 1;
+    else summaryPass += 1;
+  };
+
   for (const vector of vectors.cases) {
     const verdict = VERDICTS[vector.id];
     assert.ok(verdict, `vector ${vector.id} has no recorded verdict`);
     if (verdict.kind === "excluded") {
       assert.ok(verdict.reason.length > 40, `excluded vector ${vector.id} needs a spec-quoted reason`);
+      summaryExcluded += 1;
       continue;
     }
     const path = join(root, vector.id.replace(/[^a-zA-Z0-9-]/g, "-"));
@@ -706,5 +716,7 @@ test("shared nonce vectors: verdict table drives every case", { skip: !linux }, 
       // (The replay itself is asserted against the real request in the drive.)
       assert.equal(store.state().counts.live, 1);
     }
+    recordCompleted(verdict.kind);
   }
+  console.log(`VECTOR-SUMMARY corpus=nonce sdk=ts pass=${summaryPass} excluded=${summaryExcluded} deviation=${summaryDeviation}`);
 });

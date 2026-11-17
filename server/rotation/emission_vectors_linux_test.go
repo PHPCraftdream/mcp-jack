@@ -106,15 +106,21 @@ func TestRotationStateEmissionVectors(t *testing.T) {
 		"clock-advance-persists-revision":             "durable",
 	}
 
+	summaryPass := 0
+	summaryExcluded := 0
+	summaryDeviation := 0
 	seen := make(map[string]int, len(fixture.EventCases))
 	for _, event := range fixture.EventCases {
 		seen[event.ID]++
 		switch {
 		case plans[event.ID]:
-			t.Run(event.ID, func(t *testing.T) { driveEmissionVector(t, event) })
+			if t.Run(event.ID, func(t *testing.T) { driveEmissionVector(t, event) }) {
+				summaryPass++
+			}
 		case emissionVectorExclusions[event.ID].reason != "":
 			t.Run(event.ID, func(t *testing.T) {
 				exclusion := emissionVectorExclusions[event.ID]
+				summaryExcluded++
 				t.Skipf("excluded: %s | spec: %s", exclusion.reason, exclusion.spec)
 			})
 		case otherPackageEvents[event.ID] != "":
@@ -134,6 +140,7 @@ func TestRotationStateEmissionVectors(t *testing.T) {
 			t.Fatalf("excluded event_case %q appears %d times in the fixture", id, seen[id])
 		}
 	}
+	t.Logf("VECTOR-SUMMARY corpus=rotation-state sdk=go component=emission pass=%d excluded=%d deviation=%d", summaryPass, summaryExcluded, summaryDeviation)
 }
 
 // driveEmissionVector replays an emission vector: the committed ring is built

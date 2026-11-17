@@ -231,12 +231,21 @@ func TestRotationStateClockVectors(t *testing.T) {
 	}
 	seen := make(map[string]int, len(fixture.EventCases))
 	driven := 0
+	summaryPass := 0
+	deviation := 0
 	for _, event := range fixture.EventCases {
 		seen[event.ID]++
 		switch {
 		case plans[event.ID]:
-			driven++
-			t.Run(event.ID, func(t *testing.T) { driveClockVector(t, event, binding) })
+			if t.Run(event.ID, func(t *testing.T) { driveClockVector(t, event, binding) }) {
+				driven++
+				switch event.ID {
+				case "clock-equal-is-noop", "clock-rollback-latch-unknown-is-unavailable":
+					deviation++
+				default:
+					summaryPass++
+				}
+			}
 		case otherPackageEvents[event.ID] != "":
 			// Driven and reverse-guarded by the named package runner.
 			continue
@@ -255,6 +264,7 @@ func TestRotationStateClockVectors(t *testing.T) {
 	if driven != len(plans) {
 		t.Fatalf("drove %d clock cases, planned %d", driven, len(plans))
 	}
+	t.Logf("VECTOR-SUMMARY corpus=rotation-state sdk=go component=clock pass=%d excluded=0 deviation=%d", driven-deviation, deviation)
 }
 
 func driveClockVector(t *testing.T, event clockVectorEvent, binding rotation.Binding) {
