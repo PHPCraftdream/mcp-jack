@@ -406,7 +406,9 @@ async function runMatrix(opts) {
   const DURABLE_RECOVERY_DIAGNOSTIC = {
     go: 'durable store: durable: explicit recovery required',
     rust: 'durable nonce store: RecoveryRequired',
-    typescript: 'durable store: durable: recovery required',
+    // TypeScript refuses a dirty or unsafe store at open with the generic unavailable error (a recovery-required
+    // error only for unresolved intents or the tombstone cap): same 503 code, less specific text.
+    typescript: 'durable store: durable nonce store unavailable',
     fake: 'dirty', // the self-test fake (interop/tools/fake-durable-server.mjs)
   };
   async function expectStartupRefusal(lang, args, label) {

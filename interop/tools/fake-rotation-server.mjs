@@ -60,7 +60,15 @@ function main() {
     process.stderr.write('rotation store: rotation_clock_unsafe (latched)\n');
     return process.exit(1);
   }
-  const server = net.createServer(() => { /* contract fake: no HTTP protocol */ });
+  // Contract fake: no HTTP protocol beyond answering every request like a real server answers an
+  // unauthenticated one (unsigned 401 missing_auth), which the harness liveness probe expects.
+  const unauthenticated = JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: 'missing_auth', message: 'missing authentication' } });
+  const server = net.createServer((socket) => {
+    socket.on('error', () => { /* a probe may close early */ });
+    socket.once('data', () => {
+      socket.end(`HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(unauthenticated)}\r\nConnection: close\r\n\r\n${unauthenticated}`);
+    });
+  });
   const wantPort = a.port ? parseInt(a.port, 10) : 0;
   server.listen(wantPort, '127.0.0.1', () => {
     const ready = JSON.stringify({ ready: true, port: server.address().port, server_public_key: pubB64u, server_kid: kid });
