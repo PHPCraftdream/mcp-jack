@@ -4,6 +4,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # The ref of the dtolnay/rust-toolchain action selects the toolchain (branches `stable` and `1.88.0`),
+      # so a version bump would silently change the toolchain of the MSRV 1.88 jobs. Bump its pins by hand.
+      - dependency-name: dtolnay/rust-toolchain
   - package-ecosystem: gomod
     directory: /
     schedule:
