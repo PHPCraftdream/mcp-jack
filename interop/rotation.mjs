@@ -349,6 +349,16 @@ async function runMatrix(opts) {
     }),
   });
 
+  // Reads the status and the protocol error code of a raw HTTP response (as interop/durable.mjs does).
+  function parseResponse(raw) {
+    const m = /^HTTP\/1\.[01] (\d{3})/.exec(raw.text);
+    if (!m) return { failed: true, reason: `no HTTP response (${raw.err ?? 'empty'})` };
+    const status = parseInt(m[1], 10);
+    const bodyStart = raw.text.indexOf('\r\n\r\n');
+    const c = bodyStart === -1 ? null : /"code"\s*:\s*"([a-z_]+)"/.exec(raw.text.slice(bodyStart));
+    return { failed: false, status, code: status === 200 ? null : (c ? c[1] : null) };
+  }
+
   // A bounded, unauthenticated GET / only tests that the listening HTTP server
   // responds. It never signs or invokes jack.server.key, and no response is a
   // hard failure (not a refusal/pass).
@@ -364,13 +374,13 @@ async function runMatrix(opts) {
         socket.destroy();
         const text = Buffer.concat(chunks).toString('utf8');
         const parsed = parseResponse({ err: error, text });
-        const headersEnd = text.indexOf('\\r\\n\\r\\n');
-        const hasJackAuth = headersEnd >= 0 && /\\r\\njack-auth\\s*:/i.test(text.slice(0, headersEnd));
+        const headersEnd = text.indexOf('\r\n\r\n');
+        const hasJackAuth = headersEnd >= 0 && /\r\njack-auth\s*:/i.test(text.slice(0, headersEnd));
         const ok = !error && !parsed.failed && parsed.status === 401 && parsed.code === 'missing_auth' && !hasJackAuth;
         resolveProbe({ ok, status: parsed.status ?? null, code: parsed.code ?? null, reason: ok ? '' : `expected unsigned HTTP 401 missing_auth from live server; got ${parsed.failed ? parsed.reason : `HTTP ${parsed.status} ${parsed.code}`} (jack-auth=${hasJackAuth})` });
       };
       const socket = net.connect({ host: '127.0.0.1', port }, () => {
-        socket.write(`GET / HTTP/1.1\\r\\nHost: 127.0.0.1:${port}\\r\\nContent-Length: 0\\r\\nConnection: close\\r\\n\\r\\n`);
+        socket.write(`GET / HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`);
       });
       const timer = setTimeout(() => finish('probe timeout'), 1500);
       socket.on('data', (data) => {

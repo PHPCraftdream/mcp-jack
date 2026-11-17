@@ -407,6 +407,7 @@ async function runMatrix(opts) {
     go: 'durable store: durable: explicit recovery required',
     rust: 'durable nonce store: RecoveryRequired',
     typescript: 'durable store: durable: recovery required',
+    fake: 'dirty', // the self-test fake server (interop/tools/fake-server.mjs)
   };
   async function expectStartupRefusal(lang, args, label) {
     const t = resolveTarget(targets[lang].server, 'server', `server=${lang}`);
