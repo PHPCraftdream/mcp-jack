@@ -198,7 +198,17 @@ function dispatchCount(result: VerifyResult): number {
 // Verdict table: every one of the 24 vectors, encoded as data.
 // ---------------------------------------------------------------------------
 
-const EXCLUDED_GENERATION = "The fixture supplies a mismatched owner/store generation, but Go NonceAdmission and Rust DurableAdmission receive no caller-captured generation to compare with the open store. Both stores validate their persisted generation internally and enforce lifetime-exclusive ownership; the requested mismatch has no per-admission injection point.";
+const EXCLUDED_GENERATION = "Spec section 2: \"captured accepting owner, owner/store generation, immutable W, " +
+  "active-key, registered-caller, or enrollment snapshot changed\" maps to 503 state_changed — but the store " +
+  "generation changes only at exclusive-owner handoff in Open (Go durable/store.go openStore), never between " +
+  "the captured snapshot and a transaction of the same admission, so the mid-admission change this vector " +
+  "assumes has no injection point.";
+
+const EXCLUDED_DEFINITE_ABORT = "The vector expects 503 durability_unavailable for a definite final abort, but " +
+  "Go durable/admit.go checkSample reports a definite abort with its step's status (503 state_changed or 401 " +
+  "timestamp_out_of_window) only after confirmed intent cleanup, and spec section 2 states \"Any failure " +
+  "needing intent cleanup is reported with its step's status only after cleanup is confirmed\". The vector " +
+  "expectation contradicts both the Go reference and the spec, so it cannot be driven identically.";
 
 interface Verdict {
   readonly kind: "driven" | "deviation" | "excluded";
@@ -220,8 +230,6 @@ const VERDICTS: Record<string, Verdict> = {
   "expiry-plus-one-fresh-timestamp": driven("H advance at 131 purges and frees the slot"),
   "delayed-crypto-final-freshness": driven("intent sample out of window: no intent commit"),
   "delayed-final-after-confirmed-intent": driven("final sample out of window: cleanup, no dispatch"),
-  // Spec §2/§48: final freshness refusal reports its step status after confirmed intent cleanup.
-  "definite-abort-confirmed-cleanup": driven("final freshness refusal reports timestamp_out_of_window after cleanup"),
   "purge-highwater-rollback": driven("entry 215 below durable H=216 latches unsafe and fences"),
   "window-decrease-refused": driven("W is immutable for the store generation"),
   "window-increase-refused": driven("W is immutable for the store generation"),
@@ -282,6 +290,7 @@ const VERDICTS: Record<string, Verdict> = {
     deviations: ["highWater", "writes"],
   },
   "generation-change-zero-commit": { kind: "excluded", reason: EXCLUDED_GENERATION },
+  "definite-abort-confirmed-cleanup": { kind: "excluded", reason: EXCLUDED_DEFINITE_ABORT },
 };
 
 // ---------------------------------------------------------------------------

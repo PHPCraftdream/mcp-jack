@@ -204,17 +204,35 @@ fn exclusions() -> HashMap<&'static str, VectorExclusion> {
         (
             "generation-change-zero-commit",
             VectorExclusion {
-                reason: "Not expressible against the Go seam: the fixture supplies a mismatched owner/store \
-                     generation, but DurableAdmission carries no caller-captured generation to compare \
-                     with the open store. Go validates the captured registry snapshot and compares full \
-                     persisted metadata structurally under the admission mutex; lifetime-exclusive \
-                     ownership prevents a second owner. Rust's DurableAdmission has the same limitation: \
-                     the store owns and validates its generation internally, with no per-request captured \
-                     generation input. This fixture-only mismatch has no injection point.",
+                reason: "Not expressible against the Go seam: server.NonceAdmission carries no \
+                     captured owner/store generation, so a per-request generation mismatch \
+                     cannot be injected. Go revalidates the captured store state structurally \
+                     under the admission mutex (transaction.go decodes and compares the full \
+                     metadata), and a second owner is refused at Open (lifetime-exclusive \
+                     ownership), which is the structural counterpart of this vector. The Rust \
+                     seam has the same shape: DurableAdmission carries no captured \
+                     owner/store generation and the store revalidates its full metadata under \
+                     the admission mutex.",
                 spec: "spec/candidate/durable-nonces.md L42: \"capture immutable \
                      active-key/registered-caller/enrollment snapshot, positive immutable W, \
                      accepting owner and store generation\"; L44: \"Store admission uses a \
                      lifetime-exclusive owner; a second process opening it is refused.\"",
+            },
+        ),
+        (
+            "definite-abort-confirmed-cleanup",
+            VectorExclusion {
+                reason: "The Go implementation reports a confirmed-cleanup abort with its \
+                     step's status (401 timestamp_out_of_window), not the JS model's 503 \
+                     classification; the drivable instance is identical to \
+                     delayed-final-after-confirmed-intent, which is driven and asserts the \
+                     confirmed cleanup (2 writes, 0 live, 0 intents, 0 dispatch). The Rust \
+                     implementation reports the same step status for the same drivable \
+                     instance.",
+                spec: "spec/candidate/durable-nonces.md L48: \"Any failure needing intent \
+                     cleanup is reported with its step's status only after cleanup is \
+                     confirmed; uncertain cleanup/fence becomes unknown 503 \
+                     durability_unavailable.\"",
             },
         ),
     ])
@@ -963,11 +981,6 @@ fn plan_of(id: &str) -> Option<Plan> {
             fenced: None,
         },
         "delayed-final-after-confirmed-intent" => Single {
-            recorded: None,
-            assert_unsafe: false,
-            fenced: None,
-        },
-        "definite-abort-confirmed-cleanup" => Single {
             recorded: None,
             assert_unsafe: false,
             fenced: None,
