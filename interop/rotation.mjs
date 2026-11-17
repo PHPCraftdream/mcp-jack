@@ -328,7 +328,8 @@ async function runMatrix(opts) {
   });
   const ROTATION_RECOVERY_DIAGNOSTICS = Object.freeze({
     go: Object.freeze({
-      server: 'rotation-server: rotation store open: durable: explicit recovery required',
+      // Go opens a latched (unsafe) server ring as an invalid store, not as recovery-required.
+      server: 'rotation-server: rotation store open: durable: invalid store',
       clientRollback: 'rotation-client: rotation store open: rotation: rotation_clock_unsafe',
       clientRestart: 'rotation-client: rotation store open: durable: explicit recovery required',
     }),
