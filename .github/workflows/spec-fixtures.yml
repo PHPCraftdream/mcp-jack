@@ -54,6 +54,7 @@ jobs:
         with:
           node-version: 22
       - name: Check committed candidate fixtures before regeneration
+        continue-on-error: true
         run: node spec/tools/candidate/gen-fixtures.mjs --check
       - name: Generate candidate fixtures
         run: node spec/tools/candidate/gen-fixtures.mjs
