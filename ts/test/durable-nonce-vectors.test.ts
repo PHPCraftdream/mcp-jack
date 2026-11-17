@@ -310,7 +310,7 @@ interface Outcome {
 
 interface Harness {
   readonly path: string;
-  readonly config: DurableStoreInternalOptions;
+  readonly config: DurableStoreInternalOptions & { readonly now: () => number };
   queue(value: number): void;
   store: DurableNonceStore | undefined;
 }

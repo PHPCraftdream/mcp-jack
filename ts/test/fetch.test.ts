@@ -898,7 +898,7 @@ test("no-body statuses sign and return only transmitted bytes on static and rota
     for (const withUpstreamBody of [false, true]) {
       const expectedUpstreamBytes = withUpstreamBody ? utf8(`upstream-${status}`) : new Uint8Array(0);
       let observedUpstreamBytes: Uint8Array | undefined;
-      const next = async (): Promise<Response> => {
+      const next = (): Response => {
         const upstream = nonstandardNoBodyStatus(status, withUpstreamBody);
         observedUpstreamBytes = upstream.upstreamBytes;
         return upstream.response;
