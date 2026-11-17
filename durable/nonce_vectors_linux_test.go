@@ -193,23 +193,14 @@ type vectorExclusion struct {
 
 var vectorExclusions = map[string]vectorExclusion{
 	"generation-change-zero-commit": {
-		reason: "Not expressible against the Go seam: server.NonceAdmission carries no captured " +
-			"owner/store generation, so a per-request generation mismatch cannot be injected. Go " +
-			"revalidates the captured store state structurally under the admission mutex " +
-			"(transaction.go decodes and compares the full metadata), and a second owner is refused at " +
-			"Open (lifetime-exclusive ownership), which is the structural counterpart of this vector.",
+		reason: "Not expressible against the Go seam: the fixture supplies a mismatched owner/store " +
+			"generation, but NonceAdmission carries no caller-captured generation to compare with the " +
+			"open store. Go validates the captured registry snapshot and compares full persisted metadata " +
+			"structurally under the admission mutex; lifetime-exclusive ownership prevents a second owner. " +
+			"This fixture-only generation mismatch has no injection point.",
 		spec: "spec/candidate/durable-nonces.md L42: \"capture immutable active-key/registered-caller/" +
 			"enrollment snapshot, positive immutable W, accepting owner and store generation\"; L44: " +
 			"\"Store admission uses a lifetime-exclusive owner; a second process opening it is refused.\"",
-	},
-	"definite-abort-confirmed-cleanup": {
-		reason: "The Go implementation reports a confirmed-cleanup abort with its step's status (401 " +
-			"timestamp_out_of_window), not the JS model's 503 classification; the drivable instance is " +
-			"identical to delayed-final-after-confirmed-intent, which is driven and asserts the " +
-			"confirmed cleanup (2 writes, 0 live, 0 intents, 0 dispatch).",
-		spec: "spec/candidate/durable-nonces.md L48: \"Any failure needing intent cleanup is reported " +
-			"with its step's status only after cleanup is confirmed; uncertain cleanup/fence becomes " +
-			"unknown 503 durability_unavailable.\"",
 	},
 }
 
@@ -1050,14 +1041,16 @@ func runCapacityVector(t *testing.T, fc vectorCase, plan vectorPlan) {
 }
 
 var candidateVectorPlans = map[string]vectorPlan{
-	"same-second-restart-replay":             {run: runSingleVector, assertRecorded: boolPtr(false)},
-	"future-ts-restart-replay":               {run: runSingleVector, assertRecorded: boolPtr(false)},
-	"concurrent-same-pair":                   {run: runSequenceVector, openNow: 100, skip: map[string]bool{"dispatches": true}},
-	"concurrent-different-request-identity":  {run: runSequenceVector, openNow: 100, skip: map[string]bool{"dispatches": true}},
-	"expiry-equality":                        {run: runSingleVector, assertRecorded: boolPtr(false)},
-	"expiry-plus-one-fresh-timestamp":        {run: runSingleVector, assertRecorded: boolPtr(true)},
-	"delayed-crypto-final-freshness":         {run: runSingleVector, assertRecorded: boolPtr(false)},
-	"delayed-final-after-confirmed-intent":   {run: runSingleVector},
+	"same-second-restart-replay":            {run: runSingleVector, assertRecorded: boolPtr(false)},
+	"future-ts-restart-replay":              {run: runSingleVector, assertRecorded: boolPtr(false)},
+	"concurrent-same-pair":                  {run: runSequenceVector, openNow: 100, skip: map[string]bool{"dispatches": true}},
+	"concurrent-different-request-identity": {run: runSequenceVector, openNow: 100, skip: map[string]bool{"dispatches": true}},
+	"expiry-equality":                       {run: runSingleVector, assertRecorded: boolPtr(false)},
+	"expiry-plus-one-fresh-timestamp":       {run: runSingleVector, assertRecorded: boolPtr(true)},
+	"delayed-crypto-final-freshness":        {run: runSingleVector, assertRecorded: boolPtr(false)},
+	"delayed-final-after-confirmed-intent":  {run: runSingleVector},
+	// Spec §2/§48 reports the freshness-step status after confirmed cleanup (Go: checkSample).
+	"definite-abort-confirmed-cleanup":       {run: runSingleVector},
 	"purge-highwater-rollback":               {run: runSingleVector, assertRecorded: boolPtr(false), assertUnsafe: true},
 	"window-decrease-refused":                {run: runSingleVector, assertRecorded: boolPtr(false)},
 	"window-increase-refused":                {run: runSingleVector, assertRecorded: boolPtr(false)},
@@ -1080,6 +1073,7 @@ var candidateVectorPlans = map[string]vectorPlan{
 
 func TestCandidateNonceVectors(t *testing.T) {
 	fixture := loadVectorFixture(t)
+	var summaryPass, summaryExcluded, summaryDeviation int
 	for _, fc := range fixture.Cases {
 		_, driven := candidateVectorPlans[fc.ID]
 		_, excluded := vectorExclusions[fc.ID]
@@ -1118,6 +1112,7 @@ func TestCandidateNonceVectors(t *testing.T) {
 		t.Run(fc.ID, func(t *testing.T) {
 			if exclusion, ok := vectorExclusions[fc.ID]; ok {
 				t.Logf("excluded %s: %s; spec: %s", fc.ID, exclusion.reason, exclusion.spec)
+				summaryExcluded++
 				return
 			}
 			plan := candidateVectorPlans[fc.ID]
@@ -1125,6 +1120,12 @@ func TestCandidateNonceVectors(t *testing.T) {
 				plan.openNow = openNowFor(fc)
 			}
 			plan.run(t, fc, plan)
+			if _, deviated := vectorDeviations[fc.ID]; deviated {
+				summaryDeviation++
+			} else {
+				summaryPass++
+			}
 		})
 	}
+	t.Logf("VECTOR-SUMMARY corpus=nonce sdk=go pass=%d excluded=%d deviation=%d", summaryPass, summaryExcluded, summaryDeviation)
 }

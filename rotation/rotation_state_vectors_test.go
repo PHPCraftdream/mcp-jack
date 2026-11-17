@@ -148,17 +148,19 @@ func TestRotationStateSelectionVectors(t *testing.T) {
 		seen[event.ID]++
 		switch {
 		case plans[event.ID]:
-			driven++
-			t.Run(event.ID, func(t *testing.T) { driveSelectionVector(t, event, binding, authorizers) })
+			if t.Run(event.ID, func(t *testing.T) { driveSelectionVector(t, event, binding, authorizers) }) {
+				driven++
+			}
 		case stateVectorDrivenElsewhere[event.ID] != "":
-			t.Run(event.ID, func(t *testing.T) {
-				t.Logf("driven in %s", stateVectorDrivenElsewhere[event.ID])
-			})
+			// Driven and reverse-guarded by the named package runner.
+			t.Run(event.ID, func(t *testing.T) { t.Logf("driven in %s", stateVectorDrivenElsewhere[event.ID]) })
 		case stateVectorExclusions[event.ID].reason != "":
-			t.Run(event.ID, func(t *testing.T) {
+			if !t.Run(event.ID, func(t *testing.T) {
 				exclusion := stateVectorExclusions[event.ID]
 				t.Skipf("excluded: %s | spec: %s", exclusion.reason, exclusion.spec)
-			})
+			}) {
+				t.Errorf("excluded event %q subtest failed", event.ID)
+			}
 		default:
 			t.Fatalf("event_case %q has no plan, exclusion, or cross-package assignment", event.ID)
 		}
@@ -181,6 +183,7 @@ func TestRotationStateSelectionVectors(t *testing.T) {
 	if driven != len(plans) {
 		t.Fatalf("drove %d selection cases, planned %d", driven, len(plans))
 	}
+	t.Logf("VECTOR-SUMMARY corpus=rotation-state sdk=go component=selection pass=%d excluded=%d deviation=%d", driven, 0, 0)
 }
 
 func driveSelectionVector(t *testing.T, event stateVectorEvent, binding rotation.Binding, authorizers map[string][]byte) {

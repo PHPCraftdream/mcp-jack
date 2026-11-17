@@ -731,14 +731,27 @@ func TestCandidateRotationStateVectors(t *testing.T) {
 			t.Fatalf("%s: requestSig %q, want %q", fc.ID, fc.Input.Response.RequestSig, clientVectorRequestSig)
 		}
 	}
+	summaryPass, summaryExcluded, summaryDeviation := 0, 0, 0
 	for _, fc := range fixture.ClientCases {
 		fc := fc
-		t.Run(fc.ID, func(t *testing.T) {
+		ok := t.Run(fc.ID, func(t *testing.T) {
 			plan, planned := clientCasePlans[fc.ID]
 			if !planned {
 				t.Skipf("documented deviation only: %v", clientCaseDeviations[fc.ID])
+				return
 			}
 			plan.run(t, fc, harness)
 		})
+		if !ok {
+			continue
+		}
+		if _, planned := clientCasePlans[fc.ID]; !planned {
+			summaryExcluded++
+		} else if _, deviated := clientCaseDeviations[fc.ID]; deviated {
+			summaryDeviation++
+		} else {
+			summaryPass++
+		}
 	}
+	t.Logf("VECTOR-SUMMARY corpus=rotation-state sdk=go component=client pass=%d excluded=%d deviation=%d", summaryPass, summaryExcluded, summaryDeviation)
 }

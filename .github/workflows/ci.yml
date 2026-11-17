@@ -31,6 +31,13 @@ jobs:
           fi
       - run: go vet ./...
       - run: go test ./...
+      - name: Shared-vector verdict summaries (Go)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -count=1 -v -run '^Test(CandidateRotationStateVectors|CandidateNonceVectors|RotationStateClockVectors|RotationStateSelectionVectors|RotationStateEmissionVectors)$' ./client/rotation ./durable ./rotation ./server/rotation | tee vector-summary.log
+          test "$(grep -c VECTOR-SUMMARY vector-summary.log)" -ge 5
 
   go-race:
     name: go race
@@ -153,6 +160,13 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --all-features
+      - name: Shared-vector verdict summaries (Rust)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked --all-features --test durable_nonce_vectors --test rotation_state_vectors -- --nocapture --test-threads=1 | tee vector-summary.log
+          test "$(grep -c VECTOR-SUMMARY vector-summary.log)" -ge 2
       - name: Core without the http feature
         if: runner.os == 'Linux'
         run: cargo test --locked --no-default-features

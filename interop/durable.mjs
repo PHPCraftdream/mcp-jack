@@ -6,7 +6,7 @@
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { connect } from 'node:net';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -390,7 +390,24 @@ async function runMatrix(opts) {
     return { ok: true, outcome };
   }
 
-  // Expect startup refusal: nonzero exit within 10s and NEVER a ready line.
+  // A Rust/TS killed owner leaves this exact marker. Only remove it after the
+  // child has closed; Go's bbolt backend has no marker to remove.
+  function removeCrashOwnerMarker(lang, dir, label) {
+    if (lang !== 'rust' && lang !== 'typescript') return { ok: true };
+    const marker = join(dir, 'nonces.owner');
+    if (!existsSync(marker)) return { ok: false, reason: `${label}: expected stale owner marker is absent: ${marker}` };
+    try { unlinkSync(marker); } catch (e) { return { ok: false, reason: `${label}: cannot remove stale owner marker: ${e.message}` }; }
+    if (existsSync(marker)) return { ok: false, reason: `${label}: stale owner marker remains after removal` };
+    return { ok: true };
+  }
+
+  // Expect the SDK's exact dirty/recovery startup failure: exit 1, no stdout,
+  // and the diagnostic emitted by that interop server's durable-open path.
+  const DURABLE_RECOVERY_DIAGNOSTIC = {
+    go: 'durable store: durable: explicit recovery required',
+    rust: 'durable nonce store: RecoveryRequired',
+    typescript: 'durable store: durable: recovery required',
+  };
   async function expectStartupRefusal(lang, args, label) {
     const t = resolveTarget(targets[lang].server, 'server', `server=${lang}`);
     let child;
@@ -405,14 +422,18 @@ async function runMatrix(opts) {
       new Promise((r) => setTimeout(() => { killTree(child); r(null); }, 10000)),
     ]);
     allChildren.delete(child);
-    if (!outcome) return { refused: false, reason: 'restart child did not exit within 10s', stderr: child._stderrTail() };
-    if (child._stdoutText().includes('"ready"')) {
-      return { refused: false, reason: 'restart emitted a ready line on a dirty store', stderr: child._stderrTail() };
+    if (!outcome) return { refused: false, reason: 'restart child did not exit within 10s', stderr: child._stderrTail(), stdout: child._stdoutText() };
+    const stdout = child._stdoutText();
+    const stderr = child._stderrTail();
+    const expectedDiagnostic = DURABLE_RECOVERY_DIAGNOSTIC[lang];
+    if (stdout !== '') return { refused: false, reason: `restart wrote unexpected stdout: ${stdout}`, stderr, stdout };
+    if (outcome.code !== 1 || outcome.signal !== null) {
+      return { refused: false, reason: `restart closed with code=${outcome.code} signal=${outcome.signal} (expected exit 1)`, stderr, stdout };
     }
-    if (outcome.code === null || outcome.code === 0) {
-      return { refused: false, reason: `restart exited ${outcome.code} (expected nonzero)`, stderr: child._stderrTail() };
+    if (!expectedDiagnostic || !stderr.includes(expectedDiagnostic)) {
+      return { refused: false, reason: `restart lacks exact recovery diagnostic '${expectedDiagnostic}'`, stderr, stdout };
     }
-    return { refused: true, code: outcome.code, stderr: child._stderrTail() };
+    return { refused: true, code: outcome.code, stderr, stdout };
   }
 
   const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -484,10 +505,14 @@ async function runMatrix(opts) {
       if (!r1.ok || r1.status !== 200) return failR({ http_status: 200 }, { actual: { status: r1.status, code: r1.code }, reason: r1.reason, stderr: r1.stderr });
       const crashR = await crash(srv.child, `${pairLabel} ${id}`);
       srv = null;
-      if (!crashR.ok) return failR({ closed_by_sigkill: true }, { actual: null, reason: crashR.reason });
+      if (!crashR.ok || crashR.outcome.signal !== 'SIGKILL') {
+        return failR({ closed_by_sigkill: true, actual_close: true }, { actual: crashR.outcome ?? null, reason: crashR.reason ?? `child close signal was ${crashR.outcome.signal}` });
+      }
+      const markerR = removeCrashOwnerMarker(ctx.server, dir, `${pairLabel} ${id}`);
+      if (!markerR.ok) return failR({ stale_marker_removed_after_close: true }, { actual: null, reason: markerR.reason });
       const refusal = await expectStartupRefusal(ctx.server, [...base, '--durable-dir', dir], `${pairLabel} ${id} restart`);
       if (!refusal.refused) {
-        return failR({ startup_refused: true, ready_line: false, exit: 'nonzero within 10s' }, { actual: null, reason: refusal.reason, stderr: refusal.stderr });
+        return failR({ exit: 1, stdout: '', stderr_contains: DURABLE_RECOVERY_DIAGNOSTIC[ctx.server] }, { actual: { exit: refusal.code ?? null, stdout: refusal.stdout ?? '' }, reason: refusal.reason, stderr: refusal.stderr });
       }
       return true;
     } catch (e) {
