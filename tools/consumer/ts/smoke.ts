@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -6,12 +7,15 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import {
   Code,
+  DurableNonceAdmission,
+  DurableNonceStore,
   JackError,
   MemoryState,
   NonceStore,
   ServerUserKey,
   Verifier,
   client,
+  decodeBase64URL,
   encodeBase64URL,
   exportUserKeyPublicEnvelope,
   generateClientUserKey,
@@ -23,16 +27,25 @@ import {
   jackIdentity,
   keyId,
   parseRequestAuth,
+  requestSigningString,
   rotation,
   serveNode,
   validateUserKeyCredentialForServer,
   verify,
 } from "mcp-jack";
-import type { ExpectedServerIdentity, RegistryEntry } from "mcp-jack";
+import type {
+  DurableAdmissionRequest,
+  DurableReceipt,
+  DurableRecoverySnapshot,
+  DurableStoreOptions,
+  ExpectedServerIdentity,
+  RegistryEntry,
+} from "mcp-jack";
+import * as packageRoot from "mcp-jack";
 
 const AUDIENCE = "https://consumer.example.test";
 const NOW = 1_800_000_000;
-let consumerPhase: "static-client" | "candidate-store" | "candidate-http" | "candidate-reopen" = "static-client";
+let consumerPhase: "static-client" | "candidate-store" | "candidate-http" | "candidate-reopen" | "durable-store" = "static-client";
 const utf8 = (value: string): Uint8Array<ArrayBuffer> => new TextEncoder().encode(value);
 const boundedFetch: typeof fetch = (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(5000) });
 
@@ -112,6 +125,80 @@ async function rotationConsumer(baseUrl: string, signer: client.Signer, trusted:
     const restored = new rotation.RotationController(owner);
     assert.deepEqual(Buffer.from(restored.verifyResponse(reply)), Buffer.from(reply.body), "clean reopen retains the independently provisioned trust bytes");
     assert.deepEqual(owner.snapshot().snapshot.head, { ordinal: 0, hash: "-" });
+  } finally {
+    try { owner?.close(); }
+    finally { rmSync(root, { recursive: true, force: true }); }
+  }
+}
+
+async function durableConsumer(generatedClientKey: ReturnType<typeof generateClientUserKey>): Promise<void> {
+  if (process.platform !== "linux") return;
+  consumerPhase = "durable-store";
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "mcp-jack-durable-consumer-")));
+  let owner: DurableNonceStore | undefined;
+  try {
+    chmodSync(root, 0o700);
+    const stateFile = join(root, "nonces");
+    const options: DurableStoreOptions = { deploymentId: "public-consumer-durable", window: 30, now: () => NOW };
+    const caller: RegistryEntry = {
+      kid: generatedClientKey.kid(),
+      publicKey: encodeBase64URL(generatedClientKey.publicKey()),
+      name: "durable-consumer",
+    };
+    const body = utf8(JSON.stringify({ jsonrpc: "2.0", id: "durable-consumer", method: "tools/call",
+      params: { name: "consumer.echo", arguments: {} } }));
+    const header = client.signRequest(generatedClientKey, AUDIENCE, "POST", "/mcp", body, new Uint8Array(16).fill(23), NOW);
+    const auth = parseRequestAuth([header]);
+    const signingBytes = requestSigningString("POST", "/mcp", AUDIENCE, auth.kid, auth.ts, auth.nonce, body);
+    assert.equal(verify(generatedClientKey.publicKey(), utf8(signingBytes), decodeBase64URL(auth.sig)), true,
+      "package-root verifier authenticates the signed durable request"); // spec/candidate/durable-nonces.md §1/§2
+    const request: DurableAdmissionRequest = {
+      kid: auth.kid, nonce: auth.nonce, signature: auth.sig, signingBytes,
+      timestamp: auth.ts, window: options.window, caller,
+    };
+    DurableNonceStore.initializeUnused(stateFile, options);
+    assert.equal(existsSync(stateFile), true, "durable initialization creates concrete state"); // spec/candidate/durable-nonces.md §3
+    assert.equal(existsSync(stateFile + ".owner"), false, "durable initialization releases its setup owner"); // spec/candidate/durable-nonces.md §3
+    owner = DurableNonceStore.open(stateFile, options);
+    const admission = new DurableNonceAdmission({ store: owner, now: () => NOW });
+    const outcome = admission.reserveForVerify(request);
+    try {
+      assert.equal(outcome.accepted, true, "durable admission accepts a real authenticated request"); // spec/candidate/durable-nonces.md §1/§2
+      if (!outcome.accepted) throw new Error("durable admission rejected the signed consumer request");
+      assert.equal(outcome.finalNow, NOW, "durable adapter returns the injected post-commit time"); // spec/candidate/durable-nonces.md §2
+    } finally {
+      outcome.finish(); // spec/candidate/durable-nonces.md §4: release the lease before close
+    }
+    owner.close();
+    owner = undefined;
+
+    const snapshot: DurableRecoverySnapshot = DurableNonceStore.inspectRecovery(stateFile, options);
+    assert.equal(snapshot.deployment, options.deploymentId, "read-only recovery is bound to configured deployment"); // spec/candidate/durable-nonces.md §3
+    const receipt: DurableReceipt | undefined = snapshot.live.find((row) => row.kid === auth.kid && row.nonce === auth.nonce);
+    assert.ok(receipt, "recovery snapshot retains the committed nonce receipt"); // spec/candidate/durable-nonces.md §1/§4
+    assert.equal(receipt.signature, auth.sig, "retained receipt binds the exact authenticated signature"); // spec/candidate/durable-nonces.md §1
+    assert.equal(receipt.requestHash, createHash("sha256").update(signingBytes, "utf8").digest("base64url"),
+      "retained receipt binds the exact v1 signing bytes"); // spec/candidate/durable-nonces.md §1
+    assert.equal(receipt.timestamp, auth.ts, "retained receipt binds the signed timestamp"); // spec/candidate/durable-nonces.md §1
+
+    owner = DurableNonceStore.open(stateFile, options);
+    const reopenedAdmission = new DurableNonceAdmission({ store: owner, now: () => NOW });
+    const replay = reopenedAdmission.reserveForVerify(request);
+    try {
+      assert.equal(replay.accepted, false, "reopened durable store rejects the previously committed nonce"); // spec/candidate/durable-nonces.md §1/§2
+      if (replay.accepted) throw new Error("reopened durable store admitted a replay");
+      assert.equal(replay.httpStatus, 401, "durable replay retains the unsigned 401 status"); // spec/candidate/durable-nonces.md §5
+      assert.equal(replay.code, "replayed_nonce", "durable replay has the protocol replay code"); // spec/candidate/durable-nonces.md §2/§5
+    } finally {
+      replay.finish();
+    }
+    owner.close();
+    owner = undefined;
+
+    assert.equal("markResponseFinish" in packageRoot, false, "response finish helper is not package-root exported");
+    assert.equal("takeResultFinish" in packageRoot, false, "result finish helper is not package-root exported");
+    assert.equal("rememberResultFinish" in packageRoot, false, "result finish helper is not package-root exported");
+    assert.equal("finishResponseAdmission" in packageRoot, false, "response finish helper is not package-root exported");
   } finally {
     try { owner?.close(); }
     finally { rmSync(root, { recursive: true, force: true }); }
@@ -230,6 +317,7 @@ async function main(): Promise<void> {
     }
     assert.equal(applicationDenialVerified, true, "the wrapped application denies its own tool for the verified non-admin caller");
     await rotationConsumer(baseUrl, importedClient.signer, trustedServer);
+    await durableConsumer(generatedClientKey);
     consumerPhase = "static-client";
 
     const wrongPinClient = new client.Client({

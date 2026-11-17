@@ -28,7 +28,8 @@ import type { VerifyRequest } from "../src/server/verify.js";
 import { jackFetchHandler } from "../src/server/fetch.js";
 import { serveNode } from "../src/server/node.js";
 import { DurableNonceStore } from "../src/server/durable-store.js";
-import { DurableNonceAdmission, takeResultFinish } from "../src/server/durable-admission.js";
+import { DurableNonceAdmission } from "../src/server/durable-admission.js";
+import { takeResultFinish } from "../src/server/durable-finish.js";
 
 const linux = process.platform === "linux";
 

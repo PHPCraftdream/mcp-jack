@@ -149,7 +149,7 @@ function withMeta(work: WorkingDoc, changes: Partial<DurableMetadata>): void {
 }
 
 /** Read-only document view used by lookups. */
-interface DocView {
+export interface DocView {
   readonly meta: DurableMetadata;
   readonly live: readonly DurableReceipt[];
   readonly intents: readonly DurableReceipt[];

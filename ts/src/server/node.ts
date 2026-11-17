@@ -2,7 +2,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { AUTH_VALUES_SYMBOL, RAW_BODY_SYMBOL, RAW_TARGET_SYMBOL, dropFragment, isOriginFormTarget } from "./fetch.js";
 import type { JackRequest } from "./fetch.js";
-import { finishResponseAdmission } from "./durable-admission.js";
+import { finishResponseAdmission } from "./durable-finish.js";
 
 /** Go defaultMaxBodyBytes (mirrors fetch.ts). */
 const DEFAULT_MAX_BODY_BYTES = 1 << 20;
