@@ -178,9 +178,12 @@ fn from_public_part_identity_consistency() {
             public_key: ALICE_PUBLIC_B64U.to_string(),
             kid: bad.to_string(),
         };
-        assert!(
-            ServerPublicKey::from_public_part(&part).is_err(),
-            "malformed kid {bad:?} must be rejected"
+        let err =
+            ServerPublicKey::from_public_part(&part).expect_err("malformed kid must be rejected");
+        assert_eq!(
+            err.to_string(),
+            "jack: user key: public part kid does not match its public key",
+            "malformed kid {bad:?}"
         );
     }
 }
@@ -360,8 +363,18 @@ fn from_seed_rejects_wrong_lengths() {
     assert!(text.contains("32") && text.contains("got 33"), "{text}");
     assert!(ClientSigningKey::from_seed(&[7u8; 32]).is_ok());
     // Server role: wrong lengths are rejected by the strict import too.
-    assert!(ServerPublicKey::from_public_key(&[0u8; 31]).is_err());
-    assert!(ServerPublicKey::from_public_key(&[0u8; 33]).is_err());
+    let err = ServerPublicKey::from_public_key(&[0u8; 31])
+        .expect_err("31-byte public key must be rejected");
+    assert_eq!(
+        err.to_string(),
+        "jack: user key: invalid public key: public key must be 32 bytes"
+    );
+    let err = ServerPublicKey::from_public_key(&[0u8; 33])
+        .expect_err("33-byte public key must be rejected");
+    assert_eq!(
+        err.to_string(),
+        "jack: user key: invalid public key: public key must be 32 bytes"
+    );
 }
 
 #[test]
@@ -369,13 +382,48 @@ fn server_public_import_rejects_invalid_keys() {
     // Pinned from spec/fixtures/key-vectors.json (case ids in the const
     // comments above): identity, non-canonical identity, mixed order,
     // off-curve, y above p, and wrong lengths all reject.
-    assert!(ServerPublicKey::from_public_key(&hex_bytes(REJECT_IDENTITY_HEX)).is_err());
-    assert!(ServerPublicKey::from_public_key(&hex_bytes(REJECT_NONCANONICAL_HEX)).is_err());
-    assert!(ServerPublicKey::from_public_key(&hex_bytes(REJECT_MIXED_ORDER_HEX)).is_err());
-    assert!(ServerPublicKey::from_public_key(&hex_bytes(REJECT_OFF_CURVE_HEX)).is_err());
-    assert!(ServerPublicKey::from_public_key(&hex_bytes(REJECT_Y_ABOVE_P_HEX)).is_err());
-    assert!(ServerPublicKey::from_public_key(&[0u8; 31]).is_err());
-    assert!(ServerPublicKey::from_public_key(&[0u8; 33]).is_err());
+    let err = ServerPublicKey::from_public_key(&hex_bytes(REJECT_IDENTITY_HEX))
+        .expect_err("identity public key must be rejected");
+    assert_eq!(
+        err.to_string(),
+        "jack: user key: invalid public key: identity point"
+    );
+    let err = ServerPublicKey::from_public_key(&hex_bytes(REJECT_NONCANONICAL_HEX))
+        .expect_err("noncanonical public key must be rejected");
+    assert_eq!(
+        err.to_string(),
+        "jack: user key: invalid public key: non-canonical or off-curve public key"
+    );
+    let err = ServerPublicKey::from_public_key(&hex_bytes(REJECT_MIXED_ORDER_HEX))
+        .expect_err("mixed-order public key must be rejected");
+    assert_eq!(
+        err.to_string(),
+        "jack: user key: invalid public key: not in the prime-order subgroup"
+    );
+    let err = ServerPublicKey::from_public_key(&hex_bytes(REJECT_OFF_CURVE_HEX))
+        .expect_err("off-curve public key must be rejected");
+    assert_eq!(
+        err.to_string(),
+        "jack: user key: invalid public key: non-canonical or off-curve public key"
+    );
+    let err = ServerPublicKey::from_public_key(&hex_bytes(REJECT_Y_ABOVE_P_HEX))
+        .expect_err("y-above-p public key must be rejected");
+    assert_eq!(
+        err.to_string(),
+        "jack: user key: invalid public key: non-canonical or off-curve public key"
+    );
+    let err = ServerPublicKey::from_public_key(&[0u8; 31])
+        .expect_err("31-byte public key must be rejected");
+    assert_eq!(
+        err.to_string(),
+        "jack: user key: invalid public key: public key must be 32 bytes"
+    );
+    let err = ServerPublicKey::from_public_key(&[0u8; 33])
+        .expect_err("33-byte public key must be rejected");
+    assert_eq!(
+        err.to_string(),
+        "jack: user key: invalid public key: public key must be 32 bytes"
+    );
     // A valid pinned public key (alice) imports fine.
     let alice =
         ServerPublicKey::from_public_key(&decode_b64url_fixed(ALICE_PUBLIC_B64U, 32).expect("pub"))

@@ -55,11 +55,15 @@ fn lifecycle_exclusive_owner_one_fixed_p_publication_and_clean_reopen() {
     let path = sandbox.file();
     let marker = marker_path(&path);
     let calls = Cell::new(0);
-    assert!(RotationServerStore::open(&path, server_options(), || {
-        calls.set(calls.get() + 1);
-        Ok(100)
-    })
-    .is_err());
+    assert!(matches!(
+        RotationServerStore::open(&path, server_options(), || {
+            calls.set(calls.get() + 1);
+            Ok(100)
+        }),
+        Err(RotationError {
+            code: "rotation_state_unavailable"
+        })
+    ));
     assert_eq!(calls.get(), 0);
     RotationServerStore::initialize_unused(&path, server_options(), || {
         assert_eq!(payload(&path)["dirty"], true);
@@ -72,18 +76,30 @@ fn lifecycle_exclusive_owner_one_fixed_p_publication_and_clean_reopen() {
         "mcp-jack/server-ring/private-file/v1"
     );
     let original = fs::read(&path).unwrap();
-    assert!(
+    assert!(matches!(
         RotationServerStore::initialize_unused(&path, server_options(), || panic!(
             "must not sample"
-        ))
-        .is_err()
-    );
+        )),
+        Err(RotationError {
+            code: "rotation_state_unavailable"
+        })
+    ));
     assert_eq!(original, fs::read(&path).unwrap());
     let mut wrong = server_options();
     wrong.anchor_reference = "opaque-provider/other".into();
-    assert!(RotationServerStore::open(&path, wrong, || panic!("wrong profile")).is_err());
+    assert!(matches!(
+        RotationServerStore::open(&path, wrong, || panic!("wrong profile")),
+        Err(RotationError {
+            code: "rotation_state_unavailable"
+        })
+    ));
     let mut store = RotationServerStore::open(&path, server_options(), || Ok(100)).unwrap();
-    assert!(RotationServerStore::open(&path, server_options(), || panic!("second owner")).is_err());
+    assert!(matches!(
+        RotationServerStore::open(&path, server_options(), || panic!("second owner")),
+        Err(RotationError {
+            code: "rotation_state_unavailable"
+        })
+    ));
     let (previous, captured) = store.snapshot().unwrap();
     assert_eq!(previous.signer_references.len(), 1);
     let desired = published(&previous, &captured);
@@ -108,7 +124,12 @@ fn lifecycle_exclusive_owner_one_fixed_p_publication_and_clean_reopen() {
     store.close().unwrap();
     store.close().unwrap();
     assert!(!marker.exists());
-    assert!(store.snapshot().is_err());
+    assert!(matches!(
+        store.snapshot(),
+        Err(RotationError {
+            code: "rotation_state_unavailable"
+        })
+    ));
     let mut reopened = RotationServerStore::open(&path, server_options(), || Ok(100)).unwrap();
     assert_eq!(reopened.snapshot().unwrap().0.public.head.ordinal, 1);
     assert_eq!(payload(&path)["owner"], 3);
@@ -190,9 +211,19 @@ fn rollback_or_invalid_time_latches_unsafe_and_blocks_clean_close() {
         let error = store.advance_and_check().unwrap_err();
         assert_eq!(error.code, "rotation_clock_unsafe");
         assert_eq!(fs::read(&path).unwrap(), latched, "catch-up must not clear");
-        assert!(store.close().is_err());
+        assert!(matches!(
+            store.close(),
+            Err(RotationError {
+                code: "rotation_state_unavailable"
+            })
+        ));
         assert!(marker_path(&path).exists());
-        assert!(RotationServerStore::open(&path, server_options(), || Ok(100)).is_err());
+        assert!(matches!(
+            RotationServerStore::open(&path, server_options(), || Ok(100)),
+            Err(RotationError {
+                code: "rotation_state_unavailable"
+            })
+        ));
     }
 }
 
@@ -204,20 +235,51 @@ fn serving_leases_hold_the_dirty_epoch_and_drain_before_a_clean_close() {
     let mut store = RotationServerStore::open(&path, server_options(), || Ok(100)).unwrap();
     let one = store.acquire_serving_lease().unwrap();
     let two = store.acquire_serving_lease().unwrap();
-    assert!(store.close().is_err());
+    assert!(matches!(
+        store.close(),
+        Err(RotationError {
+            code: "rotation_state_unavailable"
+        })
+    ));
     assert_eq!(
         payload(&path)["dirty"],
         true,
         "a lease keeps the dirty epoch"
     );
-    assert!(store.snapshot().is_err(), "closing refuses new final gates");
-    assert!(store.acquire_serving_lease().is_err());
+    assert!(
+        matches!(
+            store.snapshot(),
+            Err(RotationError {
+                code: "rotation_state_unavailable"
+            })
+        ),
+        "closing refuses new final gates"
+    );
+    assert!(matches!(
+        store.acquire_serving_lease(),
+        Err(RotationError {
+            code: "rotation_state_unavailable"
+        })
+    ));
     drop(one);
-    assert!(store.close().is_err(), "the second lease is still held");
+    assert!(
+        matches!(
+            store.close(),
+            Err(RotationError {
+                code: "rotation_state_unavailable"
+            })
+        ),
+        "the second lease is still held"
+    );
     drop(two);
     store.close().unwrap();
     assert_eq!(payload(&path)["dirty"], false);
-    assert!(store.acquire_serving_lease().is_err());
+    assert!(matches!(
+        store.acquire_serving_lease(),
+        Err(RotationError {
+            code: "rotation_state_unavailable"
+        })
+    ));
 }
 
 #[test]
@@ -229,15 +291,28 @@ fn client_and_server_files_anchors_and_profiles_are_not_interchangeable() {
     RotationTrustStore::initialize_unused(&client_path, options(), || Ok(100)).unwrap();
     let server_bytes = fs::read(&server_path).unwrap();
     let client_bytes = fs::read(&client_path).unwrap();
-    assert!(RotationTrustStore::open(&server_path, options(), || panic!("domain")).is_err());
-    assert!(
-        RotationServerStore::open(&client_path, server_options(), || panic!("domain")).is_err()
-    );
+    assert!(matches!(
+        RotationTrustStore::open(&server_path, options(), || panic!("domain")),
+        Err(RotationError {
+            code: "rotation_state_unavailable"
+        })
+    ));
+    assert!(matches!(
+        RotationServerStore::open(&client_path, server_options(), || panic!("domain")),
+        Err(RotationError {
+            code: "rotation_state_unavailable"
+        })
+    ));
     for anchor_reference in [String::new(), "x".repeat(MAX_SIGNER_REFERENCE_BYTES + 1)] {
         let mut bad = server_options();
         bad.anchor_reference = anchor_reference;
         let bad_path = server_path.with_file_name("bad");
-        assert!(RotationServerStore::initialize_unused(&bad_path, bad, || panic!("bad")).is_err());
+        assert!(matches!(
+            RotationServerStore::initialize_unused(&bad_path, bad, || panic!("bad")),
+            Err(RotationError {
+                code: "rotation_state_unavailable"
+            })
+        ));
         assert!(!bad_path.exists());
     }
     assert_eq!(fs::read(&server_path).unwrap(), server_bytes);

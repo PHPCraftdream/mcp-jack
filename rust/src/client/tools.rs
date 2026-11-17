@@ -443,6 +443,16 @@ mod tests {
 
         let missing_admin =
             serde_json::from_str::<Entry>(r#"{"kid":"k","public_key":"p","name":"n"}"#);
-        assert!(missing_admin.is_err());
+        let missing_admin_error = missing_admin.expect_err("missing admin must be rejected");
+        assert_eq!(
+            missing_admin_error.classify(),
+            serde_json::error::Category::Data
+        );
+        assert!(
+            missing_admin_error
+                .to_string()
+                .starts_with("missing field `admin`"),
+            "unexpected missing-admin diagnostic: {missing_admin_error}"
+        );
     }
 }

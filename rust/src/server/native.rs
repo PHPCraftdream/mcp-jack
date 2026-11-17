@@ -872,7 +872,10 @@ mod tests {
                 .code,
             "internal_error"
         );
-        assert!(bootstrap_admin(state.as_ref(), NOW, MAX_INVITE_TTL + 1, opts()).is_err());
+        let err = bootstrap_admin(state.as_ref(), NOW, MAX_INVITE_TTL + 1, opts())
+            .expect_err("TTL above maximum must be rejected");
+        assert_eq!(err.http_status, 0);
+        assert_eq!(err.code, "internal_error");
 
         let code = bootstrap_admin(state.as_ref(), NOW, 600, opts()).unwrap();
         let view = state.view();
@@ -1620,7 +1623,7 @@ mod tests {
         assert_eq!(after_create, state.view());
 
         // 9. bootstrap_admin: ttl 0 -> Err before any update, unchanged.
-        assert!(bootstrap_admin(
+        let err = bootstrap_admin(
             state.as_ref(),
             NOW,
             0,
@@ -1628,7 +1631,9 @@ mod tests {
                 random_bytes: Some(Arc::new(|n| Ok(vec![0xA5; n]))),
             },
         )
-        .is_err());
+        .expect_err("zero bootstrap TTL must be rejected");
+        assert_eq!(err.http_status, 0);
+        assert_eq!(err.code, "internal_error");
         assert_eq!(after_create, state.view());
     }
 

@@ -18,6 +18,13 @@ pub(super) fn crash_boundary(stage: &str) {
     }
 }
 
+pub(super) fn assert_error_code<T>(result: Result<T, RotationError>, expected: &'static str) {
+    let Err(error) = result else {
+        panic!("expected rotation error code {expected}");
+    };
+    assert_eq!(error.code, expected);
+}
+
 pub(super) struct Sandbox(PathBuf);
 impl Sandbox {
     pub(super) fn new() -> Self {
@@ -102,11 +109,14 @@ fn explicit_creation_noncreating_open_exclusive_owner_and_reopen() {
     let sandbox = Sandbox::new();
     let path = sandbox.file();
     let calls = Cell::new(0);
-    assert!(RotationTrustStore::open(&path, options(), || {
-        calls.set(calls.get() + 1);
-        Ok(100)
-    })
-    .is_err());
+    // Go parity: durable/trust_store.go:166-215 opens only initialized, matching, clean state.
+    assert_error_code(
+        RotationTrustStore::open(&path, options(), || {
+            calls.set(calls.get() + 1);
+            Ok(100)
+        }),
+        "rotation_state_unavailable",
+    );
     assert_eq!(calls.get(), 0);
     assert!(!path.exists());
     assert!(!sandbox.0.join("trust.owner").exists());
@@ -118,23 +128,29 @@ fn explicit_creation_noncreating_open_exclusive_owner_and_reopen() {
     })
     .unwrap();
     let original = fs::read(&path).unwrap();
-    assert!(
-        RotationTrustStore::initialize_unused(&path, options(), || panic!("must not sample"))
-            .is_err()
+    assert_error_code(
+        RotationTrustStore::initialize_unused(&path, options(), || panic!("must not sample")),
+        "rotation_state_unavailable",
     );
     assert_eq!(original, fs::read(&path).unwrap());
     let mut wrong = options();
     wrong.window = 29;
-    assert!(RotationTrustStore::open(&path, wrong, || panic!("wrong profile")).is_err());
+    assert_error_code(
+        RotationTrustStore::open(&path, wrong, || panic!("wrong profile")),
+        "rotation_state_unavailable",
+    );
     let mut store = RotationTrustStore::open(&path, options(), || Ok(100)).unwrap();
-    assert!(RotationTrustStore::open(&path, options(), || panic!("second owner")).is_err());
+    assert_error_code(
+        RotationTrustStore::open(&path, options(), || panic!("second owner")),
+        "rotation_state_unavailable",
+    );
     let (snapshot, clock) = store.snapshot().unwrap();
     assert_eq!(clock.high_water, 100);
     assert_eq!(snapshot.revision, 1);
     store.close().unwrap();
     store.close().unwrap();
     assert!(!sandbox.0.join("trust.owner").exists());
-    assert!(store.snapshot().is_err());
+    assert_error_code(store.snapshot(), "rotation_state_unavailable");
     let mut reopened = RotationTrustStore::open(&path, options(), || Ok(101)).unwrap();
     assert_eq!(reopened.snapshot().unwrap().1.high_water, 101);
     reopened.close().unwrap();
@@ -207,9 +223,15 @@ fn rollback_and_invalid_time_latch_without_catchup_or_clean_close() {
             serde_json::from_str(decoded_file(&path)["clock"].as_str().unwrap()).unwrap();
         assert_eq!(clock["high_water"], 100);
         assert_eq!(clock["unsafe"], true);
-        assert!(store.close().is_err());
+        // The close gate refuses unsafe durable state as rotation_state_unavailable (store.rs:264-282).
+        // Go parity: durable/trust_operations.go:63-100 latches rollback; durable/trust_store.go:245-293 leaves dirty state.
+        assert_error_code(store.close(), "rotation_state_unavailable");
         drop(store);
-        assert!(RotationTrustStore::open(&path, options(), || panic!("unsafe startup")).is_err());
+        // Go parity: durable/trust_store.go:167-215 rejects unsafe/dirty state before handing out an owner.
+        assert_error_code(
+            RotationTrustStore::open(&path, options(), || panic!("unsafe startup")),
+            "rotation_state_unavailable",
+        );
     }
 }
 
@@ -228,11 +250,21 @@ fn callback_errors_panics_and_drop_preserve_startup_gate() {
     })
     .unwrap();
     fail.set(true);
-    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| store.raw_clock())).is_err());
-    assert!(store.close().is_err());
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| store.raw_clock()))
+        .expect_err("raw_clock must propagate the callback panic");
+    assert_eq!(
+        panic.downcast_ref::<&str>(),
+        Some(&"test-only callback panic")
+    );
+    // Rust's begin/close paths return unavailable when still busy/fenced (store.rs:107-117, 264-282).
+    // Go parity: durable/trust_store.go:42-51 catches provider panic; close at 245-293 does not clear dirty state.
+    assert_error_code(store.close(), "rotation_state_unavailable");
     drop(store);
     assert!(sandbox.0.join("trust.owner").exists());
-    assert!(RotationTrustStore::open(&path, options(), || panic!("abandoned owner")).is_err());
+    assert_error_code(
+        RotationTrustStore::open(&path, options(), || panic!("abandoned owner")),
+        "rotation_state_unavailable",
+    );
 
     let other = Sandbox::new();
     let path = other.file();
@@ -252,12 +284,14 @@ fn callback_errors_panics_and_drop_preserve_startup_gate() {
         store.advance_and_check().unwrap_err().code,
         "rotation_clock_unavailable"
     );
-    assert!(store.close().is_err());
+    // Go parity: durable/trust_operations.go:63-85 maps callback/storage failure to unavailable and fences.
+    assert_error_code(store.close(), "rotation_state_unavailable");
     assert!(other.0.join("trust.owner").exists());
 }
 
 #[test]
 fn filesystem_profile_refuses_symlinks_hardlinks_modes_and_fifo() {
+    // private_file.rs:27-98 maps invalid directory/file identity, mode, type, and size to unavailable.
     for kind in ["symlink", "hardlink", "mode", "fifo"] {
         let sandbox = Sandbox::new();
         let path = sandbox.file();
@@ -282,23 +316,24 @@ fn filesystem_profile_refuses_symlinks_hardlinks_modes_and_fifo() {
             }
             _ => unreachable!(),
         }
-        assert!(
-            RotationTrustStore::open(&path, options(), || panic!("invalid filesystem object"))
-                .is_err()
+        assert_error_code(
+            RotationTrustStore::open(&path, options(), || panic!("invalid filesystem object")),
+            "rotation_state_unavailable",
         );
     }
     let sandbox = Sandbox::new();
     fs::set_permissions(&sandbox.0, fs::Permissions::from_mode(0o755)).unwrap();
-    assert!(
-        RotationTrustStore::initialize_unused(&sandbox.file(), options(), || panic!(
-            "nonprivate parent"
-        ))
-        .is_err()
+    assert_error_code(
+        RotationTrustStore::initialize_unused(&sandbox.file(), options(), || {
+            panic!("nonprivate parent")
+        }),
+        "rotation_state_unavailable",
     );
 }
 
 #[test]
 fn strict_bundle_schema_profile_checksum_and_copied_clock() {
+    // Go parity: durable/trust_layout.go:75-119 enforces exact protected rows; spec/candidate/server-key-rotation.md §5 line 106 requires strict fields.
     let options = options();
     let anchor = options.anchor().unwrap();
     let profile = crate::encoding::body_hash(options.encode(&anchor).unwrap().as_bytes());
@@ -328,24 +363,35 @@ fn strict_bundle_schema_profile_checksum_and_copied_clock() {
         payload.as_object_mut().unwrap().remove(field);
         let payload = payload.to_string();
         let changed = serde_json::json!({"checksum":crate::encoding::body_hash(payload.as_bytes()),"payload":payload}).to_string().into_bytes();
-        assert!(
-            store_format::unpack(changed, &options, &profile).is_err(),
-            "{field}"
-        );
+        let result = store_format::unpack(changed, &options, &profile);
+        let Err(error) = result else {
+            panic!("missing required field {field} was accepted");
+        };
+        assert_eq!(error.code, "rotation_state_unavailable", "{field}");
     }
     let mut corrupted = bytes.clone();
     let index = corrupted.len() / 2;
     corrupted[index] ^= 1;
-    assert!(store_format::unpack(corrupted, &options, &profile).is_err());
-    assert!(store_format::unpack(b"[]".to_vec(), &options, &profile).is_err());
-    assert!(
-        store_format::unpack(vec![b' '; MAX_TRUST_SNAPSHOT_BYTES + 1], &options, &profile).is_err()
+    assert_error_code(
+        store_format::unpack(corrupted, &options, &profile),
+        "rotation_state_unavailable",
+    );
+    assert_error_code(
+        store_format::unpack(b"[]".to_vec(), &options, &profile),
+        "rotation_state_unavailable",
+    );
+    assert_error_code(
+        store_format::unpack(vec![b' '; MAX_TRUST_SNAPSHOT_BYTES + 1], &options, &profile),
+        "rotation_state_unavailable",
     );
     let mut bundle = bundle;
     let mut ahead = anchor;
     ahead.clock.high_water = 1;
     bundle.snapshot = options.encode(&ahead).unwrap();
-    assert!(store_format::unpack(bundle.pack().unwrap(), &options, &profile).is_err());
+    assert_error_code(
+        store_format::unpack(bundle.pack().unwrap(), &options, &profile),
+        "rotation_state_unavailable",
+    );
 }
 
 #[test]
@@ -435,8 +481,10 @@ fn real_child_pre_and_post_rename_unknown_outcomes_preserve_artifacts() {
                 .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
                 .count();
             assert_eq!(temporaries, usize::from(stage == "before-rename"));
-            assert!(
-                RotationTrustStore::open(&path, options(), || panic!("uncertain startup")).is_err()
+            // Go parity: durable/trust_store.go:151-201 rejects invalid filesystem/store identity during open.
+            assert_error_code(
+                RotationTrustStore::open(&path, options(), || panic!("uncertain startup")),
+                "rotation_state_unavailable",
             );
             if payload["dirty"] == true {
                 // Only test-owned evidence: we separately prove the dirty gate without the marker.
@@ -445,10 +493,13 @@ fn real_child_pre_and_post_rename_unknown_outcomes_preserve_artifacts() {
                     sandbox.0.join("archived-owner-evidence"),
                 )
                 .unwrap();
-                assert!(RotationTrustStore::open(&path, options(), || panic!(
-                    "dirty startup before clock"
-                ))
-                .is_err());
+                // Go parity: durable/trust_store.go:151-201 rejects invalid filesystem/store identity during open.
+                assert_error_code(
+                    RotationTrustStore::open(&path, options(), || {
+                        panic!("dirty startup before clock")
+                    }),
+                    "rotation_state_unavailable",
+                );
                 assert_eq!(decoded_file(&path), payload);
             }
         }
@@ -471,17 +522,20 @@ fn private_file_inclusive_limit_and_exact_byte_conflict() {
     assert_eq!(owner.read().unwrap(), b"replacement");
     owner.close().unwrap();
     let oversized = sandbox.0.join("oversized");
-    assert!(super::private_file::FileOwner::create_unused(
-        &oversized,
-        &vec![0; MAX_TRUST_SNAPSHOT_BYTES + 1]
-    )
-    .is_err());
+    assert_error_code(
+        super::private_file::FileOwner::create_unused(
+            &oversized,
+            &vec![0; MAX_TRUST_SNAPSHOT_BYTES + 1],
+        ),
+        "rotation_state_unavailable",
+    );
     assert!(!oversized.exists());
     assert!(!sandbox.0.join("oversized.owner").exists());
 }
 
 #[test]
 fn protected_bundle_rejects_raw_number_aliases_duplicates_and_wrong_objects() {
+    // Go parity: durable/trust_layout.go:47-119 validates guard identity and exact row schema; spec/candidate/server-key-rotation.md §5 line 106 requires strict fields.
     let options = options();
     let anchor = options.anchor().unwrap();
     let profile = crate::encoding::body_hash(options.encode(&anchor).unwrap().as_bytes());
@@ -507,16 +561,25 @@ fn protected_bundle_rejects_raw_number_aliases_duplicates_and_wrong_objects() {
     assert_eq!(payload.matches("\"owner\":1").count(), 1);
     for raw in ["0", "-0", "1.0", "1e0", "9007199254740992", "null", "true"] {
         let changed = payload.replacen("\"owner\":1", &format!("\"owner\":{raw}"), 1);
-        assert!(store_format::unpack(seal(&changed), &options, &profile).is_err());
+        assert_error_code(
+            store_format::unpack(seal(&changed), &options, &profile),
+            "rotation_state_unavailable",
+        );
     }
     for extra in [r#""owner":1"#, r#""own\u0065r":1"#, r#""extra":0"#] {
         let mut changed = payload[..payload.len() - 1].to_owned();
         changed.push(',');
         changed.push_str(extra);
         changed.push('}');
-        assert!(store_format::unpack(seal(&changed), &options, &profile).is_err());
+        assert_error_code(
+            store_format::unpack(seal(&changed), &options, &profile),
+            "rotation_state_unavailable",
+        );
     }
-    assert!(store_format::unpack(seal("[]"), &options, &profile).is_err());
+    assert_error_code(
+        store_format::unpack(seal("[]"), &options, &profile),
+        "rotation_state_unavailable",
+    );
     let mut value: serde_json::Value = serde_json::from_str(payload).unwrap();
     for field in [
         "domain",
@@ -531,7 +594,10 @@ fn protected_bundle_rejects_raw_number_aliases_duplicates_and_wrong_objects() {
     ] {
         let saved = value[field].clone();
         value[field] = serde_json::Value::Null;
-        assert!(store_format::unpack(seal(&value.to_string()), &options, &profile).is_err());
+        assert_error_code(
+            store_format::unpack(seal(&value.to_string()), &options, &profile),
+            "rotation_state_unavailable",
+        );
         value[field] = saved;
     }
     let clock = &bundle.clock;
@@ -547,14 +613,21 @@ fn protected_bundle_rejects_raw_number_aliases_duplicates_and_wrong_objects() {
         ),
     ] {
         assert_eq!(clock.matches(needle).count(), 1);
-        assert!(
-            store_format::read_clock(&clock.replacen(needle, replacement, 1), &options).is_err()
+        assert_error_code(
+            store_format::read_clock(&clock.replacen(needle, replacement, 1), &options),
+            "rotation_state_unavailable",
         );
     }
-    assert!(store_format::read_clock("[]", &options).is_err());
+    assert_error_code(
+        store_format::read_clock("[]", &options),
+        "rotation_state_unavailable",
+    );
     let mut clock_value: serde_json::Value = serde_json::from_str(clock).unwrap();
     clock_value["binding"] = serde_json::json!([options.binding.endpoint, options.binding.aud]);
-    assert!(store_format::read_clock(&clock_value.to_string(), &options).is_err());
+    assert_error_code(
+        store_format::read_clock(&clock_value.to_string(), &options),
+        "rotation_state_unavailable",
+    );
 }
 
 #[test]
@@ -594,7 +667,7 @@ fn late_filesystem_identity_loss_cannot_commit_clock_or_clean_owner() {
             store.advance_and_check().unwrap_err().code,
             "rotation_clock_unavailable"
         );
-        assert!(store.close().is_err());
+        assert_error_code(store.close(), "rotation_state_unavailable");
         let surviving = if replace_parent {
             moved.join("trust")
         } else {

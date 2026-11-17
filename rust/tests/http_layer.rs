@@ -1260,10 +1260,9 @@ async fn identity_snapshot_handshake_cancellation_drops_request_future() {
     .await;
     drop(entered_tx);
 
-    assert!(
-        timed_out.is_err(),
-        "identity handshake should remain pending"
-    );
+    let timeout_error: tokio::time::error::Elapsed =
+        timed_out.expect_err("identity handshake should remain pending");
+    assert_eq!(timeout_error.to_string(), "deadline has elapsed");
     assert!(dropped.load(Ordering::SeqCst));
 }
 
@@ -1531,13 +1530,11 @@ async fn refuses_endless_stream_without_buffering() {
     assert_eq!(error_code(&got.body), "streaming_unsupported");
     assert_signed(&got, &signed.request_sig, &server_pub);
     // The body was dropped unread: the producer can no longer enqueue frames.
-    assert!(
-        sender
-            .send_data(Bytes::from_static(b"data: never\n\n"))
-            .await
-            .is_err(),
-        "the endless body must be dropped without polling"
-    );
+    let send_error: http_body_util::channel::SendError = sender
+        .send_data(Bytes::from_static(b"data: never\n\n"))
+        .await
+        .expect_err("the endless body must be dropped without polling");
+    assert_eq!(send_error.to_string(), "failed to send frame");
 }
 
 // ---------------------------------------------------------------------------
@@ -1611,19 +1608,18 @@ fn assert_overflow_answer(o: &Observed, server_pub: &[u8; 32]) {
     let other = signed_request(&harness::signer_by_name("alice"), "GET", "/mcp", b"");
     assert_ne!(other.request_sig, o.sent.request_sig);
     let values: Vec<&str> = o.got.jack_auth.iter().map(String::as_str).collect();
-    assert!(
-        mcp_jack::signing::verify_response(
-            server_pub,
-            502,
-            &values,
-            &other.request_sig,
-            &o.got.body,
-            FIXTURE_NOW,
-            30,
-        )
-        .is_err(),
-        "overflow answer must be bound to its own request only"
-    );
+    let error = mcp_jack::signing::verify_response(
+        server_pub,
+        502,
+        &values,
+        &other.request_sig,
+        &o.got.body,
+        FIXTURE_NOW,
+        30,
+    )
+    .expect_err("overflow answer must be bound to its own request only");
+    assert_eq!(error.http_status, 0);
+    assert_eq!(error.code, mcp_jack::error::codes::BAD_SIGNATURE);
 }
 
 /// An ordinary upstream answer passes untouched and is signed.

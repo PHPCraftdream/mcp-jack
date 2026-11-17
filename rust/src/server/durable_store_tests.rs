@@ -201,16 +201,28 @@ fn owner_generation(sandbox: &Sandbox) -> u64 {
 
 #[test]
 fn owner_exclusivity_clean_close_and_reopen() {
+    // Spec §2 requires exactly one lifetime store owner.
     let sandbox = Sandbox::new();
     let path = sandbox.file();
-    // Opening an absent store is refused; it is never reinterpreted as empty.
-    assert!(DurableNonceStore::open(&path, &options(), clock(&[100])).is_err());
+    // Missing input is unavailable, never an implicit empty store (Go: durable/store.go:167-170; spec §3).
+    assert!(matches!(
+        DurableNonceStore::open(&path, &options(), clock(&[100])),
+        Err(DurableStoreError::Unavailable)
+    ));
     assert!(!path.with_file_name("nonce-store.owner").exists());
     DurableNonceStore::initialize_unused(&path, &options(), clock(&[100])).unwrap();
-    assert!(DurableNonceStore::initialize_unused(&path, &options(), clock(&[100])).is_err());
+    // Existing store data is not replaced (Go: durable/store.go:109-123; spec §2).
+    assert!(matches!(
+        DurableNonceStore::initialize_unused(&path, &options(), clock(&[100])),
+        Err(DurableStoreError::Unavailable)
+    ));
     assert_eq!(owner_generation(&sandbox), 1);
     let store = DurableNonceStore::open(&path, &options(), clock(&[100])).unwrap();
-    assert!(DurableNonceStore::open(&path, &options(), clock(&[100])).is_err());
+    // The held lifetime-owner marker refuses a second owner (Go: durable/store.go:167-170; spec §2).
+    assert!(matches!(
+        DurableNonceStore::open(&path, &options(), clock(&[100])),
+        Err(DurableStoreError::Unavailable)
+    ));
     assert!(path.with_file_name("nonce-store.owner").exists());
     assert_eq!(owner_generation(&sandbox), 2);
     store.close().unwrap();
@@ -227,8 +239,15 @@ fn crash_left_owner_marker_fails_closed() {
     let path = sandbox.file();
     let marker = path.with_file_name("nonce-store.owner");
     fs::write(&marker, b"stale").unwrap();
-    assert!(DurableNonceStore::open(&path, &options(), clock(&[100])).is_err());
-    assert!(DurableNonceStore::initialize_unused(&path, &options(), clock(&[100])).is_err());
+    // Existing owner marker blocks both paths; exactly one owner is allowed (spec §2).
+    assert!(matches!(
+        DurableNonceStore::open(&path, &options(), clock(&[100])),
+        Err(DurableStoreError::Unavailable)
+    ));
+    assert!(matches!(
+        DurableNonceStore::initialize_unused(&path, &options(), clock(&[100])),
+        Err(DurableStoreError::Unavailable)
+    ));
     assert!(marker.exists());
 }
 
@@ -239,10 +258,17 @@ fn wrong_deployment_or_window_is_refused() {
     store.close().unwrap();
     let mut wrong = options();
     wrong.deployment_id = "other-deployment".into();
-    assert!(DurableNonceStore::open(&sandbox.file(), &wrong, clock(&[100])).is_err());
+    // Persisted deployment and window must match (durable_store.rs:780-784; Go: durable/snapshot.go:42-43; spec §3).
+    assert!(matches!(
+        DurableNonceStore::open(&sandbox.file(), &wrong, clock(&[100])),
+        Err(DurableStoreError::InvalidStore)
+    ));
     let mut wrong = options();
     wrong.window = 60;
-    assert!(DurableNonceStore::open(&sandbox.file(), &wrong, clock(&[100])).is_err());
+    assert!(matches!(
+        DurableNonceStore::open(&sandbox.file(), &wrong, clock(&[100])),
+        Err(DurableStoreError::InvalidStore)
+    ));
 }
 
 // ----------------------------------------------------------- reserve basics
@@ -425,9 +451,13 @@ fn sample_below_high_water_latches_clock_unsafe_and_persists() {
         .reserve(&admission(&b64(4, 32), &b64(5, 16), 200))
         .unwrap_err();
     assert_eq!(error.code, "durability_unavailable");
-    assert!(store.close().is_err());
+    // A fenced store preserves recovery-required status on close (durable_store.rs:861-869; Go: durable/store.go:219-227).
+    assert_eq!(store.close(), Err(DurableStoreError::RecoveryRequired));
     // The latch persists: reopen fails closed; inspect shows the latch.
-    assert!(DurableNonceStore::open(&sandbox.file(), &options(), clock(&[201])).is_err());
+    assert!(matches!(
+        DurableNonceStore::open(&sandbox.file(), &options(), clock(&[201])),
+        Err(DurableStoreError::RecoveryRequired)
+    ));
     let snapshot = inspect_recovery(&sandbox.file(), &options()).unwrap();
     assert!(snapshot.unsafe_latched);
     assert!(snapshot.dirty);
@@ -465,7 +495,11 @@ fn reopen_below_high_water_fails_closed_before_absence() {
     let (kid, nonce) = pair(1);
     drop(store.reserve(&admission(&kid, &nonce, 186)).unwrap());
     store.close().unwrap();
-    assert!(DurableNonceStore::open(&sandbox.file(), &options(), clock(&[215])).is_err());
+    // Startup below H latches rollback and requires recovery (Go: durable/store.go:191-196; spec §3).
+    assert!(matches!(
+        DurableNonceStore::open(&sandbox.file(), &options(), clock(&[215])),
+        Err(DurableStoreError::RecoveryRequired)
+    ));
     let snapshot = inspect_recovery(&sandbox.file(), &options()).unwrap();
     assert!(snapshot.unsafe_latched);
     assert_eq!(
@@ -534,8 +568,11 @@ fn reconcile_moves_exact_row_to_terminal_tombstone() {
         reconcile_unknown(&sandbox.file(), &options(), &snapshot.hash, &missing).unwrap_err(),
         DurableStoreError::RecoveryRequired
     );
-    // The fence stays: unknown terminal state never reopens automatically.
-    assert!(DurableNonceStore::open(&sandbox.file(), &options(), clock(&[100])).is_err());
+    // Reconciliation leaves the dirty epoch closed until recovery (Go: durable/snapshot.go:45-46; spec §4).
+    assert!(matches!(
+        DurableNonceStore::open(&sandbox.file(), &options(), clock(&[100])),
+        Err(DurableStoreError::RecoveryRequired)
+    ));
 }
 
 fn snapshot_metadata_helper(sandbox: &Sandbox) -> DurableMetadata {
@@ -741,27 +778,32 @@ fn valid_fixture() -> (Vec<u8>, DurableMetadata, [u8; 48], DurableReceipt) {
 
 #[test]
 fn strict_loader_rejects_trailing_bytes_and_corruption() {
+    // Strict encoded-file rejection (durable_format.rs:615-699; spec §3).
     let (bytes, _, _, _) = valid_fixture();
     let mut trailing = bytes.clone();
     trailing.push(0);
-    assert!(
-        decode_state(&trailing).is_err(),
-        "trailing bytes must be rejected"
-    );
+    assert!(matches!(
+        decode_state(&trailing),
+        Err(DurableStoreError::InvalidStore)
+    ));
     let mut flipped = bytes.clone();
     let middle = flipped.len() / 2;
     flipped[middle] ^= 0xff;
-    assert!(
-        decode_state(&flipped).is_err(),
-        "checksum corruption must be rejected"
-    );
+    assert!(matches!(
+        decode_state(&flipped),
+        Err(DurableStoreError::InvalidStore)
+    ));
     let mut truncated = bytes.clone();
     truncated.pop();
-    assert!(decode_state(&truncated).is_err());
+    assert!(matches!(
+        decode_state(&truncated),
+        Err(DurableStoreError::InvalidStore)
+    ));
 }
 
 #[test]
 fn strict_loader_rejects_counter_and_cap_violations() {
+    // Go: durable/metadata.go:118-125; spec §3 and §6 require exact counts and caps.
     let (_, metadata, key, receipt) = valid_fixture();
     let metadata_sealed = encode_metadata(&metadata).unwrap();
     let payload = strip_seal(&metadata_sealed).to_vec();
@@ -770,10 +812,10 @@ fn strict_loader_rejects_counter_and_cap_violations() {
     let live_offset = wrong_count.len() - 13;
     wrong_count[live_offset..live_offset + 4].copy_from_slice(&1u32.to_be_bytes());
     let file = build_file(&seal_payload(&wrong_count), &[], &[], &[], &[], &[]);
-    assert!(
-        decode_state(&file).is_err(),
-        "counter mismatch must be rejected"
-    );
+    assert!(matches!(
+        decode_state(&file),
+        Err(DurableStoreError::InvalidStore)
+    ));
     // A row present under a zeroed metadata counter is the mirror rejection.
     let record = record_of(
         &metadata,
@@ -797,23 +839,24 @@ fn strict_loader_rejects_counter_and_cap_violations() {
         &[expiry_key(130, &key)],
         &[(receipt.operation_id, key)],
     );
-    assert!(
-        decode_state(&file).is_err(),
-        "row without counter must be rejected"
-    );
+    assert!(matches!(
+        decode_state(&file),
+        Err(DurableStoreError::InvalidStore)
+    ));
     // Aggregate cap: 65 tombstones above the 64 cap is rejected at load.
     let mut over_cap = payload.clone();
     let tombstone_offset = over_cap.len() - 9;
     over_cap[tombstone_offset..tombstone_offset + 4].copy_from_slice(&65u32.to_be_bytes());
     let file = build_file(&seal_payload(&over_cap), &[], &[], &[], &[], &[]);
-    assert!(
-        decode_state(&file).is_err(),
-        "65 tombstones must be rejected"
-    );
+    assert!(matches!(
+        decode_state(&file),
+        Err(DurableStoreError::InvalidStore)
+    ));
 }
 
 #[test]
 fn strict_loader_rejects_duplicate_and_inconsistent_indexes() {
+    // Go: durable/layout.go:16-94; spec §3 requires exact primary/index agreement.
     let (_, metadata, key, receipt) = valid_fixture();
     let metadata_sealed = encode_metadata(&metadata).unwrap();
     let record = record_of(
@@ -841,16 +884,16 @@ fn strict_loader_rejects_duplicate_and_inconsistent_indexes() {
         &[index],
         &ops,
     );
-    assert!(
-        decode_state(&file).is_err(),
-        "duplicate keys must be rejected"
-    );
+    assert!(matches!(
+        decode_state(&file),
+        Err(DurableStoreError::InvalidStore)
+    ));
     // Missing expiry index entry for a live row.
     let file = build_file(&metadata_sealed, &[row.clone()], &[], &[], &[], &ops);
-    assert!(
-        decode_state(&file).is_err(),
-        "missing expiry entry must be rejected"
-    );
+    assert!(matches!(
+        decode_state(&file),
+        Err(DurableStoreError::InvalidStore)
+    ));
     // Duplicate expiry index entries.
     let file = build_file(
         &metadata_sealed,
@@ -860,10 +903,10 @@ fn strict_loader_rejects_duplicate_and_inconsistent_indexes() {
         &[index, index],
         &ops,
     );
-    assert!(
-        decode_state(&file).is_err(),
-        "duplicate expiry entries must be rejected"
-    );
+    assert!(matches!(
+        decode_state(&file),
+        Err(DurableStoreError::InvalidStore)
+    ));
     // Expiry entry that no live row produced.
     let file = build_file(
         &metadata_sealed,
@@ -873,10 +916,10 @@ fn strict_loader_rejects_duplicate_and_inconsistent_indexes() {
         &[expiry_key(131, &key)],
         &ops,
     );
-    assert!(
-        decode_state(&file).is_err(),
-        "inconsistent expiry entry must be rejected"
-    );
+    assert!(matches!(
+        decode_state(&file),
+        Err(DurableStoreError::InvalidStore)
+    ));
     // The same operation identity stored twice in the operation index.
     let other = record_of(
         &metadata,
@@ -906,14 +949,15 @@ fn strict_loader_rejects_duplicate_and_inconsistent_indexes() {
             (receipt.operation_id, other_key),
         ],
     );
-    assert!(
-        decode_state(&file).is_err(),
-        "duplicate operation identity must be rejected"
-    );
+    assert!(matches!(
+        decode_state(&file),
+        Err(DurableStoreError::InvalidStore)
+    ));
 }
 
 #[test]
 fn strict_loader_rejects_wrong_typed_and_inconsistent_records() {
+    // Go: durable/record.go:42-72; spec §3 requires typed records and ts/W/expiry consistency.
     let (_, metadata, key, receipt) = valid_fixture();
     let metadata_sealed = encode_metadata(&metadata).unwrap();
     let build = |receipt: DurableReceipt, kind_value: Option<u8>| {
@@ -941,10 +985,10 @@ fn strict_loader_rejects_wrong_typed_and_inconsistent_records() {
         &[expiry_key(130, &key)],
         &[(receipt.operation_id, key)],
     );
-    assert!(
-        decode_state(&file).is_err(),
-        "unsupported record kind must be rejected"
-    );
+    assert!(matches!(
+        decode_state(&file),
+        Err(DurableStoreError::InvalidStore)
+    ));
     // ts/retainUntil inconsistency.
     let mut inconsistent = receipt.clone();
     inconsistent.retain_until = 131;
@@ -957,10 +1001,10 @@ fn strict_loader_rejects_wrong_typed_and_inconsistent_records() {
         &[expiry_key(131, &key)],
         &[(receipt.operation_id, key)],
     );
-    assert!(
-        decode_state(&file).is_err(),
-        "retainUntil != ts+W must be rejected"
-    );
+    assert!(matches!(
+        decode_state(&file),
+        Err(DurableStoreError::InvalidStore)
+    ));
     // A receipt whose intent_id does not recompute is rejected.
     let mut wrong_intent = receipt.clone();
     wrong_intent.intent_id = b64(11, 32);
@@ -973,14 +1017,15 @@ fn strict_loader_rejects_wrong_typed_and_inconsistent_records() {
         &[expiry_key(130, &key)],
         &[(receipt.operation_id, key)],
     );
-    assert!(
-        decode_state(&file).is_err(),
-        "non-recomputing intent_id must be rejected"
-    );
+    assert!(matches!(
+        decode_state(&file),
+        Err(DurableStoreError::InvalidStore)
+    ));
 }
 
 #[test]
 fn strict_loader_rejects_wrong_store_binding() {
+    // Go: durable/record.go:42-48; spec §3 binds every row to its store identity.
     let (_, metadata, key, receipt) = valid_fixture();
     let mut foreign = metadata.clone();
     foreign.store_id = [1; 16];
@@ -1004,10 +1049,10 @@ fn strict_loader_rejects_wrong_store_binding() {
         &[expiry_key(130, &key)],
         &[(receipt.operation_id, key)],
     );
-    assert!(
-        decode_state(&file).is_err(),
-        "wrong store identity must be rejected"
-    );
+    assert!(matches!(
+        decode_state(&file),
+        Err(DurableStoreError::InvalidStore)
+    ));
 }
 
 /// Builds the fixed-position version-1 record payload for crafted fixtures.
@@ -1067,12 +1112,17 @@ fn inspect_reports_fields_and_sensitive_hash_changes_with_state() {
     assert_eq!(snapshot.live.len(), 2);
     // A store held open by a live owner cannot be inspected concurrently.
     let store = DurableNonceStore::open(&sandbox.file(), &options(), clock(&[100])).unwrap();
-    assert!(inspect_recovery(&sandbox.file(), &options()).is_err());
+    // The Linux owner marker excludes concurrent inspection (Go: durable/recovery_inspect.go:33-38).
+    assert!(matches!(
+        inspect_recovery(&sandbox.file(), &options()),
+        Err(DurableStoreError::Unavailable)
+    ));
     store.close().unwrap();
 }
 
 #[test]
 fn oversized_logical_file_is_rejected() {
+    // The format cap is 16 MiB (spec §3/§6); decode_state returns InvalidStore above MAX_FILE_BYTES.
     let (_, metadata, key, receipt) = valid_fixture();
     let metadata_sealed = encode_metadata(&metadata).unwrap();
     let record = record_of(
@@ -1097,7 +1147,10 @@ fn oversized_logical_file_is_rejected() {
         &[],
         &[(receipt.operation_id, key)],
     );
-    assert!(decode_state(&file).is_err());
+    assert!(matches!(
+        decode_state(&file),
+        Err(DurableStoreError::InvalidStore)
+    ));
     assert!(file.len() > MAX_FILE_BYTES);
 }
 
@@ -1278,11 +1331,23 @@ fn poisoned_lock_fences_the_store() {
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         store.poison_for_test();
     }));
-    assert!(outcome.is_err(), "the poisoning panic must propagate");
+    let Err(payload) = outcome else {
+        panic!("poisoning panic did not propagate");
+    };
+    assert!(
+        payload
+            .downcast_ref::<&str>()
+            .is_some_and(|message| *message == "poison the session lock")
+            || payload
+                .downcast_ref::<String>()
+                .is_some_and(|message| message == "poison the session lock"),
+        "unexpected poisoning panic payload"
+    );
     // The poisoned lock fences: the next admission is refused, not resumed.
     let (kid, nonce) = pair(1);
     let error = store.reserve(&admission(&kid, &nonce, 100)).unwrap_err();
     assert_eq!(error.status, 503);
     assert_eq!(error.code, "durability_unavailable");
-    assert!(store.close().is_err());
+    // A fenced store preserves recovery-required status on close (durable_store.rs:861-869; Go: durable/store.go:219-227).
+    assert_eq!(store.close(), Err(DurableStoreError::RecoveryRequired));
 }

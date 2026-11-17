@@ -1,4 +1,4 @@
-use super::store_tests::{initialize, next, options, Sandbox};
+use super::store_tests::{assert_error_code, initialize, next, options, Sandbox};
 use super::*;
 use crate::auth_header::{format_response_auth, ResponseAuth};
 use crate::client::{InMemorySigner, Signer};
@@ -101,6 +101,7 @@ fn unknown_key_and_body_cap_precede_clock_bad_crypto_never_advances_guard() {
         );
         assert_eq!(calls.get(), 0);
         now.set(101);
+        // Go parity: client/rotation_auth.go:25-65 and client/auth.go:85-120 pin outer response refusal codes.
         for mutation in ["body", "status", "request", "signature"] {
             let mut changed = response(31, 100, b"opaque");
             match mutation {
@@ -162,7 +163,8 @@ fn final_freshness_and_rollback_refuse_body_without_undoing_clock_state() {
                 store.advance_and_check().unwrap_err().code,
                 "rotation_clock_unsafe"
             );
-            assert!(store.close().is_err());
+            // Go parity: durable/trust_store.go:245-293 reports unsafe dirty-state close as unavailable.
+            assert_error_code(store.close(), "rotation_state_unavailable");
         } else {
             let (snapshot, clock) = store.snapshot().unwrap();
             assert_eq!(snapshot.revision, 1);

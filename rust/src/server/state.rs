@@ -438,12 +438,24 @@ mod tests {
         assert!(entry.admin);
         // Null, string and number are all rejected (strict boolean).
         for admin in ["null", "\"true\"", "1"] {
+            let err = serde_json::from_str::<RegistryEntry>(&format!(
+                r#"{{"kid":"k1","public_key":"pk","name":"alice","admin":{admin}}}"#
+            ))
+            .expect_err("non-boolean admin must be rejected");
+            assert_eq!(
+                err.classify(),
+                serde_json::error::Category::Data,
+                "admin {admin}: {err}"
+            );
+            let expected_prefix = match admin {
+                "null" => "invalid type: null, expected a boolean",
+                "\"true\"" => "invalid type: string \"true\", expected a boolean",
+                "1" => "invalid type: integer `1`, expected a boolean",
+                _ => unreachable!("admin input is fixed by this test"),
+            };
             assert!(
-                serde_json::from_str::<RegistryEntry>(&format!(
-                    r#"{{"kid":"k1","public_key":"pk","name":"alice","admin":{admin}}}"#
-                ))
-                .is_err(),
-                "admin {admin} must be rejected"
+                err.to_string().starts_with(expected_prefix),
+                "admin {admin}: expected {expected_prefix:?}, got {err}"
             );
         }
     }
