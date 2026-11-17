@@ -884,7 +884,12 @@ async fn forwarded_answer_is_signed_and_replay_is_unsigned() {
         body: b"untrusted selector",
     };
     assert!(
-        h.provider.authorize_response(&dead).is_err(),
+        matches!(
+            h.provider.authorize_response(&dead),
+            Err(RotationError {
+                code: "rotation_state_unavailable"
+            })
+        ),
         "closed owner served"
     );
 }

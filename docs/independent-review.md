@@ -49,7 +49,7 @@ No Critical or High finding.
 | L-8 | Low | The Go state loader accepts case-variant member names (`ADMIN` loads as an administrator, inferred from encoding/json); Rust and TypeScript are exact. Answers F-17. | Fixed: the Go loader matches member names exactly; the Rust and TypeScript loaders were already exact. |
 | I-1 | Info | The release candidate mixes versions: `mcp-jack-0.0.0.tgz` and `mcp-jack-0.1.0.crate`. | Known; resolved by the release PR that sets versions. |
 | I-2 | Info | The gateway denies `jack.whoami` and `jack.key.rotate` and the CLI has no key-rotate command, so users behind the gateway cannot rotate their own key in-band (spec 03 section 3.1). | Documented in the operations guide. |
-| I-3 | Info | The TypeScript fetch adapter sends 204/205/304 answers with a null body while the signature covers the upstream bytes; fails closed at the client. | Recorded. |
+| I-3 | Info | The TypeScript fetch adapter sends 204/205/304 answers with a null body while the signature covers the upstream bytes; fails closed at the client. | Fixed: `writeSigned` normalizes those statuses to empty bytes before static signing or rotation authorization; output length is zero. |
 | I-4 | Info | TypeScript `acceptRefresh` throws on a late final-gate failure and loses `committed: true`; Go returns the result with the error. | Fixed: the error carries the committed outcome (`RotationRefreshCommittedError`). |
 | I-5 | Info | If the only administrator key expires there is no in-band path and `jack bootstrap` needs a state file that does not exist yet. | Documented in the operations guide. |
 | I-6 | Info | A stale `<state>.owner` marker after a crash blocks the gateway until removed by hand. | Same family as the documented missing recovery command. |

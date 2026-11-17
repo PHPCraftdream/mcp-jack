@@ -130,8 +130,9 @@ mod tests {
         for s in [
             "ab=", "ab==", "a b", "ab\n", "?", "a", "aa_", "ab", "+", "/", "abé",
         ] {
-            assert!(
-                decode_b64url(s).is_err(),
+            assert_eq!(
+                decode_b64url(s),
+                Err(BadBase64Url),
                 "decode_b64url({s:?}) should fail"
             );
         }
@@ -154,9 +155,9 @@ mod tests {
     #[test]
     fn decode_fixed_size() {
         assert_eq!(decode_b64url_fixed("aw", 1).as_deref(), Ok(&[0x6B][..]));
-        assert!(decode_b64url_fixed("aw", 2).is_err());
-        assert!(decode_b64url_fixed("aw", 0).is_err());
-        assert!(decode_b64url_fixed("a", 1).is_err());
+        assert_eq!(decode_b64url_fixed("aw", 2), Err(BadBase64Url));
+        assert_eq!(decode_b64url_fixed("aw", 0), Err(BadBase64Url));
+        assert_eq!(decode_b64url_fixed("a", 1), Err(BadBase64Url));
     }
 
     #[test]

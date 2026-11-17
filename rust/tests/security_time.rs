@@ -21,5 +21,10 @@ fn rfc2822_rejects_nesting_at_the_recursion_guard() {
     // In time 0.3.47, comment() starts at depth 1 and refuses entry at depth 32;
     // 31 nested comments are valid, while the next level must be rejected.
     assert!(OffsetDateTime::parse(&date_with_comment_depth(31), &Rfc2822).is_ok());
-    assert!(OffsetDateTime::parse(&date_with_comment_depth(32), &Rfc2822).is_err());
+    assert_eq!(
+        OffsetDateTime::parse(&date_with_comment_depth(32), &Rfc2822),
+        Err(time::error::Parse::ParseFromDescription(
+            time::error::ParseFromDescription::InvalidComponent("day")
+        ))
+    );
 }

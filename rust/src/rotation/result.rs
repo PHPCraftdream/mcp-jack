@@ -328,6 +328,15 @@ mod tests {
     fn raw_struct_sequence_control_demonstrates_why_map_gate_is_required() {
         let sequence = r#"["2.0",7,{"content":[],"structuredContent":null,"isError":false}]"#;
         assert!(serde_json::from_str::<Envelope>(sequence).is_ok());
-        assert!(serde_json::from_str::<Object<Envelope>>(sequence).is_err());
+        let Err(error) = serde_json::from_str::<Object<Envelope>>(sequence) else {
+            panic!("positional sequence accepted");
+        };
+        assert_eq!(error.classify(), serde_json::error::Category::Data);
+        assert!(
+            error
+                .to_string()
+                .starts_with("invalid type: sequence, expected an object at line "),
+            "unexpected sequence diagnostic: {error}"
+        );
     }
 }

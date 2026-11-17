@@ -23,6 +23,7 @@ import {
   pairKeyOf, removeSorted, sortKeyOf, validateReceipt,
 } from "./durable-format.js";
 import type { DurableDocument, DurableMetadata, DurableReceipt, DurableRecordKind } from "./durable-format.js";
+import type { DurableStoreInternalOptions } from "./durable-store-internal.js";
 
 /** Go ErrRecoveryRequired: explicit recovery required; a restart never clears it. */
 function recoveryRequired(): JackError {
@@ -39,16 +40,8 @@ export interface DurableStoreOptions {
   readonly deploymentId: string;
   /** Immutable window W in seconds, 1..120 (spec section 2). */
   readonly window: number;
-  /** Raw clock; defaults to wall time. Injected by tests. */
+  /** Raw clock; defaults to wall time. */
   readonly now?: () => number;
-  /**
-   * Test/recovery fault seam: called before each intent/final commit.
-   * "commit" reports unknown AFTER a successful commit; "abort" reports
-   * unknown without committing. Returning undefined commits normally.
-   */
-  readonly injectTransactionFailure?: (phase: "intent" | "final") => "commit" | "abort" | undefined;
-  /** Test-only seam: operation id to allocate; Go retries a collision once (durable/admit.go). */
-  readonly injectOperationId?: () => string;
 }
 
 /** One authenticated admission (post-signature; spec section 2 ordering). */
@@ -95,9 +88,9 @@ const SNAP_DOMAIN = "mcp-jack/durable-nonce/recovery-snapshot/v1\n";
 const GROUPS: readonly { readonly name: "live" | "intents" | "tombstones"; readonly kind: DurableRecordKind }[] =
   [{ name: "live", kind: "live" }, { name: "intents", kind: "intent" }, { name: "tombstones", kind: "tombstone" }];
 
-function normalized(options: DurableStoreOptions): { deploymentId: string; window: number; now: () => number;
-  injectTransactionFailure: DurableStoreOptions["injectTransactionFailure"];
-  injectOperationId: DurableStoreOptions["injectOperationId"] } {
+function normalized(options: DurableStoreInternalOptions): { deploymentId: string; window: number; now: () => number;
+  injectTransactionFailure: DurableStoreInternalOptions["injectTransactionFailure"];
+  injectOperationId: DurableStoreInternalOptions["injectOperationId"] } {
   const bytes = Buffer.byteLength(options.deploymentId ?? "", "utf8");
   if (bytes === 0 || bytes > 1024 || !Number.isSafeInteger(options.window) || options.window < 1 || options.window > 120) {
     throw durableUnavailable();
@@ -206,8 +199,8 @@ export class DurableNonceStore {
 
   private constructor(private readonly file: RotationFileOwner, private readonly path: string,
     private readonly options: { deploymentId: string; window: number; now: () => number;
-      injectTransactionFailure: DurableStoreOptions["injectTransactionFailure"];
-      injectOperationId: DurableStoreOptions["injectOperationId"] },
+      injectTransactionFailure: DurableStoreInternalOptions["injectTransactionFailure"];
+      injectOperationId: DurableStoreInternalOptions["injectOperationId"] },
     private doc: DurableDocument, private bytes: Uint8Array) {}
 
   /** Clock samples taken since open (test instrumentation). */

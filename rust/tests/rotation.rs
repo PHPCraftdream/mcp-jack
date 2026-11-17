@@ -2,7 +2,7 @@ mod common;
 
 use ed25519_dalek::{Signer, SigningKey};
 use mcp_jack::client::{ClientError, InMemorySigner, Signer as JackSigner};
-use mcp_jack::encoding::{body_hash, decode_b64url, decode_b64url_fixed, encode_b64url};
+use mcp_jack::encoding::{body_hash, decode_b64url, decode_b64url_fixed, encode_b64url, key_id};
 use mcp_jack::rotation::{self, Binding, Checkpoint};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -207,7 +207,12 @@ fn bounds_unknown_authorizer_and_retained_reuse() {
             .code,
         "key_reuse"
     );
-    assert!(rotation::selected_ordinal(&[], rotation::MAX_TIMESTAMP + 1).is_err());
+    assert_eq!(
+        rotation::selected_ordinal(&[], rotation::MAX_TIMESTAMP + 1)
+            .expect_err("out-of-range current time accepted")
+            .code,
+        "timestamp"
+    );
     assert!(!rotation::assignment_valid(
         &[],
         0,
@@ -361,6 +366,148 @@ fn signing_order_errors_and_no_retry_are_observable() {
     assert_eq!(*events.lock().expect("test event lock"), ["next", "old"]);
 }
 
+fn expected_record_mutation_code(
+    original: &[u8],
+    mutated: &[u8],
+    index: usize,
+    binding: Binding<'_>,
+    authorizers: &BTreeMap<String, [u8; 32]>,
+) -> &'static str {
+    fn decimal(text: &str, maximum: u64) -> Option<u64> {
+        if text.is_empty()
+            || (text.len() > 1 && text.starts_with('0'))
+            || !text.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return None;
+        }
+        text.parse::<u64>().ok().filter(|value| *value <= maximum)
+    }
+
+    if mutated.is_empty() || mutated.len() > rotation::MAX_RECORD_BYTES {
+        return "record_size";
+    }
+    if !mutated.is_ascii() {
+        return "non_ascii";
+    }
+    let text = std::str::from_utf8(mutated).expect("ASCII mutation");
+    if text.ends_with('\n') {
+        return "trailing_lf";
+    }
+    let lines: Vec<&str> = text.split('\n').collect();
+    if lines.len() != 12 {
+        return "line_count";
+    }
+    let line = original[..index]
+        .iter()
+        .filter(|byte| **byte == b'\n')
+        .count();
+    match line {
+        0 => "domain",
+        1 | 2 => {
+            let Ok(decoded) = decode_b64url(lines[line]) else {
+                return "binding_encoding";
+            };
+            let limit = if line == 1 { 2048 } else { 1024 };
+            if decoded.is_empty() || decoded.len() > limit {
+                return "binding_encoding";
+            }
+            let Ok(decoded) = std::str::from_utf8(&decoded) else {
+                return "utf8";
+            };
+            let expected = if line == 1 {
+                binding.endpoint
+            } else {
+                binding.aud
+            };
+            if decoded == expected {
+                "new_proof"
+            } else {
+                "binding"
+            }
+        }
+        3 => match decimal(lines[3], rotation::MAX_ORDINAL) {
+            Some(ordinal) if ordinal != 0 => "new_proof",
+            _ => "ordinal",
+        },
+        4 => "new_proof",
+        5 => {
+            if decode_b64url_fixed(lines[5], 32).is_err() {
+                return "key_id";
+            }
+            let Some(public) = authorizers.get(lines[5]) else {
+                return "unknown_authorizer";
+            };
+            if key_id(public) != lines[5] || mcp_jack::ed25519::validate_public_key(public).is_err()
+            {
+                "unknown_authorizer"
+            } else {
+                "new_proof"
+            }
+        }
+        6 => {
+            if decode_b64url_fixed(lines[6], 32).is_err() {
+                return "key_id";
+            }
+            let Ok(public) = decode_b64url_fixed(lines[7], 32) else {
+                return "new_key";
+            };
+            if key_id(&public) != lines[6] {
+                "new_key_id"
+            } else {
+                "new_proof"
+            }
+        }
+        7 => {
+            if lines[7].len() != 43 {
+                return "base64url";
+            }
+            let Ok(public) = decode_b64url_fixed(lines[7], 32) else {
+                return "new_key";
+            };
+            if mcp_jack::ed25519::validate_public_key(&public).is_err() {
+                return "new_key";
+            }
+            if key_id(&public) != lines[6] {
+                "new_key_id"
+            } else {
+                "new_proof"
+            }
+        }
+        8 | 9 => {
+            let Some(published_at) = decimal(lines[8], rotation::MAX_TIMESTAMP) else {
+                return "timestamp";
+            };
+            let Some(activates_at) = decimal(lines[9], rotation::MAX_TIMESTAMP) else {
+                return "timestamp";
+            };
+            if published_at
+                .checked_add(rotation::GRACE_SECONDS)
+                .filter(|value| *value <= rotation::MAX_TIMESTAMP)
+                != Some(activates_at)
+            {
+                "activation"
+            } else {
+                "new_proof"
+            }
+        }
+        10 => {
+            if decode_b64url_fixed(lines[10], 64).is_err() {
+                "proof_encoding"
+            } else {
+                "new_proof"
+            }
+        }
+        11 => {
+            if decode_b64url_fixed(lines[11], 64).is_err() {
+                "proof_encoding"
+            } else {
+                "old_authorization"
+            }
+        }
+        _ => unreachable!("12-line record has no other line index"),
+    }
+}
+
 #[test]
 fn every_byte_mutation_is_rejected_without_poisoning_the_positive_record() {
     let corpus = corpus();
@@ -377,10 +524,16 @@ fn every_byte_mutation_is_rejected_without_poisoning_the_positive_record() {
     for (index, byte) in original.iter().enumerate() {
         let mut mutated = original.to_vec();
         mutated[index] = *byte ^ 1;
-        assert!(
-            rotation::parse_record(&mutated, binding(&corpus.binding), &keys).is_err(),
-            "single-byte mutation accepted at {index}"
+        let expected = expected_record_mutation_code(
+            original,
+            &mutated,
+            index,
+            binding(&corpus.binding),
+            &keys,
         );
+        let error = rotation::parse_record(&mutated, binding(&corpus.binding), &keys)
+            .expect_err("single-byte mutation accepted");
+        assert_eq!(error.code, expected, "single-byte mutation at {index}");
         exercised += 1;
     }
     assert_eq!(exercised, original.len());
@@ -496,11 +649,16 @@ fn strict_result_rejects_duplicate_extra_type_lexical_and_surrogate_changes() {
         ordinary.replacen("\"isError\":false", "\"isError\":true", 1),
         ordinary.replacen("\"type\":\"text\"", "\"type\":\"text\",\"extra\":1", 1),
     ] {
-        assert!(rotation::decode_result(changed.as_bytes(), b"7").is_err());
+        let error = rotation::decode_result(changed.as_bytes(), b"7")
+            .expect_err("invalid envelope accepted");
+        assert_eq!(error.code, "rotation_result_invalid");
     }
     let mismatch = payload.replacen("\"complete\":true", "\"complete\":false", 1);
-    assert!(rotation::decode_result(&result_body(&payload, &mismatch, "7"), b"7").is_err());
-    assert!(rotation::decode_result(&[0xff], b"7").is_err());
+    let error = rotation::decode_result(&result_body(&payload, &mismatch, "7"), b"7")
+        .expect_err("mismatched mirrors accepted");
+    assert_eq!(error.code, "rotation_result_invalid");
+    let error = rotation::decode_result(&[0xff], b"7").expect_err("invalid UTF-8 accepted");
+    assert_eq!(error.code, "rotation_result_invalid");
 }
 
 #[test]
@@ -510,7 +668,8 @@ fn strict_result_has_inclusive_full_body_and_page_caps() {
     body.resize(rotation::MAX_RESULT_BODY_BYTES, b' ');
     assert!(rotation::decode_result(&body, b"7").is_ok());
     body.push(b' ');
-    assert!(rotation::decode_result(&body, b"7").is_err());
+    let error = rotation::decode_result(&body, b"7").expect_err("oversized body accepted");
+    assert_eq!(error.code, "rotation_result_invalid");
     let corpus = corpus();
     let mut value: serde_json::Value = serde_json::from_str(&payload).expect("payload");
     value["records"] = serde_json::json!(vec![corpus.valid_chains["overlapping"][0].clone(); 16]);
@@ -529,7 +688,9 @@ fn strict_result_has_inclusive_full_body_and_page_caps() {
             corpus.valid_chains["overlapping"][0].clone(),
         ));
     let page = value.to_string();
-    assert!(rotation::decode_result(&result_body(&page, &page, "7"), b"7").is_err());
+    let error = rotation::decode_result(&result_body(&page, &page, "7"), b"7")
+        .expect_err("oversized page accepted");
+    assert_eq!(error.code, "rotation_result_invalid");
 }
 
 fn framing_result(

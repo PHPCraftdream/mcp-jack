@@ -198,8 +198,9 @@ mod tests {
     fn expect_bad(url: &str) {
         let err = validate_base_url(url).expect_err("must be rejected");
         assert_eq!(err.to_string(), BAD_URL, "{url:?}");
-        assert!(
-            request_target(url).is_err(),
+        assert_eq!(
+            request_target(url),
+            Err(ClientError::Client(BAD_URL.to_string())),
             "request_target must fail too: {url:?}"
         );
     }
@@ -207,8 +208,9 @@ mod tests {
     fn expect_https_required(url: &str) {
         let err = validate_base_url(url).expect_err("must be rejected");
         assert_eq!(err.to_string(), HTTPS_REQUIRED, "{url:?}");
-        assert!(
-            request_target(url).is_err(),
+        assert_eq!(
+            request_target(url),
+            Err(ClientError::Client(HTTPS_REQUIRED.to_string())),
             "request_target must fail too: {url:?}"
         );
     }
