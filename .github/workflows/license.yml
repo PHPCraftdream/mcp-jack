@@ -30,8 +30,8 @@ jobs:
     env:
       GOTOOLCHAIN: local
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version: 1.25.x
       - name: Install go-licenses (pinned)
@@ -50,13 +50,18 @@ jobs:
       run:
         working-directory: rust
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@5445741acf05630efa19e221cc588ebe0842b13d # stable
+        with:
+          toolchain: stable
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2
         with:
           tool: cargo-deny@0.20.2
       - name: Check workspace licences against the policy (rust/deny.toml)
         run: cargo deny --locked --all-features --config deny.toml check licenses
+      - name: Check interop workspace licences against the policy (rust/deny.toml)
+        working-directory: interop/rust
+        run: cargo deny --locked --all-features --config ../../rust/deny.toml check licenses
       - name: "Refusal control: MIT-only config must refuse named crates"
         run: |
           output="$(cargo deny --locked --all-features --config ../tools/license/testdata/deny-mit-only.toml check licenses 2>&1)" && status=0 || status=$?
@@ -82,8 +87,8 @@ jobs:
       run:
         working-directory: ts
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 24
       - run: npm ci --no-audit --no-fund
@@ -116,8 +121,8 @@ jobs:
     name: dual-licence manifests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
       - run: node tools/license/check-own-license.mjs

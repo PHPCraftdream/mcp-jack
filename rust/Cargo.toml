@@ -17,7 +17,7 @@ name = "mcp_jack"
 [features]
 default = []
 http = ["dep:http", "dep:bytes", "dep:http-body-util", "dep:tower-service", "dep:tower-layer"]
-client-http = ["dep:http", "dep:bytes", "dep:http-body-util", "dep:hyper", "hyper/client", "dep:hyper-util", "dep:tokio", "tokio/rt", "tokio/time", "tokio/sync", "tokio/io-util", "dep:tokio-rustls", "dep:webpki-roots", "dep:hickory-resolver", "dep:hickory-net", "dep:hickory-proto"]
+client-http = ["dep:http", "dep:bytes", "dep:http-body-util", "dep:hyper", "hyper/client", "dep:hyper-util", "dep:tokio", "tokio/rt", "tokio/time", "tokio/io-util", "dep:tokio-rustls", "dep:webpki-roots", "dep:hickory-resolver", "dep:hickory-net", "dep:hickory-proto"]
 
 [dependencies]
 ed25519-dalek = { version = "2.2", features = ["std"] }
@@ -35,10 +35,10 @@ tower-service = { version = "0.3", optional = true }
 tower-layer = { version = "0.3", optional = true }
 
 # Shared transport dependencies are optional for the client HTTP feature.
-hyper = { version = "1", optional = true, features = ["server", "http1"] }
+hyper = { version = "1", optional = true, features = ["http1"] }
 # TokioIo adapter and Tower service bridge.
-hyper-util = { version = "0.1", optional = true, features = ["tokio", "service"] }
-tokio = { version = "1", optional = true, features = ["rt-multi-thread", "net", "macros", "signal"] }
+hyper-util = { version = "0.1", optional = true, features = ["tokio"] }
+tokio = { version = "1", optional = true, features = ["net"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"], optional = true }
 webpki-roots = { version = "1.0.11", optional = true }
 hickory-resolver = { version = "=0.26.3", default-features = false, features = ["tokio", "system-config"], optional = true }
