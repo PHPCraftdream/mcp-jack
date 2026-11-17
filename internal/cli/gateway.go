@@ -90,6 +90,9 @@ func loadGateway(path string) (gatewayConfig, time.Duration, error) {
 	return c, d, nil
 }
 
+// gateway loads and validates config, acquires resources in a fixed order,
+// serves until done, and releases in reverse order; the deferred releases may
+// overwrite the named result error only when it is still nil.
 func gateway(ctx context.Context, path string, audit io.Writer) (result error) {
 	if audit == nil {
 		audit = io.Discard
@@ -112,18 +115,45 @@ func gateway(ctx context.Context, path string, audit io.Writer) (result error) {
 		return err
 	}
 	defer unlock()
-	if _, err := readPrivate(c.StateFile, maxBody); err != nil {
+	state, err := verifyGatewayState(c, signing)
+	if err != nil {
 		return err
+	}
+	base := dialGatewayTransport(c, timeout)
+	defer base.CloseIdleConnections()
+	nonces, closeNonces, h, err := buildGatewayHandler(c, signing, state, timeout, base, audit)
+	if err != nil {
+		return errConfig
+	}
+	defer func() {
+		if err := closeNonces(); err != nil && result == nil {
+			result = errConfig
+		}
+	}()
+	return serveGateway(ctx, c, timeout, nonces, h)
+}
+
+// verifyGatewayState reads the locked state file and rejects key IDs that
+// collide with the server's signing key IDs.
+func verifyGatewayState(c gatewayConfig, signing *gatewaySigning) (*server.FileState, error) {
+	if _, err := readPrivate(c.StateFile, maxBody); err != nil {
+		return nil, err
 	}
 	state, err := server.OpenFileState(c.StateFile)
 	if err != nil || len(state.View().Keys) > 1024 || len(state.View().Invites) > 1024 {
-		return errConfig
+		return nil, errConfig
 	}
 	for _, entry := range state.View().Keys {
 		if signing.serverKIDs[entry.Kid] {
-			return errConfig
+			return nil, errConfig
 		}
 	}
+	return state, nil
+}
+
+// dialGatewayTransport builds the unix-socket transport to the upstream,
+// re-checking the socket on every dial.
+func dialGatewayTransport(c gatewayConfig, timeout time.Duration) *http.Transport {
 	base := directTransport(timeout)
 	base.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
 		if socketOK(c.UpstreamSocket) != nil {
@@ -131,7 +161,12 @@ func gateway(ctx context.Context, path string, audit io.Writer) (result error) {
 		}
 		return (&net.Dialer{Timeout: timeout}).DialContext(ctx, "unix", c.UpstreamSocket)
 	}
-	defer base.CloseIdleConnections()
+	return base
+}
+
+// buildGatewayHandler assembles native policy, verifier, and MCP handler. It
+// returns the active nonce store, its release function, and the handler.
+func buildGatewayHandler(c gatewayConfig, signing *gatewaySigning, state *server.FileState, timeout time.Duration, base *http.Transport, audit io.Writer) (*server.NonceStore, func() error, http.Handler, error) {
 	policy := gatewayNative{
 		native: server.NewNativeTools(server.NativeOptions{}), serverKID: signing.anchorKID,
 		serverKIDs: signing.serverKIDs, adminEnabled: bool(c.NativeAdmin),
@@ -145,17 +180,17 @@ func gateway(ctx context.Context, path string, audit io.Writer) (result error) {
 	}
 	closeNonces, err := selectGatewayNonces(c, &verification)
 	if err != nil {
-		return errConfig
+		return nil, nil, nil, errConfig
 	}
-	defer func() {
-		if err := closeNonces(); err != nil && result == nil {
-			result = errConfig
-		}
-	}()
+	fail := func() (*server.NonceStore, func() error, http.Handler, error) {
+		// Mirror the original unwind: the release runs before returning.
+		_ = closeNonces()
+		return nil, nil, nil, errConfig
+	}
 	nonces := verification.Nonces
 	v, err := server.NewVerifier(verification)
 	if err != nil {
-		return errConfig
+		return fail()
 	}
 	handlerConfig := server.HandlerConfig{Verifier: v, ServerKey: signing.key, MaxBodyBytes: maxBody, MaxResponseBytes: maxBody}
 	if signing.provider != nil {
@@ -164,15 +199,20 @@ func gateway(ctx context.Context, path string, audit io.Writer) (result error) {
 	}
 	h, err := server.NewHandler(handlerConfig, upstreamHandler(c, base))
 	if err != nil {
-		return errConfig
+		return fail()
 	}
-	var connections sync.WaitGroup
+	return nonces, closeNonces, h, nil
+}
+
+// gatewayAdmissionHandler builds the outer handler applying the concurrency
+// slot, per-second admission, and nonce capacity limits before delegation.
+func gatewayAdmissionHandler(c gatewayConfig, timeout time.Duration, nonces *server.NonceStore, h http.Handler) http.Handler {
 	slots := make(chan struct{}, c.MaxConcurrent)
 	// General transport limit applies before auth; the backend enforces durable capacity.
 	var rateMu sync.Mutex
 	var second int64
 	var admitted int
-	outer := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
 		case slots <- struct{}{}:
 			defer func() { <-slots }()
@@ -210,6 +250,13 @@ func gateway(ctx context.Context, path string, audit io.Writer) (result error) {
 		}
 		h.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// serveGateway builds the admission-limited outer handler and runs the HTTP
+// server until it fails or the context is cancelled.
+func serveGateway(ctx context.Context, c gatewayConfig, timeout time.Duration, nonces *server.NonceStore, h http.Handler) error {
+	var connections sync.WaitGroup
+	outer := gatewayAdmissionHandler(c, timeout, nonces, h)
 	listener, err := net.Listen("tcp", c.Listen)
 	if err != nil {
 		return errConfig
