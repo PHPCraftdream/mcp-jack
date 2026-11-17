@@ -106,7 +106,7 @@ type Config struct {
 	Native NativeTools
 	// ServerKeys serves only the candidate jack.server.key; the default native allowlist is unchanged.
 	ServerKeys NativeTools
-	// Window is the timestamp window in seconds; zero means DefaultWindow.
+	// Window is 0 (default 30) or an integer from 1 through 120 seconds.
 	Window int64
 	// Now returns the current Unix time in seconds; nil means the wall clock.
 	// Tests inject a fixed clock. The Verifier never lets its request time go
@@ -127,9 +127,8 @@ func audHasControl(aud string) bool {
 }
 
 // Verifier authenticates and authorizes requests (spec 01 section 4, spec 02
-// section 4). Freshness and the volatile nonce store use a request time that
-// is monotonic within the process, so a wall-clock step back cannot revive a
-// purged nonce.
+// section 4). Request decisions use max(clock sample, highest sample seen),
+// preventing a backward clock step from reviving expired keys, invites or nonces.
 type Verifier struct {
 	cfg Config
 	mu  sync.Mutex
@@ -169,8 +168,10 @@ func NewVerifier(cfg Config) (*Verifier, error) {
 		if cfg.Window < 0 || cfg.Window > 120 {
 			return nil, errors.New("server: durable window must be between 1 and 120 seconds")
 		}
+	} else if cfg.Window < 0 || cfg.Window > 120 {
+		return nil, errors.New("server: window must be 0 (default 30) or an integer between 1 and 120 seconds")
 	}
-	if cfg.Window <= 0 {
+	if cfg.Window == 0 {
 		cfg.Window = DefaultWindow
 	}
 	if cfg.Now == nil {
@@ -258,7 +259,7 @@ func (v *Verifier) Verify(req Request) Result {
 	var verifyKey []byte
 	caller, known := v.cfg.State.Lookup(auth.Kid)
 	if known {
-		if !entryActive(caller, now) {
+		if !entryActive(caller, effective) {
 			return rejection(401, jack.CodeKeyInactive, "key is not active")
 		}
 		key, err := jack.DecodeBase64URLFixed(caller.PublicKey, 32)
@@ -267,7 +268,7 @@ func (v *Verifier) Verify(req Request) Result {
 		}
 		verifyKey = key
 	} else {
-		key, rej, ok := enrollmentKey(req, auth.Kid, v.cfg.State, now)
+		key, rej, ok := enrollmentKey(req, auth.Kid, v.cfg.State, effective)
 		if !ok {
 			return rej
 		}
@@ -325,7 +326,7 @@ func (v *Verifier) Verify(req Request) Result {
 	if known {
 		callerPtr = &caller
 	}
-	return v.authorize(req, auth, now, callerPtr, res)
+	return v.authorize(req, auth, effective, callerPtr, res)
 }
 
 // authorize is step 9: body shape, protocol-native tools, the admin gate for
