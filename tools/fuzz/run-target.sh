@@ -16,10 +16,11 @@ fuzztime=$3
 minimize=$4
 outdir=$5
 
-case "$pkg" in
-  .|server|client|userkey|rotation|durable) ;;
-  *) echo "::error title=go-fuzz-discovery::unsupported package: ${pkg}" >&2; exit 2 ;;
-esac
+# "." or a repository-relative package directory such as server/internal/rpcbody.
+if [ "$pkg" != "." ] && { [[ "$pkg" == *..* ]] || [[ ! "$pkg" =~ ^[A-Za-z0-9_][A-Za-z0-9_./-]*$ ]] || [[ "$pkg" == */ ]]; }; then
+  echo "::error title=go-fuzz-discovery::unsupported package: ${pkg}" >&2
+  exit 2
+fi
 if [[ ! "$name" =~ ^Fuzz[A-Za-z0-9_]+$ ]]; then
   echo "::error title=go-fuzz-discovery::invalid fuzz target name: ${name}" >&2
   exit 2
@@ -30,7 +31,8 @@ fi
 if [ "$pkg" = "." ]; then
   safe_pkg="rootpkg"
 else
-  safe_pkg="$pkg"
+  slash=/
+  safe_pkg="${pkg//"$slash"/__}"
 fi
 if ! mkdir -p "$outdir"; then
   echo "::error title=go-fuzz-log::cannot create artifact directory: ${outdir}" >&2

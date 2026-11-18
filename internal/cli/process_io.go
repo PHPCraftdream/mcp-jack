@@ -4,13 +4,19 @@ import (
 	"context"
 	"fmt"
 	"os"
+
+	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/stdio"
 )
 
 // ProcessIO prepares owned, interruptible stdio only for the bridge command.
 // Bridge pipes must be exclusively used by this process after preparation.
 func ProcessIO(args []string) (IO, error) {
 	if len(args) != 0 && args[0] == "bridge" {
-		return prepareProcessIO(os.Stdin, os.Stdout)
+		sio, err := stdio.PrepareProcessIO(os.Stdin, os.Stdout)
+		if err != nil {
+			return IO{}, err
+		}
+		return IO{In: sio.In, Out: sio.Out, Err: sio.Err}, nil
 	}
 	return IO{In: os.Stdin, Out: os.Stdout, Err: os.Stderr}, nil
 }

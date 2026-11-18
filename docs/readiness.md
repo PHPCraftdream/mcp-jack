@@ -8,7 +8,7 @@ The integration receipts for `444c69b` (PR #14) below are historical. Current ma
 
 ## Current test-source inventory (static file inventory, not results)
 
-- **Go:** root-level primitive, conformance and key tests (`base64_test.go`, `ed25519_test.go`, `header_test.go`, `spec/fixtures_test.go`); client transport/profile/signing tests under `client/`; verifier, identity, audit, state, native-tool and middleware tests under `server/`; key and transfer tests under `userkey/`.
+- **Go:** root-package primitive, conformance and key tests (`internal/jacktest/`, `spec/fixtures_test.go`); client transport/profile/signing tests under `client/`; verifier, identity, audit, state, native-tool and middleware tests under `server/`; key and transfer tests under `userkey/` and `userkey/internal/transfertest/`.
 - **Rust:** integration tests under `rust/tests/`, grouped by area (`conformance/`, `server/`, `client/`, `rotation/`, `user_key/` and the two vector runners).
 - **TypeScript:** tests under `ts/test/`, including auth/signing and verification vectors, `native.test.ts`, audit, nonce/state, Fetch and Node HTTP adapters, client transport/URL policy, and `user-key-transfer.test.ts`.
 - **Shared contract data:** `spec/fixtures/` contains authentication, key, response, admin, state-file, URL-policy, and independent user-key-transfer fixtures. Fixture files are conformance sources; their presence does not establish a passing lane.

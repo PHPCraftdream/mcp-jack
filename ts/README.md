@@ -279,7 +279,7 @@ consumed.
 Deliberately not provided: no remote reset or recovery (dirty/fenced/unknown
 state keeps its startup gate); `announce` stays an explicit single-publication
 operation; and the Go gateway's refusal of callers authenticated by server
-keys (the `serverKIDs` deny in `internal/cli/gateway_native.go`) is a
+keys (the `serverKIDs` deny in `internal/cli/internal/gateway/gateway_native.go`) is a
 gateway-layer rule the SDK server package does not implement — a TS gateway
 would have to enforce it itself.
 

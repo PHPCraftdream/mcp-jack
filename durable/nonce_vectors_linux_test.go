@@ -12,7 +12,6 @@ package durable
 // deviations are data, not scattered comments.
 
 import (
-	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -22,6 +21,7 @@ import (
 	"testing"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
+	"github.com/PHPCraftdream/mcp-jack/durable/internal/testfixture"
 	"github.com/PHPCraftdream/mcp-jack/server"
 	bolt "go.etcd.io/bbolt"
 )
@@ -309,302 +309,6 @@ func vectorOperation(name string) [16]byte {
 }
 
 // ---------------------------------------------------------------------------
-// Seeding: fresh store + scripted clock + direct bucket writes.
-// ---------------------------------------------------------------------------
-
-type scriptedClock struct {
-	values []int64
-	index  int
-}
-
-func newScriptedClock(values ...int64) *scriptedClock {
-	return &scriptedClock{values: values}
-}
-
-func (c *scriptedClock) push(values ...int64) {
-	c.values = append(c.values, values...)
-}
-
-func (c *scriptedClock) Now() int64 {
-	if c.index >= len(c.values) {
-		return c.values[len(c.values)-1]
-	}
-	value := c.values[c.index]
-	c.index++
-	return value
-}
-
-// vectorRowHighWater picks a receipt HighWater satisfying validateRecord:
-// 0 <= Hw <= metadata.HighWater and |Hw - ts| <= W.
-func vectorRowHighWater(metadataHighWater, ts int64) int64 {
-	if metadataHighWater > 0 {
-		return metadataHighWater
-	}
-	return ts
-}
-
-func vectorSeedRowRecord(t *testing.T, m metadata, kind byte, kidName, nonceName string, ts, retainUntil, highWater int64) nonceRecord {
-	t.Helper()
-	var key [48]byte
-	kidRaw := vectorKidRaw(kidName)
-	nonceRaw := vectorNonceRaw(nonceName)
-	copy(key[:32], kidRaw[:])
-	copy(key[32:], nonceRaw[:])
-	signing := jack.RequestSigningString("GET", "/mcp", vectorAud, vectorKid(kidName), ts, vectorNonce(nonceName), nil)
-	requestHash, err := jack.DecodeBase64URLFixed(jack.BodyHash([]byte(signing)), 32)
-	if err != nil {
-		t.Fatalf("seed row %s/%s request hash: %v", kidName, nonceName, err)
-	}
-	operation := vectorOperation(kidName + "/" + nonceName)
-	sigRaw := vectorSigRaw(kidName + ":" + nonceName)
-	row := nonceRecord{
-		kind: kind, storeID: m.StoreID, key: key,
-		receipt: server.NonceReceipt{
-			Version:         formatVersion,
-			DeploymentID:    m.Deployment,
-			StoreGeneration: m.Generation,
-			OwnerGeneration: m.Owner,
-			IntentID:        storageIntentID(m, key, sigRaw[:], requestHash, operation),
-			OperationID:     operation,
-			KID:             vectorKid(kidName),
-			Nonce:           vectorNonce(nonceName),
-			Signature:       vectorSig(kidName + ":" + nonceName),
-			RequestHash:     jack.BodyHash([]byte(signing)),
-			Timestamp:       ts,
-			RetainUntil:     retainUntil,
-			HighWater:       highWater,
-		},
-	}
-	if err := validateRecord(row, m); err != nil {
-		t.Fatalf("seed row %s/%s invalid: %v", kidName, nonceName, err)
-	}
-	return row
-}
-
-// vectorSplitRowKey derives the deterministic identity names of a seed row.
-// Pair rows are written "kid:nonce"; generated capacity rows ("seed-N") carry
-// a single name, so the nonce name falls back to a whole-key derivative.
-func vectorSplitRowKey(key string) (string, string) {
-	for index := 0; index < len(key); index++ {
-		if key[index] == ':' {
-			return key[:index], key[index+1:]
-		}
-	}
-	return key, key + "/nonce"
-}
-
-// vectorCaseRows builds every seed row of a case; encodeRecord (via
-// validateRecord) already rejects any row inconsistent with the metadata.
-func vectorCaseRows(t *testing.T, fc vectorCase, m metadata) []nonceRecord {
-	t.Helper()
-	var rows []nonceRecord
-	for _, row := range fc.State.Live {
-		kidName, nonceName := vectorSplitRowKey(row.Key)
-		rows = append(rows, vectorSeedRowRecord(t, m, liveRecord, kidName, nonceName,
-			row.TS, row.RetainUntil, vectorRowHighWater(m.HighWater, row.TS)))
-	}
-	for _, row := range fc.State.Intents {
-		kidName, nonceName := vectorSplitRowKey(row.Key)
-		rows = append(rows, vectorSeedRowRecord(t, m, intentRecord, kidName, nonceName,
-			row.TS, row.RetainUntil, vectorRowHighWater(m.HighWater, row.TS)))
-	}
-	for _, row := range fc.State.Tombstones {
-		rows = append(rows, vectorSeedRowRecord(t, m, tombstoneRecord, row.IntentID, row.IntentID+"-pair",
-			100, 130, vectorRowHighWater(m.HighWater, 100)))
-	}
-	return rows
-}
-
-// seedVectorState writes the rows, their operation index, the live expiry
-// index, and matching metadata in one transaction, then re-checks the exact
-// graph invariants the loader itself uses (validateRows) and syncs the
-// in-memory metadata the transaction layer compares against.
-func seedVectorState(t *testing.T, owner *Store, fc vectorCase, highWater int64) {
-	t.Helper()
-	if fc.State == nil {
-		return // sequence cases start from a fresh empty store
-	}
-	seedMeta := owner.meta
-	seedMeta.HighWater = highWater
-	rows := vectorCaseRows(t, fc, seedMeta)
-	m := seedMeta
-	err := owner.db.Update(func(tx *bolt.Tx) error {
-		for _, row := range rows {
-			encoded, err := encodeRecord(row, seedMeta)
-			if err != nil {
-				return err
-			}
-			bucket := "intent"
-			switch row.kind {
-			case liveRecord:
-				bucket = "live"
-			case tombstoneRecord:
-				bucket = "tombstone"
-			}
-			if err := tx.Bucket([]byte(bucket)).Put(row.key[:], encoded); err != nil {
-				return err
-			}
-			if err := tx.Bucket([]byte("operation")).Put(row.receipt.OperationID[:], row.key[:]); err != nil {
-				return err
-			}
-			if row.kind == liveRecord {
-				index := expiryKey(row)
-				if err := tx.Bucket([]byte("expiry")).Put(index[:], []byte{}); err != nil {
-					return err
-				}
-			}
-			switch row.kind {
-			case liveRecord:
-				m.Live++
-			case intentRecord:
-				m.Intents++
-			case tombstoneRecord:
-				m.Tombstones++
-			}
-		}
-		if err := validateRows(tx, m); err != nil {
-			return err
-		}
-		return tx.Bucket([]byte("metadata")).Put(headerKey, encodeMetadata(m))
-	})
-	if err != nil {
-		t.Fatalf("%s: seed state: %v", fc.ID, err)
-	}
-	owner.meta = m
-}
-
-// ---------------------------------------------------------------------------
-// Driving: full-path Verifier, store-direct, counters.
-// ---------------------------------------------------------------------------
-
-type vectorCounters struct {
-	transactCalls int
-	nativeCalls   int
-	accepted      int
-	eventCalls    int
-	eventAccepted int
-}
-
-func countTransact(owner *Store, counters *vectorCounters) {
-	original := owner.transact
-	owner.transact = func(apply func(*bolt.Tx) error) error {
-		counters.transactCalls++
-		counters.eventCalls++
-		return original(apply)
-	}
-}
-
-func resetEventCounters(counters *vectorCounters) {
-	counters.eventCalls = 0
-	counters.eventAccepted = 0
-}
-
-type refusingNative struct {
-	counters *vectorCounters
-}
-
-func (n refusingNative) Call(*server.NativeCall) (server.NativeResult, *jack.Error) {
-	n.counters.nativeCalls++
-	return server.NativeResult{}, &jack.Error{HTTPStatus: 403, Code: "authorization_refused", Message: "authorization refused"}
-}
-
-func vectorRegisteredKey(t *testing.T, state *server.MemoryState, kidName string) ed25519.PrivateKey {
-	t.Helper()
-	seed := sha256.Sum256([]byte("candidate-vector/key/" + kidName))
-	key := ed25519.NewKeyFromSeed(seed[:])
-	public := key.Public().(ed25519.PublicKey)
-	if err := state.Update(func(edit *server.StateEdit) error {
-		edit.PutKey(server.RegistryEntry{
-			Kid:       vectorKid(kidName),
-			PublicKey: jack.EncodeBase64URL(public),
-			Name:      "candidate-vector-" + kidName,
-		})
-		return nil
-	}); err != nil {
-		t.Fatalf("register vector key %s: %v", kidName, err)
-	}
-	return key
-}
-
-func vectorToolBody(tool string) []byte {
-	body, err := json.Marshal(map[string]any{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  "tools/call",
-		"params":  map[string]any{"name": tool, "arguments": map[string]any{}},
-	})
-	if err != nil {
-		panic(err) // constant-shaped body; marshal cannot fail
-	}
-	return body
-}
-
-func vectorRequest(t *testing.T, state *server.MemoryState, ev vectorEvent, target string, body []byte) server.Request {
-	t.Helper()
-	key := vectorRegisteredKey(t, state, ev.KID)
-	kid, nonce := vectorKid(ev.KID), vectorNonce(ev.Nonce)
-	method := "GET"
-	if body != nil {
-		method = "POST"
-	}
-	signing := jack.RequestSigningString(method, target, vectorAud, kid, ev.TS, nonce, body)
-	signature := jack.EncodeBase64URL(ed25519.Sign(key, []byte(signing)))
-	if !ev.Authenticated {
-		// Tamper after signing so signature verification must fail pre-admission.
-		target += "/tampered"
-	}
-	return server.Request{
-		Method:     method,
-		Target:     target,
-		AuthValues: []string{jack.FormatRequestAuth(jack.RequestAuth{Kid: kid, TS: ev.TS, Nonce: nonce, Sig: signature})},
-		Body:       body,
-	}
-}
-
-func vectorVerifier(t *testing.T, owner *Store, state *server.MemoryState, clock *scriptedClock, counters *vectorCounters, window int64, refuseNative bool) *server.Verifier {
-	t.Helper()
-	cfg := server.Config{Aud: vectorAud, State: state, DurableNonces: owner, Now: clock.Now, Window: window}
-	if refuseNative {
-		cfg.Native = refusingNative{counters: counters}
-	}
-	verifier, err := server.NewVerifier(cfg)
-	if err != nil {
-		t.Fatalf("NewVerifier: %v", err)
-	}
-	return verifier
-}
-
-// driveVectorEvent runs one full-path event: the Verifier consumes the entry
-// clock sample, the store consumes entry/intent/final samples, and the
-// Verifier consumes the post-commit sample (5 pushes per event).
-func driveVectorEvent(t *testing.T, owner *Store, state *server.MemoryState, clock *scriptedClock, counters *vectorCounters, ev vectorEvent, target string) server.Result {
-	t.Helper()
-	clock.push(ev.EntryNow, ev.EntryNow, ev.IntentNow, ev.FinalNow, ev.FinalNow)
-	var body []byte
-	refuseNative := ev.Authorization == "refused"
-	if refuseNative {
-		body = vectorToolBody(vectorToolName)
-	}
-	request := vectorRequest(t, state, ev, target, body)
-	verifier := vectorVerifier(t, owner, state, clock, counters, ev.Window, refuseNative)
-	result := verifier.Verify(request)
-	result.Done()
-	if result.Accepted {
-		counters.accepted++
-		counters.eventAccepted++
-	}
-	return result
-}
-
-// vectorEffects derives the harness-local effect counters:
-// authorization = post-commit authorization gate reached (native call entered
-// or accepted forward); handler = dispatch permission observed;
-// stateMutation = 0 (the Verifier harness never runs a wrapped handler).
-func vectorEffects(counters *vectorCounters) (int, int, int) {
-	return counters.nativeCalls + counters.accepted, counters.accepted, 0
-}
-
-// ---------------------------------------------------------------------------
 // Assertions.
 // ---------------------------------------------------------------------------
 
@@ -754,10 +458,10 @@ func openNowFor(fc vectorCase) int64 {
 // newSingleStore creates a fresh store for one case, seeds the vector state,
 // and installs the transact-call counter. The clock holds the init/open
 // samples; runners push the per-event samples afterwards.
-func newSingleStore(t *testing.T, fc vectorCase, plan vectorPlan) (*Store, string, Options, *scriptedClock, *vectorCounters, *server.MemoryState) {
+func newSingleStore(t *testing.T, fc vectorCase, plan vectorPlan) (*Store, string, Options, *testfixture.ScriptedClock, *vectorCounters, *server.MemoryState) {
 	t.Helper()
-	clock := newScriptedClock(plan.openNow, plan.openNow)
-	path := filepath.Join(privateTestDirectory(t), "candidate-vectors.db")
+	clock := testfixture.NewScriptedClock(plan.openNow, plan.openNow)
+	path := filepath.Join(testfixture.PrivateDirectory(t), "candidate-vectors.db")
 	opts := Options{DeploymentID: vectorDeployment(fc), Window: vectorWindow(fc), Now: clock.Now}
 	if err := InitializeUnused(path, opts); err != nil {
 		t.Fatalf("%s: InitializeUnused: %v", fc.ID, err)
@@ -831,7 +535,7 @@ func runSequenceVector(t *testing.T, fc vectorCase, plan vectorPlan) {
 func runStoreDirectVector(t *testing.T, fc vectorCase, plan vectorPlan) {
 	owner, _, _, clock, counters, _ := newSingleStore(t, fc, plan)
 	ev := *fc.Event
-	clock.push(ev.EntryNow, ev.IntentNow, ev.FinalNow)
+	clock.Push(ev.EntryNow, ev.IntentNow, ev.FinalNow)
 	kid, nonce := vectorKid(ev.KID), vectorNonce(ev.Nonce)
 	validateCalls := 0
 	admission := server.NonceAdmission{
@@ -994,7 +698,7 @@ func runCrashVector(t *testing.T, fc vectorCase, plan vectorPlan) {
 	if err := owner.Close(); err != nil {
 		t.Fatalf("%s: clean close after commit: %v", fc.ID, err)
 	}
-	clock.push(fc.Expect.HighWater)
+	clock.Push(fc.Expect.HighWater)
 	reopened, err := Open(path, opts)
 	if err != nil {
 		t.Fatalf("%s: reopen after committed reservation: %v", fc.ID, err)

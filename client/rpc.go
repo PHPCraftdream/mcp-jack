@@ -1,3 +1,49 @@
+// Package client is the mcp-jack client SDK.
+//
+// Every outgoing request is signed with an Ed25519 signer (Signer) and every
+// response is verified against the pinned server public key before its body is
+// returned (spec 01 sections 4 and 5). The package speaks the protocol-native
+// jack.* tools for user management, including enrollment and key rotation
+// (spec 03 sections 3.1-3.3).
+//
+// # Generic tool calls
+//
+// Client.CallTool performs one signed, response-verified tools/call for any
+// tool name and decodes the verified structuredContent into out (a pointer
+// given to json.Unmarshal; nil discards the payload, but a result without
+// structuredContent is still an error). It is a single-request signed tool
+// caller, not a full MCP session client: there is no initialize, tools/list,
+// notification or streaming support, and structuredContent is the only result
+// model. The native helpers are unchanged.
+//
+//	var res struct {
+//		OK bool `json:"ok"`
+//	}
+//	err := c.CallTool(ctx, "svc.restart", map[string]any{"name": "web"}, &res)
+//	// errors: *client.HTTPError, *client.RPCError, *client.ToolError, ...
+//
+// # Destination policy
+//
+// Spec 01 section 1 requires HTTPS for non-loopback connections. The raw
+// destination URL string is checked (docs/design/interop.md section 9) by
+// NewClient, by profile loading and validation, and by every Transport
+// request before signing: https is accepted for any host, http only for a
+// literal canonical 127.x.y.z or [::1]; localhost aliases, userinfo and
+// percent escapes in the authority (zone IDs included), and backslashes are
+// refused; percent-encoded path/query is accepted and signed as given.
+// Nothing is resolved. SDK-built HTTP clients never follow redirects and a
+// 301, 302, 303, 307 or 308 answer to a signed request is refused before
+// verification (ErrRedirectRefused); its Location is never surfaced. This is
+// a no-follow/no-downgrade guard, not TLS enforcement. Other 3xx statuses
+// (e.g. a signed 304) are verified normally.
+//
+// A caller-supplied http.Client or base http.RoundTripper (Config.HTTP,
+// Transport.Base) is outside the SDK's control: it must use TLS for https
+// URLs, connect to exactly the URL it is given and not follow redirects. The
+// SDK cannot police it; the policy is applied before a request reaches it.
+// Signing and response verification are mandatory regardless: NewClient always
+// wraps Config.HTTP's base round tripper in its own signing/verifying
+// Transport (a prewrapped *Transport is collapsed, never mutated).
 package client
 
 import (
@@ -13,6 +59,7 @@ import (
 	"time"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
+	"github.com/PHPCraftdream/mcp-jack/client/internal/urlpolicy"
 )
 
 // Config carries everything NewClient needs to reach and trust one server.
@@ -94,7 +141,7 @@ func audHasControl(aud string) bool {
 
 // NewClient validates cfg and returns a Client.
 func NewClient(cfg Config) (*Client, error) {
-	if err := checkDestination(cfg.BaseURL); err != nil {
+	if err := urlpolicy.CheckDestination(cfg.BaseURL); err != nil {
 		return nil, err
 	}
 	u, err := url.Parse(cfg.BaseURL)
@@ -372,4 +419,124 @@ func readCapped(r io.Reader, capBytes int) ([]byte, error) {
 		return nil, fmt.Errorf("jack client: response body exceeds %d bytes", capBytes)
 	}
 	return raw, nil
+}
+
+// Profile is a client configuration file holding ONLY public data: it
+// deliberately has no private-key field, since private keys must never live
+// in config files (spec 01 section 6, README principle 5).
+type Profile struct {
+	URL string `json:"url"`
+	Aud string `json:"aud"`
+	// ServerPublicKey is the unpadded base64url of the 32-byte server key.
+	ServerPublicKey string `json:"server_public_key"`
+	// KID is the client key's identifier (kid), never a private key.
+	KID string `json:"kid,omitempty"`
+	// Name is the client key's label.
+	Name string `json:"name,omitempty"`
+}
+
+// LoadProfile reads and validates a profile from r.
+func LoadProfile(r io.Reader) (Profile, error) {
+	if r == nil {
+		return Profile{}, fmt.Errorf("jack client: nil profile reader")
+	}
+	var p Profile
+	dec := json.NewDecoder(r)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&p); err != nil {
+		return Profile{}, fmt.Errorf("jack client: profile: %w", err)
+	}
+	// Trailing data would silently hide a second document.
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return Profile{}, fmt.Errorf("jack client: profile: trailing data after JSON object")
+	}
+	if err := validateProfile(p); err != nil {
+		return Profile{}, err
+	}
+	return p, nil
+}
+
+// validateProfile enforces spec 01 sections 3 and 6 field rules.
+func validateProfile(p Profile) error {
+	// The client URL policy decides acceptance on the raw string (percent
+	// escapes are refused in the authority only; percent-encoded path/query
+	// is accepted); the parse checks below are extra and reject only what
+	// net/url cannot parse, with a generic non-policy error.
+	if err := urlpolicy.CheckDestination(p.URL); err != nil {
+		return err
+	}
+	u, err := url.Parse(p.URL)
+	if err != nil || !u.IsAbs() || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("jack client: profile url must be an absolute http/https URL with a host")
+	}
+	if p.Aud == "" {
+		return fmt.Errorf("jack client: profile aud must be non-empty")
+	}
+	if audHasControl(p.Aud) {
+		return fmt.Errorf("jack client: profile aud must not contain control characters")
+	}
+	serverKey, err := jack.DecodeBase64URLFixed(p.ServerPublicKey, 32)
+	if err != nil {
+		return fmt.Errorf("jack client: profile server_public_key: %w", jack.ErrBadBase64URL)
+	}
+	if err := jack.ValidatePublicKey(serverKey); err != nil {
+		// Local validation never becomes an HTTP response: zero the
+		// validator's wire admission status (400) per the Error.HTTPStatus
+		// contract, matching VerifyResponse's client-side remap.
+		var jErr *jack.Error
+		if errors.As(err, &jErr) {
+			return &jack.Error{HTTPStatus: 0, Code: jErr.Code, Message: jErr.Message}
+		}
+		return err
+	}
+	if p.KID != "" {
+		if _, err := jack.DecodeBase64URLFixed(p.KID, 32); err != nil {
+			return fmt.Errorf("jack client: profile kid: %w", jack.ErrBadBase64URL)
+		}
+	}
+	return nil
+}
+
+// SaveProfile writes p as indented JSON with a trailing newline.
+func SaveProfile(w io.Writer, p Profile) error {
+	if w == nil {
+		return fmt.Errorf("jack client: nil profile writer")
+	}
+	data, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	_, err = w.Write(data)
+	return err
+}
+
+// ServerKeyBytes returns the decoded 32-byte server public key.
+func (p Profile) ServerKeyBytes() ([]byte, error) {
+	return jack.DecodeBase64URLFixed(p.ServerPublicKey, 32)
+}
+
+// NewClientFromProfile validates p and builds a Client for it. httpc is the
+// optional caller-supplied HTTP client (Config.HTTP); it supplies timeout, Jar and
+// the base RoundTripper, while the SDK always adds its own signing and
+// verifying Transport (see Config.HTTP). nil selects the built-in one. The Rust
+// and TS SDKs expose the same constructor (Client::from_profile /
+// clientFromProfile).
+func NewClientFromProfile(p Profile, signer Signer, httpc *http.Client) (*Client, error) {
+	if err := validateProfile(p); err != nil {
+		return nil, err
+	}
+	serverKey, err := p.ServerKeyBytes()
+	if err != nil {
+		// validateProfile already accepted this key, so this is unreachable
+		// in practice; kept so a decode failure can never pass a short key on.
+		return nil, fmt.Errorf("jack client: profile server_public_key: %w", err)
+	}
+	return NewClient(Config{
+		BaseURL:   p.URL,
+		Aud:       p.Aud,
+		Signer:    signer,
+		ServerKey: serverKey,
+		HTTP:      httpc,
+	})
 }
