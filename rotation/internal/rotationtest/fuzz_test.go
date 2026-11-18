@@ -17,7 +17,7 @@ import (
 // fuzzFixture reads the committed candidate vectors the way the unit tests do,
 // bound to testing.F so it can seed corpora without a testing.T.
 func fuzzFixture(f *testing.F) (vectors, rotation.Binding, rotation.Checkpoint, map[string][]byte) {
-	data, err := os.ReadFile("../spec/fixtures/candidate/rotation-vectors.json")
+	data, err := os.ReadFile("../../../spec/fixtures/candidate/rotation-vectors.json")
 	if err != nil {
 		f.Fatalf("read rotation vectors: %v", err)
 	}

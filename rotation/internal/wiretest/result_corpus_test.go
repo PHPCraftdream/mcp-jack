@@ -34,7 +34,7 @@ type corpusDocument struct {
 
 func loadRotationCorpus(t *testing.T) corpusDocument {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "rust", "tests", "rotation-property-corpus.json"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "rust", "tests", "rotation-property-corpus.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
