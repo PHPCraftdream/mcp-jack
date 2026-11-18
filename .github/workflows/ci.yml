@@ -148,10 +148,7 @@ jobs:
           node-version: 22
       - name: Self-test the layout linter
         run: node --test tools/layout/check-layout.test.mjs
-      # Informational until the tree is clean; the final layout task removes
-      # continue-on-error and makes this step blocking.
       - name: Check file length and folder size
-        continue-on-error: true
         run: node tools/layout/check-layout.mjs
 
   rust:
