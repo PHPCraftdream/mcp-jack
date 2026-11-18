@@ -1,13 +1,16 @@
-package rotation
+package strictjson
 
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"strconv"
 	"unicode/utf16"
 	"unicode/utf8"
 )
+
+var errInvalid = errors.New("strictjson: invalid")
 
 // Stdlib checks the JSON grammar; an additional guard forbids lone surrogates,
 // which encoding/json would otherwise replace with U+FFFD. Native JSON policy is unchanged.
@@ -57,24 +60,24 @@ func scalarJSON(data []byte) bool {
 	return true
 }
 
-func strictJSON(data []byte) (any, error) {
+func Scan(data []byte) (any, error) {
 	if !scalarJSON(data) {
-		return nil, invalid("rotation_result_invalid")
+		return nil, errInvalid
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
-	value, err := strictJSONValue(decoder, 0)
+	value, err := scanValue(decoder, 0)
 	if err != nil {
 		return nil, err
 	}
 	if _, err := decoder.Token(); err != io.EOF {
-		return nil, invalid("rotation_result_invalid")
+		return nil, errInvalid
 	}
 	return value, nil
 }
 
-func strictJSONValue(decoder *json.Decoder, depth int) (any, error) {
-	fail := func() (any, error) { return nil, invalid("rotation_result_invalid") }
+func scanValue(decoder *json.Decoder, depth int) (any, error) {
+	fail := func() (any, error) { return nil, errInvalid }
 	if depth > 64 {
 		return fail()
 	}
@@ -98,7 +101,7 @@ func strictJSONValue(decoder *json.Decoder, depth int) (any, error) {
 			if _, duplicate := object[key]; duplicate {
 				return fail()
 			}
-			value, err := strictJSONValue(decoder, depth+1)
+			value, err := scanValue(decoder, depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -111,7 +114,7 @@ func strictJSONValue(decoder *json.Decoder, depth int) (any, error) {
 	case '[':
 		array := make([]any, 0)
 		for decoder.More() {
-			value, err := strictJSONValue(decoder, depth+1)
+			value, err := scanValue(decoder, depth+1)
 			if err != nil {
 				return nil, err
 			}
