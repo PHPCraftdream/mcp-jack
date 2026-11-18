@@ -1,6 +1,6 @@
 //go:build linux
 
-package durable
+package ownedfile
 
 import (
 	"os"
@@ -9,8 +9,8 @@ import (
 )
 
 // Only explicitly listed local filesystems are accepted; this is not power-loss certification.
-func privateDirectory(path string) error {
-	if os.Getpagesize() != pageBytes {
+func PrivateDirectory(path string) error {
+	if os.Getpagesize() != PageBytes {
 		return ErrUnsupported
 	}
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
@@ -61,7 +61,7 @@ func openPrivateFile(path string, flags int, mode os.FileMode, create bool) (*os
 		valid = ok && stat.Uid == uint32(os.Geteuid()) && stat.Nlink == 1
 	}
 	if valid {
-		valid = info.Size() <= maxFileBytes && (create || info.Size() >= 4*pageBytes)
+		valid = info.Size() <= MaxFileBytes && (create || info.Size() >= 4*PageBytes)
 	}
 	if !valid {
 		_ = file.Close()

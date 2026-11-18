@@ -1,12 +1,13 @@
 //go:build linux
 
-package durable
+package rotationstore
 
 import (
 	"errors"
 	"os"
 	"testing"
 
+	"github.com/PHPCraftdream/mcp-jack/durable/internal/ownedfile"
 	"github.com/PHPCraftdream/mcp-jack/rotation"
 	bolt "go.etcd.io/bbolt"
 )
@@ -44,10 +45,10 @@ func TestServerClockNoOpKeepsTuple(t *testing.T) {
 func TestServerSnapshotRejectsChangedOwnedGuard(t *testing.T) {
 	store, _, _, _, _ := testServerOwner(t)
 	mutateServerGuard(t, store, func(guard *trustGuard) { guard.Owner++ })
-	if _, _, err := store.Snapshot(); !errors.Is(err, ErrUnavailable) || !store.fenced.Load() {
+	if _, _, err := store.Snapshot(); !errors.Is(err, ownedfile.ErrUnavailable) || !store.fenced.Load() {
 		t.Fatalf("snapshot accepted changed owner: %v", err)
 	}
-	if err := store.Close(); !errors.Is(err, ErrUnavailable) {
+	if err := store.Close(); !errors.Is(err, ownedfile.ErrUnavailable) {
 		t.Fatalf("fenced close: %v", err)
 	}
 }
@@ -68,10 +69,10 @@ func TestServerRawClockAndClosedOperationGates(t *testing.T) {
 		store.Fence()
 		return now.Load()
 	}
-	if raw, err := store.RawClock(); raw != 0 || !errors.Is(err, ErrUnavailable) || !store.fenced.Load() {
+	if raw, err := store.RawClock(); raw != 0 || !errors.Is(err, ownedfile.ErrUnavailable) || !store.fenced.Load() {
 		t.Fatalf("post-sample fence exposed clock: %d %v", raw, err)
 	}
-	if err := store.Close(); !errors.Is(err, ErrUnavailable) {
+	if err := store.Close(); !errors.Is(err, ownedfile.ErrUnavailable) {
 		t.Fatalf("fenced close: %v", err)
 	}
 	closed, _, _, _, signer := testServerOwner(t)
@@ -83,15 +84,15 @@ func TestServerRawClockAndClosedOperationGates(t *testing.T) {
 	if err := closed.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if raw, err := closed.RawClock(); raw != 0 || !errors.Is(err, ErrUnavailable) {
+	if raw, err := closed.RawClock(); raw != 0 || !errors.Is(err, ownedfile.ErrUnavailable) {
 		t.Fatalf("closed RawClock = %d, %v", raw, err)
 	}
 	requireServerCode(t, func() error { _, err := closed.AdvanceAndCheck(); return err }(), "rotation_clock_unavailable")
-	if _, _, err := closed.Snapshot(); !errors.Is(err, ErrUnavailable) {
+	if _, _, err := closed.Snapshot(); !errors.Is(err, ownedfile.ErrUnavailable) {
 		t.Fatalf("closed Snapshot: %v", err)
 	}
 	requireServerCode(t, func() error { _, err := closed.CheckSnapshotClock(expected); return err }(), "rotation_clock_unavailable")
-	if err := closed.CompareAndSwap(expected, desired, tuple); !errors.Is(err, ErrUnavailable) {
+	if err := closed.CompareAndSwap(expected, desired, tuple); !errors.Is(err, ownedfile.ErrUnavailable) {
 		t.Fatalf("closed CompareAndSwap: %v", err)
 	}
 	leaseStore, _, _, _, _ := testServerOwner(t)
@@ -104,7 +105,7 @@ func TestServerRawClockAndClosedOperationGates(t *testing.T) {
 	if err := leaseStore.Close(); err != nil {
 		t.Fatalf("released lease close: %v", err)
 	}
-	if _, err := leaseStore.AcquireServingLease(); !errors.Is(err, ErrUnavailable) {
+	if _, err := leaseStore.AcquireServingLease(); !errors.Is(err, ownedfile.ErrUnavailable) {
 		t.Fatalf("closed serving lease: %v", err)
 	}
 }
@@ -114,10 +115,10 @@ func TestServerClockProviderPanicsFailClosed(t *testing.T) {
 	t.Run("raw clock", func(t *testing.T) {
 		store, _, _, _, _ := testServerOwner(t)
 		store.options.Now = func() int64 { panic("injected raw server clock panic") }
-		if raw, err := store.RawClock(); raw != 0 || !errors.Is(err, ErrUnavailable) {
+		if raw, err := store.RawClock(); raw != 0 || !errors.Is(err, ownedfile.ErrUnavailable) {
 			t.Fatalf("RawClock panic result: %d, %v", raw, err)
 		}
-		if err := store.Close(); !errors.Is(err, ErrUnavailable) {
+		if err := store.Close(); !errors.Is(err, ownedfile.ErrUnavailable) {
 			t.Fatalf("fenced close: %v", err)
 		}
 	})
@@ -129,7 +130,7 @@ func TestServerClockProviderPanicsFailClosed(t *testing.T) {
 		} else {
 			requireServerCode(t, err, "rotation_clock_unavailable")
 		}
-		if err := store.Close(); !errors.Is(err, ErrUnavailable) {
+		if err := store.Close(); !errors.Is(err, ownedfile.ErrUnavailable) {
 			t.Fatalf("fenced close: %v", err)
 		}
 	})
@@ -172,7 +173,7 @@ func TestServerOwnedGuardAndCorruptSnapshotFailures(t *testing.T) {
 		desired := extendServer(t, expected, clock, signer)
 		mutateServerGuard(t, store, func(guard *trustGuard) { guard.Owner++ })
 		requireServerCode(t, store.CompareAndSwap(expected, desired, clock), "rotation_state_unknown")
-		if _, _, err := store.Snapshot(); !errors.Is(err, ErrUnavailable) {
+		if _, _, err := store.Snapshot(); !errors.Is(err, ownedfile.ErrUnavailable) {
 			t.Fatalf("Snapshot with changed owner: %v", err)
 		}
 		// server_operations.go:advanceServerClock maps a failed owned guard to rotation_clock_unavailable and fences the store.
@@ -181,7 +182,7 @@ func TestServerOwnedGuardAndCorruptSnapshotFailures(t *testing.T) {
 		if !store.fenced.Load() {
 			t.Fatal("owned guard failure did not fence the store")
 		}
-		if err := store.Close(); !errors.Is(err, ErrUnavailable) {
+		if err := store.Close(); !errors.Is(err, ownedfile.ErrUnavailable) {
 			t.Fatalf("fenced close: %v", err)
 		}
 	})
@@ -201,7 +202,7 @@ func TestServerOwnedGuardAndCorruptSnapshotFailures(t *testing.T) {
 				_, err = store.CheckSnapshotClock(expected)
 				requireServerCode(t, err, "rotation_clock_unavailable")
 			case "snapshot":
-				if _, _, err := store.Snapshot(); !errors.Is(err, ErrUnavailable) {
+				if _, _, err := store.Snapshot(); !errors.Is(err, ownedfile.ErrUnavailable) {
 					t.Fatalf("corrupt snapshot read: %v", err)
 				}
 			case "publication":
@@ -210,7 +211,7 @@ func TestServerOwnedGuardAndCorruptSnapshotFailures(t *testing.T) {
 			if !store.fenced.Load() {
 				t.Fatal("corrupt durable state did not fence owner")
 			}
-			if err := store.Close(); !errors.Is(err, ErrUnavailable) {
+			if err := store.Close(); !errors.Is(err, ownedfile.ErrUnavailable) {
 				t.Fatalf("fenced close: %v", err)
 			}
 		})
@@ -236,7 +237,7 @@ func TestServerUnsafeClockAndRevisionExhaustion(t *testing.T) {
 			if err != nil || !persisted.Clock.Unsafe || persisted.Clock.HighWater != 1000 || persisted.Clock.Revision != 2 {
 				t.Fatalf("unsafe clock tuple = %+v, %v", persisted.Clock, err)
 			}
-			if err := store.Close(); !errors.Is(err, ErrUnavailable) {
+			if err := store.Close(); !errors.Is(err, ownedfile.ErrUnavailable) {
 				t.Fatalf("unsafe close: %v", err)
 			}
 		})
@@ -254,7 +255,7 @@ func TestServerUnsafeClockAndRevisionExhaustion(t *testing.T) {
 		if err != nil || !persisted.Clock.Unsafe || persisted.Clock.HighWater != 1000 || persisted.Clock.Revision != 2 {
 			t.Fatalf("rollback latch = %+v, %v", persisted.Clock, err)
 		}
-		if err := store.Close(); !errors.Is(err, ErrUnavailable) {
+		if err := store.Close(); !errors.Is(err, ownedfile.ErrUnavailable) {
 			t.Fatalf("unsafe close: %v", err)
 		}
 	})
@@ -269,7 +270,7 @@ func TestServerUnsafeClockAndRevisionExhaustion(t *testing.T) {
 		if err != nil || persisted.Clock.Revision != rotation.MaxOrdinal || persisted.Clock.HighWater != 1000 {
 			t.Fatalf("exhausted clock changed: %+v, %v", persisted.Clock, err)
 		}
-		if err := store.Close(); !errors.Is(err, ErrUnavailable) {
+		if err := store.Close(); !errors.Is(err, ownedfile.ErrUnavailable) {
 			t.Fatalf("fenced close: %v", err)
 		}
 	})
@@ -288,7 +289,7 @@ func TestServerClockPanicAndCASClockConflict(t *testing.T) {
 		if !store.fenced.Load() {
 			t.Fatal("clock panic failed to fence owner")
 		}
-		if err := store.Close(); !errors.Is(err, ErrUnavailable) {
+		if err := store.Close(); !errors.Is(err, ownedfile.ErrUnavailable) {
 			t.Fatalf("panic close: %v", err)
 		}
 	})
@@ -332,7 +333,7 @@ func TestServerClockAndPublicationRejectPostTransactionFence(t *testing.T) {
 		if err != nil || persisted.Clock.HighWater != 1001 || persisted.Clock.Revision != 2 {
 			t.Fatalf("committed clock not observed: %+v, %v", persisted.Clock, err)
 		}
-		if err := store.Close(); !errors.Is(err, ErrUnavailable) {
+		if err := store.Close(); !errors.Is(err, ownedfile.ErrUnavailable) {
 			t.Fatalf("fenced close: %v", err)
 		}
 	})
@@ -355,7 +356,7 @@ func TestServerClockAndPublicationRejectPostTransactionFence(t *testing.T) {
 		if err != nil || string(persisted) != string(wanted) || len(intent) == 0 {
 			t.Fatal("post-commit fence did not preserve publication and intent")
 		}
-		if err := store.Close(); !errors.Is(err, ErrUnavailable) {
+		if err := store.Close(); !errors.Is(err, ownedfile.ErrUnavailable) {
 			t.Fatalf("fenced close: %v", err)
 		}
 	})
@@ -387,7 +388,7 @@ func TestServerReadonlyTransactionsFailClosed(t *testing.T) {
 			if !store.fenced.Load() {
 				t.Fatal("readonly transaction error did not fence store")
 			}
-			if err := store.Close(); !errors.Is(err, ErrUnavailable) {
+			if err := store.Close(); !errors.Is(err, ownedfile.ErrUnavailable) {
 				t.Fatalf("fenced close: %v", err)
 			}
 		})
@@ -412,7 +413,7 @@ func TestServerPostCommitFileStatFailuresFenceAcknowledgment(t *testing.T) {
 				}
 				defer fake.Close()
 				if fixture == "oversized file" {
-					if err := fake.Truncate(maxFileBytes + pageBytes); err != nil {
+					if err := fake.Truncate(ownedfile.MaxFileBytes + ownedfile.PageBytes); err != nil {
 						t.Fatal(err)
 					}
 				} else if err := fake.Close(); err != nil {
@@ -440,7 +441,7 @@ func TestServerPostCommitFileStatFailuresFenceAcknowledgment(t *testing.T) {
 				if !store.fenced.Load() {
 					t.Fatal("invalid backing-file stat did not fence owner")
 				}
-				if err := store.Close(); !errors.Is(err, ErrUnavailable) {
+				if err := store.Close(); !errors.Is(err, ownedfile.ErrUnavailable) {
 					t.Fatalf("fenced close: %v", err)
 				}
 			})

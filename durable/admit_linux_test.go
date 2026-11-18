@@ -3,21 +3,29 @@
 package durable
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
+	"github.com/PHPCraftdream/mcp-jack/client"
+	"github.com/PHPCraftdream/mcp-jack/durable/internal/testfixture"
 	"github.com/PHPCraftdream/mcp-jack/server"
 	bolt "go.etcd.io/bbolt"
 )
 
 func testOwner(t *testing.T, now *int64) (*Store, string, Options) {
 	t.Helper()
-	path := filepath.Join(privateTestDirectory(t), "admission.db")
+	path := filepath.Join(testfixture.PrivateDirectory(t), "admission.db")
 	opts := testOptions(now)
 	if err := InitializeUnused(path, opts); err != nil {
 		t.Fatal(err)
@@ -404,4 +412,413 @@ func TestCloseOfFencedStoreReportsRecoveryRequired(t *testing.T) {
 		}
 		t.Fatalf("open after a fenced close: %v", err)
 	}
+}
+
+type httpFixtureResponseSigner struct {
+	key   ed25519.PrivateKey
+	mode  string
+	calls int
+}
+
+func (provider *httpFixtureResponseSigner) PublicKey() []byte {
+	return provider.key.Public().(ed25519.PublicKey)
+}
+
+func (provider *httpFixtureResponseSigner) Sign(message []byte) ([]byte, error) {
+	provider.calls++
+	switch provider.mode {
+	case "signer-error":
+		return nil, errors.New("private response provider detail")
+	case "signer-panic":
+		panic("private response provider detail")
+	case "signer-bad-signature":
+		return make([]byte, ed25519.SignatureSize), nil
+	case "signer-message-mutation":
+		message[0] ^= 1
+	}
+	return ed25519.Sign(provider.key, message), nil
+}
+
+func TestActualHTTPOutcomesKeepNonceConsumedAcrossCleanRestart(t *testing.T) {
+	for _, outcome := range []string{"success", "handler-error", "response-overflow", "streaming-refusal", "handler-panic", "opaque-success", "signer-error", "signer-panic", "signer-bad-signature", "signer-message-mutation"} {
+		t.Run(outcome, func(t *testing.T) {
+			now := int64(100)
+			owner, path, opts := testOwner(t, &now)
+			state := server.NewMemoryState()
+			request := signedStorageRequest(t, state, 100, 13)
+			auth, err := jack.ParseRequestAuth(request.AuthValues)
+			if err != nil {
+				t.Fatal(err)
+			}
+			seed := sha256.Sum256([]byte("mcp-jack public HTTP durable server fixture"))
+			serverKey := ed25519.NewKeyFromSeed(seed[:])
+			provider := &httpFixtureResponseSigner{key: serverKey, mode: outcome}
+			opaque := outcome == "opaque-success" || strings.HasPrefix(outcome, "signer-")
+			calls := 0
+			next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				if outcome == "handler-panic" {
+					panic("public handler panic")
+				}
+				if outcome == "streaming-refusal" {
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = w.Write([]byte("data: x\n\n"))
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				if outcome == "handler-error" {
+					w.WriteHeader(http.StatusInternalServerError)
+				}
+				body := []byte("{}")
+				if outcome == "response-overflow" {
+					body = []byte("123456789")
+				}
+				_, _ = w.Write(body)
+			})
+			wrap := func(storage *Store) http.Handler {
+				config := server.HandlerConfig{Verifier: actualVerifier(t, storage, state, &now), ServerKey: serverKey, MaxResponseBytes: 8}
+				if opaque {
+					config.ServerKey = nil
+					config.ResponseSigner = provider
+				}
+				handler, err := server.NewHandler(config, next)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return handler
+			}
+			invoke := func(handler http.Handler, target string) *httptest.ResponseRecorder {
+				t.Helper()
+				r := httptest.NewRequest(http.MethodGet, target, nil)
+				for _, value := range request.AuthValues {
+					r.Header.Add("Jack-Auth", value)
+				}
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, r)
+				return response
+			}
+			handler := wrap(owner)
+			bad := invoke(handler, "/tampered")
+			if bad.Code != http.StatusUnauthorized || calls != 0 || owner.meta.Live != 0 || provider.calls != 0 {
+				t.Fatal("HTTP pre-auth refusal consumed nonce or dispatched")
+			}
+			var response *httptest.ResponseRecorder
+			var recovered any
+			func() {
+				defer func() { recovered = recover() }()
+				response = invoke(handler, "/mcp")
+			}()
+			if outcome == "handler-panic" {
+				if recovered != "public handler panic" {
+					t.Fatalf("handler panic changed: %v", recovered)
+				}
+			} else {
+				if recovered != nil {
+					t.Fatalf("unexpected HTTP panic: %v", recovered)
+				}
+				verification := client.VerifyResponse(serverKey.Public().(ed25519.PublicKey), response.Code, response.Header().Values("Jack-Auth"), auth.Sig, response.Body.Bytes(), time.Unix(now, 0), 30*time.Second)
+				if strings.HasPrefix(outcome, "signer-") {
+					if response.Code != 503 || len(response.Header().Values("Jack-Auth")) != 0 || verification == nil || bytes.Contains(response.Body.Bytes(), []byte("private response provider detail")) || bytes.Equal(response.Body.Bytes(), []byte("{}")) {
+						t.Fatal("signing failure emitted unsigned success, leaked detail or was trusted")
+					}
+				} else {
+					want := map[string]int{"success": 200, "opaque-success": 200, "handler-error": 500, "response-overflow": 502, "streaming-refusal": 501}[outcome]
+					if response.Code != want || verification != nil {
+						t.Fatalf("HTTP outcome=%d want=%d signature=%v", response.Code, want, verification)
+					}
+				}
+			}
+			if calls != 1 || owner.meta.Live != 1 || owner.meta.Intents != 0 || (opaque && provider.calls != 1) {
+				t.Fatal("post-reservation HTTP outcome undid or duplicated admission")
+			}
+			// Close drains the real request lease, including panic/error branches.
+			if err := owner.Close(); err != nil {
+				t.Fatal(err)
+			}
+			now = 101
+			reopened, err := Open(path, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			replay := invoke(wrap(reopened), "/mcp")
+			if replay.Code != http.StatusUnauthorized || calls != 1 || !bytes.Contains(replay.Body.Bytes(), []byte(jack.CodeReplayedNonce)) || len(replay.Header().Values("Jack-Auth")) != 0 || (opaque && provider.calls != 1) {
+				t.Fatalf("restart redelivered HTTP operation: status=%d calls=%d", replay.Code, calls)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Seeding: fresh store + scripted clock + direct bucket writes.
+// ---------------------------------------------------------------------------
+
+// vectorRowHighWater picks a receipt HighWater satisfying validateRecord:
+// 0 <= Hw <= metadata.HighWater and |Hw - ts| <= W.
+func vectorRowHighWater(metadataHighWater, ts int64) int64 {
+	if metadataHighWater > 0 {
+		return metadataHighWater
+	}
+	return ts
+}
+
+func vectorSeedRowRecord(t *testing.T, m metadata, kind byte, kidName, nonceName string, ts, retainUntil, highWater int64) nonceRecord {
+	t.Helper()
+	var key [48]byte
+	kidRaw := vectorKidRaw(kidName)
+	nonceRaw := vectorNonceRaw(nonceName)
+	copy(key[:32], kidRaw[:])
+	copy(key[32:], nonceRaw[:])
+	signing := jack.RequestSigningString("GET", "/mcp", vectorAud, vectorKid(kidName), ts, vectorNonce(nonceName), nil)
+	requestHash, err := jack.DecodeBase64URLFixed(jack.BodyHash([]byte(signing)), 32)
+	if err != nil {
+		t.Fatalf("seed row %s/%s request hash: %v", kidName, nonceName, err)
+	}
+	operation := vectorOperation(kidName + "/" + nonceName)
+	sigRaw := vectorSigRaw(kidName + ":" + nonceName)
+	row := nonceRecord{
+		kind: kind, storeID: m.StoreID, key: key,
+		receipt: server.NonceReceipt{
+			Version:         formatVersion,
+			DeploymentID:    m.Deployment,
+			StoreGeneration: m.Generation,
+			OwnerGeneration: m.Owner,
+			IntentID:        storageIntentID(m, key, sigRaw[:], requestHash, operation),
+			OperationID:     operation,
+			KID:             vectorKid(kidName),
+			Nonce:           vectorNonce(nonceName),
+			Signature:       vectorSig(kidName + ":" + nonceName),
+			RequestHash:     jack.BodyHash([]byte(signing)),
+			Timestamp:       ts,
+			RetainUntil:     retainUntil,
+			HighWater:       highWater,
+		},
+	}
+	if err := validateRecord(row, m); err != nil {
+		t.Fatalf("seed row %s/%s invalid: %v", kidName, nonceName, err)
+	}
+	return row
+}
+
+// vectorSplitRowKey derives the deterministic identity names of a seed row.
+// Pair rows are written "kid:nonce"; generated capacity rows ("seed-N") carry
+// a single name, so the nonce name falls back to a whole-key derivative.
+func vectorSplitRowKey(key string) (string, string) {
+	for index := 0; index < len(key); index++ {
+		if key[index] == ':' {
+			return key[:index], key[index+1:]
+		}
+	}
+	return key, key + "/nonce"
+}
+
+// vectorCaseRows builds every seed row of a case; encodeRecord (via
+// validateRecord) already rejects any row inconsistent with the metadata.
+func vectorCaseRows(t *testing.T, fc vectorCase, m metadata) []nonceRecord {
+	t.Helper()
+	var rows []nonceRecord
+	for _, row := range fc.State.Live {
+		kidName, nonceName := vectorSplitRowKey(row.Key)
+		rows = append(rows, vectorSeedRowRecord(t, m, liveRecord, kidName, nonceName,
+			row.TS, row.RetainUntil, vectorRowHighWater(m.HighWater, row.TS)))
+	}
+	for _, row := range fc.State.Intents {
+		kidName, nonceName := vectorSplitRowKey(row.Key)
+		rows = append(rows, vectorSeedRowRecord(t, m, intentRecord, kidName, nonceName,
+			row.TS, row.RetainUntil, vectorRowHighWater(m.HighWater, row.TS)))
+	}
+	for _, row := range fc.State.Tombstones {
+		rows = append(rows, vectorSeedRowRecord(t, m, tombstoneRecord, row.IntentID, row.IntentID+"-pair",
+			100, 130, vectorRowHighWater(m.HighWater, 100)))
+	}
+	return rows
+}
+
+// seedVectorState writes the rows, their operation index, the live expiry
+// index, and matching metadata in one transaction, then re-checks the exact
+// graph invariants the loader itself uses (validateRows) and syncs the
+// in-memory metadata the transaction layer compares against.
+func seedVectorState(t *testing.T, owner *Store, fc vectorCase, highWater int64) {
+	t.Helper()
+	if fc.State == nil {
+		return // sequence cases start from a fresh empty store
+	}
+	seedMeta := owner.meta
+	seedMeta.HighWater = highWater
+	rows := vectorCaseRows(t, fc, seedMeta)
+	m := seedMeta
+	err := owner.db.Update(func(tx *bolt.Tx) error {
+		for _, row := range rows {
+			encoded, err := encodeRecord(row, seedMeta)
+			if err != nil {
+				return err
+			}
+			bucket := "intent"
+			switch row.kind {
+			case liveRecord:
+				bucket = "live"
+			case tombstoneRecord:
+				bucket = "tombstone"
+			}
+			if err := tx.Bucket([]byte(bucket)).Put(row.key[:], encoded); err != nil {
+				return err
+			}
+			if err := tx.Bucket([]byte("operation")).Put(row.receipt.OperationID[:], row.key[:]); err != nil {
+				return err
+			}
+			if row.kind == liveRecord {
+				index := expiryKey(row)
+				if err := tx.Bucket([]byte("expiry")).Put(index[:], []byte{}); err != nil {
+					return err
+				}
+			}
+			switch row.kind {
+			case liveRecord:
+				m.Live++
+			case intentRecord:
+				m.Intents++
+			case tombstoneRecord:
+				m.Tombstones++
+			}
+		}
+		if err := validateRows(tx, m); err != nil {
+			return err
+		}
+		return tx.Bucket([]byte("metadata")).Put(headerKey, encodeMetadata(m))
+	})
+	if err != nil {
+		t.Fatalf("%s: seed state: %v", fc.ID, err)
+	}
+	owner.meta = m
+}
+
+// ---------------------------------------------------------------------------
+// Driving: full-path Verifier, store-direct, counters.
+// ---------------------------------------------------------------------------
+
+type vectorCounters struct {
+	transactCalls int
+	nativeCalls   int
+	accepted      int
+	eventCalls    int
+	eventAccepted int
+}
+
+func countTransact(owner *Store, counters *vectorCounters) {
+	original := owner.transact
+	owner.transact = func(apply func(*bolt.Tx) error) error {
+		counters.transactCalls++
+		counters.eventCalls++
+		return original(apply)
+	}
+}
+
+func resetEventCounters(counters *vectorCounters) {
+	counters.eventCalls = 0
+	counters.eventAccepted = 0
+}
+
+type refusingNative struct {
+	counters *vectorCounters
+}
+
+func (n refusingNative) Call(*server.NativeCall) (server.NativeResult, *jack.Error) {
+	n.counters.nativeCalls++
+	return server.NativeResult{}, &jack.Error{HTTPStatus: 403, Code: "authorization_refused", Message: "authorization refused"}
+}
+
+func vectorRegisteredKey(t *testing.T, state *server.MemoryState, kidName string) ed25519.PrivateKey {
+	t.Helper()
+	seed := sha256.Sum256([]byte("candidate-vector/key/" + kidName))
+	key := ed25519.NewKeyFromSeed(seed[:])
+	public := key.Public().(ed25519.PublicKey)
+	if err := state.Update(func(edit *server.StateEdit) error {
+		edit.PutKey(server.RegistryEntry{
+			Kid:       vectorKid(kidName),
+			PublicKey: jack.EncodeBase64URL(public),
+			Name:      "candidate-vector-" + kidName,
+		})
+		return nil
+	}); err != nil {
+		t.Fatalf("register vector key %s: %v", kidName, err)
+	}
+	return key
+}
+
+func vectorToolBody(tool string) []byte {
+	body, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params":  map[string]any{"name": tool, "arguments": map[string]any{}},
+	})
+	if err != nil {
+		panic(err) // constant-shaped body; marshal cannot fail
+	}
+	return body
+}
+
+func vectorRequest(t *testing.T, state *server.MemoryState, ev vectorEvent, target string, body []byte) server.Request {
+	t.Helper()
+	key := vectorRegisteredKey(t, state, ev.KID)
+	kid, nonce := vectorKid(ev.KID), vectorNonce(ev.Nonce)
+	method := "GET"
+	if body != nil {
+		method = "POST"
+	}
+	signing := jack.RequestSigningString(method, target, vectorAud, kid, ev.TS, nonce, body)
+	signature := jack.EncodeBase64URL(ed25519.Sign(key, []byte(signing)))
+	if !ev.Authenticated {
+		// Tamper after signing so signature verification must fail pre-admission.
+		target += "/tampered"
+	}
+	return server.Request{
+		Method:     method,
+		Target:     target,
+		AuthValues: []string{jack.FormatRequestAuth(jack.RequestAuth{Kid: kid, TS: ev.TS, Nonce: nonce, Sig: signature})},
+		Body:       body,
+	}
+}
+
+func vectorVerifier(t *testing.T, owner *Store, state *server.MemoryState, clock *testfixture.ScriptedClock, counters *vectorCounters, window int64, refuseNative bool) *server.Verifier {
+	t.Helper()
+	cfg := server.Config{Aud: vectorAud, State: state, DurableNonces: owner, Now: clock.Now, Window: window}
+	if refuseNative {
+		cfg.Native = refusingNative{counters: counters}
+	}
+	verifier, err := server.NewVerifier(cfg)
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	return verifier
+}
+
+// driveVectorEvent runs one full-path event: the Verifier consumes the entry
+// clock sample, the store consumes entry/intent/final samples, and the
+// Verifier consumes the post-commit sample (5 pushes per event).
+func driveVectorEvent(t *testing.T, owner *Store, state *server.MemoryState, clock *testfixture.ScriptedClock, counters *vectorCounters, ev vectorEvent, target string) server.Result {
+	t.Helper()
+	clock.Push(ev.EntryNow, ev.EntryNow, ev.IntentNow, ev.FinalNow, ev.FinalNow)
+	var body []byte
+	refuseNative := ev.Authorization == "refused"
+	if refuseNative {
+		body = vectorToolBody(vectorToolName)
+	}
+	request := vectorRequest(t, state, ev, target, body)
+	verifier := vectorVerifier(t, owner, state, clock, counters, ev.Window, refuseNative)
+	result := verifier.Verify(request)
+	result.Done()
+	if result.Accepted {
+		counters.accepted++
+		counters.eventAccepted++
+	}
+	return result
+}
+
+// vectorEffects derives the harness-local effect counters:
+// authorization = post-commit authorization gate reached (native call entered
+// or accepted forward); handler = dispatch permission observed;
+// stateMutation = 0 (the Verifier harness never runs a wrapped handler).
+func vectorEffects(counters *vectorCounters) (int, int, int) {
+	return counters.nativeCalls + counters.accepted, counters.accepted, 0
 }
