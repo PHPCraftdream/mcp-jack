@@ -6,7 +6,7 @@ use super::{
 };
 
 /// Domain separates the server ring from client trust: the files are not interchangeable.
-pub(super) const SERVER_DOMAIN: &str = "mcp-jack/server-ring/private-file/v1";
+pub(in crate::rotation) const SERVER_DOMAIN: &str = "mcp-jack/server-ring/private-file/v1";
 
 /// Independent OOB profile plus an opaque signer handle for the anchor key; the handle is not key authority.
 #[derive(Clone)]
@@ -22,7 +22,7 @@ fn refuse() -> RotationError {
 }
 
 impl RotationServerStoreOptions {
-    pub(super) fn base(&self) -> RotationStoreOptions {
+    pub(in crate::rotation) fn base(&self) -> RotationStoreOptions {
         RotationStoreOptions {
             binding: self.binding.clone(),
             window: self.window,
@@ -31,7 +31,7 @@ impl RotationServerStoreOptions {
     }
 
     /// Anchor ring: one checkpoint key with its opaque reference, revision 1, clock not yet sampled.
-    pub(super) fn anchor(&self) -> Result<ServerSnapshot, RotationError> {
+    pub(in crate::rotation) fn anchor(&self) -> Result<ServerSnapshot, RotationError> {
         let base = self.base();
         let public = base.anchor().map_err(|_| refuse())?;
         let signer_references = vec![SignerReference {
@@ -51,7 +51,7 @@ impl RotationServerStoreOptions {
     }
 }
 
-pub(super) fn encode(
+pub(in crate::rotation) fn encode(
     base: &RotationStoreOptions,
     value: &ServerSnapshot,
 ) -> Result<String, RotationError> {
@@ -59,14 +59,14 @@ pub(super) fn encode(
     String::from_utf8(bytes).map_err(|_| refuse())
 }
 
-pub(super) struct ServerLoaded {
+pub(in crate::rotation) struct ServerLoaded {
     pub bytes: Vec<u8>,
     pub bundle: Bundle,
     pub snapshot: ServerSnapshot,
     pub clock: ClockTuple,
 }
 
-pub(super) fn unpack_server(
+pub(in crate::rotation) fn unpack_server(
     bytes: Vec<u8>,
     base: &RotationStoreOptions,
     profile: &str,
@@ -96,7 +96,7 @@ pub(super) fn unpack_server(
     })
 }
 
-pub(super) fn compatible_server(state: &ServerLoaded) -> Result<(), RotationError> {
+pub(in crate::rotation) fn compatible_server(state: &ServerLoaded) -> Result<(), RotationError> {
     if !trust_clock_compatible(&state.snapshot.public, &state.clock) {
         return Err(refuse());
     }

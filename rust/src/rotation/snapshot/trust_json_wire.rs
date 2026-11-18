@@ -7,7 +7,7 @@ use std::fmt;
 
 #[derive(Serialize)]
 #[serde(transparent)]
-pub(super) struct Unsigned(pub(super) u64);
+pub(in crate::rotation) struct Unsigned(pub(in crate::rotation) u64);
 
 fn canonical_unsigned<E: de::Error>(raw: &RawValue) -> Result<u64, E> {
     let text = raw.get();
@@ -35,7 +35,7 @@ impl<'de> Deserialize<'de> for Unsigned {
 // Not an Option field: known_cutoff must be present but allows explicit null.
 #[derive(Serialize)]
 #[serde(transparent)]
-pub(super) struct Cutoff(pub(super) Option<u64>);
+pub(in crate::rotation) struct Cutoff(pub(in crate::rotation) Option<u64>);
 
 impl<'de> Deserialize<'de> for Cutoff {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -49,7 +49,7 @@ impl<'de> Deserialize<'de> for Cutoff {
 
 #[derive(Serialize)]
 #[serde(transparent)]
-pub(super) struct BoundedVec<T, const LIMIT: usize>(pub(super) Vec<T>);
+pub(in crate::rotation) struct BoundedVec<T, const LIMIT: usize>(pub(in crate::rotation) Vec<T>);
 
 impl<'de, T: Deserialize<'de>, const LIMIT: usize> Deserialize<'de> for BoundedVec<T, LIMIT> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -84,62 +84,62 @@ impl<'de, T: Deserialize<'de>, const LIMIT: usize> Deserialize<'de> for BoundedV
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct BindingDocument {
-    pub(super) endpoint: String,
-    pub(super) aud: String,
+pub(in crate::rotation) struct BindingDocument {
+    pub(in crate::rotation) endpoint: String,
+    pub(in crate::rotation) aud: String,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct CheckpointDocument {
-    pub(super) ordinal: Unsigned,
-    pub(super) hash: String,
-    pub(super) kid: String,
-    pub(super) public_key: String,
-    pub(super) published_at: Unsigned,
+pub(in crate::rotation) struct CheckpointDocument {
+    pub(in crate::rotation) ordinal: Unsigned,
+    pub(in crate::rotation) hash: String,
+    pub(in crate::rotation) kid: String,
+    pub(in crate::rotation) public_key: String,
+    pub(in crate::rotation) published_at: Unsigned,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct HeadDocument {
-    pub(super) ordinal: Unsigned,
-    pub(super) hash: String,
+pub(in crate::rotation) struct HeadDocument {
+    pub(in crate::rotation) ordinal: Unsigned,
+    pub(in crate::rotation) hash: String,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct KeyDocument {
-    pub(super) ordinal: Unsigned,
-    pub(super) kid: String,
-    pub(super) public_key: String,
-    pub(super) not_before: Unsigned,
-    pub(super) known_cutoff: Cutoff,
+pub(in crate::rotation) struct KeyDocument {
+    pub(in crate::rotation) ordinal: Unsigned,
+    pub(in crate::rotation) kid: String,
+    pub(in crate::rotation) public_key: String,
+    pub(in crate::rotation) not_before: Unsigned,
+    pub(in crate::rotation) known_cutoff: Cutoff,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ClockDocument {
-    pub(super) binding: Object<BindingDocument>,
-    pub(super) window: Unsigned,
-    pub(super) high_water: Unsigned,
-    pub(super) clock_revision: Unsigned,
+pub(in crate::rotation) struct ClockDocument {
+    pub(in crate::rotation) binding: Object<BindingDocument>,
+    pub(in crate::rotation) window: Unsigned,
+    pub(in crate::rotation) high_water: Unsigned,
+    pub(in crate::rotation) clock_revision: Unsigned,
     #[serde(rename = "unsafe")]
-    pub(super) unsafe_clock: bool,
+    pub(in crate::rotation) unsafe_clock: bool,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct TrustDocument {
-    pub(super) format_version: Unsigned,
-    pub(super) binding: Object<BindingDocument>,
-    pub(super) window: Unsigned,
-    pub(super) checkpoint: Object<CheckpointDocument>,
-    pub(super) head: Object<HeadDocument>,
-    pub(super) records: BoundedVec<String, { MAX_RETAINED_KEYS - 1 }>,
-    pub(super) keys: BoundedVec<Object<KeyDocument>, MAX_RETAINED_KEYS>,
-    pub(super) trust_revision: Unsigned,
-    pub(super) fenced: bool,
-    pub(super) clock: Object<ClockDocument>,
+pub(in crate::rotation) struct TrustDocument {
+    pub(in crate::rotation) format_version: Unsigned,
+    pub(in crate::rotation) binding: Object<BindingDocument>,
+    pub(in crate::rotation) window: Unsigned,
+    pub(in crate::rotation) checkpoint: Object<CheckpointDocument>,
+    pub(in crate::rotation) head: Object<HeadDocument>,
+    pub(in crate::rotation) records: BoundedVec<String, { MAX_RETAINED_KEYS - 1 }>,
+    pub(in crate::rotation) keys: BoundedVec<Object<KeyDocument>, MAX_RETAINED_KEYS>,
+    pub(in crate::rotation) trust_revision: Unsigned,
+    pub(in crate::rotation) fenced: bool,
+    pub(in crate::rotation) clock: Object<ClockDocument>,
 }
 
 #[cfg(test)]

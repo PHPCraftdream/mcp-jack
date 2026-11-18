@@ -17,14 +17,14 @@ pub struct RotationStoreOptions {
 }
 
 impl RotationStoreOptions {
-    pub(super) fn binding(&self) -> Binding<'_> {
+    pub(in crate::rotation) fn binding(&self) -> Binding<'_> {
         Binding {
             endpoint: &self.binding.endpoint,
             aud: &self.binding.aud,
         }
     }
 
-    pub(super) fn anchor(&self) -> Result<TrustSnapshot, RotationError> {
+    pub(in crate::rotation) fn anchor(&self) -> Result<TrustSnapshot, RotationError> {
         let root = &self.checkpoint;
         let not_before = if root.ordinal == 0 {
             0
@@ -63,7 +63,10 @@ impl RotationStoreOptions {
         validate_trust_snapshot(&snapshot, self.binding(), self.window, root)
     }
 
-    pub(super) fn encode(&self, value: &TrustSnapshot) -> Result<String, RotationError> {
+    pub(in crate::rotation) fn encode(
+        &self,
+        value: &TrustSnapshot,
+    ) -> Result<String, RotationError> {
         String::from_utf8(encode_trust_snapshot(
             value,
             self.binding(),
@@ -78,7 +81,7 @@ fn refuse() -> RotationError {
     invalid("rotation_state_unavailable")
 }
 
-pub(super) fn clock_bytes(clock: &ClockTuple) -> Result<String, RotationError> {
+pub(in crate::rotation) fn clock_bytes(clock: &ClockTuple) -> Result<String, RotationError> {
     serde_json::to_string(&ClockDocument {
         binding: Object(BindingDocument {
             endpoint: clock.binding.endpoint.clone(),
@@ -92,7 +95,7 @@ pub(super) fn clock_bytes(clock: &ClockTuple) -> Result<String, RotationError> {
     .map_err(|_| refuse())
 }
 
-pub(super) fn read_clock(
+pub(in crate::rotation) fn read_clock(
     bytes: &str,
     options: &RotationStoreOptions,
 ) -> Result<ClockTuple, RotationError> {
@@ -125,7 +128,7 @@ struct Seal {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Bundle {
+pub(in crate::rotation) struct Bundle {
     domain: String,
     format_version: Unsigned,
     pub store_id: String,
@@ -138,11 +141,11 @@ pub(super) struct Bundle {
 }
 
 /// Domain separates client/server private files: one is not opened as the other.
-pub(super) const CLIENT_DOMAIN: &str = "mcp-jack/client-trust/private-file/v1";
+pub(in crate::rotation) const CLIENT_DOMAIN: &str = "mcp-jack/client-trust/private-file/v1";
 
 impl Bundle {
     /// Client trust profile; clock/snapshot are taken from the anchor.
-    pub(super) fn new(
+    pub(in crate::rotation) fn new(
         store_id: String,
         profile: String,
         anchor: &TrustSnapshot,
@@ -157,7 +160,7 @@ impl Bundle {
         ))
     }
 
-    pub(super) fn sealed(
+    pub(in crate::rotation) fn sealed(
         domain: &str,
         store_id: String,
         profile: String,
@@ -178,7 +181,7 @@ impl Bundle {
     }
 
     /// The checksum detects accidental corruption; this is not a MAC or a backup rollback oracle.
-    pub(super) fn pack(&self) -> Result<Vec<u8>, RotationError> {
+    pub(in crate::rotation) fn pack(&self) -> Result<Vec<u8>, RotationError> {
         let payload = serde_json::to_string(self).map_err(|_| refuse())?;
         let checksum = body_hash(payload.as_bytes());
         let bytes = serde_json::to_vec(&Seal { payload, checksum }).map_err(|_| refuse())?;
@@ -190,13 +193,13 @@ impl Bundle {
 }
 
 /// Envelope without snapshot decode: the caller validates the snapshot of its type against the clock.
-pub(super) struct Sealed {
+pub(in crate::rotation) struct Sealed {
     pub bytes: Vec<u8>,
     pub bundle: Bundle,
     pub clock: ClockTuple,
 }
 
-pub(super) fn unpack_envelope(
+pub(in crate::rotation) fn unpack_envelope(
     bytes: Vec<u8>,
     options: &RotationStoreOptions,
     profile: &str,
@@ -229,14 +232,14 @@ pub(super) fn unpack_envelope(
     })
 }
 
-pub(super) struct Loaded {
+pub(in crate::rotation) struct Loaded {
     pub bytes: Vec<u8>,
     pub bundle: Bundle,
     pub snapshot: TrustSnapshot,
     pub clock: ClockTuple,
 }
 
-pub(super) fn unpack(
+pub(in crate::rotation) fn unpack(
     bytes: Vec<u8>,
     options: &RotationStoreOptions,
     profile: &str,
@@ -263,7 +266,7 @@ pub(super) fn unpack(
     })
 }
 
-pub(super) fn compatible(state: &Loaded) -> Result<(), RotationError> {
+pub(in crate::rotation) fn compatible(state: &Loaded) -> Result<(), RotationError> {
     if !trust_clock_compatible(&state.snapshot, &state.clock) {
         return Err(refuse());
     }

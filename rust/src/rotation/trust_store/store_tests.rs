@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 thread_local! { static CRASH_ARMED: Cell<bool> = const { Cell::new(false) }; }
 
-pub(super) fn crash_boundary(stage: &str) {
+pub(in crate::rotation) fn crash_boundary(stage: &str) {
     if CRASH_ARMED.with(Cell::get)
         && std::env::var("JACK_STORE_CRASH_STAGE").as_deref() == Ok(stage)
     {
@@ -18,16 +18,19 @@ pub(super) fn crash_boundary(stage: &str) {
     }
 }
 
-pub(super) fn assert_error_code<T>(result: Result<T, RotationError>, expected: &'static str) {
+pub(in crate::rotation) fn assert_error_code<T>(
+    result: Result<T, RotationError>,
+    expected: &'static str,
+) {
     let Err(error) = result else {
         panic!("expected rotation error code {expected}");
     };
     assert_eq!(error.code, expected);
 }
 
-pub(super) struct Sandbox(PathBuf);
+pub(in crate::rotation) struct Sandbox(PathBuf);
 impl Sandbox {
-    pub(super) fn new() -> Self {
+    pub(in crate::rotation) fn new() -> Self {
         let mut random = [0; 16];
         getrandom::fill(&mut random).unwrap();
         let path = std::env::temp_dir().join(format!(
@@ -37,7 +40,7 @@ impl Sandbox {
         fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
         Self(path)
     }
-    pub(super) fn file(&self) -> PathBuf {
+    pub(in crate::rotation) fn file(&self) -> PathBuf {
         self.0.join("trust")
     }
 }
@@ -47,7 +50,7 @@ impl Drop for Sandbox {
     }
 }
 
-pub(super) fn options() -> RotationStoreOptions {
+pub(in crate::rotation) fn options() -> RotationStoreOptions {
     let signer = InMemorySigner::from_seed(&[31; 32]).unwrap();
     RotationStoreOptions {
         binding: OwnedBinding {
@@ -64,7 +67,7 @@ pub(super) fn options() -> RotationStoreOptions {
         },
     }
 }
-pub(super) fn next(previous: &TrustSnapshot, clock: &ClockTuple) -> TrustSnapshot {
+pub(in crate::rotation) fn next(previous: &TrustSnapshot, clock: &ClockTuple) -> TrustSnapshot {
     let old = InMemorySigner::from_seed(&[31; 32]).unwrap();
     let new = InMemorySigner::from_seed(&[32; 32]).unwrap();
     let record = create_record(
@@ -96,7 +99,7 @@ pub(super) fn next(previous: &TrustSnapshot, clock: &ClockTuple) -> TrustSnapsho
     desired.revision += 1;
     desired
 }
-pub(super) fn initialize(path: &Path) {
+pub(in crate::rotation) fn initialize(path: &Path) {
     RotationTrustStore::initialize_unused(path, options(), || Ok(100)).unwrap();
 }
 fn decoded_file(path: &Path) -> serde_json::Value {
@@ -437,7 +440,7 @@ fn real_child_pre_and_post_rename_unknown_outcomes_preserve_artifacts() {
             let output = Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
-                    "rotation::store_tests::crash_child",
+                    "rotation::trust_store::store_tests::crash_child",
                     "--nocapture",
                 ])
                 .env("JACK_STORE_CRASH_PATH", &path)
