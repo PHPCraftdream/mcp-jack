@@ -1,4 +1,4 @@
-package client
+package client_test
 
 import (
 	"encoding/base64"
@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
+	"github.com/PHPCraftdream/mcp-jack/client"
 	spec "github.com/PHPCraftdream/mcp-jack/spec"
 )
 
@@ -28,7 +29,7 @@ func TestSignerFromFixtureKeys(t *testing.T) {
 			if len(seed) != 32 {
 				t.Fatalf("key %s: decoded seed is %d bytes, want 32", k.Name, len(seed))
 			}
-			signer, err := NewInMemorySigner(seed)
+			signer, err := client.NewInMemorySigner(seed)
 			if err != nil {
 				t.Fatalf("key %s: NewInMemorySigner error: %v", k.Name, err)
 			}
@@ -52,7 +53,7 @@ func TestSignerFromFixtureKeys(t *testing.T) {
 // TestGenerateSigner checks random signer generation: valid 32-byte key,
 // distinct KIDs across calls.
 func TestGenerateSigner(t *testing.T) {
-	s1, err := GenerateSigner()
+	s1, err := client.GenerateSigner()
 	if err != nil {
 		t.Fatalf("GenerateSigner error: %v", err)
 	}
@@ -64,7 +65,7 @@ func TestGenerateSigner(t *testing.T) {
 		t.Fatalf("first signer: ValidatePublicKey error: %v", err)
 	}
 
-	s2, err := GenerateSigner()
+	s2, err := client.GenerateSigner()
 	if err != nil {
 		t.Fatalf("second GenerateSigner error: %v", err)
 	}
@@ -91,7 +92,7 @@ func TestNewInMemorySignerRejectsBadSeed(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			signer, err := NewInMemorySigner(tc.seed)
+			signer, err := client.NewInMemorySigner(tc.seed)
 			if err == nil {
 				t.Fatalf("NewInMemorySigner(%s) succeeded; want error", tc.name)
 			}
@@ -117,7 +118,7 @@ func TestInMemorySignerSignRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("key %s: hex.DecodeString error: %v", k.Name, err)
 	}
-	signer, err := NewInMemorySigner(seed)
+	signer, err := client.NewInMemorySigner(seed)
 	if err != nil {
 		t.Fatalf("key %s: NewInMemorySigner error: %v", k.Name, err)
 	}
