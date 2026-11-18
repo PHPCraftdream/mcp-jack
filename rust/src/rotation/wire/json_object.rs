@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 // A normal serde struct allows a sequence; candidate objects must be maps.
 #[derive(Serialize)]
 #[serde(transparent)]
-pub(super) struct Object<T>(pub(super) T);
+pub(in crate::rotation) struct Object<T>(pub(in crate::rotation) T);
 
 impl<'de, T: Deserialize<'de>> Deserialize<'de> for Object<T> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {

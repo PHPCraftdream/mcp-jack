@@ -23,7 +23,7 @@ fn record_error(error: RotationError) -> RotationError {
 }
 
 /// Pre-authority validation; framing/decoded values are not a trust ACK.
-pub(super) fn prepare(
+pub(in crate::rotation) fn prepare(
     snapshot: &TrustSnapshot,
     page: &DecodedResult,
     cursor: &ResultCursor,
@@ -103,7 +103,7 @@ pub(super) fn prepare(
 }
 
 /// Bounded desired value; the store performs whole-state validation and an exact CAS.
-pub(super) fn extended(
+pub(in crate::rotation) fn extended(
     snapshot: &TrustSnapshot,
     extension: Vec<Record>,
     clock: ClockTuple,

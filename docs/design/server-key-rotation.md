@@ -27,8 +27,8 @@ These references are repository-relative, not private workstation paths.
 | `client/transport.go` lines 19–26 | Existing general user `Signer` interface. |
 | `userkey/transfer.go` lines 47–77, 186–208, 227–291, 714–739 | Existing strict independently expected server identity and credential-import behavior; credential transfer is not a rotation pin store. |
 | `server/internal/state/statefile.go` lines 22–65, 264–325 | Current state file is registry/invite state; file `fsync` then rename is implemented, but that alone does not establish durable directory metadata or power-loss recovery. |
-| `rust/src/client/profile.rs`, `rust/src/client/signer.rs`, `rust/src/client/http_transport.rs` | Rust profile, user signer, and transport counterparts. |
-| `rust/src/server/http.rs`, `rust/src/server/state_file.rs`, `rust/src/user_key.rs` | Rust server HTTP/state and strict user-key transfer counterparts. |
+| `rust/src/client/profile.rs`, `rust/src/client/request_signing/signer.rs`, `rust/src/client/network/http_transport/mod.rs` | Rust profile, user signer, and transport counterparts. |
+| `rust/src/server/http.rs`, `rust/src/server/registry/state_file.rs`, `rust/src/user_key/mod.rs` | Rust server HTTP/state and strict user-key transfer counterparts. |
 | `rust/src/ed25519.rs` lines 23–49 | Rust's current generic verifier explicitly uses strict verification, rejecting noncanonical/small-order R in addition to canonical S. This source observation is not a claim that the Go and TypeScript wrappers currently enforce the same R-point rules. |
 | `ts/src/client/profile.ts`, `ts/src/client/signer.ts`, `ts/src/client/transport.ts`, `ts/src/ed25519.ts` | TypeScript client/profile/transport and verifier counterparts. |
 | `ts/src/server/fetch.ts`, `ts/src/server/node.ts`, `ts/src/server/state-file.ts`, `ts/src/user-key-transfer.ts` | TypeScript server adapters/state and strict user-key transfer counterpart. |

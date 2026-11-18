@@ -4,19 +4,22 @@
 //! sections 4 and 5). It speaks the protocol-native jack.* tools (spec 03
 //! sections 3.1-3.3).
 
-pub mod auth;
 pub mod error;
-#[cfg(feature = "client-http")]
-pub mod http_transport;
+mod network;
 pub mod profile;
-pub mod rotation_auth;
-#[cfg(all(target_os = "linux", feature = "client-http"))]
-pub mod rotation_http;
+mod request_signing;
+mod rotation;
 pub mod rpc;
-pub mod signer;
 pub mod tools;
 pub mod transport;
-pub mod url;
+
+#[cfg(feature = "client-http")]
+pub use network::http_transport;
+pub use network::url;
+pub use request_signing::{auth, signer};
+pub use rotation::rotation_auth;
+#[cfg(all(target_os = "linux", feature = "client-http"))]
+pub use rotation::rotation_http;
 
 pub use auth::{random_nonce, sign_request, SignedRequest, NONCE_SIZE};
 pub use error::{ClientError, HttpError, RpcError, ToolError, UnauthenticatedResponseError};

@@ -34,7 +34,9 @@ fn write_binding(value: OwnedBinding) -> Object<BindingDocument> {
 
 /// Strict map-only document -> unvalidated value; the caller must invoke validation.
 /// A shared step of public decode and protected server snapshot, without a schema of its own at the server.
-pub(super) fn read_trust_document(wire: TrustDocument) -> Result<TrustSnapshot, RotationError> {
+pub(in crate::rotation) fn read_trust_document(
+    wire: TrustDocument,
+) -> Result<TrustSnapshot, RotationError> {
     let root = wire.checkpoint.0;
     let clock = wire.clock.0;
     let mut keys = Vec::with_capacity(wire.keys.0.len());
@@ -78,7 +80,7 @@ pub(super) fn read_trust_document(wire: TrustDocument) -> Result<TrustSnapshot, 
 }
 
 /// Already validated value -> document; without repeated validation, store, or clock.
-pub(super) fn write_trust_document(value: TrustSnapshot) -> TrustDocument {
+pub(in crate::rotation) fn write_trust_document(value: TrustSnapshot) -> TrustDocument {
     let root = value.checkpoint;
     let clock = value.clock;
     TrustDocument {

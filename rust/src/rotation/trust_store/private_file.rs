@@ -131,7 +131,7 @@ fn write_file(mut file: File, bytes: &[u8]) -> Result<(), RotationError> {
 }
 
 /// Internal lifetime owner; Drop does not remove the marker and does not confirm clean state.
-pub(super) struct FileOwner {
+pub(in crate::rotation) struct FileOwner {
     parent: File,
     parent_path: PathBuf,
     name: OsString,
@@ -174,7 +174,10 @@ impl FileOwner {
         })
     }
 
-    pub(super) fn create_unused(path: &Path, bytes: &[u8]) -> Result<Self, RotationError> {
+    pub(in crate::rotation) fn create_unused(
+        path: &Path,
+        bytes: &[u8],
+    ) -> Result<Self, RotationError> {
         Self::bounded(bytes)?;
         let mut owner = Self::acquire(path)?;
         let file = match fs::openat(
@@ -199,7 +202,7 @@ impl FileOwner {
         Ok(owner)
     }
 
-    pub(super) fn open(path: &Path) -> Result<Self, RotationError> {
+    pub(in crate::rotation) fn open(path: &Path) -> Result<Self, RotationError> {
         let mut owner = Self::acquire(path)?;
         if owner.read().is_err() {
             let _ = owner.close();
@@ -238,12 +241,16 @@ impl FileOwner {
         Ok(())
     }
 
-    pub(super) fn read(&mut self) -> Result<Vec<u8>, RotationError> {
+    pub(in crate::rotation) fn read(&mut self) -> Result<Vec<u8>, RotationError> {
         self.ensure()?;
         read_at(&self.parent, &self.name, MAX_TRUST_SNAPSHOT_BYTES)
     }
 
-    pub(super) fn replace(&mut self, expected: &[u8], desired: &[u8]) -> Result<(), RotationError> {
+    pub(in crate::rotation) fn replace(
+        &mut self,
+        expected: &[u8],
+        desired: &[u8],
+    ) -> Result<(), RotationError> {
         self.ensure()?;
         Self::bounded(expected)?;
         Self::bounded(desired)?;
@@ -281,11 +288,11 @@ impl FileOwner {
         Ok(())
     }
 
-    pub(super) fn fence(&mut self) {
+    pub(in crate::rotation) fn fence(&mut self) {
         self.fenced = true;
     }
 
-    pub(super) fn close(&mut self) -> Result<(), RotationError> {
+    pub(in crate::rotation) fn close(&mut self) -> Result<(), RotationError> {
         if self.closed {
             return Ok(());
         }
