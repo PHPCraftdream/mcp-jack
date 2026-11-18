@@ -1,10 +1,10 @@
 //go:build !linux
 
-package durable
+package ownedfile
 
 import "os"
 
-func privateDirectory(string) error {
+func PrivateDirectory(string) error {
 	return ErrUnsupported
 }
 

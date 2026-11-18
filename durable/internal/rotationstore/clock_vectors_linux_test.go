@@ -1,6 +1,6 @@
 //go:build linux
 
-package durable
+package rotationstore
 
 // Candidate rotation-state-vector conformance driver for the clock event
 // family. It loads spec/fixtures/candidate/rotation-state-vectors.json
@@ -25,12 +25,13 @@ import (
 	"testing"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
+	"github.com/PHPCraftdream/mcp-jack/durable/internal/testfixture"
 	"github.com/PHPCraftdream/mcp-jack/rotation"
 	bolt "go.etcd.io/bbolt"
 )
 
 const clockVectorFixtureFormat = "mcp-jack-candidate-rotation-state-v1"
-const clockVectorFixturePath = "../spec/fixtures/candidate/rotation-state-vectors.json"
+const clockVectorFixturePath = "../../../spec/fixtures/candidate/rotation-state-vectors.json"
 
 type clockVectorFixture struct {
 	Format      string             `json:"format"`
@@ -149,9 +150,9 @@ func clockVectorBinding(t *testing.T, fixture clockVectorFixture) rotation.Bindi
 // revision=4) through the real path: init at 173797 (H=173797, revision=1),
 // OpenTrust's mandatory advance at 173798 (revision=2), then explicit
 // advances at 173799 and 173800 (revisions 3 and 4).
-func newClockVectorStore(t *testing.T, binding rotation.Binding, clock *scriptedClock) *TrustStore {
+func newClockVectorStore(t *testing.T, binding rotation.Binding, clock *testfixture.ScriptedClock) *TrustStore {
 	t.Helper()
-	clock.push(173797, 173798, 173799, 173800)
+	clock.Push(173797, 173798, 173799, 173800)
 	directory, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -294,7 +295,7 @@ func driveClockVector(t *testing.T, event clockVectorEvent, binding rotation.Bin
 		t.Fatalf("expect: %v", err)
 	}
 
-	clock := newScriptedClock()
+	clock := testfixture.NewScriptedClock()
 	store := newClockVectorStore(t, binding, clock)
 	seeded := guardClockTuple(t, store)
 	if seeded.HighWater != input.Guard.HighWater || seeded.Revision != input.Guard.Revision ||
@@ -309,7 +310,7 @@ func driveClockVector(t *testing.T, event clockVectorEvent, binding rotation.Bin
 	} else {
 		countTrustTransact(store, counters)
 	}
-	clock.push(input.RawNow)
+	clock.Push(input.RawNow)
 	tuple, err := store.AdvanceAndCheck()
 
 	var refusal *rotation.Error
