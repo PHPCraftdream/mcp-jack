@@ -1,4 +1,4 @@
-import { base64url } from './crypto.mjs';
+import { base64url } from '../crypto.mjs';
 import { signRecord, keyOfName } from './rotation-encode.mjs';
 
 export const ENDPOINT = 'https://svc.example.test/mcp';

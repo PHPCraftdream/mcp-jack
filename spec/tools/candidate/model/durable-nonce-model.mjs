@@ -1,5 +1,5 @@
-import { durableIntentIdentity } from './verification.mjs';
-import { MAX_TIMESTAMP } from './rotation-codec.mjs';
+import { durableIntentIdentity } from '../checks/verification.mjs';
+import { MAX_TIMESTAMP } from '../rotation/rotation-codec.mjs';
 
 export const NONCE_LIMITS = Object.freeze({ livePlusIntent: 4096, unresolved: 64, purgeRows: 128 });
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);

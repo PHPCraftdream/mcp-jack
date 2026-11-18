@@ -2,12 +2,12 @@ import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { TransferCheckFailure } from './transfer-checks.mjs';
-import { TransferFailure, ownedCount, runProbe } from './transfer-process.mjs';
+import { TransferCheckFailure } from './checks.mjs';
+import { TransferFailure, ownedCount, runProbe } from './process.mjs';
 
 const LABEL = 'transfer lifecycle self-test';
 const operations = [{ id: 'control', op: 'validate-credential' }];
-const childScript = fileURLToPath(new URL('./tools/transfer-child.mjs', import.meta.url));
+const childScript = fileURLToPath(new URL('../tools/transfer-child.mjs', import.meta.url));
 
 export async function lifecycleTests(report) {
   let count = 0;

@@ -1,5 +1,5 @@
-import { base64url, keyId, publicFromSeed, sha256, signSeed, strictBase64url, testSeed, verifyNode } from './crypto.mjs';
-import { verifyChain, MAX_ORDINAL } from './rotation-codec.mjs';
+import { base64url, keyId, publicFromSeed, sha256, signSeed, strictBase64url, testSeed, verifyNode } from '../crypto.mjs';
+import { verifyChain, MAX_ORDINAL } from '../rotation/rotation-codec.mjs';
 import { parseStrictJson, parsedNumberIsIntegerLiteral } from './strict-json.mjs';
 
 const ascii = (text) => Buffer.from(text, 'ascii');

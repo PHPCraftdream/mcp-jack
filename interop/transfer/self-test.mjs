@@ -1,12 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkErrorResult, checkIssueResult, checkPublicResult, checkSignerResult, TransferCheckFailure, validateTargets, verificationControls } from './transfer-checks.mjs';
-import { b64u, loadTransferFixtures } from './transfer-fixtures.mjs';
-import { TransferFailure, ownedCount, runProbe, validateResults } from './transfer-process.mjs';
-import { lifecycleTests } from './transfer-lifecycle-test.mjs';
+import { checkErrorResult, checkIssueResult, checkPublicResult, checkSignerResult, TransferCheckFailure, validateTargets, verificationControls } from './checks.mjs';
+import { b64u, loadTransferFixtures } from './fixtures.mjs';
+import { TransferFailure, ownedCount, runProbe, validateResults } from './process.mjs';
+import { lifecycleTests } from './lifecycle-test.mjs';
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LANGS = ['go', 'rust', 'typescript'];
 const fail = (label) => { throw new TransferCheckFailure(label); };
 

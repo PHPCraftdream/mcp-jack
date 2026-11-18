@@ -7,7 +7,7 @@ import { TextDecoder } from 'node:util';
 export const MAX_IPC_BYTES = 2 * 1024 * 1024;
 const MAX_OPERATIONS = 1024;
 const CLEANUP_MS = 2000;
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const OP_NAMES = new Set([
   'issue', 'generate', 'from-seed', 'import-private', 'import-credential',
   'import-public', 'validate-credential',

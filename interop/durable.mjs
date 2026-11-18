@@ -409,7 +409,7 @@ async function runMatrix(opts) {
     // TypeScript refuses a dirty or unsafe store at open with the generic unavailable error (a recovery-required
     // error only for unresolved intents or the tombstone cap): same 503 code, less specific text.
     typescript: 'durable store: durable nonce store unavailable',
-    fake: 'dirty', // the self-test fake (interop/tools/fake-durable-server.mjs)
+    fake: 'dirty', // the self-test fake (interop/tools/fakes/fake-durable-server.mjs)
   };
   async function expectStartupRefusal(lang, args, label) {
     const t = resolveTarget(targets[lang].server, 'server', `server=${lang}`);
@@ -637,8 +637,8 @@ function printMatrix(matrixCells, serverLangs, clientLangs) {
 // ---- self-test (harness-level only, NOT SDK evidence) ----------------------------
 
 async function selfTest() {
-  const fakeServer = join(SCRIPT_DIR, 'tools', 'fake-durable-server.mjs');
-  const fakeClient = join(SCRIPT_DIR, 'tools', 'fake-durable-client.mjs');
+  const fakeServer = join(SCRIPT_DIR, 'tools', 'fakes', 'fake-durable-server.mjs');
+  const fakeClient = join(SCRIPT_DIR, 'tools', 'fakes', 'fake-durable-client.mjs');
   const targets = { fake: { server: [process.execPath, fakeServer], client: [process.execPath, fakeClient] } };
   const loaded = loadFixtures();
   let checks = 0;

@@ -1,6 +1,6 @@
-import { b64u, decodeB64u } from './transfer-fixtures.mjs';
-import { checkErrorResult, checkPublicResult, checkSignerResult, mutationFromBaseline, TransferCheckFailure } from './transfer-checks.mjs';
-import { validateResults } from './transfer-process.mjs';
+import { b64u, decodeB64u } from '../fixtures.mjs';
+import { checkErrorResult, checkPublicResult, checkSignerResult, mutationFromBaseline, TransferCheckFailure } from '../checks.mjs';
+import { validateResults } from '../process.mjs';
 
 const LANGS = Object.freeze(['go', 'rust', 'typescript']);
 const requireCase = (condition, label) => {

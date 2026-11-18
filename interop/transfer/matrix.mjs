@@ -1,6 +1,6 @@
-import { b64u } from './transfer-fixtures.mjs';
-import { TransferCheckFailure, checkIssueResult, checkSignerResult } from './transfer-checks.mjs';
-import { validateResults } from './transfer-process.mjs';
+import { b64u } from './fixtures.mjs';
+import { TransferCheckFailure, checkIssueResult, checkSignerResult } from './checks.mjs';
+import { validateResults } from './process.mjs';
 
 const LANGS = Object.freeze(['go', 'rust', 'typescript']);
 

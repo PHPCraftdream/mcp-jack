@@ -14,7 +14,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(SCRIPT_DIR, '..', '..');
+const REPO_ROOT = resolve(SCRIPT_DIR, '..', '..', '..');
 const DEV = process.env.JACK_ROTATION_DEVIATE ?? '';
 const HEAD43 = 'a'.repeat(43);
 

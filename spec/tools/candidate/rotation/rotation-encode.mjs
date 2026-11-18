@@ -1,4 +1,4 @@
-import { base64url, keyId, publicFromSeed, sha256, signSeed, testSeed } from './crypto.mjs';
+import { base64url, keyId, publicFromSeed, sha256, signSeed, testSeed } from '../crypto.mjs';
 
 export const ROTATION_DOMAIN = 'mcp-jack/server-key-rotation/min1';
 export const GRACE = 172800;

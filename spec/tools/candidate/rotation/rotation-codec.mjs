@@ -1,4 +1,4 @@
-import { base64url, keyId, sha256, strictBase64url, validPublicKey, verifyNode } from './crypto.mjs';
+import { base64url, keyId, sha256, strictBase64url, validPublicKey, verifyNode } from '../crypto.mjs';
 
 export const DOMAIN = 'mcp-jack/server-key-rotation/min1';
 export const GRACE_SECONDS = 172800;
