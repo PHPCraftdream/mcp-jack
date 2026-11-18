@@ -223,7 +223,7 @@ interop/rust/target/release/interop-transfer
 
 ## User-key transfer (mcp_jack::user_key)
 
-Role-specific transfer of Ed25519 client keys between the server (issuance) and the client (import). The full conformance table lives in `spec/fixtures/user-key-transfer.json` (shared with the Go and TypeScript lanes; see `docs/design/user-keys.md` sections 11 and 12.2) and is exercised by `tests/user_key_transfer.rs`.
+Role-specific transfer of Ed25519 client keys between the server (issuance) and the client (import). The full conformance table lives in `spec/fixtures/user-key-transfer.json` (shared with the Go and TypeScript lanes; see `docs/design/user-keys.md` sections 11 and 12.2) and is exercised by `tests/user_key/transfer/`.
 
 ### Server: issue a credential for delivery
 

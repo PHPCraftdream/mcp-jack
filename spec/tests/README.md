@@ -71,7 +71,7 @@ The existing top-level `tools/gen-fixtures.mjs` and `tests/CASES.md` are the cur
 | Language | Runners |
 |---|---|
 | Go | `spec/*_test.go` and package tests in `server/` and `client/` |
-| Rust | `rust/tests/*conformance.rs`, `rust/tests/state_file.rs` and `rust/tests/client_*.rs` |
+| Rust | `rust/tests/*conformance.rs`, `rust/tests/server/state_file/` and `rust/tests/client_*.rs` |
 | TypeScript | `ts/test/*.test.ts` (current vectors read from top-level `spec/fixtures`) |
 
 The current Jack 3×3 request/response and credential-transfer matrices are existing SDK interop surfaces. They are separate from Task57 candidate machinery and proposed official MCP client → bridge → gateway → server compatibility. Neither surface is test evidence for these documentation edits.
