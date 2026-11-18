@@ -451,7 +451,7 @@ until pending is dispatched; completion is handled only by its own select arm.
 It does not serialize the peer beyond valid protocol or change signing, response
 bytes, retries, timeout budgets, dependencies or providers.
 
-Regression sources in `internal/cli/bridge_eof_test.go` retain the direct
+Regression sources in `internal/cli/internal/bridge/bridge_eof_test.go` retain the direct
 admission transition checks and the default `Run` signed HTTP lifecycle. A
 separate signed HTTP case uses an optional, internal per-invocation observer:
 `bridge` delegates to `bridgeWithObserver` with nil, and both execute the same
@@ -498,7 +498,7 @@ persistence blocker and its accepted deployment limitation are unchanged.
 
 The earlier fixture/documentation correction described below was **unrun here**.
 That Task89 follow-up changed the owned-output test in
-`internal/cli/limits_test.go` from a 900,000-byte response to a small reply with a
+`internal/cli/limits_unix_test.go` from a 900,000-byte response to a small reply with a
 saturated pipe, plus documentation; the admission correction above is a separate
 production change.
 Historically, parent-provided logs for exact head
