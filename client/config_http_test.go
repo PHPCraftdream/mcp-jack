@@ -14,6 +14,8 @@ import (
 	"time"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
+	"github.com/PHPCraftdream/mcp-jack/client/internal/testfixture"
+	"github.com/PHPCraftdream/mcp-jack/client/internal/urlpolicy"
 )
 
 const cfgHTTPURL = "https://svc.example.test/mcp"
@@ -778,5 +780,65 @@ func TestConfigHTTPChainOfFiveAccepted(t *testing.T) {
 	}
 	if spy.calls != 1 || len(rec.headerCounts) != 1 || rec.headerCounts[0] != 1 {
 		t.Fatalf("spy calls = %d, header counts = %v, want one signed call", spy.calls, rec.headerCounts)
+	}
+}
+
+func isPolicyError(err error) bool {
+	return errors.Is(err, urlpolicy.ErrMalformedDestination) || errors.Is(err, urlpolicy.ErrInsecureDestination)
+}
+
+func newPolicyProfile(t *testing.T, rawURL string) (Profile, []byte) {
+	t.Helper()
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("ed25519.GenerateKey: %v", err)
+	}
+	return Profile{URL: rawURL, Aud: fixtureAud, ServerPublicKey: jack.EncodeBase64URL(pub)}, pub
+}
+
+func TestNewClientURLPolicyFixture(t *testing.T) {
+	for _, c := range testfixture.LoadURLPolicyCases(t) {
+		t.Run(c.Name, func(t *testing.T) {
+			p, pub := newPolicyProfile(t, c.URL)
+			doc, merr := json.Marshal(p)
+			if merr != nil {
+				t.Fatalf("marshal profile: %v", merr)
+			}
+			_, errNew := NewClient(Config{
+				BaseURL:   c.URL,
+				Aud:       fixtureAud,
+				Signer:    seedSignerByName(t, "alice"),
+				ServerKey: pub,
+			})
+			errValidate := validateProfile(p)
+			_, errLoad := LoadProfile(bytes.NewReader(doc))
+			_, errFromProfile := NewClientFromProfile(p, seedSignerByName(t, "alice"), nil)
+
+			paths := []struct {
+				name string
+				err  error
+			}{
+				{"NewClient", errNew},
+				{"validateProfile", errValidate},
+				{"LoadProfile", errLoad},
+				{"NewClientFromProfile", errFromProfile},
+			}
+			for _, e := range paths {
+				switch {
+				case !c.Allow:
+					if e.err == nil || !isPolicyError(e.err) {
+						t.Fatalf("%s(%q) = %v, want policy refusal", e.name, c.URL, e.err)
+					}
+				case testfixture.GoParseRejects(c):
+					if e.err == nil || isPolicyError(e.err) || !strings.Contains(e.err.Error(), testfixture.GenericParseMsg) {
+						t.Fatalf("%s(%q) = %v, want the generic %q error (parse_reject go), not a policy error", e.name, c.URL, e.err, testfixture.GenericParseMsg)
+					}
+				default:
+					if e.err != nil {
+						t.Fatalf("%s(%q) = %v, want success", e.name, c.URL, e.err)
+					}
+				}
+			}
+		})
 	}
 }

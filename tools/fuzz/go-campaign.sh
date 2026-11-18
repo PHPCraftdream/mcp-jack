@@ -20,21 +20,21 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
 # package + FuzzName pairs.
 targets=(
-  ". FuzzParseRequestAuth"
-  ". FuzzParseResponseAuth"
-  "server FuzzClassifyBody"
+  "internal/jacktest FuzzParseRequestAuth"
+  "internal/jacktest FuzzParseResponseAuth"
+  "server/internal/rpcbody FuzzClassifyBody"
   "client FuzzLoadProfile"
-  "userkey FuzzImportEnvelopes"
-  "userkey FuzzValidateCredential"
-  "rotation FuzzParseRecord"
-  "rotation FuzzDecodeResult"
-  "rotation FuzzDecodeServerKeyArguments"
-  "rotation FuzzDecodeServerSnapshot"
-  "rotation FuzzDecodeTrustSnapshot"
-  "rotation FuzzVerifyChain"
+  "userkey/internal/transfertest FuzzImportEnvelopes"
+  "userkey/internal/transfertest FuzzValidateCredential"
+  "rotation/internal/rotationtest FuzzParseRecord"
+  "rotation/internal/rotationtest FuzzDecodeResult"
+  "rotation/internal/rotationtest FuzzDecodeServerKeyArguments"
+  "rotation/internal/rotationtest FuzzDecodeServerSnapshot"
+  "rotation/internal/rotationtest FuzzDecodeTrustSnapshot"
+  "rotation/internal/rotationtest FuzzVerifyChain"
   "durable FuzzDecodeMetadata"
   "durable FuzzDecodeRecord"
-  "durable FuzzDecodeTrustGuard"
+  "durable/internal/rotationstore FuzzDecodeTrustGuard"
 )
 
 failed=0

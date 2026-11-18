@@ -3,15 +3,19 @@ package cli
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
-	"strconv"
-	"time"
-)
 
-const maxBody = 1 << 20
-const protocolVersion = "2025-11-25"
+	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/admin"
+	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/bridge"
+	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/command"
+	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/gateway"
+	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/keys"
+	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/nonce"
+	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/serverkey"
+	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/stdio"
+	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/transport"
+)
 
 const usage = `jack keygen server|user --secret FILE --public FILE
 jack bootstrap --state FILE --invite-file FILE
@@ -45,20 +49,6 @@ invite-create stores the code only in a new private file; stdout contains only i
 After an invite-create error the reservation file is kept: do not delete it to retry automatically.
 `
 
-var errConfig = errors.New("invalid configuration or private storage")
-var errProtocol = errors.New("unsupported or invalid protocol message")
-var errRemote = errors.New("remote call failed; no retry performed")
-
-type verifiedStatusError struct {
-	status int
-}
-
-func (e *verifiedStatusError) Error() string {
-	return "authenticated HTTP " + strconv.Itoa(e.status) + "; no retry performed"
-}
-
-func (e *verifiedStatusError) Unwrap() error { return errRemote }
-
 // IO transfers ownership of In and Out to Run for bridge operation. Close must
 // unblock concurrent Read/Write; use pipes or files, not arbitrary blocking wrappers.
 type IO struct {
@@ -77,8 +67,8 @@ func Run(ctx context.Context, args []string, streams IO) int {
 		return 0
 	}
 	message := "operation failed"
-	var verified *verifiedStatusError
-	var enrollAuth *enrollUnauthorizedError
+	var verified *transport.VerifiedStatusError
+	var enrollAuth *keys.EnrollUnauthorizedError
 	switch {
 	case errors.As(err, &verified):
 		message = verified.Error()
@@ -86,37 +76,17 @@ func Run(ctx context.Context, args []string, streams IO) int {
 		// Must precede the errRemote fallback: a 401 from enroll carries the
 		// invite-specific diagnostic even though it unwraps to errRemote.
 		message = enrollAuth.Error()
-	case errors.Is(err, errConfig):
-		message = errConfig.Error()
-	case errors.Is(err, errProtocol):
-		message = errProtocol.Error()
-	case errors.Is(err, errRemote):
-		message = errRemote.Error()
+	case errors.Is(err, command.ErrConfig):
+		message = command.ErrConfig.Error()
+	case errors.Is(err, command.ErrProtocol):
+		message = command.ErrProtocol.Error()
+	case errors.Is(err, command.ErrRemote):
+		message = command.ErrRemote.Error()
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		message = "operation cancelled or deadline exceeded"
 	}
 	_, _ = fmt.Fprintln(streams.Err, "jack: "+message)
 	return 1
-}
-
-func flags(name string, args []string, names ...string) (map[string]string, error) {
-	f := flag.NewFlagSet(name, flag.ContinueOnError)
-	f.SetOutput(io.Discard)
-	values := make(map[string]*string)
-	for _, name := range names {
-		values[name] = f.String(name, "", "")
-	}
-	if f.Parse(args) != nil || f.NArg() != 0 {
-		return nil, errConfig
-	}
-	out := make(map[string]string)
-	for name, value := range values {
-		if *value == "" {
-			return nil, errConfig
-		}
-		out[name] = *value
-	}
-	return out, nil
 }
 
 // run resolves the top-level command and dispatches to a per-command handler.
@@ -130,7 +100,7 @@ func run(ctx context.Context, args []string, streams IO) error {
 		return err
 	}
 	if len(args) < 2 {
-		return errConfig
+		return command.ErrConfig
 	}
 	switch args[0] {
 	case "keygen":
@@ -150,51 +120,51 @@ func run(ctx context.Context, args []string, streams IO) error {
 	case "gateway", "bridge":
 		return runGatewayOrBridge(ctx, args, streams)
 	}
-	return errConfig
+	return command.ErrConfig
 }
 
 // runKeygen handles "jack keygen server|user --secret FILE --public FILE".
 func runKeygen(args []string) error {
 	if len(args) < 3 {
-		return errConfig
+		return command.ErrConfig
 	}
-	f, err := flags("keygen", args[2:], "secret", "public")
+	f, err := command.Flags("keygen", args[2:], "secret", "public")
 	if err != nil {
 		return err
 	}
-	return keygen(args[1], f["secret"], f["public"])
+	return keys.Keygen(args[1], f["secret"], f["public"])
 }
 
 // runBootstrap handles "jack bootstrap --state FILE --invite-file FILE".
 func runBootstrap(args []string) error {
-	f, err := flags("bootstrap", args[1:], "state", "invite-file")
+	f, err := command.Flags("bootstrap", args[1:], "state", "invite-file")
 	if err != nil {
 		return err
 	}
-	return bootstrap(f["state"], f["invite-file"])
+	return keys.Bootstrap(f["state"], f["invite-file"])
 }
 
 // runServerKeyCommand dispatches the server-key-* subcommands.
 func runServerKeyCommand(_ context.Context, args []string, streams IO) error {
 	switch args[0] {
 	case "server-key-init-unused":
-		f, err := flags(args[0], args[1:], "config", "confirm-unused-endpoint", "confirm-unused-aud")
+		f, err := command.Flags(args[0], args[1:], "config", "confirm-unused-endpoint", "confirm-unused-aud")
 		if err != nil {
 			return err
 		}
-		return serverKeyInitializeUnused(f["config"], f["confirm-unused-endpoint"], f["confirm-unused-aud"])
+		return serverkey.ServerKeyInitializeUnused(f["config"], f["confirm-unused-endpoint"], f["confirm-unused-aud"])
 	case "server-key-announce":
-		f, err := flags(args[0], args[1:], "config", "reference", "kid")
+		f, err := command.Flags(args[0], args[1:], "config", "reference", "kid")
 		if err != nil {
 			return err
 		}
-		return serverKeyAnnounce(f["config"], f["reference"], f["kid"], streams.Out)
+		return serverkey.ServerKeyAnnounce(f["config"], f["reference"], f["kid"], streams.Out)
 	default:
-		f, err := flags(args[0], args[1:], "config")
+		f, err := command.Flags(args[0], args[1:], "config")
 		if err != nil {
 			return err
 		}
-		return serverKeyStatus(f["config"], streams.Out)
+		return serverkey.ServerKeyStatus(f["config"], streams.Out)
 	}
 }
 
@@ -202,89 +172,82 @@ func runServerKeyCommand(_ context.Context, args []string, streams IO) error {
 func runNonceCommand(_ context.Context, args []string, streams IO) error {
 	switch args[0] {
 	case "nonce-init-unused":
-		f, err := flags(args[0], args[1:], "config", "confirm-unused-deployment")
+		f, err := command.Flags(args[0], args[1:], "config", "confirm-unused-deployment")
 		if err != nil {
 			return err
 		}
-		return nonceInitializeUnused(f["config"], f["confirm-unused-deployment"])
+		return nonce.NonceInitializeUnused(f["config"], f["confirm-unused-deployment"])
 	case "nonce-reconcile-terminal":
-		f, err := flags(args[0], args[1:], "config", "expected-hash", "receipt-file", "confirm-no-redelivery")
+		f, err := command.Flags(args[0], args[1:], "config", "expected-hash", "receipt-file", "confirm-no-redelivery")
 		if err != nil {
 			return err
 		}
-		return nonceReconcileTerminal(f["config"], f["expected-hash"], f["receipt-file"], f["confirm-no-redelivery"])
+		return nonce.NonceReconcileTerminal(f["config"], f["expected-hash"], f["receipt-file"], f["confirm-no-redelivery"])
 	default:
-		f, err := flags(args[0], args[1:], "config")
+		f, err := command.Flags(args[0], args[1:], "config")
 		if err != nil {
 			return err
 		}
-		return nonceInspect(f["config"], streams.Out)
+		return nonce.NonceInspect(f["config"], streams.Out)
 	}
 }
 
 // runInviteCommand dispatches the invite-* subcommands.
 func runInviteCommand(ctx context.Context, args []string, streams IO) error {
 	if args[0] == "invite-create" {
-		return inviteCreate(ctx, args[1:], streams.Out)
+		return admin.InviteCreate(ctx, args[1:], streams.Out)
 	}
 	names := []string{"config"}
 	if args[0] == "invite-revoke" {
 		names = append(names, "invite-id")
 	}
-	f, err := flags(args[0], args[1:], names...)
+	f, err := command.Flags(args[0], args[1:], names...)
 	if err != nil {
 		return err
 	}
-	return inviteCommand(ctx, args[0], f["config"], f["invite-id"], streams.Out)
+	return admin.InviteCommand(ctx, args[0], f["config"], f["invite-id"], streams.Out)
 }
 
 // runUserCommand dispatches the user-* subcommands.
 func runUserCommand(ctx context.Context, args []string, streams IO) error {
 	if args[0] == "user-create" {
-		return userCreate(ctx, args[1:], streams.Out)
+		return admin.UserCreate(ctx, args[1:], streams.Out)
 	}
 	if args[0] == "user-set-admin" {
-		f, err := flags(args[0], args[1:], "config", "kid", "admin")
+		f, err := command.Flags(args[0], args[1:], "config", "kid", "admin")
 		if err != nil {
 			return err
 		}
-		return userSetAdmin(ctx, f["config"], f["kid"], f["admin"], streams.Out)
+		return admin.UserSetAdmin(ctx, f["config"], f["kid"], f["admin"], streams.Out)
 	}
 	names := []string{"config"}
 	if args[0] != "user-list" {
 		names = append(names, "kid")
 	}
-	f, err := flags(args[0], args[1:], names...)
+	f, err := command.Flags(args[0], args[1:], names...)
 	if err != nil {
 		return err
 	}
-	return userCommand(ctx, args[0], f["config"], f["kid"], streams.Out)
+	return admin.UserCommand(ctx, args[0], f["config"], f["kid"], streams.Out)
 }
 
 // runEnroll handles "jack enroll --config FILE --invite-file FILE --name NAME".
 func runEnroll(ctx context.Context, args []string) error {
-	f, err := flags("enroll", args[1:], "config", "invite-file", "name")
+	f, err := command.Flags("enroll", args[1:], "config", "invite-file", "name")
 	if err != nil {
 		return err
 	}
-	return enroll(ctx, f["config"], f["invite-file"], f["name"])
+	return keys.Enroll(ctx, f["config"], f["invite-file"], f["name"])
 }
 
 // runGatewayOrBridge handles "jack gateway" and "jack bridge".
 func runGatewayOrBridge(ctx context.Context, args []string, streams IO) error {
-	f, err := flags(args[0], args[1:], "config")
+	f, err := command.Flags(args[0], args[1:], "config")
 	if err != nil {
 		return err
 	}
 	if args[0] == "gateway" {
-		return gateway(ctx, f["config"], streams.Err)
+		return gateway.Run(ctx, f["config"], streams.Err)
 	}
-	return bridge(ctx, f["config"], streams)
-}
-
-func callDuration(ms int) (time.Duration, error) {
-	if ms < 100 || ms > 30000 {
-		return 0, errConfig
-	}
-	return time.Duration(ms) * time.Millisecond, nil
+	return bridge.Run(ctx, f["config"], stdio.IO{In: streams.In, Out: streams.Out, Err: streams.Err})
 }

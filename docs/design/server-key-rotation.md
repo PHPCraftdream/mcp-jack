@@ -22,17 +22,17 @@ These references are repository-relative, not private workstation paths.
 |---|---|
 | `spec/01-authentication.md` sections 2–5, 6, 7 | Ed25519, strict canonical keys/signatures and `kid`; exact signed request/response bytes; response pinning and verification precedence; existing time window; profile/security and conformance rules. |
 | `spec/02-authorization.md` sections 1–2 | Registry is user-key state, not a server-response-key pin store; `jack.*` dispatch and user/admin distinction. |
-| `client/profile.go` lines 14–26, 49–99 | Profile stores URL, audience, server public key, and optional `KID` documented as the client/user key id; current validation/import path. |
+| `client/rpc.go` lines 14–26, 49–99 | Profile stores URL, audience, server public key, and optional `KID` documented as the client/user key id; current validation/import path. |
 | `client/transport.go` lines 120–237 | Existing response buffering cap (1 MiB), redirect/stream refusal, exact response verification, and current pinned-key behavior. |
-| `client/signer.go` lines 19–26 | Existing general user `Signer` interface. |
+| `client/transport.go` lines 19–26 | Existing general user `Signer` interface. |
 | `userkey/transfer.go` lines 47–77, 186–208, 227–291, 714–739 | Existing strict independently expected server identity and credential-import behavior; credential transfer is not a rotation pin store. |
-| `server/statefile.go` lines 22–65, 264–325 | Current state file is registry/invite state; file `fsync` then rename is implemented, but that alone does not establish durable directory metadata or power-loss recovery. |
+| `server/internal/state/statefile.go` lines 22–65, 264–325 | Current state file is registry/invite state; file `fsync` then rename is implemented, but that alone does not establish durable directory metadata or power-loss recovery. |
 | `rust/src/client/profile.rs`, `rust/src/client/request_signing/signer.rs`, `rust/src/client/network/http_transport/mod.rs` | Rust profile, user signer, and transport counterparts. |
 | `rust/src/server/http.rs`, `rust/src/server/registry/state_file.rs`, `rust/src/user_key/mod.rs` | Rust server HTTP/state and strict user-key transfer counterparts. |
 | `rust/src/ed25519.rs` lines 23–49 | Rust's current generic verifier explicitly uses strict verification, rejecting noncanonical/small-order R in addition to canonical S. This source observation is not a claim that the Go and TypeScript wrappers currently enforce the same R-point rules. |
 | `ts/src/client/profile.ts`, `ts/src/client/signer.ts`, `ts/src/client/transport.ts`, `ts/src/ed25519.ts` | TypeScript client/profile/transport and verifier counterparts. |
 | `ts/src/server/fetch.ts`, `ts/src/server/node.ts`, `ts/src/server/state-file.ts`, `ts/src/user-key-transfer.ts` | TypeScript server adapters/state and strict user-key transfer counterpart. |
-| `server/statefile.go` | Go registry/invite persistence; not a client pin store or rotation snapshot. |
+| `server/internal/state/statefile.go` | Go registry/invite persistence; not a client pin store or rotation snapshot. |
 
 The existing profile's `server_public_key` is a static server pin, while `kid` is the user's key id. Existing registry/invite stores are not pin stores. Do not repurpose either. Existing same-directory temp-file write, file sync, and rename must not be described as sufficient power-loss durability for the new trust snapshot: a separately reviewed platform durability mapping is required.
 

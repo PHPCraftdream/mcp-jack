@@ -25,7 +25,7 @@ How to read it:
 | Area | Read fully | Read partly | Not reached |
 |---|---|---|---|
 | Specification | `spec/01`, `spec/02`, `spec/03`, `spec/candidate/durable-nonces.md`, `spec/candidate/server-key-rotation.md`, `docs/protocol-transition.md`, `docs/threat-model.md`, `SECURITY.md` | `spec/candidate/README.md` | `docs/design/server-key-rotation.md`, `docs/design/durable-nonce-backend.md` |
-| Go root, `server/`, `rotation/`, `durable/`, `client/`, `client/rotation/` | almost all (not `durable/recovery_snapshot.go`) | `client/rpc.go` (start) | `client/{tools,profile,errors}.go`, rest of `client/rpc.go`, `userkey/{key,transfer}.go` bodies |
+| Go root, `server/`, `rotation/`, `durable/`, `client/`, `client/rotation/` | almost all (not `durable/layout.go`) | `client/rpc.go` (start) | `client/{tools,profile,errors}.go`, rest of `client/rpc.go`, `userkey/{key,transfer}.go` bodies |
 | Go `internal/cli/` | gateway, storage, connection, bridge, run, keys, nonce and server-key commands, admin RPC and invite file | `docs/design/cli.md` | most `admin*.go` |
 | Rust | `rotation/{record,result,json_object,mod,private_file,store}.rs`, most of `rotation/server_provider.rs` | `server/verify.rs`, `server/http.rs`, `server/nonce.rs`, `auth_header.rs`, `ed25519.rs`, start of `rotation/server_key.rs` | `server/{native,state,state_file}`, `client/*`, `rotation/{chain,page,controller,trust*,server_state*,server_store*,store_format,sign}`, `user_key.rs` |
 | TypeScript | none in full | `ed25519.ts`, `auth-header.ts`, `json-raw.ts`, `server/{verify,fetch,node}.ts`, `rotation-file.ts`, `server/server-key-tool.ts` | `client/*`, other `rotation-*`, `server/{native,state,state-file,nonce}`, `user-key*` |

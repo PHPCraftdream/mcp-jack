@@ -12,13 +12,16 @@ import (
 	"testing"
 
 	"github.com/PHPCraftdream/mcp-jack/client"
+	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/clitest"
+	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/storage"
+	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/wire"
 	"github.com/PHPCraftdream/mcp-jack/server"
 	"github.com/PHPCraftdream/mcp-jack/userkey"
 )
 
 func TestProcessAdminLifecycle(t *testing.T) {
 	var forwarded atomic.Int32
-	config, _, state := signedFixtureWithNative(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	config, _, state := clitest.SignedFixtureWithNative(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		forwarded.Add(1)
 		w.WriteHeader(500)
 	}), server.NewNativeTools(server.NativeOptions{}))
@@ -29,12 +32,12 @@ func TestProcessAdminLifecycle(t *testing.T) {
 	}
 	invoke := func(success bool, args ...string) ([]byte, string) {
 		t.Helper()
-		process, in, out, diagnostics := childArgs(t, args...)
+		process, in, out, diagnostics := clitest.ChildArgs(t, args...)
 		if err := in.Close(); err != nil {
 			t.Fatal("child input close failed")
 		}
-		reply, err := io.ReadAll(io.LimitReader(out, maxBody+1))
-		if err != nil || len(reply) > maxBody {
+		reply, err := io.ReadAll(io.LimitReader(out, wire.MaxBody+1))
+		if err != nil || len(reply) > wire.MaxBody {
 			t.Fatal("child output unreadable or unbounded")
 		}
 		waitErr := process.Wait()
@@ -43,12 +46,12 @@ func TestProcessAdminLifecycle(t *testing.T) {
 		}
 		return reply, diagnostics.String()
 	}
-	directory := privateDir(t)
+	directory := clitest.PrivateDir(t)
 	secretPath, publicPath := filepath.Join(directory, "user.seed"), filepath.Join(directory, "user.public")
 	if reply, _ := invoke(true, "keygen", "user", "--secret", secretPath, "--public", publicPath); len(reply) != 0 {
 		t.Fatal("keygen exposed key material on stdout")
 	}
-	publicDocument, err := readPrivate(publicPath, 4096)
+	publicDocument, err := storage.ReadPrivate(publicPath, 4096)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +90,7 @@ func TestProcessAdminLifecycle(t *testing.T) {
 	if json.Unmarshal(invited, &invitation) != nil || invitation.InviteID == "" || invitation.Code != "" {
 		t.Fatal("binary invite receipt malformed or exposes code")
 	}
-	code, err := readPrivate(invitePath, 43)
+	code, err := storage.ReadPrivate(invitePath, 43)
 	if err != nil || len(code) != 43 || strings.Contains(string(invited), string(code)) {
 		t.Fatal("binary private invite output missing or exposed")
 	}
