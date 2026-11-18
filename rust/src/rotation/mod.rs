@@ -1,43 +1,28 @@
 //! Candidate rotation primitives; static credentials and runtime trust are not changed.
 
-mod chain;
 #[cfg(target_os = "linux")]
-mod controller;
+mod server_side;
+mod snapshot;
+#[cfg(target_os = "linux")]
+mod trust_client;
+#[cfg(target_os = "linux")]
+mod trust_store;
+mod wire;
+
+#[cfg(target_os = "linux")]
+use server_side::{server_provider, server_store, server_store_format};
+#[cfg(target_os = "linux")]
+use snapshot::trust_json_wire;
+use snapshot::{server_key, server_state, server_state_json, trust, trust_json};
+#[cfg(target_os = "linux")]
+use trust_client::controller;
 #[cfg(all(test, target_os = "linux"))]
-mod controller_tests;
-mod json_object;
-mod page;
-#[cfg(target_os = "linux")]
-mod private_file;
-mod record;
-#[cfg(target_os = "linux")]
-mod refresh_state;
+use trust_client::refresh_tests;
 #[cfg(all(test, target_os = "linux"))]
-mod refresh_tests;
-mod result;
-mod server_key;
+use trust_store::store_tests;
 #[cfg(target_os = "linux")]
-mod server_provider;
-#[cfg(all(test, target_os = "linux"))]
-mod server_provider_tests;
-mod server_state;
-mod server_state_json;
-#[cfg(target_os = "linux")]
-mod server_store;
-#[cfg(target_os = "linux")]
-mod server_store_format;
-#[cfg(all(test, target_os = "linux"))]
-mod server_store_tests;
-mod sign;
-#[cfg(target_os = "linux")]
-mod store;
-#[cfg(target_os = "linux")]
-mod store_format;
-#[cfg(all(test, target_os = "linux"))]
-mod store_tests;
-mod trust;
-mod trust_json;
-mod trust_json_wire;
+use trust_store::{private_file, store, store_format};
+use wire::{chain, json_object, page, record, result, sign};
 
 #[cfg(target_os = "linux")]
 pub use controller::{RotationController, RotationRefreshResult, RotationResponse};

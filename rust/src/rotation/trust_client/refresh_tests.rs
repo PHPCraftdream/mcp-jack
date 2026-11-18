@@ -369,7 +369,7 @@ fn first_bridge_equality_and_late_final_failure_preserve_exact_commit_outcome() 
     }
 }
 
-pub(super) fn crash_refresh<C: FnMut() -> Result<u64, RotationError>>(
+pub(in crate::rotation) fn crash_refresh<C: FnMut() -> Result<u64, RotationError>>(
     store: &mut RotationTrustStore<C>,
 ) {
     let records = chain();
