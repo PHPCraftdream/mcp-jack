@@ -1,13 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { TransferCheckFailure, validateTargets } from './transfer-checks.mjs';
-import { loadTransferFixtures } from './transfer-fixtures.mjs';
-import { runCredentialPairs } from './transfer-matrix.mjs';
-import { runRefusalPairs } from './transfer-refusals.mjs';
-import { runTrustPairs } from './transfer-trust.mjs';
-import { runPublicPairs } from './transfer-public.mjs';
-import { TransferFailure, runProbe, shutdownOwned } from './transfer-process.mjs';
+import { TransferCheckFailure, validateTargets } from './transfer/checks.mjs';
+import { loadTransferFixtures } from './transfer/fixtures.mjs';
+import { runCredentialPairs } from './transfer/matrix.mjs';
+import { runRefusalPairs } from './transfer/cases/refusals.mjs';
+import { runTrustPairs } from './transfer/cases/trust.mjs';
+import { runPublicPairs } from './transfer/cases/public.mjs';
+import { TransferFailure, runProbe, shutdownOwned } from './transfer/process.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_TARGETS = join(ROOT, 'interop', 'targets.json');
@@ -75,7 +75,7 @@ async function main() {
   try {
     const options = parseArgs(process.argv.slice(2));
     if (options.selfTest) {
-      const selfTestPath = join(ROOT, 'interop', 'transfer-self-test.mjs');
+      const selfTestPath = join(ROOT, 'interop', 'transfer', 'self-test.mjs');
       const selfTestModule = await import(pathToFileURL(selfTestPath));
       await selfTestModule.selfTest();
       process.stdout.write('PASS transfer self-test\n');

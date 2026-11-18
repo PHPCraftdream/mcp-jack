@@ -572,7 +572,7 @@ async function runMatrix(opts) {
 
     // Fake peer: driver-owned, spawned via its own argv (not the targets doc).
     const fakeArgv = [
-      process.execPath, join(SCRIPT_DIR, 'tools', 'rotation-fake.mjs'),
+      process.execPath, join(SCRIPT_DIR, 'tools', 'fakes', 'rotation-fake.mjs'),
       '--port', String(portC), '--clock-file', clkFakeSrv, '--mode-file', modePath,
       '--aud', registry.aud, '--url', urlC,
       '--k0-seed-hex', keys.svc.seed_hex, '--k1-seed-hex', keys.erin.seed_hex,
@@ -827,8 +827,8 @@ function printMatrix(matrixCells, serverLangs, clientLangs) {
 // ---- self-test -----------------------------------------------------------------
 
 async function selfTest() {
-  const fakeServer = join(SCRIPT_DIR, 'tools', 'fake-rotation-server.mjs');
-  const fakeClient = join(SCRIPT_DIR, 'tools', 'fake-rotation-client.mjs');
+  const fakeServer = join(SCRIPT_DIR, 'tools', 'fakes', 'fake-rotation-server.mjs');
+  const fakeClient = join(SCRIPT_DIR, 'tools', 'fakes', 'fake-rotation-client.mjs');
   const targets = { fake: { rotation_server: [process.execPath, fakeServer], rotation_client: [process.execPath, fakeClient] } };
   const loaded = loadFixtures();
   let checks = 0;

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { signSeed } from './crypto.mjs';
+import { signSeed } from '../crypto.mjs';
 
 const fromHex = (value) => Buffer.from(value, 'hex');
 const EXPECTED_RFC = Object.freeze({

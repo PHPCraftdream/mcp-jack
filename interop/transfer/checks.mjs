@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { b64u, oracleSign, oracleVerify, publicEnvelope } from './transfer-fixtures.mjs';
+import { b64u, oracleSign, oracleVerify, publicEnvelope } from './fixtures.mjs';
 
 const SAFE_LABEL_CHARS = /[^a-zA-Z0-9 _:/=.,-]/gu;
 const SIGNER_FIELDS = ['id', 'ok', 'public_key', 'kid', 'public_envelope_b64u', 'signatures_b64u'];

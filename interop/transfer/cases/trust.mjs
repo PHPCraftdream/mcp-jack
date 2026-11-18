@@ -1,6 +1,6 @@
-import { b64u, decodeB64u } from './transfer-fixtures.mjs';
-import { TransferCheckFailure, checkErrorResult, checkSignerResult, mutationFromBaseline, trustVariants } from './transfer-checks.mjs';
-import { validateResults } from './transfer-process.mjs';
+import { b64u, decodeB64u } from '../fixtures.mjs';
+import { TransferCheckFailure, checkErrorResult, checkSignerResult, mutationFromBaseline, trustVariants } from '../checks.mjs';
+import { validateResults } from '../process.mjs';
 
 const LANGS = Object.freeze(['go', 'rust', 'typescript']);
 const messageBytes = (messages) => messages.map((message) => b64u(message.bytes));

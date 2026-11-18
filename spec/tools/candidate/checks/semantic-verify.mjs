@@ -2,13 +2,13 @@ import { readFileSync } from 'node:fs';
 
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { verifyChain, parseRecord, selectedOrdinal } from './rotation-codec.mjs';
-import { ROTATION_KEYS_PUBLIC } from './rotation-cases.mjs';
-import { reserveNonce, initialNonceState } from './durable-nonce-model.mjs';
-import { advanceAndCheckClock, initialClockGuard, trustClockCAS } from './clock-guard-model.mjs';
-import { acceptRefresh, finalServerEmission, newRotationSnapshot } from './rotation-state-model.mjs';
+import { verifyChain, parseRecord, selectedOrdinal } from '../rotation/rotation-codec.mjs';
+import { ROTATION_KEYS_PUBLIC } from '../rotation/rotation-cases.mjs';
+import { reserveNonce, initialNonceState } from '../model/durable-nonce-model.mjs';
+import { advanceAndCheckClock, initialClockGuard, trustClockCAS } from '../model/clock-guard-model.mjs';
+import { acceptRefresh, finalServerEmission, newRotationSnapshot } from '../model/rotation-state-model.mjs';
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const readJson = (path) => JSON.parse(readFileSync(resolve(ROOT, path), 'utf8'));
 const check = (condition, message) => { if (!condition) throw new Error(message); };
 const anchor = ROTATION_KEYS_PUBLIC.anchor;

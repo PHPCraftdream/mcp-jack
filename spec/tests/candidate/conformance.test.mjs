@@ -3,17 +3,17 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { verifyOnDiskFixtures } from '../../tools/candidate/semantic-verify.mjs';
+import { verifyOnDiskFixtures } from '../../tools/candidate/checks/semantic-verify.mjs';
 import { GENERATED } from '../../tools/candidate/fixture-build.mjs';
 import { base64url, keyId, publicFromSeed, sha256, signSeed, testSeed, verifyNode, RFC8032_TEST } from '../../tools/candidate/crypto.mjs';
-import { pureVerifier, runCryptoKats } from '../../tools/candidate/independent-checks.mjs';
-import { ENDPOINT, AUDIENCE, ROTATION_KEYS_PUBLIC, ROTATION_NEGATIVE, ROTATION_VALID, rotationRecordsForVerification } from '../../tools/candidate/rotation-cases.mjs';
-import { verifyChain, parseRecord, selectedOrdinal, assignmentValid, encodeB } from '../../tools/candidate/rotation-codec.mjs';
-import { parseRefreshArguments, parseCandidateResponseBody, durableIntentIdentity, verifyRequestSignature, verifyResponseSignature, validateRefreshPreResponse } from '../../tools/candidate/verification.mjs';
-import { acceptRefresh, newRotationSnapshot } from '../../tools/candidate/rotation-state-model.mjs';
+import { pureVerifier, runCryptoKats } from '../../tools/candidate/checks/independent-checks.mjs';
+import { ENDPOINT, AUDIENCE, ROTATION_KEYS_PUBLIC, ROTATION_NEGATIVE, ROTATION_VALID, rotationRecordsForVerification } from '../../tools/candidate/rotation/rotation-cases.mjs';
+import { verifyChain, parseRecord, selectedOrdinal, assignmentValid, encodeB } from '../../tools/candidate/rotation/rotation-codec.mjs';
+import { parseRefreshArguments, parseCandidateResponseBody, durableIntentIdentity, verifyRequestSignature, verifyResponseSignature, validateRefreshPreResponse } from '../../tools/candidate/checks/verification.mjs';
+import { acceptRefresh, newRotationSnapshot } from '../../tools/candidate/model/rotation-state-model.mjs';
 import { NONCE_EVENTS } from '../../tools/candidate/scenario-data.mjs';
-import { initialNonceState, reserveNonce } from '../../tools/candidate/durable-nonce-model.mjs';
-import { advanceAndCheckClock, initialClockGuard, trustClockCAS } from '../../tools/candidate/clock-guard-model.mjs';
+import { initialNonceState, reserveNonce } from '../../tools/candidate/model/durable-nonce-model.mjs';
+import { advanceAndCheckClock, initialClockGuard, trustClockCAS } from '../../tools/candidate/model/clock-guard-model.mjs';
 
 const named = (name) => {
   const seed = testSeed(name);

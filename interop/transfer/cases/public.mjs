@@ -1,8 +1,8 @@
-import { b64u } from './transfer-fixtures.mjs';
+import { b64u } from '../fixtures.mjs';
 import {
   checkErrorResult, checkPublicResult, checkSignerResult, TransferCheckFailure, verificationControls,
-} from './transfer-checks.mjs';
-import { validateResults } from './transfer-process.mjs';
+} from '../checks.mjs';
+import { validateResults } from '../process.mjs';
 
 const LANGS = Object.freeze(['go', 'rust', 'typescript']);
 const PEOPLE = Object.freeze(['alice', 'bob', 'carol']);

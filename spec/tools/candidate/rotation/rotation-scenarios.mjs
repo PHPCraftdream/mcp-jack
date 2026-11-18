@@ -1,4 +1,4 @@
-import { base64url, sha256, signSeed } from './crypto.mjs';
+import { base64url, sha256, signSeed } from '../crypto.mjs';
 import { ROTATION_KEYS, rotationRecordsForVerification, ROTATION_KEYS_PUBLIC, ENDPOINT, AUDIENCE } from './rotation-cases.mjs';
 import { signRecord } from './rotation-encode.mjs';
 

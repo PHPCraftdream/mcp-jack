@@ -1,5 +1,5 @@
 import { advanceAndCheckClock, initialClockGuard } from './clock-guard-model.mjs';
-import { validateRefreshPreResponse } from './verification.mjs';
+import { validateRefreshPreResponse } from '../checks/verification.mjs';
 import { NONCE_LIMITS } from './durable-nonce-model.mjs';
 
 export const ROTATION_LIMITS = Object.freeze({ pending: 128, retired: 1024, pageLinks: 16, recordBytes: 8192, bodyBytes: 256 * 1024 });

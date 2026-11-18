@@ -39,4 +39,4 @@ export const NONCE_EVENTS = Object.freeze([
   { id: 'no-effects-without-final-commit', description: 'A prepared intent is never dispatch permission when final outcome is unknown.', state: emptyState(), event: event({ name: 'alice', nonce: 'no-effects', ts: 100, finalOutcome: 'unknown', reservationFound: false, handlerEffect: 'stateMutation' }), expect: { status: 503, code: 'durability_unavailable', callbacks: 2, writes: 2, dispatches: 0, highWater: 100, liveCount: 0, intentCount: 0, tombstoneCount: 1, fenced: true, effects: { authorization: 0, handler: 0, stateMutation: 0 }, tombstoneOutcome: 'unknown_absent' } },
 ]);
 
-export { ROTATION_CLIENT_CASES, ROTATION_EVENT_CASES } from './rotation-scenarios.mjs';
+export { ROTATION_CLIENT_CASES, ROTATION_EVENT_CASES } from './rotation/rotation-scenarios.mjs';

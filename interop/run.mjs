@@ -650,8 +650,8 @@ function printMatrix(matrixCells, serverLangs, clientLangs) {
 // ---- self-test ---------------------------------------------------------------
 
 async function selfTest() {
-  const fakeServer = join(SCRIPT_DIR, 'tools', 'fake-server.mjs');
-  const fakeClient = join(SCRIPT_DIR, 'tools', 'fake-client.mjs');
+  const fakeServer = join(SCRIPT_DIR, 'tools', 'fakes', 'fake-server.mjs');
+  const fakeClient = join(SCRIPT_DIR, 'tools', 'fakes', 'fake-client.mjs');
   const targets = { fake: { server: [process.execPath, fakeServer], client: [process.execPath, fakeClient] } };
   const loaded = loadFixtures();
   let checks = 0;
