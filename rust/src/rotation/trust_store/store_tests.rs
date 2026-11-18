@@ -440,7 +440,7 @@ fn real_child_pre_and_post_rename_unknown_outcomes_preserve_artifacts() {
             let output = Command::new(std::env::current_exe().unwrap())
                 .args([
                     "--exact",
-                    "rotation::store_tests::crash_child",
+                    "rotation::trust_store::store_tests::crash_child",
                     "--nocapture",
                 ])
                 .env("JACK_STORE_CRASH_PATH", &path)
