@@ -1,7 +1,7 @@
-import { Code, JackError } from "../errors.js";
-import { decodeRotationServerKeyArguments, rotationServerKeyPage, validateRotationServerKeyCursor } from "../rotation-server-key.js";
-import type { RotationServerProvider } from "../rotation-server-provider.js";
-import type { RotationServerStore } from "../rotation-server-store.js";
+import { Code, JackError } from "../core/errors.js";
+import { decodeRotationServerKeyArguments, rotationServerKeyPage, validateRotationServerKeyCursor } from "../rotation/snapshot/server-key.js";
+import type { RotationServerProvider } from "../rotation/server/provider.js";
+import type { RotationServerStore } from "../rotation/server/store.js";
 import { TOOL_SERVER_KEY } from "./verify.js";
 import type { NativeCall, NativeResult, NativeTools } from "./verify.js";
 

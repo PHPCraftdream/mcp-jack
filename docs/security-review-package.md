@@ -36,7 +36,7 @@ and the Rust and TypeScript rotation controllers and store formats, which the
 pre-review did not read against the Go reference. The Rust server durable-nonce
 sources (`rust/src/server/durable_store.rs`, `durable_format.rs`,
 `durable_recovery.rs`, `durable_admission.rs`) and the TypeScript counterparts
-(`ts/src/server/durable-store.ts`, `durable-format.ts`, `durable-admission.ts`)
+(`ts/src/server/durable/store.ts`, `durable-format.ts`, `durable-admission.ts`)
 landed after the reviewed commit and were re-read in this tree; the reviewed
 commit `1822634` predates them.
 
@@ -49,9 +49,9 @@ commit failed the strict loader (fixed in `rust/src/server/durable_store.rs`);
 fences only on non-definite outcomes; (c) the TypeScript store validated the
 prepared receipt against the pre-transaction high water, rejecting every
 admission whose clock had moved since the last durable high-water write (fixed
-in `ts/src/server/durable-store.ts`).
+in `ts/src/server/durable/store.ts`).
 
-Serving-open in all three SDKs refuses dirty/unsafe state, unresolved intents or 64 tombstones; Rust uses canonical binary bytes and TypeScript canonical JSON. Recovery binds deployment and window; TypeScript additionally uses exclusive ownership, private-file, no-follow and bounded-read checks ([operations](operations.md); [cross-language conformance](cross-language-conformance.md)). Go and Rust drain leases outside the mutex; fenced close reports `RecoveryRequired` and releases the backend owner unless I/O fails. TypeScript leased close throws while remaining retryable after caller stop-ingress/drain; a fenced close reports recovery-required and releases its marker, as in Go and Rust. Rust fences when a poisoned lock is next acquired (`rust/src/server/durable_store.rs:704-711`); TypeScript fences on unexpected non-`JackError` reserve failure (`ts/src/server/durable-store.ts:430-446`). These current-source notes are separate from the historical pre-review; no builds or tests were run for this cleanup.
+Serving-open in all three SDKs refuses dirty/unsafe state, unresolved intents or 64 tombstones; Rust uses canonical binary bytes and TypeScript canonical JSON. Recovery binds deployment and window; TypeScript additionally uses exclusive ownership, private-file, no-follow and bounded-read checks ([operations](operations.md); [cross-language conformance](cross-language-conformance.md)). Go and Rust drain leases outside the mutex; fenced close reports `RecoveryRequired` and releases the backend owner unless I/O fails. TypeScript leased close throws while remaining retryable after caller stop-ingress/drain; a fenced close reports recovery-required and releases its marker, as in Go and Rust. Rust fences when a poisoned lock is next acquired (`rust/src/server/durable_store.rs:704-711`); TypeScript fences on unexpected non-`JackError` reserve failure (`ts/src/server/durable/store.ts:430-446`). These current-source notes are separate from the historical pre-review; no builds or tests were run for this cleanup.
 
 ## 2. Findings and disposition
 

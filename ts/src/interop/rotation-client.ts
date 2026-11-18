@@ -3,16 +3,16 @@
 // JSON result line on stdout (exit 0 for a completed step, whatever its
 // outcome); harness-level failures go to stderr with exit 1 and no stdout.
 import { existsSync, readFileSync } from "node:fs";
-import { BadBase64UrlError, decodeBase64URLFixed, encodeBase64URL, keyId } from "../encoding.js";
-import { JackError } from "../errors.js";
-import { parseRequestAuth, parseResponseAuth } from "../auth-header.js";
-import { randomNonce, signRequest } from "../client/auth.js";
-import { InMemorySigner } from "../client/signer.js";
-import { RotationController } from "../rotation-controller.js";
-import { RotationHTTPClient } from "../rotation-http.js";
-import { RotationError } from "../rotation-record.js";
-import { RotationTrustStore } from "../rotation-store.js";
-import type { RotationStoreOptions } from "../rotation-store.js";
+import { BadBase64UrlError, decodeBase64URLFixed, encodeBase64URL, keyId } from "../core/encoding.js";
+import { JackError } from "../core/errors.js";
+import { parseRequestAuth, parseResponseAuth } from "../core/auth-header.js";
+import { randomNonce, signRequest } from "../client/signing/auth.js";
+import { InMemorySigner } from "../client/signing/signer.js";
+import { RotationController } from "../rotation/trust-store/controller.js";
+import { RotationHTTPClient } from "../rotation/http/http.js";
+import { RotationError } from "../rotation/wire/record.js";
+import { RotationTrustStore } from "../rotation/trust-store/store.js";
+import type { RotationStoreOptions } from "../rotation/trust-store/store.js";
 
 function fail(msg: string): never {
   process.stderr.write(`rotation-client: ${msg}\n`);

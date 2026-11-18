@@ -59,7 +59,7 @@ async function copyLibraryTree(source, destination, relative = "") {
       // The library-only tsconfig already excludes src/interop; a directory
       // named interop in the build output is a packaging defect, not
       // something to skip silently.
-      if (relative !== "" || !["client", "server"].includes(entry.name)) fail(`unexpected library output directory ${rel}`);
+      if (entry.name === "interop") fail(`unexpected library output directory ${rel}`);
       await mkdir(path.join(destination, rel), { recursive: true });
       await copyLibraryTree(source, destination, rel);
       continue;
@@ -113,7 +113,7 @@ if (!Array.isArray(packed) || packed.length !== 1 || packed[0] === undefined || 
 }
 const packedInfo = packed[0];
 const members = packedInfo.files.map((file) => String(file.path).replaceAll("\\", "/")).sort();
-const allowed = /^(?:package\.json|README\.md|LICENSE-MIT|LICENSE-APACHE|dist\/(?:[^/]+\.(?:js|d\.ts)|(?:client|server)\/[^/]+\.(?:js|d\.ts)))$/u;
+const allowed = /^(?:package\.json|README\.md|LICENSE-MIT|LICENSE-APACHE|dist\/(?:(?!interop\/)[^/]+\/)*[^/]+\.(?:js|d\.ts))$/u;
 for (const member of members) {
   if (!allowed.test(member)) fail(`npm pack included a forbidden member: ${member}`);
 }

@@ -1,8 +1,8 @@
 /** Typed MCP tool calls of the jack protocol (spec 03; port of Go client/tools.go). */
-import { encodeBase64URL } from "../encoding.js";
-import { rotateProofString } from "../signing.js";
+import { encodeBase64URL } from "../core/encoding.js";
+import { rotateProofString } from "../core/signing.js";
 import type { Client, JsonValue } from "./rpc.js";
-import type { Signer } from "./signer.js";
+import type { Signer } from "./signing/signer.js";
 
 /** Protocol-native tool names (spec 03). */
 export const TOOL_ENROLL = "jack.enroll";

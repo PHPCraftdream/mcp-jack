@@ -168,8 +168,8 @@ export function classifyLines(source, verdict) {
 }
 
 // Group rules on the dist-test-relative posix path: src/interop/ is helper
-// code NOT published by ts/package.json ("files" ships only dist, dist/client,
-// dist/server); test/ is the test suite itself; other src/ files are product.
+// code NOT published by ts/package.json ("files" ships dist/**/*.js and
+// dist/**/*.d.ts); test/ is the test suite itself; other src/ files are product.
 // Everything else (tsc, node: internals, scripts) is ignored entirely.
 export function groupFor(relPosix) {
   if (relPosix.startsWith("src/interop/")) return "interop";

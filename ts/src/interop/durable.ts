@@ -3,8 +3,8 @@
 // out-of-band initialization and the serve-mode store open. When --durable-dir
 // is absent every path here is bypassed by server.ts (zero behaviour change).
 import { join } from "node:path";
-import { DurableNonceAdmission } from "../server/durable-admission.js";
-import { DurableNonceStore } from "../server/durable-store.js";
+import { DurableNonceAdmission } from "../server/durable/admission.js";
+import { DurableNonceStore } from "../server/durable/store.js";
 
 /** Validated durable options of one process. */
 export interface DurableSettings {

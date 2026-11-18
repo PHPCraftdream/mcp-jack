@@ -16,23 +16,23 @@
  * (handed to native tools so integer rules can be judged lexically). The
  * tokenizer is exported for reuse by the native-tools task.
  */
-import type { RequestAuth } from "../auth-header.js";
-import { parseRequestAuth } from "../auth-header.js";
-import { BadBase64UrlError, decodeBase64URLFixed, keyId } from "../encoding.js";
-import { validatePublicKey, verify as verifyEd25519 } from "../ed25519.js";
-import { Code, JackError } from "../errors.js";
-import { requestSigningString } from "../signing.js";
+import type { RequestAuth } from "../core/auth-header.js";
+import { parseRequestAuth } from "../core/auth-header.js";
+import { BadBase64UrlError, decodeBase64URLFixed, keyId } from "../core/encoding.js";
+import { validatePublicKey, verify as verifyEd25519 } from "../core/ed25519.js";
+import { Code, JackError } from "../core/errors.js";
+import { requestSigningString } from "../core/signing.js";
 import type { AuditEvent, AuditSink } from "./audit.js";
 import { AUDIT_FAILURE, AUDIT_SUCCESS } from "./audit.js";
-import type { NonceStore } from "./nonce.js";
-import type { DurableAdmission } from "./durable-admission.js";
-import { rememberResultFinish } from "./durable-finish.js";
-import type { RegistryEntry, StateStore } from "./state.js";
-import { inviteIdOf } from "./state.js";
-import { parseJsonRaw } from "../json-raw.js";
-import type { JsonValue, RawJsonNode } from "../json-raw.js";
-export { parseJsonRaw } from "../json-raw.js";
-export type { JsonValue, RawJsonNode } from "../json-raw.js";
+import type { NonceStore } from "./registry/nonce.js";
+import type { DurableAdmission } from "./durable/admission.js";
+import { rememberResultFinish } from "./durable/finish.js";
+import type { RegistryEntry, StateStore } from "./registry/state.js";
+import { inviteIdOf } from "./registry/state.js";
+import { parseJsonRaw } from "../core/json-raw.js";
+import type { JsonValue, RawJsonNode } from "../core/json-raw.js";
+export { parseJsonRaw } from "../core/json-raw.js";
+export type { JsonValue, RawJsonNode } from "../core/json-raw.js";
 
 // One shared strict UTF-8 decoder: a decode failure is exactly "not valid
 // UTF-8" (overlong, lone surrogates, truncated sequences all fail) and it
