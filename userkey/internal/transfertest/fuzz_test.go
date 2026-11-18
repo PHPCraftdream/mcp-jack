@@ -50,7 +50,7 @@ func ukRedacted(value any, data []byte) bool {
 }
 
 // ukAliceSeedB64 is the base64url d member of the pinned ukPrivAlice
-// fixture (transfer_test.go:81); it exists here only so the canonical
+// fixture (transfer_helpers_test.go:77); it exists here only so the canonical
 // private-envelope composer ukComposePrivate can rebuild that document
 // from its seed.
 const ukAliceSeedB64 = "FZSUIe6CQazeIZxM_5PMNGoEiOBJ3v9h2jEnmLdY0o8"
