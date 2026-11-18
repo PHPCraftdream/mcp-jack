@@ -138,6 +138,22 @@ jobs:
       - name: Regenerate and compare
         run: node spec/tools/gen-fixtures.mjs --check
 
+  layout:
+    name: layout lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+      - name: Self-test the layout linter
+        run: node --test tools/layout/check-layout.test.mjs
+      # Informational until the tree is clean; the final layout task removes
+      # continue-on-error and makes this step blocking.
+      - name: Check file length and folder size
+        continue-on-error: true
+        run: node tools/layout/check-layout.mjs
+
   rust:
     name: rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
