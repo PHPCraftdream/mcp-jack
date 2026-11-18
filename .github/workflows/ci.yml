@@ -36,7 +36,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          go test -count=1 -v -run '^Test(CandidateRotationStateVectors|CandidateNonceVectors|RotationStateClockVectors|RotationStateSelectionVectors|RotationStateEmissionVectors)$' ./client/rotation ./durable ./rotation ./server/rotation | tee vector-summary.log
+          go test -count=1 -v -run '^Test(CandidateRotationStateVectors|CandidateNonceVectors|RotationStateClockVectors|RotationStateSelectionVectors|RotationStateEmissionVectors)$' ./client/rotation ./durable ./durable/internal/rotationstore ./rotation ./server/rotation | tee vector-summary.log
           test "$(grep -c VECTOR-SUMMARY vector-summary.log)" -ge 5
 
   go-race:

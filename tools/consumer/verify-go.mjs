@@ -54,7 +54,7 @@ if (realStageRelative === "" || realStageRelative === ".." || realStageRelative.
 
 const inventoryPath = path.join(stageDir, "inventory.json");
 const inventory = JSON.parse(await readFile(inventoryPath, "utf8"));
-const allowed = /^(?:[^/]+\.go|go\.(?:mod|sum)|LICENSE-MIT|LICENSE-APACHE|client\/[^/]+\.go|client\/rotation\/[^/]+\.go|server\/[^/]+\.go|server\/rotation\/[^/]+\.go|userkey\/[^/]+\.go|rotation\/[^/]+\.go|durable\/[^/]+\.go|spec\/.+)$/u;
+const allowed = /^(?:[^/]+\.go|go\.(?:mod|sum)|LICENSE-MIT|LICENSE-APACHE|(?:client|server|rotation|durable|userkey)\/(?:[^/]+\/)*[^/]+\.go|internal\/jacktest\/[^/]+\.go|spec\/.+)$/u;
 if (inventory.module !== "github.com/PHPCraftdream/mcp-jack" || inventory.goVersion !== "1.25.0" || inventory.snapshot !== "staged") {
   throw new Error("staged module identity metadata changed");
 }
