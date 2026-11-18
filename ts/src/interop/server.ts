@@ -3,22 +3,22 @@
 // ever written: the ready line in serve mode or the --verify-only verdict;
 // every diagnostic goes to stderr.
 import { createServer } from "node:http";
-import { BadBase64UrlError, decodeBase64URL, decodeBase64URLFixed, encodeBase64URL } from "../encoding.js";
-import { verify as verifyEd25519 } from "../ed25519.js";
-import { Code, JackError } from "../errors.js";
-import { requestSigningString } from "../signing.js";
-import { parseRequestAuth } from "../auth-header.js";
-import type { RequestAuth } from "../auth-header.js";
-import { InMemorySigner } from "../client/signer.js";
-import { jackFetchHandler, jackIdentity, RAW_TARGET_SYMBOL } from "../server/fetch.js";
-import type { JackRequest } from "../server/fetch.js";
+import { BadBase64UrlError, decodeBase64URL, decodeBase64URLFixed, encodeBase64URL } from "../core/encoding.js";
+import { verify as verifyEd25519 } from "../core/ed25519.js";
+import { Code, JackError } from "../core/errors.js";
+import { requestSigningString } from "../core/signing.js";
+import { parseRequestAuth } from "../core/auth-header.js";
+import type { RequestAuth } from "../core/auth-header.js";
+import { InMemorySigner } from "../client/signing/signer.js";
+import { jackFetchHandler, jackIdentity, RAW_TARGET_SYMBOL } from "../server/http/fetch.js";
+import type { JackRequest } from "../server/http/fetch.js";
 import { bootstrapAdmin, Native } from "../server/native.js";
-import { NonceStore } from "../server/nonce.js";
-import { openFileState } from "../server/state-file.js";
-import type { FileState } from "../server/state-file.js";
+import { NonceStore } from "../server/registry/nonce.js";
+import { openFileState } from "../server/registry/state-file.js";
+import type { FileState } from "../server/registry/state-file.js";
 import { parseJsonRaw, Verifier } from "../server/verify.js";
 import type { RawJsonNode } from "../server/verify.js";
-import { serveNode } from "../server/node.js";
+import { serveNode } from "../server/http/node.js";
 import { durableInit, durableOpen, durableSettings } from "./durable.js";
 import type { DurableHandle, DurableSettings } from "./durable.js";
 

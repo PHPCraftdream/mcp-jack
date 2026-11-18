@@ -8,6 +8,7 @@ Thanks for your interest. The project is an early draft: the specification (`spe
 - A behavior change starts in `spec/` and its fixtures (`spec/tools/gen-fixtures.mjs` regenerates them; CI checks that they are up to date). Then every SDK gets the same change.
 - No private paths, secrets or personal data in commits.
 - Keep comments short and explain why, not what.
+- Layout limits for code and test files (`.go .rs .ts .tsx .mts .cts .js .mjs .cjs .sh .py`): at most 1000 lines per file and at most 7 such files directly in one folder. When a file or folder is over the limit, split it by topic and move the parts into subfolders (a Go folder is a package, so a split Go folder becomes several packages behind the original one; the public import path stays). `node tools/layout/check-layout.mjs` checks the whole tree and CI fails on a violation; see `tools/layout/README.md`.
 
 ## Checks
 
@@ -19,6 +20,7 @@ CI runs all of these; run what applies to your change before opening a pull requ
 | Rust (`rust/`) | `cargo fmt --check`, `cargo clippy --locked --all-targets --all-features -- -D warnings`, `cargo test --locked --all-features` |
 | TypeScript (`ts/`) | `npm ci --no-audit --no-fund`, `npm run typecheck`, `npm test` |
 | Fixtures | `node spec/tools/gen-fixtures.mjs --check` |
+| Layout | `node tools/layout/check-layout.mjs` |
 | Interop (3 x 3 matrix) | build the executables as in `interop/README.md`, then `node interop/run.mjs` |
 | Licences | CI-only: the `license` workflow; policy and rationale in `tools/license/README.md` |
 

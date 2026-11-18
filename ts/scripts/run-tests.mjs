@@ -4,7 +4,7 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const dir = join("dist-test", "test");
-const files = readdirSync(dir)
+const files = readdirSync(dir, { recursive: true })
   .filter((name) => name.endsWith(".test.js"))
   .sort()
   .map((name) => join(dir, name));

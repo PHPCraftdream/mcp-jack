@@ -1,0 +1,20 @@
+/** Candidate rotation primitives; current static credentials remain unchanged. */
+export * from "./wire/record.js";
+export * from "./wire/chain.js";
+export * from "./wire/sign.js";
+export * from "./wire/result.js";
+export * from "./wire/page.js";
+export * from "./snapshot/trust.js";
+export * from "./snapshot/trust-json.js";
+export { RotationTrustStore } from "./trust-store/store.js";
+export type { RotationStoreOptions } from "./trust-store/store.js";
+export { RotationController, RotationRefreshCommittedError } from "./trust-store/controller.js";
+export type { RotationResponse, RotationRefreshResult } from "./trust-store/controller.js";
+export { RotationHTTPClient } from "./http/http.js";
+export type { RotationHTTPReply } from "./http/http.js";
+export * from "./snapshot/server-state.js";
+export * from "./snapshot/server-key.js";
+export { RotationServerStore } from "./server/store.js";
+export type { RotationServerStoreOptions } from "./server/store-format.js";
+export { RotationServerProvider } from "./server/provider.js";
+export type { PinnedRotationSigner, RotationPublication, RotationResponseAuthorization, RotationResponseKeyRequest, RotationServerKey } from "./server/provider.js";

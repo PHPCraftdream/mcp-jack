@@ -11,11 +11,11 @@ import {
   decodeBase64URLFixed,
   encodeBase64URL,
   keyId,
-} from "../encoding.js";
-import { validatePublicKey, verify as verifyEd25519 } from "../ed25519.js";
-import { Code, JackError } from "../errors.js";
-import { rotateProofString } from "../signing.js";
-import { validName } from "../syntax.js";
+} from "../core/encoding.js";
+import { validatePublicKey, verify as verifyEd25519 } from "../core/ed25519.js";
+import { Code, JackError } from "../core/errors.js";
+import { rotateProofString } from "../core/signing.js";
+import { validName } from "../core/syntax.js";
 import {
   TOOL_ADMIN_INVITE_CREATE,
   TOOL_ADMIN_INVITE_LIST,
@@ -36,13 +36,13 @@ import type {
   NativeTools,
   RawJsonNode,
 } from "./verify.js";
-import { inviteIdOf } from "./state.js";
+import { inviteIdOf } from "./registry/state.js";
 import type {
   InviteRecord,
   RegistryEntry,
   StateEdit,
   StateStore,
-} from "./state.js";
+} from "./registry/state.js";
 
 // ---------------------------------------------------------------------------
 // Local helpers.

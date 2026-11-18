@@ -1,14 +1,14 @@
 /** JSON-RPC MCP client performing signed, response-verified tool calls (port of Go client/rpc.go). */
-import { validatePublicKey } from "../ed25519.js";
-import { JackError } from "../errors.js";
-import { MAX_BODY_BYTES, createSigningFetch, readBodyCapped } from "./transport.js";
-import type { SigningFetch } from "./transport.js";
+import { validatePublicKey } from "../core/ed25519.js";
+import { JackError } from "../core/errors.js";
+import { MAX_BODY_BYTES, createSigningFetch, readBodyCapped } from "./transport/transport.js";
+import type { SigningFetch } from "./transport/transport.js";
 import { HTTPError, RPCError, ToolError, parseErrorBody } from "./errors.js";
-import type { Clock, NonceSource } from "./auth.js";
+import type { Clock, NonceSource } from "./signing/auth.js";
 import { adminInviteCreate, adminInviteList, adminInviteRevoke, adminUserCreate, adminUserGet, adminUserList, adminUserRevoke, adminUserSetAdmin, enroll, rotateKey, whoAmI } from "./tools.js";
 import type { EnrollResult, Entry, InviteCreateParams, InviteCreateResult, InviteListEntry, InviteRevokeResult, KidResult, UserCreateParams, WhoAmIResult } from "./tools.js";
-import type { Signer } from "./signer.js";
-import { checkDestination } from "./url-policy.js";
+import type { Signer } from "./signing/signer.js";
+import { checkDestination } from "./transport/url-policy.js";
 
 /** Any JSON value, exactly as JSON.parse can produce. */
 export type JsonValue = string | number | boolean | null | JsonValue[] | { readonly [key: string]: JsonValue };

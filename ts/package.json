@@ -13,12 +13,8 @@
     }
   },
   "files": [
-    "dist/*.js",
-    "dist/*.d.ts",
-    "dist/client/*.js",
-    "dist/client/*.d.ts",
-    "dist/server/*.js",
-    "dist/server/*.d.ts",
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
     "README.md",
     "LICENSE-MIT",
     "LICENSE-APACHE"

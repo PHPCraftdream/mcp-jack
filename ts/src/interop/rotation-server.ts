@@ -6,17 +6,17 @@
 import { createServer } from "node:http";
 import { existsSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
-import { encodeBase64URL } from "../encoding.js";
-import { InMemorySigner } from "../client/signer.js";
-import { RotationServerProvider } from "../rotation-server-provider.js";
-import type { RotationServerKey } from "../rotation-server-provider.js";
-import { RotationServerStore } from "../rotation-server-store.js";
-import { jackFetchHandler } from "../server/fetch.js";
+import { encodeBase64URL } from "../core/encoding.js";
+import { InMemorySigner } from "../client/signing/signer.js";
+import { RotationServerProvider } from "../rotation/server/provider.js";
+import type { RotationServerKey } from "../rotation/server/provider.js";
+import { RotationServerStore } from "../rotation/server/store.js";
+import { jackFetchHandler } from "../server/http/fetch.js";
 import { Native } from "../server/native.js";
-import { NonceStore } from "../server/nonce.js";
-import { serveNode } from "../server/node.js";
-import { openFileState } from "../server/state-file.js";
-import type { FileState } from "../server/state-file.js";
+import { NonceStore } from "../server/registry/nonce.js";
+import { serveNode } from "../server/http/node.js";
+import { openFileState } from "../server/registry/state-file.js";
+import type { FileState } from "../server/registry/state-file.js";
 import { ServerKeyTool } from "../server/server-key-tool.js";
 import { Verifier } from "../server/verify.js";
 

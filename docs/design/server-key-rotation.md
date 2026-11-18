@@ -30,8 +30,8 @@ These references are repository-relative, not private workstation paths.
 | `rust/src/client/profile.rs`, `rust/src/client/request_signing/signer.rs`, `rust/src/client/network/http_transport/mod.rs` | Rust profile, user signer, and transport counterparts. |
 | `rust/src/server/http.rs`, `rust/src/server/registry/state_file.rs`, `rust/src/user_key/mod.rs` | Rust server HTTP/state and strict user-key transfer counterparts. |
 | `rust/src/ed25519.rs` lines 23–49 | Rust's current generic verifier explicitly uses strict verification, rejecting noncanonical/small-order R in addition to canonical S. This source observation is not a claim that the Go and TypeScript wrappers currently enforce the same R-point rules. |
-| `ts/src/client/profile.ts`, `ts/src/client/signer.ts`, `ts/src/client/transport.ts`, `ts/src/ed25519.ts` | TypeScript client/profile/transport and verifier counterparts. |
-| `ts/src/server/fetch.ts`, `ts/src/server/node.ts`, `ts/src/server/state-file.ts`, `ts/src/user-key-transfer.ts` | TypeScript server adapters/state and strict user-key transfer counterpart. |
+| `ts/src/client/profile.ts`, `ts/src/client/signing/signer.ts`, `ts/src/client/transport/transport.ts`, `ts/src/core/ed25519.ts` | TypeScript client/profile/transport and verifier counterparts. |
+| `ts/src/server/http/fetch.ts`, `ts/src/server/http/node.ts`, `ts/src/server/registry/state-file.ts`, `ts/src/user-key/transfer.ts` | TypeScript server adapters/state and strict user-key transfer counterpart. |
 | `server/internal/state/statefile.go` | Go registry/invite persistence; not a client pin store or rotation snapshot. |
 
 The existing profile's `server_public_key` is a static server pin, while `kid` is the user's key id. Existing registry/invite stores are not pin stores. Do not repurpose either. Existing same-directory temp-file write, file sync, and rename must not be described as sufficient power-loss durability for the new trust snapshot: a separately reviewed platform durability mapping is required.

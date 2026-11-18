@@ -1,11 +1,11 @@
 /** Client profile: a configuration file holding ONLY public data (port of Go client/profile.go). */
-import { BadBase64UrlError, decodeBase64URLFixed } from "../encoding.js";
-import { validatePublicKey } from "../ed25519.js";
-import { JackError } from "../errors.js";
+import { BadBase64UrlError, decodeBase64URLFixed } from "../core/encoding.js";
+import { validatePublicKey } from "../core/ed25519.js";
+import { JackError } from "../core/errors.js";
 import { Client } from "./rpc.js";
-import type { Clock, NonceSource } from "./auth.js";
-import type { Signer } from "./signer.js";
-import { checkDestination } from "./url-policy.js";
+import type { Clock, NonceSource } from "./signing/auth.js";
+import type { Signer } from "./signing/signer.js";
+import { checkDestination } from "./transport/url-policy.js";
 
 /**
  * Profile is a client configuration file. It deliberately has no private-key
