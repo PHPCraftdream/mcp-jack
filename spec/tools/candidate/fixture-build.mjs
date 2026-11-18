@@ -1,4 +1,4 @@
-import { ROTATION_KEYS_PUBLIC, ROTATION_NEGATIVE, ROTATION_VALID, rotationRecordsForVerification } from './rotation-cases.mjs';
+import { ROTATION_KEYS_PUBLIC, ROTATION_NEGATIVE, ROTATION_VALID, rotationRecordsForVerification } from './rotation/rotation-cases.mjs';
 import { NONCE_EVENTS, ROTATION_CLIENT_CASES, ROTATION_EVENT_CASES } from './scenario-data.mjs';
 
 const json = (value) => `${JSON.stringify(value, null, 2)}\n`;

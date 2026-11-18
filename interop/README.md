@@ -21,13 +21,14 @@ interop/
   rotation.mjs                      rotation matrix, self-test, fake driver
   targets.json                      Go, Rust and TypeScript executable argv
   transfer.mjs                      independent credential-transfer matrix
-  transfer-{checks,fixtures,matrix,public,refusals,trust,process}.mjs
-  transfer-{self-test,lifecycle-test}.mjs
+  transfer/{checks,fixtures,matrix,process,self-test,lifecycle-test}.mjs
+  transfer/cases/{public,refusals,trust}.mjs
   tools/gen-sign-cases.mjs           signing-vector generator/checker (not run here)
-  tools/fake-{client,server}.mjs     request-harness self-test only; not SDKs
   tools/transfer-child.mjs           transfer lifecycle self-test child
-  tools/rotation-fake.mjs            rotation fake peer (page/page-tamper/old-key)
-  tools/fake-rotation-{server,client}.mjs  rotation self-test fakes; not SDKs
+  tools/fakes/fake-{client,server}.mjs  request-harness self-test only; not SDKs
+  tools/fakes/rotation-fake.mjs      rotation fake peer (page/page-tamper/old-key)
+  tools/fakes/fake-rotation-{server,client}.mjs  rotation self-test fakes; not SDKs
+  tools/fakes/fake-durable-{server,client}.mjs   durable self-test fakes; not SDKs
   go/{server,client,transfer}/       Go integration executable sources
   go/{rotationserver,rotationclient}/  Go rotation executable sources
   rust/src/bin/interop*.rs           Rust integration executable sources
@@ -396,7 +397,7 @@ The matrix pins 19 named checks:
 | `r4-client-rollback-refused` | A client store clock below its high water latches unsafe; the client refuses (nonzero exit, no JSON line). |
 | `r5-client-restart-no-recovery` | A restart on the latched client store still refuses even with the clock moved far forward: no catch-up recovery exists. |
 
-The fake peer `tools/rotation-fake.mjs` (page, page-tamper, and old-key modes) is driver-owned harness tooling like `tools/fake-server.mjs` and is never SDK evidence. The self-test fakes exercise driver logic only and are not SDKs.
+The fake peer `tools/fakes/rotation-fake.mjs` (page, page-tamper, and old-key modes) is driver-owned harness tooling like `tools/fakes/fake-server.mjs` and is never SDK evidence. The self-test fakes exercise driver logic only and are not SDKs.
 
 Limits: single-page refresh only (no pagination); no quarantine/conflict coverage; no capacity/compaction coverage; no concurrent publishers; restart coverage limited to the fail-closed rollback latch above (no recovery/reconcile or fence-clearing flow is exercised — no SDK implements one); no bridge-expired refusal (the client never receives a first-seen record at or after A in this matrix); no Windows/macOS runs; no durable-nonce profile; no fuzzing. Per-language deeper coverage stays in the SDK test suites.
 

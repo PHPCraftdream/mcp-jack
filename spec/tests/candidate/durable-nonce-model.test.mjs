@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { NONCE_EVENTS } from '../../tools/candidate/scenario-data.mjs';
-import { initialNonceState, reserveNonce, reconcileNonceRestart } from '../../tools/candidate/durable-nonce-model.mjs';
+import { initialNonceState, reserveNonce, reconcileNonceRestart } from '../../tools/candidate/model/durable-nonce-model.mjs';
 
 test('hand-stated durable nonce cases execute status, callback, persistence, and effects oracles', () => {
   for (const item of NONCE_EVENTS.filter((row) => !row.sequence)) {

@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { base64url, keyId, publicFromSeed, sha256, signSeed, testSeed, verifyNode, RFC8032_TEST } from '../../tools/candidate/crypto.mjs';
-import { pureVerifier, runCryptoKats } from '../../tools/candidate/independent-checks.mjs';
-import { ROTATION_KEYS_PUBLIC, ROTATION_NEGATIVE, ROTATION_VALID, rotationRecordsForVerification, ENDPOINT, AUDIENCE } from '../../tools/candidate/rotation-cases.mjs';
-import { verifyChain, parseRecord, selectedOrdinal, assignmentValid, encodeB } from '../../tools/candidate/rotation-codec.mjs';
-import { parseRefreshArguments, verifyRequestSignature, verifyResponseSignature } from '../../tools/candidate/verification.mjs';
+import { pureVerifier, runCryptoKats } from '../../tools/candidate/checks/independent-checks.mjs';
+import { ROTATION_KEYS_PUBLIC, ROTATION_NEGATIVE, ROTATION_VALID, rotationRecordsForVerification, ENDPOINT, AUDIENCE } from '../../tools/candidate/rotation/rotation-cases.mjs';
+import { verifyChain, parseRecord, selectedOrdinal, assignmentValid, encodeB } from '../../tools/candidate/rotation/rotation-codec.mjs';
+import { parseRefreshArguments, verifyRequestSignature, verifyResponseSignature } from '../../tools/candidate/checks/verification.mjs';
 
 const named = (name) => {
   const seed = testSeed(name);
