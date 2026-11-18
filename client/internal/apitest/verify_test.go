@@ -1,4 +1,4 @@
-package client
+package client_test
 
 import (
 	"errors"
@@ -7,6 +7,7 @@ import (
 	"time"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
+	"github.com/PHPCraftdream/mcp-jack/client"
 	spec "github.com/PHPCraftdream/mcp-jack/spec"
 )
 
@@ -42,7 +43,7 @@ func TestVerifyResponseVectors(t *testing.T) {
 			}
 
 			window := time.Duration(tc.State.WindowSeconds) * time.Second
-			err = VerifyResponse(serverKey, tc.Response.Status, headerValues, tc.State.RequestSig, body, time.Unix(tc.State.Now, 0), window)
+			err = client.VerifyResponse(serverKey, tc.Response.Status, headerValues, tc.State.RequestSig, body, time.Unix(tc.State.Now, 0), window)
 
 			var je *jack.Error
 
@@ -110,12 +111,12 @@ func TestVerifyResponseDefaultWindow(t *testing.T) {
 		t.Fatalf("decode body: %v", err)
 	}
 
-	if err := VerifyResponse(serverKey, tc.Response.Status, headerValues, tc.State.RequestSig, body, time.Unix(tc.State.Now+30, 0), 0); err != nil {
+	if err := client.VerifyResponse(serverKey, tc.Response.Status, headerValues, tc.State.RequestSig, body, time.Unix(tc.State.Now+30, 0), 0); err != nil {
 		t.Errorf("window <= 0 at +30s boundary: got error %v, want accept", err)
 	}
 
 	var je *jack.Error
-	if err := VerifyResponse(serverKey, tc.Response.Status, headerValues, tc.State.RequestSig, body, time.Unix(tc.State.Now+31, 0), 0); err == nil {
+	if err := client.VerifyResponse(serverKey, tc.Response.Status, headerValues, tc.State.RequestSig, body, time.Unix(tc.State.Now+31, 0), 0); err == nil {
 		t.Errorf("window <= 0 at +31s: got nil error, want timestamp_out_of_window")
 	} else if !errors.As(err, &je) {
 		t.Errorf("window <= 0 at +31s: got error %v, not a *jack.Error", err)
