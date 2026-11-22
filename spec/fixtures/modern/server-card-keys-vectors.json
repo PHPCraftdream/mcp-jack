@@ -543,6 +543,72 @@
       }
     },
     {
+      "id": "card-fetch-server-key-and-dedicated",
+      "rule": "R7.3",
+      "description": "a card publishing the raw MCP server key next to the dedicated key yields only the dedicated key",
+      "kind": "fetch",
+      "input": {
+        "mcpUrl": "https://mcp.example.test/mcp",
+        "cardUrl": "https://mcp.example.test/server-card",
+        "mcp_server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+        "response": {
+          "status": 200,
+          "headers": {},
+          "card": {
+            "remotes": [
+              {
+                "type": "streamable-http",
+                "url": "https://mcp.example.test/mcp",
+                "extensionsInfo": {
+                  "io.modelcontextprotocol/events": {
+                    "webhooks": {
+                      "signingKeys": {
+                        "keys": [
+                          {
+                            "kty": "OKP",
+                            "crv": "Ed25519",
+                            "x": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+                            "kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88"
+                          },
+                          {
+                            "kty": "OKP",
+                            "crv": "Ed25519",
+                            "x": "71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ",
+                            "kid": "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg"
+                          }
+                        ]
+                      },
+                      "egressIpRanges": [
+                        "203.0.113.0/24",
+                        "2001:db8::/32"
+                      ]
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "expect": {
+        "result": "accept",
+        "keys": [
+          "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg"
+        ],
+        "egress": [
+          "203.0.113.0/24",
+          "2001:db8::/32"
+        ],
+        "rejected": [
+          {
+            "kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+            "reason": "mcp_server_key"
+          }
+        ],
+        "cache_ttl": 300
+      }
+    },
+    {
       "id": "card-jwk-valid",
       "rule": "R7.3",
       "description": "two well formed JWKs are both accepted",
@@ -776,6 +842,40 @@
           }
         ],
         "mcp_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88"
+      },
+      "expect": {
+        "accepted": [
+          "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg"
+        ],
+        "rejected": [
+          {
+            "kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+            "reason": "mcp_server_key"
+          }
+        ]
+      }
+    },
+    {
+      "id": "card-jwk-server-key-raw",
+      "rule": "R7.3",
+      "description": "the configured raw server public key drops the server key even though its kid is not named",
+      "kind": "jwk-set",
+      "input": {
+        "signing_keys": [
+          {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ",
+            "kid": "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg"
+          },
+          {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+            "kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88"
+          }
+        ],
+        "mcp_server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw"
       },
       "expect": {
         "accepted": [
@@ -1077,6 +1177,151 @@
       },
       "expect": {
         "result": "accept"
+      }
+    },
+    {
+      "id": "card-webhook-key-agree-discovery",
+      "rule": "R7.6",
+      "description": "a tool result publishing both keys discovery accepted agrees with the card",
+      "kind": "webhook-key-discovery",
+      "input": {
+        "mcpUrl": "https://mcp.example.test/mcp",
+        "cardUrl": "https://mcp.example.test/server-card",
+        "response": {
+          "status": 200,
+          "headers": {},
+          "card": {
+            "remotes": [
+              {
+                "type": "streamable-http",
+                "url": "https://mcp.example.test/mcp",
+                "extensionsInfo": {
+                  "io.modelcontextprotocol/events": {
+                    "webhooks": {
+                      "signingKeys": {
+                        "keys": [
+                          {
+                            "kty": "OKP",
+                            "crv": "Ed25519",
+                            "x": "71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ",
+                            "kid": "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg"
+                          },
+                          {
+                            "kty": "OKP",
+                            "crv": "Ed25519",
+                            "x": "9vRVawRdYBgeanZhnZjKWAcT_RHMzSyGb_BO5LJ9JsA",
+                            "kid": "5WagpSYUiSUNAUEb2yn1foTj_zpE75JB3D7DOCjz6uM"
+                          }
+                        ]
+                      },
+                      "egressIpRanges": [
+                        "203.0.113.0/24",
+                        "2001:db8::/32"
+                      ]
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "toolResult": {
+          "webhook_key": {
+            "signing_keys": {
+              "keys": [
+                {
+                  "kty": "OKP",
+                  "crv": "Ed25519",
+                  "x": "71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ",
+                  "kid": "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg"
+                },
+                {
+                  "kty": "OKP",
+                  "crv": "Ed25519",
+                  "x": "9vRVawRdYBgeanZhnZjKWAcT_RHMzSyGb_BO5LJ9JsA",
+                  "kid": "5WagpSYUiSUNAUEb2yn1foTj_zpE75JB3D7DOCjz6uM"
+                }
+              ]
+            },
+            "egress_ip_ranges": [
+              "203.0.113.0/24",
+              "2001:db8::/32"
+            ]
+          }
+        }
+      },
+      "expect": {
+        "result": "accept"
+      }
+    },
+    {
+      "id": "card-webhook-key-mismatch-discovery",
+      "rule": "R7.6",
+      "description": "a tool result narrowing the card set to one of its two keys is webhook_key_mismatch",
+      "kind": "webhook-key-discovery",
+      "input": {
+        "mcpUrl": "https://mcp.example.test/mcp",
+        "cardUrl": "https://mcp.example.test/server-card",
+        "response": {
+          "status": 200,
+          "headers": {},
+          "card": {
+            "remotes": [
+              {
+                "type": "streamable-http",
+                "url": "https://mcp.example.test/mcp",
+                "extensionsInfo": {
+                  "io.modelcontextprotocol/events": {
+                    "webhooks": {
+                      "signingKeys": {
+                        "keys": [
+                          {
+                            "kty": "OKP",
+                            "crv": "Ed25519",
+                            "x": "71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ",
+                            "kid": "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg"
+                          },
+                          {
+                            "kty": "OKP",
+                            "crv": "Ed25519",
+                            "x": "9vRVawRdYBgeanZhnZjKWAcT_RHMzSyGb_BO5LJ9JsA",
+                            "kid": "5WagpSYUiSUNAUEb2yn1foTj_zpE75JB3D7DOCjz6uM"
+                          }
+                        ]
+                      },
+                      "egressIpRanges": [
+                        "203.0.113.0/24",
+                        "2001:db8::/32"
+                      ]
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "toolResult": {
+          "webhook_key": {
+            "signing_keys": {
+              "keys": [
+                {
+                  "kty": "OKP",
+                  "crv": "Ed25519",
+                  "x": "9vRVawRdYBgeanZhnZjKWAcT_RHMzSyGb_BO5LJ9JsA",
+                  "kid": "5WagpSYUiSUNAUEb2yn1foTj_zpE75JB3D7DOCjz6uM"
+                }
+              ]
+            },
+            "egress_ip_ranges": [
+              "203.0.113.0/24",
+              "2001:db8::/32"
+            ]
+          }
+        }
+      },
+      "expect": {
+        "result": "reject",
+        "code": "webhook_key_mismatch"
       }
     }
   ]

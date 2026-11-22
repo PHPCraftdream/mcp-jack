@@ -487,10 +487,38 @@
     {
       "id": "ssrf-v4-this-network",
       "rule": "R6.5",
-      "description": "0.0.0.0 is inside 0.0.0.0/8 this_network",
+      "description": "0.1.2.3 is inside 0.0.0.0/8 this_network",
+      "kind": "address",
+      "input": {
+        "address": "0.1.2.3"
+      },
+      "expect": {
+        "result": "reject",
+        "reason": "this_network",
+        "family": "ipv4"
+      }
+    },
+    {
+      "id": "ssrf-v4-this-host",
+      "rule": "R6.5",
+      "description": "0.0.0.0 is inside the more specific 0.0.0.0/32 this_host_on_this_network row",
       "kind": "address",
       "input": {
         "address": "0.0.0.0"
+      },
+      "expect": {
+        "result": "reject",
+        "reason": "this_host_on_this_network",
+        "family": "ipv4"
+      }
+    },
+    {
+      "id": "ssrf-v4-this-host-global",
+      "rule": "R6.5",
+      "description": "0.1.0.0 is outside the /32 and stays inside 0.0.0.0/8 this_network, so the /32 does not leak",
+      "kind": "address",
+      "input": {
+        "address": "0.1.0.0"
       },
       "expect": {
         "result": "reject",
@@ -929,6 +957,48 @@
       "expect": {
         "result": "reject",
         "reason": "discard_only",
+        "family": "ipv6"
+      }
+    },
+    {
+      "id": "ssrf-v6-dummy-prefix",
+      "rule": "R6.6",
+      "description": "100:0:0:1::1 is inside 100:0:0:1::/64 dummy_ipv6_prefix",
+      "kind": "address",
+      "input": {
+        "address": "100:0:0:1::1"
+      },
+      "expect": {
+        "result": "reject",
+        "reason": "dummy_ipv6_prefix",
+        "family": "ipv6"
+      }
+    },
+    {
+      "id": "ssrf-v6-dummy-prefix-first",
+      "rule": "R6.6",
+      "description": "the first address of 100:0:0:1::/64, 100:0:0:1::, is dummy_ipv6_prefix",
+      "kind": "address",
+      "input": {
+        "address": "100:0:0:1::"
+      },
+      "expect": {
+        "result": "reject",
+        "reason": "dummy_ipv6_prefix",
+        "family": "ipv6"
+      }
+    },
+    {
+      "id": "ssrf-v6-dummy-prefix-last",
+      "rule": "R6.6",
+      "description": "the last address of 100:0:0:1::/64, 100:0:0:1:ffff:ffff:ffff:ffff, is dummy_ipv6_prefix",
+      "kind": "address",
+      "input": {
+        "address": "100:0:0:1:ffff:ffff:ffff:ffff"
+      },
+      "expect": {
+        "result": "reject",
+        "reason": "dummy_ipv6_prefix",
         "family": "ipv6"
       }
     },

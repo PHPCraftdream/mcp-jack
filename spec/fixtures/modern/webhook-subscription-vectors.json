@@ -652,26 +652,26 @@
     {
       "id": "sub-envelope-terminated",
       "rule": "R8.8",
-      "description": "a terminated envelope without data carries only code and message",
+      "description": "a terminated envelope with an integer code and no data carries only code and message",
       "kind": "envelope",
       "input": {
         "kind": "terminated",
-        "code": "-32024",
+        "code": -32024,
         "message": "Forbidden"
       },
       "expect": {
         "result": "accept",
-        "body_text": "{\"type\":\"terminated\",\"error\":{\"code\":\"-32024\",\"message\":\"Forbidden\"}}"
+        "body_text": "{\"type\":\"terminated\",\"error\":{\"code\":-32024,\"message\":\"Forbidden\"}}"
       }
     },
     {
       "id": "sub-envelope-terminated-data",
       "rule": "R8.8",
-      "description": "a terminated envelope appends the optional data member last",
+      "description": "a terminated envelope with an integer code appends the optional data member last",
       "kind": "envelope",
       "input": {
         "kind": "terminated",
-        "code": "-32024",
+        "code": -32024,
         "message": "Forbidden",
         "data": {
           "reason": "Access revoked"
@@ -679,7 +679,100 @@
       },
       "expect": {
         "result": "accept",
-        "body_text": "{\"type\":\"terminated\",\"error\":{\"code\":\"-32024\",\"message\":\"Forbidden\",\"data\":{\"reason\":\"Access revoked\"}}}"
+        "body_text": "{\"type\":\"terminated\",\"error\":{\"code\":-32024,\"message\":\"Forbidden\",\"data\":{\"reason\":\"Access revoked\"}}}"
+      }
+    },
+    {
+      "id": "sub-envelope-terminated-code-string",
+      "rule": "R8.8",
+      "description": "a string error code is not an integer",
+      "kind": "envelope",
+      "input": {
+        "kind": "terminated",
+        "code": "-32024",
+        "message": "Forbidden"
+      },
+      "expect": {
+        "result": "reject",
+        "code": "invalid_envelope"
+      }
+    },
+    {
+      "id": "sub-envelope-terminated-code-fraction",
+      "rule": "R8.8",
+      "description": "a fractional error code is not an integer",
+      "kind": "envelope",
+      "input": {
+        "kind": "terminated",
+        "code": -32024.5,
+        "message": "Forbidden"
+      },
+      "expect": {
+        "result": "reject",
+        "code": "invalid_envelope"
+      }
+    },
+    {
+      "id": "sub-envelope-terminated-message-missing",
+      "rule": "R8.8",
+      "description": "a terminated envelope without message is rejected",
+      "kind": "envelope",
+      "input": {
+        "kind": "terminated",
+        "code": -32024
+      },
+      "expect": {
+        "result": "reject",
+        "code": "invalid_envelope"
+      }
+    },
+    {
+      "id": "sub-envelope-terminated-message-nonstring",
+      "rule": "R8.8",
+      "description": "a numeric message is not a string",
+      "kind": "envelope",
+      "input": {
+        "kind": "terminated",
+        "code": -32024,
+        "message": 403
+      },
+      "expect": {
+        "result": "reject",
+        "code": "invalid_envelope"
+      }
+    },
+    {
+      "id": "sub-envelope-terminated-data-nonobject",
+      "rule": "R8.8",
+      "description": "an array data member is not an object",
+      "kind": "envelope",
+      "input": {
+        "kind": "terminated",
+        "code": -32024,
+        "message": "Forbidden",
+        "data": [
+          "Access revoked"
+        ]
+      },
+      "expect": {
+        "result": "reject",
+        "code": "invalid_envelope"
+      }
+    },
+    {
+      "id": "sub-envelope-terminated-data-null",
+      "rule": "R8.8",
+      "description": "a null data member is not an object",
+      "kind": "envelope",
+      "input": {
+        "kind": "terminated",
+        "code": -32024,
+        "message": "Forbidden",
+        "data": null
+      },
+      "expect": {
+        "result": "reject",
+        "code": "invalid_envelope"
       }
     },
     {

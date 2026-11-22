@@ -1786,7 +1786,7 @@
           ]
         ],
         "stream_b64u": [
-          "ZXZlbnQ6IG1lc3NhZ2UKZGF0YTogeyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoibm90aWZpY2F0aW9ucy9wcm9ncmVzcyIsInBhcmFtcyI6eyJwcm9ncmVzc1Rva2VuIjoidDEiLCJwcm9ncmVzcyI6MX19CmphY2s6IHNlcT0wLHRzPTE3NjcyMjU1NjAsc2lnPVBYVndZWFBHR1N5eFVVMjZsdUFoVThuYUxFOTBZNm00WW9Xb3k4c3Y0U2ROOXg2akRkNTRZaXp4UTVwR3ViSWhhSlFfNWVRZ0VwZThjbVVVTmdDT0NBCgpldmVudDogbWVzc2FnZQpkYXRhOiB7Impzb25ycGMiOiIyLjAiLCJtZXRob2QiOiJub3RpZmljYXRpb25zL3Byb2dyZXNzIiwicGFyYW1zIjp7InByb2dyZXNzVG9rZW4iOiJ0MSIsInByb2dyZXNzIjoyfX0KamFjazogc2VxPTEsdHM9MTc2NzIyNTU2OSxzaWc9ZWN6WmVOR2ZrYk1BRk1tWmp6Sjdqc1AwYmNYT3dnQy1HRHhIbmpBcGN0YU10MHh0bjlfdGtwbTdaMXplZk1KWm41T0hHUzVLRlFBSjlIR2tVaXhxQ3cKCmV2ZW50OiBqYWNrLWVuZApkYXRhOgpqYWNrOiBzZXE9Mix0cz0xNzY3MjI1NTY5LHNpZz13WXVQZWI1dnF6NEdyY3F0TVFtdHpvYm9BclFPZ3huNk5aNFUwT2hSZmFqZWp4dmlENWxZZEkyVlFBSE0zb25SN0hITVhJeXdlSV9uXzJQWjBNQS1DQQoK"
+          "ZXZlbnQ6IG1lc3NhZ2UKZGF0YTogeyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoibm90aWZpY2F0aW9ucy9wcm9ncmVzcyIsInBhcmFtcyI6eyJwcm9ncmVzc1Rva2VuIjoidDEiLCJwcm9ncmVzcyI6MX19CmphY2s6IHNlcT0wLHRzPTE3NjcyMjU1NjAsc2lnPVBYVndZWFBHR1N5eFVVMjZsdUFoVThuYUxFOTBZNm00WW9Xb3k4c3Y0U2ROOXg2akRkNTRZaXp4UTVwR3ViSWhhSlFfNWVRZ0VwZThjbVVVTmdDT0NBCgpldmVudDogbWVzc2FnZQpkYXRhOiB7Impzb25ycGMiOiIyLjAiLCJtZXRob2QiOiJub3RpZmljYXRpb25zL3Byb2dyZXNzIiwicGFyYW1zIjp7InByb2dyZXNzVG9rZW4iOiJ0MSIsInByb2dyZXNzIjoyfX0KamFjazogc2VxPTEsdHM9MTc2NzIyNTU2OSxzaWc9ZWN6WmVOR2ZrYk1BRk1tWmp6Sjdqc1AwYmNYT3dnQy1HRHhIbmpBcGN0YU10MHh0bjlfdGtwbTdaMXplZk1KWm41T0hHUzVLRlFBSjlIR2tVaXhxQ3cKCmV2ZW50OiBqYWNrLWVuZApkYXRhOgpqYWNrOiBzZXE9Mix0cz0xNzY3MjI1NjAwLHNpZz1EYmF2czhKQ2pTVzJtaFZwVms4dTF3ZUVnbk1yWlpBdmxGd2ZQOVRjbnpzdjlTazMybEhJWkpSQ2lKdm9qX2VrU05NUVV0VWJFNUxza3g4dEVTQ3NCdwoK"
         ]
       },
       "expect": {
@@ -1830,7 +1830,7 @@
           ]
         ],
         "stream_b64u": [
-          "ZXZlbnQ6IG1lc3NhZ2UKZGF0YTogeyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoibm90aWZpY2F0aW9ucy9wcm9ncmVzcyIsInBhcmFtcyI6eyJwcm9ncmVzc1Rva2VuIjoidDEiLCJwcm9ncmVzcyI6MX19CmphY2s6IHNlcT0wLHRzPTE3NjcyMjU2MTAsc2lnPUJPYWhKZjdYY2l5N0J6TW5iaF9BbGRmVnQxU0tRZ0ptUldUekM0NWsxajV1SVplZDdwcXJkMWp1cXlYSlRNY3ROR1QzSkVWYmp3MzZwaWFQVk9sTkNRCgpldmVudDogamFjay1lbmQKZGF0YToKamFjazogc2VxPTEsdHM9MTc2NzIyNTYxMCxzaWc9TWVVMGs3elRUMFZPMnFhd3NmRnc5Z1pwUTI3X21wUFJJTTFvVFZnUm0xaTluZmVXSTJRLWJaYVRkMXFpVEZGRC02ZFA3MFhOandfdzhEX2YwUmZJQkEKCg"
+          "ZXZlbnQ6IG1lc3NhZ2UKZGF0YTogeyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoibm90aWZpY2F0aW9ucy9wcm9ncmVzcyIsInBhcmFtcyI6eyJwcm9ncmVzc1Rva2VuIjoidDEiLCJwcm9ncmVzcyI6MX19CmphY2s6IHNlcT0wLHRzPTE3NjcyMjU2MTAsc2lnPUJPYWhKZjdYY2l5N0J6TW5iaF9BbGRmVnQxU0tRZ0ptUldUekM0NWsxajV1SVplZDdwcXJkMWp1cXlYSlRNY3ROR1QzSkVWYmp3MzZwaWFQVk9sTkNRCgo"
         ]
       },
       "expect": {
@@ -2218,7 +2218,7 @@
           ]
         ],
         "stream_b64u": [
-          "ZXZlbnQ6IG1lc3NhZ2UKZGF0YTogeyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoibm90aWZpY2F0aW9ucy9wcm9ncmVzcyIsInBhcmFtcyI6eyJwcm9ncmVzc1Rva2VuIjoidDEiLCJwcm9ncmVzcyI6MX19CmphY2s6IHNlcT0wLHRzPTE3NjcyMjU2MDAsc2lnPXVycERmZ09OOUxmSEVPNXhJdGJlQmpsNlRZMXd3VlpFcTEzemJGMUxzcXd5ZG81R2ZCbTZIUkFZLUpMa296S0U0dnlydFBVeTlpMF9xNDNyMnR1N0RBCgpldmVudDogamFjay1lbmQKZGF0YTogeApqYWNrOiBzZXE9MSx0cz0xNzY3MjI1NjAwLHNpZz1ZeEtNeXRETDVSVEZROTlMUjZXQVpJTVEwVXZXRjJiV3I3Wm16Ny1NT2l3RXc5OXBhdVM1N0tISS0xY2l1dWtHcTE4ZVlHQlg0bmVpeDhzMFg1N1lCZwoK"
+          "ZXZlbnQ6IG1lc3NhZ2UKZGF0YTogeyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoibm90aWZpY2F0aW9ucy9wcm9ncmVzcyIsInBhcmFtcyI6eyJwcm9ncmVzc1Rva2VuIjoidDEiLCJwcm9ncmVzcyI6MX19CmphY2s6IHNlcT0wLHRzPTE3NjcyMjU2MDAsc2lnPXVycERmZ09OOUxmSEVPNXhJdGJlQmpsNlRZMXd3VlpFcTEzemJGMUxzcXd5ZG81R2ZCbTZIUkFZLUpMa296S0U0dnlydFBVeTlpMF9xNDNyMnR1N0RBCgpldmVudDogamFjay1lbmQKZGF0YTogeApqYWNrOiBzZXE9MSx0cz0xNzY3MjI1NjAwLHNpZz1ZeEtNeXRETDVSVEZROTlMUjZXQVpJTVEwVXZXRjJiV3I3Wm16Ny1NT2l3RXc5OXBhdVM1N0tISS0xY2l1dWtHcTE4ZVlHQlg0bmVpeDhzMFg1N1lCZwoKZXZlbnQ6IGphY2stZW5kCmRhdGE6CmphY2s6IHNlcT0yLHRzPTE3NjcyMjU2MDAsc2lnPWVYN1AtMWJKZTNsanhCQzFrSEk3Q2RTdFI1Z3UycnA4YV9VYjYyUkxGOU1FeEpzSE1XSDl1MXhpM0prNTRLTEp1V01mc3o0Y2x3Rm5acGRTWmx1WkFBCgo"
         ]
       },
       "expect": {
@@ -3271,6 +3271,105 @@
       "silent_after_ms": 90001
     },
     {
+      "id": "stream-idle-bom-late-chunk",
+      "description": "a BOM shifts the offsets, so the frame is timed in the chunk that carried its last byte (4.5, 2.14)",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "pinned_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+        "pinned_server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+        "request_sig": "OsOug0yCJZPIkJ5Huk2UcIxlstzaz4b22EBRHfQHO0YgoHkDflI7kNPpSGO4HzueDASfxlEQRL1Kt45PN0pfBw",
+        "request_id": 1,
+        "successor_activation": null,
+        "frame_max_bytes": 1048576,
+        "stream_idle_ms": 90000
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "X-Accel-Buffering",
+            "no"
+          ],
+          [
+            "Jack-Auth",
+            "s1 kid=wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88,ts=1767225600,sid=q9nUNYuH-Xf_cgJBVu4_Dg,sig=LTE8doFNPgqOVb_LI-8rW-i295JexxTPR85x5XRzOLCTtIOlz8r4uuZZ1lr2QZeLdk15masENOU9rZScH8TBAQ"
+          ]
+        ],
+        "stream_b64u": [
+          "77u_ZXZlbnQ6IG1lcw",
+          "c2FnZQpkYXRhOiB7Impzb25ycGMiOiIyLjAiLCJtZXRob2QiOiJub3RpZmljYXRpb25zL3Byb2dyZXNzIiwicGFyYW1zIjp7InByb2dyZXNzVG9rZW4iOiJ0MSIsInByb2dyZXNzIjoxfX0KamFjazogc2VxPTAsdHM9MTc2NzIyNTYwMCxzaWc9dXJwRGZnT045TGZIRU81eEl0YmVCamw2VFkxd3dWWkVxMTN6YkYxTHNxd3lkbzVHZkJtNkhSQVktSkxrb3pLRTR2eXJ0UFV5OWkwX3E0M3IydHU3REEKCmV2ZW50OiBqYWNrLWVuZApkYXRhOgpqYWNrOiBzZXE9MSx0cz0xNzY3MjI1NjAwLHNpZz1EMnV6ZWpJam1EUHZZU0o1MFUyODN1UlRSeGJRdXY2M1pLQVduc0ZVZlRRQkhNeE96SUx4LWp5U0JuVE1kQXZPWHNvaDVBRXo2d1MzY281d0VuQnpEUQoK"
+        ]
+      },
+      "expect": {
+        "messages": [],
+        "terminal": {
+          "state": "error",
+          "code": "stream_idle",
+          "frames_verified": 0
+        }
+      },
+      "arrival_ms": [
+        0,
+        90001
+      ]
+    },
+    {
+      "id": "stream-idle-comment-silence",
+      "description": "a comment at 80000 ms plus 20000 ms of silence is 100000 ms without a verified frame (4.5)",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "pinned_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+        "pinned_server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+        "request_sig": "OsOug0yCJZPIkJ5Huk2UcIxlstzaz4b22EBRHfQHO0YgoHkDflI7kNPpSGO4HzueDASfxlEQRL1Kt45PN0pfBw",
+        "request_id": 1,
+        "successor_activation": null,
+        "frame_max_bytes": 1048576,
+        "stream_idle_ms": 90000
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "X-Accel-Buffering",
+            "no"
+          ],
+          [
+            "Jack-Auth",
+            "s1 kid=wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88,ts=1767225600,sid=q9nUNYuH-Xf_cgJBVu4_Dg,sig=LTE8doFNPgqOVb_LI-8rW-i295JexxTPR85x5XRzOLCTtIOlz8r4uuZZ1lr2QZeLdk15masENOU9rZScH8TBAQ"
+          ]
+        ],
+        "stream_b64u": [
+          "ZXZlbnQ6IG1lc3NhZ2UKZGF0YTogeyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoibm90aWZpY2F0aW9ucy9wcm9ncmVzcyIsInBhcmFtcyI6eyJwcm9ncmVzc1Rva2VuIjoidDEiLCJwcm9ncmVzcyI6MX19CmphY2s6IHNlcT0wLHRzPTE3NjcyMjU2MDAsc2lnPXVycERmZ09OOUxmSEVPNXhJdGJlQmpsNlRZMXd3VlpFcTEzemJGMUxzcXd5ZG81R2ZCbTZIUkFZLUpMa296S0U0dnlydFBVeTlpMF9xNDNyMnR1N0RBCgo",
+          "OiBrZWVwYWxpdmUK"
+        ]
+      },
+      "expect": {
+        "messages": [
+          "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progressToken\":\"t1\",\"progress\":1}}"
+        ],
+        "terminal": {
+          "state": "error",
+          "code": "stream_idle",
+          "frames_verified": 1
+        }
+      },
+      "silent_after_ms": 20000,
+      "arrival_ms": [
+        0,
+        80000
+      ]
+    },
+    {
       "id": "stream-stdio-ok",
       "description": "stdio consumer writes one line per message frame (6.2)",
       "state": {
@@ -3662,6 +3761,52 @@
         ],
         "terminal": {
           "state": "ok"
+        },
+        "mcp_complete": false
+      }
+    },
+    {
+      "id": "stream-close-no-end-frame",
+      "description": "a final response without a verified jack-end is truncated and never MCP-complete (4.4, 6.3)",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "pinned_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+        "pinned_server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+        "request_sig": "OsOug0yCJZPIkJ5Huk2UcIxlstzaz4b22EBRHfQHO0YgoHkDflI7kNPpSGO4HzueDASfxlEQRL1Kt45PN0pfBw",
+        "request_id": 1,
+        "successor_activation": null,
+        "frame_max_bytes": 1048576
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "X-Accel-Buffering",
+            "no"
+          ],
+          [
+            "Jack-Auth",
+            "s1 kid=wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88,ts=1767225600,sid=q9nUNYuH-Xf_cgJBVu4_Dg,sig=LTE8doFNPgqOVb_LI-8rW-i295JexxTPR85x5XRzOLCTtIOlz8r4uuZZ1lr2QZeLdk15masENOU9rZScH8TBAQ"
+          ]
+        ],
+        "stream_b64u": [
+          "ZXZlbnQ6IG1lc3NhZ2UKZGF0YTogeyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoibm90aWZpY2F0aW9ucy9wcm9ncmVzcyIsInBhcmFtcyI6eyJwcm9ncmVzc1Rva2VuIjoidDEiLCJwcm9ncmVzcyI6MX19CmphY2s6IHNlcT0wLHRzPTE3NjcyMjU2MDAsc2lnPXVycERmZ09OOUxmSEVPNXhJdGJlQmpsNlRZMXd3VlpFcTEzemJGMUxzcXd5ZG81R2ZCbTZIUkFZLUpMa296S0U0dnlydFBVeTlpMF9xNDNyMnR1N0RBCgpldmVudDogbWVzc2FnZQpkYXRhOiB7Impzb25ycGMiOiIyLjAiLCJpZCI6MSwicmVzdWx0Ijp7InJlc3VsdFR5cGUiOiJjb21wbGV0ZSIsIl9tZXRhIjp7ImlvLm1vZGVsY29udGV4dHByb3RvY29sL3N1YnNjcmlwdGlvbklkIjoxfX19CmphY2s6IHNlcT0xLHRzPTE3NjcyMjU2MDAsc2lnPWo5UldKTkdzNkNVVnRMYXktaDJ0LS00Z0JmVEFUMXpQdW9DRmFIdTMyUXNPNG9McTNiSGNULUlPd0R5cm5CcGZqOUhvaXlxX2dLUDBqeUhkTUQxV0JnCgo"
+        ]
+      },
+      "expect": {
+        "messages": [
+          "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progressToken\":\"t1\",\"progress\":1}}",
+          "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"resultType\":\"complete\",\"_meta\":{\"io.modelcontextprotocol/subscriptionId\":1}}}"
+        ],
+        "terminal": {
+          "state": "error",
+          "code": "stream_truncated",
+          "frames_verified": 2
         },
         "mcp_complete": false
       }

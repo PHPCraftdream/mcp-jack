@@ -714,6 +714,32 @@
       }
     },
     {
+      "id": "sig-stale-and-bad-signature",
+      "rule": "R3.9",
+      "description": "a stale delivery whose HMAC fails answers bad_signature, never stale_timestamp",
+      "kind": "verify",
+      "input": {
+        "now": 1767225600,
+        "window": 300,
+        "enforce": "none",
+        "keys": [],
+        "secrets": [
+          "whsec_Ha+2nPDW61Z9H5/Uc/1B8csaLDZJ6SeG9jHX+FmQbZk="
+        ],
+        "envelope": {
+          "webhook_id": "msg_7Qk2mZ4rT9xV1bN6pL3sD8wY5cJ0hG2f",
+          "webhook_timestamp": 1767225299,
+          "signature_header": "v1,7hHhk9Odx32LUpYhxN40gi+DGyLNSWgUQrvhQ1WGEzU=",
+          "body_b64u": "eyJldmVudElkIjoiZXZ0XzEiLCJuYW1lIjoiaW5jaWRlbnQuY3JlYXRlZCIsImRhdGEiOnsic2V2ZXJpdHkiOiJQMSJ9fQ",
+          "endpoint_id": "sub_a3f1c8e2b0d49f7e"
+        }
+      },
+      "expect": {
+        "result": "reject",
+        "code": "bad_signature"
+      }
+    },
+    {
       "id": "sig-multi-accept-second",
       "rule": "R2.7",
       "description": "the second of two v1 entries verifies",

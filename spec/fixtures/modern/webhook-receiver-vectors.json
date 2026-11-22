@@ -2115,7 +2115,7 @@
     {
       "id": "rcv-r38-not-routed-then-retry",
       "rule": "R3.8",
-      "description": "a 503 for an unrouted id records nothing, so the retried copy is accepted once routing is on",
+      "description": "the route is installed on the same receiver, so an id wrongly recorded by the 503 would surface as a lost acceptance or as duplicate",
       "kind": "sequence",
       "input": {
         "config": {
@@ -2171,17 +2171,34 @@
               ]
             ],
             "body_text": "{\"eventId\":\"evt_1\",\"name\":\"incident.created\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"data\":{\"severity\":\"P1\"}}",
-            "config": {
-              "secrets": [
-                {
-                  "secret": "whsec_XnU10kns2Fq27j9gLmtVokIK8FOLWR23RQF1a6WdHNY=",
-                  "subscription_id": "sub_a3f1c8e2b0d49f7e"
-                }
+            "route": [
+              "sub_a3f1c8e2b0d49f7e"
+            ]
+          },
+          {
+            "now": 1767225602,
+            "headers": [
+              [
+                "webhook-id",
+                "msg_7Qk2mZ4rT9xV1bN6pL3sD8wY5cJ0hG2f"
               ],
-              "routed": [
+              [
+                "webhook-timestamp",
+                "1767225602"
+              ],
+              [
+                "webhook-signature",
+                "v1,82RlEwXHjrS8JT8LAmq0RR7hrUk8DxHXrj86gDbjU9s="
+              ],
+              [
+                "X-MCP-Subscription-Id",
                 "sub_a3f1c8e2b0d49f7e"
               ]
-            }
+            ],
+            "body_text": "{\"eventId\":\"evt_1\",\"name\":\"incident.created\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"data\":{\"severity\":\"P1\"}}",
+            "route": [
+              "sub_a3f1c8e2b0d49f7e"
+            ]
           }
         ]
       },
@@ -2216,6 +2233,15 @@
             ],
             "code": null,
             "recorded": true
+          },
+          {
+            "status": 200,
+            "body": {
+              "status": "duplicate"
+            },
+            "delivered": [],
+            "code": null,
+            "recorded": false
           }
         ],
         "final_state": {
@@ -3578,6 +3604,190 @@
       }
     },
     {
+      "id": "rcv-r315-server-key-raw",
+      "rule": "R4.5",
+      "description": "a jack header naming the kid derived from the configured raw MCP server public key is refused before the key lookup",
+      "kind": "sequence",
+      "input": {
+        "config": {
+          "secrets": [
+            {
+              "secret": "whsec_XnU10kns2Fq27j9gLmtVokIK8FOLWR23RQF1a6WdHNY=",
+              "subscription_id": "sub_a3f1c8e2b0d49f7e"
+            }
+          ],
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ],
+          "keys": [
+            "svc",
+            "newbie"
+          ],
+          "jack": {
+            "aud": "https://svc.example.test",
+            "window": 30,
+            "callback_urls": {
+              "sub_a3f1c8e2b0d49f7e": "https://hooks.example.test/hooks/alice"
+            }
+          },
+          "mcp_server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw"
+        },
+        "steps": [
+          {
+            "now": 1767225600,
+            "headers": [
+              [
+                "webhook-id",
+                "msg_7Qk2mZ4rT9xV1bN6pL3sD8wY5cJ0hG2f"
+              ],
+              [
+                "webhook-timestamp",
+                "1767225600"
+              ],
+              [
+                "webhook-signature",
+                "v1,Bt7vsCONxET/3czQb/iQTyNMinnzGL2DglV13p/vKpk= v1a,jEVILPxYVuijInJw+Hmv1IZcM2f8AWdJ45t8t+7rLjXNE4MATm4JmhVWsYxR8pvNpHM++Cg1to7wf2fbOk7+CQ== v2a,b+lEnbm9DV1b/XeYnME0+wFpAGoeWBreLrXGZ99Sn0/izKVt8za8fbjNUC9YmYId10PzLMbz5UUEKyGtKSGUBg=="
+              ],
+              [
+                "X-MCP-Subscription-Id",
+                "sub_a3f1c8e2b0d49f7e"
+              ],
+              [
+                "Jack-Webhook-Auth",
+                "w1 kid=wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88,sig=cLBjRXNfM8RqByh08wUAjAqtDN_j5qc12JIX9tM0fjupSVeolgdzBtZu5XpQ6eLNuLT17Nsfh0KJ_l2Mb1S5DQ"
+              ]
+            ],
+            "body_text": "{\"eventId\":\"evt_1\",\"name\":\"incident.created\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"data\":{\"severity\":\"P1\"}}"
+          }
+        ]
+      },
+      "expect": {
+        "steps": [
+          {
+            "status": 401,
+            "body": {
+              "error": {
+                "code": "webhook_key_is_server_key",
+                "message": "the webhook key is the mcp server key"
+              }
+            },
+            "delivered": [],
+            "code": "webhook_key_is_server_key",
+            "recorded": false
+          }
+        ],
+        "final_state": {
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ],
+          "terminated": [],
+          "secrets": [
+            {
+              "subscription_id": "sub_a3f1c8e2b0d49f7e",
+              "callback_url": null
+            }
+          ],
+          "accepted": []
+        }
+      }
+    },
+    {
+      "id": "rcv-r315-dedicated-key-after-raw-config",
+      "rule": "R4.5",
+      "description": "the dedicated webhook key is still accepted when the server key is configured only by its raw public key",
+      "kind": "sequence",
+      "input": {
+        "config": {
+          "secrets": [
+            {
+              "secret": "whsec_XnU10kns2Fq27j9gLmtVokIK8FOLWR23RQF1a6WdHNY=",
+              "subscription_id": "sub_a3f1c8e2b0d49f7e"
+            }
+          ],
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ],
+          "keys": [
+            "svc",
+            "newbie"
+          ],
+          "jack": {
+            "aud": "https://svc.example.test",
+            "window": 30,
+            "callback_urls": {
+              "sub_a3f1c8e2b0d49f7e": "https://hooks.example.test/hooks/alice"
+            }
+          },
+          "mcp_server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw"
+        },
+        "steps": [
+          {
+            "now": 1767225600,
+            "headers": [
+              [
+                "webhook-id",
+                "msg_7Qk2mZ4rT9xV1bN6pL3sD8wY5cJ0hG2f"
+              ],
+              [
+                "webhook-timestamp",
+                "1767225600"
+              ],
+              [
+                "webhook-signature",
+                "v1,Bt7vsCONxET/3czQb/iQTyNMinnzGL2DglV13p/vKpk= v1a,jEVILPxYVuijInJw+Hmv1IZcM2f8AWdJ45t8t+7rLjXNE4MATm4JmhVWsYxR8pvNpHM++Cg1to7wf2fbOk7+CQ== v2a,b+lEnbm9DV1b/XeYnME0+wFpAGoeWBreLrXGZ99Sn0/izKVt8za8fbjNUC9YmYId10PzLMbz5UUEKyGtKSGUBg=="
+              ],
+              [
+                "X-MCP-Subscription-Id",
+                "sub_a3f1c8e2b0d49f7e"
+              ],
+              [
+                "Jack-Webhook-Auth",
+                "w1 kid=imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg,sig=VaV1BEVCoeOH9CVvHWUo6n478tG35SxnmmDVoZHaX0bkyX5_FWlq1fzzL7nqTLW0sTF-K-3M_6mLwxqjyE41Ag"
+              ]
+            ],
+            "body_text": "{\"eventId\":\"evt_1\",\"name\":\"incident.created\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"data\":{\"severity\":\"P1\"}}"
+          }
+        ]
+      },
+      "expect": {
+        "steps": [
+          {
+            "status": 200,
+            "body": {
+              "status": "accepted"
+            },
+            "delivered": [
+              {
+                "eventId": "evt_1",
+                "name": "incident.created",
+                "timestamp": "2026-01-01T00:00:00Z",
+                "data": {
+                  "severity": "P1"
+                }
+              }
+            ],
+            "code": null,
+            "recorded": true
+          }
+        ],
+        "final_state": {
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ],
+          "terminated": [],
+          "secrets": [
+            {
+              "subscription_id": "sub_a3f1c8e2b0d49f7e",
+              "callback_url": null
+            }
+          ],
+          "accepted": [
+            "msg_7Qk2mZ4rT9xV1bN6pL3sD8wY5cJ0hG2f"
+          ]
+        }
+      }
+    },
+    {
       "id": "rcv-r315-pending-jack-other-url",
       "rule": "R3.15",
       "description": "on the pending path w1 binds the entry callback url, so another url does not verify",
@@ -4704,14 +4914,14 @@
               ],
               [
                 "webhook-signature",
-                "v1,DD+6SW0qZtlP1L2PJmBxSuaaYW2cDkxK6mcbMKhnfXA="
+                "v1,NaLdsTXf81E0mJc6tbrvwfKy0uJzhTJNYHnDSBGvNgo="
               ],
               [
                 "X-MCP-Subscription-Id",
                 "sub_a3f1c8e2b0d49f7e"
               ]
             ],
-            "body_text": "{\"name\":\"incident.created\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"data\":{}}"
+            "body_text": "{\"name\":\"incident.created\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"data\":{\"severity\":\"P1\"}}"
           }
         ]
       },
@@ -4776,14 +4986,14 @@
               ],
               [
                 "webhook-signature",
-                "v1,XFMmAnGaAfgEJXY2w3i/9RmKv/I/NTHHdKY0KlOtir8="
+                "v1,yAZExuJ682Q48NI39bX5aazkQbZkL2tnjGIGlhxsTQs="
               ],
               [
                 "X-MCP-Subscription-Id",
                 "sub_a3f1c8e2b0d49f7e"
               ]
             ],
-            "body_text": "{\"eventId\":42,\"name\":\"incident.created\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"data\":{}}"
+            "body_text": "{\"eventId\":42,\"name\":\"incident.created\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"data\":{\"severity\":\"P1\"}}"
           }
         ]
       },
@@ -4848,14 +5058,14 @@
               ],
               [
                 "webhook-signature",
-                "v1,EF/sw7amB4FB66giTIK8TrF2BRm5FHxFkK9Rvx4OQYA="
+                "v1,miwo899DdmUGH14L3j3N5KXVQSsEnzdOR/gcJqvSIec="
               ],
               [
                 "X-MCP-Subscription-Id",
                 "sub_a3f1c8e2b0d49f7e"
               ]
             ],
-            "body_text": "{\"eventId\":\"evt_1\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"data\":{}}"
+            "body_text": "{\"eventId\":\"evt_1\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"data\":{\"severity\":\"P1\"}}"
           }
         ]
       },
@@ -4920,14 +5130,14 @@
               ],
               [
                 "webhook-signature",
-                "v1,bUib7plaOgd4tYSPgijA0QvHA0QVY+fofK/z5Ytmk0I="
+                "v1,Q2hVTBQJ0l53JSNe2pAbioKpq031SXRmx4HnptsNeuM="
               ],
               [
                 "X-MCP-Subscription-Id",
                 "sub_a3f1c8e2b0d49f7e"
               ]
             ],
-            "body_text": "{\"eventId\":\"evt_1\",\"name\":\"incident.created\",\"data\":{}}"
+            "body_text": "{\"eventId\":\"evt_1\",\"name\":\"incident.created\",\"data\":{\"severity\":\"P1\"}}"
           }
         ]
       },
@@ -5064,14 +5274,14 @@
               ],
               [
                 "webhook-signature",
-                "v1,mPkkLIjdeHTpM8w1Hl+WoDxfPSYMQkMRyGZIqrAtn2E="
+                "v1,oP7fJqAZAchessUvVyBw16JHgJ52W2eUJ+bZ6kXHmDI="
               ],
               [
                 "X-MCP-Subscription-Id",
                 "sub_a3f1c8e2b0d49f7e"
               ]
             ],
-            "body_text": "{\"eventId\":\"evt_1\",\"name\":\"incident.created\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"data\":{},\"cursor\":5}"
+            "body_text": "{\"eventId\":\"evt_1\",\"name\":\"incident.created\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"data\":{\"severity\":\"P1\"},\"cursor\":5}"
           }
         ]
       },
@@ -5322,9 +5532,9 @@
       }
     },
     {
-      "id": "rcv-r318-terminated-data-not-object",
+      "id": "rcv-r318-terminated-message-missing",
       "rule": "R3.18",
-      "description": "a terminated envelope whose data is a string fails field validation",
+      "description": "a terminated envelope whose error has no message fails field validation",
       "kind": "sequence",
       "input": {
         "config": {
@@ -5352,14 +5562,14 @@
               ],
               [
                 "webhook-signature",
-                "v1,9vNVryJC1psID9BA3Y6MG9phVHUWh/jUYQO0l77i1aU="
+                "v1,1VLIkDy3N4IIsdbPLmP3500q9VhP38JBPiQ+g6Lgc0w="
               ],
               [
                 "X-MCP-Subscription-Id",
                 "sub_a3f1c8e2b0d49f7e"
               ]
             ],
-            "body_text": "{\"type\":\"terminated\",\"error\":{\"code\":-32024,\"message\":\"Forbidden\"},\"data\":\"x\"}"
+            "body_text": "{\"type\":\"terminated\",\"error\":{\"code\":-32024}}"
           }
         ]
       },
@@ -5390,6 +5600,302 @@
             }
           ],
           "accepted": []
+        }
+      }
+    },
+    {
+      "id": "rcv-r318-terminated-message-not-string",
+      "rule": "R3.18",
+      "description": "a terminated envelope whose error message is a number fails field validation",
+      "kind": "sequence",
+      "input": {
+        "config": {
+          "secrets": [
+            {
+              "secret": "whsec_XnU10kns2Fq27j9gLmtVokIK8FOLWR23RQF1a6WdHNY=",
+              "subscription_id": "sub_a3f1c8e2b0d49f7e"
+            }
+          ],
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ]
+        },
+        "steps": [
+          {
+            "now": 1767225600,
+            "headers": [
+              [
+                "webhook-id",
+                "msg_7Qk2mZ4rT9xV1bN6pL3sD8wY5cJ0hG2f"
+              ],
+              [
+                "webhook-timestamp",
+                "1767225600"
+              ],
+              [
+                "webhook-signature",
+                "v1,J4IXlR8Jv7e7q7Fi0IUXjjFygy20PqY3ihkfOCzdHPc="
+              ],
+              [
+                "X-MCP-Subscription-Id",
+                "sub_a3f1c8e2b0d49f7e"
+              ]
+            ],
+            "body_text": "{\"type\":\"terminated\",\"error\":{\"code\":-32024,\"message\":403}}"
+          }
+        ]
+      },
+      "expect": {
+        "steps": [
+          {
+            "status": 400,
+            "body": {
+              "error": {
+                "code": "malformed_body",
+                "message": "body is not a json object"
+              }
+            },
+            "delivered": [],
+            "code": "malformed_body",
+            "recorded": false
+          }
+        ],
+        "final_state": {
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ],
+          "terminated": [],
+          "secrets": [
+            {
+              "subscription_id": "sub_a3f1c8e2b0d49f7e",
+              "callback_url": null
+            }
+          ],
+          "accepted": []
+        }
+      }
+    },
+    {
+      "id": "rcv-r318-terminated-data-not-object",
+      "rule": "R3.18",
+      "description": "a terminated envelope whose error.data is a string fails field validation",
+      "kind": "sequence",
+      "input": {
+        "config": {
+          "secrets": [
+            {
+              "secret": "whsec_XnU10kns2Fq27j9gLmtVokIK8FOLWR23RQF1a6WdHNY=",
+              "subscription_id": "sub_a3f1c8e2b0d49f7e"
+            }
+          ],
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ]
+        },
+        "steps": [
+          {
+            "now": 1767225600,
+            "headers": [
+              [
+                "webhook-id",
+                "msg_7Qk2mZ4rT9xV1bN6pL3sD8wY5cJ0hG2f"
+              ],
+              [
+                "webhook-timestamp",
+                "1767225600"
+              ],
+              [
+                "webhook-signature",
+                "v1,HK3oMAu/aWtp+u6Vjb9RK6a479evhJaMxxRi2MhJ/2A="
+              ],
+              [
+                "X-MCP-Subscription-Id",
+                "sub_a3f1c8e2b0d49f7e"
+              ]
+            ],
+            "body_text": "{\"type\":\"terminated\",\"error\":{\"code\":-32024,\"message\":\"Forbidden\",\"data\":\"x\"}}"
+          }
+        ]
+      },
+      "expect": {
+        "steps": [
+          {
+            "status": 400,
+            "body": {
+              "error": {
+                "code": "malformed_body",
+                "message": "body is not a json object"
+              }
+            },
+            "delivered": [],
+            "code": "malformed_body",
+            "recorded": false
+          }
+        ],
+        "final_state": {
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ],
+          "terminated": [],
+          "secrets": [
+            {
+              "subscription_id": "sub_a3f1c8e2b0d49f7e",
+              "callback_url": null
+            }
+          ],
+          "accepted": []
+        }
+      }
+    },
+    {
+      "id": "rcv-r318-terminated-data-array",
+      "rule": "R3.18",
+      "description": "a terminated envelope whose error.data is an array fails field validation",
+      "kind": "sequence",
+      "input": {
+        "config": {
+          "secrets": [
+            {
+              "secret": "whsec_XnU10kns2Fq27j9gLmtVokIK8FOLWR23RQF1a6WdHNY=",
+              "subscription_id": "sub_a3f1c8e2b0d49f7e"
+            }
+          ],
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ]
+        },
+        "steps": [
+          {
+            "now": 1767225600,
+            "headers": [
+              [
+                "webhook-id",
+                "msg_7Qk2mZ4rT9xV1bN6pL3sD8wY5cJ0hG2f"
+              ],
+              [
+                "webhook-timestamp",
+                "1767225600"
+              ],
+              [
+                "webhook-signature",
+                "v1,x8btFVv0hPfYk6VnCVuJrsfVe+veLVkL4cGB7M66hk8="
+              ],
+              [
+                "X-MCP-Subscription-Id",
+                "sub_a3f1c8e2b0d49f7e"
+              ]
+            ],
+            "body_text": "{\"type\":\"terminated\",\"error\":{\"code\":-32024,\"message\":\"Forbidden\",\"data\":[]}}"
+          }
+        ]
+      },
+      "expect": {
+        "steps": [
+          {
+            "status": 400,
+            "body": {
+              "error": {
+                "code": "malformed_body",
+                "message": "body is not a json object"
+              }
+            },
+            "delivered": [],
+            "code": "malformed_body",
+            "recorded": false
+          }
+        ],
+        "final_state": {
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ],
+          "terminated": [],
+          "secrets": [
+            {
+              "subscription_id": "sub_a3f1c8e2b0d49f7e",
+              "callback_url": null
+            }
+          ],
+          "accepted": []
+        }
+      }
+    },
+    {
+      "id": "rcv-r318-occurrence-control",
+      "rule": "R3.18",
+      "description": "the accepted occurrence the negatives above each deviate from by exactly one field",
+      "kind": "sequence",
+      "input": {
+        "config": {
+          "secrets": [
+            {
+              "secret": "whsec_XnU10kns2Fq27j9gLmtVokIK8FOLWR23RQF1a6WdHNY=",
+              "subscription_id": "sub_a3f1c8e2b0d49f7e"
+            }
+          ],
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ]
+        },
+        "steps": [
+          {
+            "now": 1767225600,
+            "headers": [
+              [
+                "webhook-id",
+                "msg_7Qk2mZ4rT9xV1bN6pL3sD8wY5cJ0hG2f"
+              ],
+              [
+                "webhook-timestamp",
+                "1767225600"
+              ],
+              [
+                "webhook-signature",
+                "v1,Bt7vsCONxET/3czQb/iQTyNMinnzGL2DglV13p/vKpk="
+              ],
+              [
+                "X-MCP-Subscription-Id",
+                "sub_a3f1c8e2b0d49f7e"
+              ]
+            ],
+            "body_text": "{\"eventId\":\"evt_1\",\"name\":\"incident.created\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"data\":{\"severity\":\"P1\"}}"
+          }
+        ]
+      },
+      "expect": {
+        "steps": [
+          {
+            "status": 200,
+            "body": {
+              "status": "accepted"
+            },
+            "delivered": [
+              {
+                "eventId": "evt_1",
+                "name": "incident.created",
+                "timestamp": "2026-01-01T00:00:00Z",
+                "data": {
+                  "severity": "P1"
+                }
+              }
+            ],
+            "code": null,
+            "recorded": true
+          }
+        ],
+        "final_state": {
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ],
+          "terminated": [],
+          "secrets": [
+            {
+              "subscription_id": "sub_a3f1c8e2b0d49f7e",
+              "callback_url": null
+            }
+          ],
+          "accepted": [
+            "msg_7Qk2mZ4rT9xV1bN6pL3sD8wY5cJ0hG2f"
+          ]
         }
       }
     },

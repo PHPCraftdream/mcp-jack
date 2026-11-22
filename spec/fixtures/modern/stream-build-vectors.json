@@ -264,7 +264,7 @@
     },
     {
       "id": "build-oversize-error-frame",
-      "description": "the 3.2 oversize notification signed, then the end frame",
+      "description": "a 1025-byte handler message against a 1024-byte cap: the signal then the end frame",
       "input": {
         "request_sig": "OsOug0yCJZPIkJ5Huk2UcIxlstzaz4b22EBRHfQHO0YgoHkDflI7kNPpSGO4HzueDASfxlEQRL1Kt45PN0pfBw",
         "kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
@@ -275,7 +275,7 @@
           {
             "seq": 0,
             "ts": 1767225600,
-            "data": "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/jack/stream_error\",\"params\":{\"code\":\"stream_frame_too_large\",\"limit\":1048576}}"
+            "data": "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/jack/stream_error\",\"params\":{\"code\":\"stream_frame_too_large\",\"limit\":1024}}"
           },
           {
             "seq": 1,
@@ -292,20 +292,20 @@
             "seq": 0,
             "ts": 1767225600,
             "prev": "LTE8doFNPgqOVb_LI-8rW-i295JexxTPR85x5XRzOLCTtIOlz8r4uuZZ1lr2QZeLdk15masENOU9rZScH8TBAQ",
-            "data_hash": "4_HMgreyiRf8ITjjDDk9VbqdMWgyOVtx-uQ223CNJZs",
-            "signing_string": "mcp-jack/stream1/frame\nq9nUNYuH-Xf_cgJBVu4_Dg\n0\n1767225600\nLTE8doFNPgqOVb_LI-8rW-i295JexxTPR85x5XRzOLCTtIOlz8r4uuZZ1lr2QZeLdk15masENOU9rZScH8TBAQ\n4_HMgreyiRf8ITjjDDk9VbqdMWgyOVtx-uQ223CNJZs",
-            "sig": "oLCMpJcB89jaPRm1ZHMrCNbK3UKO2RaHcrUvo_0-3W-82syz3og1y_KXC7iie7CEeDtoGnvcnS4n7ihXBxY-AA"
+            "data_hash": "nJEiDoDCprjxfkGRi_-p8IHxdJg10J39JBDzr71JaUs",
+            "signing_string": "mcp-jack/stream1/frame\nq9nUNYuH-Xf_cgJBVu4_Dg\n0\n1767225600\nLTE8doFNPgqOVb_LI-8rW-i295JexxTPR85x5XRzOLCTtIOlz8r4uuZZ1lr2QZeLdk15masENOU9rZScH8TBAQ\nnJEiDoDCprjxfkGRi_-p8IHxdJg10J39JBDzr71JaUs",
+            "sig": "UoVHefeLbN-Xm2hD7nA5M8p0sSLA83JM9dUzlOHN3T3bIGV_0Xou_yLg2Nw9skxtk0kFMDl_0ADvZXL92VNyAw"
           },
           {
             "seq": 1,
             "ts": 1767225601,
-            "prev": "oLCMpJcB89jaPRm1ZHMrCNbK3UKO2RaHcrUvo_0-3W-82syz3og1y_KXC7iie7CEeDtoGnvcnS4n7ihXBxY-AA",
+            "prev": "UoVHefeLbN-Xm2hD7nA5M8p0sSLA83JM9dUzlOHN3T3bIGV_0Xou_yLg2Nw9skxtk0kFMDl_0ADvZXL92VNyAw",
             "data_hash": "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU",
-            "signing_string": "mcp-jack/stream1/frame\nq9nUNYuH-Xf_cgJBVu4_Dg\n1\n1767225601\noLCMpJcB89jaPRm1ZHMrCNbK3UKO2RaHcrUvo_0-3W-82syz3og1y_KXC7iie7CEeDtoGnvcnS4n7ihXBxY-AA\n47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU",
-            "sig": "5Ktoewj46NkNKjUTcfKk9uOICFqXtKqxRzo73L13_BQYpzoqB7O2OchuB6nahmVSJoc6zMznhbNdGxdpwXRbDw"
+            "signing_string": "mcp-jack/stream1/frame\nq9nUNYuH-Xf_cgJBVu4_Dg\n1\n1767225601\nUoVHefeLbN-Xm2hD7nA5M8p0sSLA83JM9dUzlOHN3T3bIGV_0Xou_yLg2Nw9skxtk0kFMDl_0ADvZXL92VNyAw\n47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU",
+            "sig": "Dj5W8MW2iG3mKVPhkLKDNVgTY2hJw8311EbUhAuXiqZRh6JmoC1MZmwOxokwaOz_65MiTXjHzp9m3yVAeELKCQ"
           }
         ],
-        "stream_b64u": "ZXZlbnQ6IG1lc3NhZ2UKZGF0YTogeyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoibm90aWZpY2F0aW9ucy9qYWNrL3N0cmVhbV9lcnJvciIsInBhcmFtcyI6eyJjb2RlIjoic3RyZWFtX2ZyYW1lX3Rvb19sYXJnZSIsImxpbWl0IjoxMDQ4NTc2fX0KamFjazogc2VxPTAsdHM9MTc2NzIyNTYwMCxzaWc9b0xDTXBKY0I4OWphUFJtMVpITXJDTmJLM1VLTzJSYUhjclV2b18wLTNXLTgyc3l6M29nMXlfS1hDN2lpZTdDRWVEdG9HbnZjblM0bjdpaFhCeFktQUEKCmV2ZW50OiBqYWNrLWVuZApkYXRhOgpqYWNrOiBzZXE9MSx0cz0xNzY3MjI1NjAxLHNpZz01S3RvZXdqNDZOa05LalVUY2ZLazl1T0lDRnFYdEtxeFJ6bzczTDEzX0JRWXB6b3FCN08yT2NodUI2bmFobVZTSm9jNnpNem5oYk5kR3hkcHdYUmJEdwoK"
+        "stream_b64u": "ZXZlbnQ6IG1lc3NhZ2UKZGF0YTogeyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoibm90aWZpY2F0aW9ucy9qYWNrL3N0cmVhbV9lcnJvciIsInBhcmFtcyI6eyJjb2RlIjoic3RyZWFtX2ZyYW1lX3Rvb19sYXJnZSIsImxpbWl0IjoxMDI0fX0KamFjazogc2VxPTAsdHM9MTc2NzIyNTYwMCxzaWc9VW9WSGVmZUxiTi1YbTJoRDduQTVNOHAwc1NMQTgzSk05ZFV6bE9ITjNUM2JJR1ZfMFhvdV95TGcyTnc5c2t4dGswa0ZNRGxfMEFEdlpYTDkyVk55QXcKCmV2ZW50OiBqYWNrLWVuZApkYXRhOgpqYWNrOiBzZXE9MSx0cz0xNzY3MjI1NjAxLHNpZz1EajVXOE1XMmlHM21LVlBoa0xLRE5WZ1RZMmhKdzgzMTFFYlVoQXVYaXFaUmg2Sm1vQzFNWm13T3hva3dhT3pfNjVNaVRYakh6cDltM3lWQWVFTEtDUQoK"
       }
     },
     {
