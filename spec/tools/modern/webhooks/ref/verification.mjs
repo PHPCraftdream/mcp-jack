@@ -37,7 +37,7 @@ export function challengeEcho({ status, bodyText, nonce, maxBody = 4096 } = {}) 
   return { ok: true };
 }
 
-// R5.3: the two members of an attempt pair as one comparable value, whatever object carries them.
+// R5.3: the two members of an attempt pair as one comparable value, whatever object carries them; a pair is two non-empty strings, so an empty member is not a pair.
 export function pairKey(pair) {
   let principal;
   let url;
@@ -51,6 +51,7 @@ export function pairKey(pair) {
     return null;
   }
   if (typeof principal !== 'string' || typeof url !== 'string') return null;
+  if (principal.length === 0 || url.length === 0) return null;
   return JSON.stringify([String(principal), String(url)]);
 }
 
