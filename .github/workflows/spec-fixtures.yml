@@ -84,6 +84,8 @@ jobs:
           node-version: 22
       - name: Self-tests of the modern-profile generators
         run: node --test "spec/tools/modern/**/*.test.mjs"
+      - name: Check committed modern fixtures before regeneration
+        run: node spec/tools/modern/gen-modern.mjs --check
       - name: Generate modern fixtures
         run: node spec/tools/modern/gen-modern.mjs
       - name: Verify modern regeneration is deterministic
