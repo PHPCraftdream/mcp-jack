@@ -29,8 +29,8 @@ const ID_TERM = 'msg_terminated_7Qk2mZ4rT9xV1bN6pL3sD8wY5cJ0hG2f';
 const HOOK = 'https://hooks.example.test/hooks/alice';
 const HOOK_OTHER = 'https://hooks.example.test/hooks/bob';
 const STAMP = '2026-01-01T00:00:00Z';
-const EVENT = `{"eventId":"evt_1","name":"incident.created","data":{"severity":"P1"}}`;
-const EVENT_OTHER = '{"eventId":"evt_2","name":"incident.created","data":{}}';
+const EVENT = `{"eventId":"evt_1","name":"incident.created","timestamp":"${STAMP}","data":{"severity":"P1"}}`;
+const EVENT_OTHER = `{"eventId":"evt_2","name":"incident.created","timestamp":"${STAMP}","data":{}}`;
 const GAP = '{"type":"gap","cursor":"cursor_7f3a"}';
 const TERM = '{"type":"terminated","error":{"code":-32024,"message":"Forbidden"}}';
 const CHALLENGE = b64u(sha256('challenge:1').subarray(0, 16));
@@ -40,7 +40,7 @@ const ARRAY_BODY = '[1]';
 const BIG = 'a'.repeat(262145);
 const JACK_WINDOW = 30;
 
-const EVENT_MSG = { eventId: 'evt_1', name: 'incident.created', data: { severity: 'P1' } };
+const EVENT_MSG = { eventId: 'evt_1', name: 'incident.created', timestamp: STAMP, data: { severity: 'P1' } };
 const GAP_MSG = { type: 'gap', cursor: 'cursor_7f3a' };
 const TERM_MSG = { type: 'terminated', error: { code: -32024, message: 'Forbidden' } };
 
