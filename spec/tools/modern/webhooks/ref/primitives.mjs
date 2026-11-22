@@ -89,5 +89,6 @@ export function validateJwk(jwk) {
   if (jwk.kid !== kid) return bad('kid_mismatch');
   if (jwk.alg !== undefined && jwk.alg !== 'EdDSA') return bad('alg');
   if (jwk.use !== undefined && jwk.use !== 'sig') return bad('use');
-  return { ok: true, key: { kid, public_key: b64u(pub), pub } };
+  // R7.3: the accepted key record every consumer uses; x and public_key are the same base64url of the same 32 raw bytes.
+  return { ok: true, key: { kid, kty: 'OKP', crv: 'Ed25519', x: b64u(pub), public_key: b64u(pub), pub } };
 }

@@ -2,9 +2,13 @@
 // no I/O, no resolver. Literals are hand-parsed: no URL, no net.isIP, no dns.
 
 // R6.5: IPv4 special registry, snake_case reason names. `reachable` is the registry's "Globally Reachable"
-// column; the longest matching row decides. Rows overlap on purpose (192.0.0.0/24 contains the /29 and /32 rows).
+// column; the longest matching row decides. Rows overlap on purpose (192.0.0.0/24 contains the /29 and /32 rows,
+// and 0.0.0.0/8 contains the registry's own 0.0.0.0/32 "This host on this network" row).
+// Not a registry row: 224.0.0.0/4 is the multicast block of the address architecture; every registry row inside
+// it is also not globally reachable, so the decision is the same.
 export const IPV4_BLOCKS = [
   { block: '0.0.0.0/8', name: 'this_network', reachable: false },
+  { block: '0.0.0.0/32', name: 'this_host_on_this_network', reachable: false },
   { block: '10.0.0.0/8', name: 'private_use', reachable: false },
   { block: '100.64.0.0/10', name: 'shared_address_space', reachable: false },
   { block: '127.0.0.0/8', name: 'loopback', reachable: false },
@@ -33,6 +37,10 @@ export const IPV4_BLOCKS = [
 
 // R6.6, R6.7: IPv6 special registry. `reachable` is the registry's "Globally Reachable" column; the longest
 // matching row decides. Rows overlap on purpose (2001::/23 contains the more specific 2001::/32 rows).
+// Not registry rows: ff00::/8 is the multicast block of the address architecture, and ::/96 is the Jack addition
+// the spec documents (the registry's mapped row ::ffff:0:0/96 is a different block). 100:0:0:1::/64 is the
+// registry's "Dummy IPv6 Prefix"; it sits next to 100::/64 rather than inside it (group 4 is 1 against 0), so
+// neither row shadows the other.
 export const IPV6_BLOCKS = [
   { block: '::/128', name: 'unspecified', reachable: false },
   { block: '::1/128', name: 'loopback', reachable: false },
@@ -42,6 +50,7 @@ export const IPV6_BLOCKS = [
   { block: '64:ff9b::/96', name: 'nat64_well_known', reachable: true },
   { block: '64:ff9b:1::/48', name: 'nat64_local_use', reachable: false },
   { block: '100::/64', name: 'discard_only', reachable: false },
+  { block: '100:0:0:1::/64', name: 'dummy_ipv6_prefix', reachable: false },
   { block: '2001::/23', name: 'ietf_protocol_assignments', reachable: false },
   { block: '2001::/32', name: 'teredo', reachable: false },
   { block: '2001:1::1/128', name: 'pcp_anycast', reachable: true },

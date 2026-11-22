@@ -1,6 +1,6 @@
 // Webhooks family of the M0 modern-profile vectors: build() and the generated case index.
 import { NOW, deepEqual, stableStringify } from '../../gen/core.mjs';
-import { RULES, RULE_IDS } from './rules.mjs';
+import { RULES, RULE_IDS, RULE_VECTORS } from './rules.mjs';
 import * as signatures from './vectors/signatures.mjs';
 import * as w1 from './vectors/w1.mjs';
 import * as receiver from './vectors/receiver.mjs';
@@ -28,6 +28,26 @@ const CLOCK = [
   'Fixture keys are test-only.',
 ].join(' ');
 
+// RULE_VECTORS is declared independently of the cases, so check it names exactly the collected set.
+function assertRuleVectors(entries) {
+  const byId = new Map(entries.map((entry) => [entry.case.id, entry.case]));
+  const declared = new Set();
+  for (const rule of RULES) {
+    const ids = Object.hasOwn(RULE_VECTORS, rule.id) ? RULE_VECTORS[rule.id] : undefined;
+    if (!Array.isArray(ids) || ids.length === 0) throw new Error(`rule ${rule.id} declares no case ids`);
+    for (const id of ids) {
+      if (!byId.has(id)) throw new Error(`rule ${rule.id} declares unknown case ${id}`);
+      const c = byId.get(id);
+      if (c.rule !== rule.id) throw new Error(`case ${id} is declared under ${rule.id} but carries ${c.rule}`);
+      if (declared.has(id)) throw new Error(`case ${id} is declared twice`);
+      declared.add(id);
+    }
+  }
+  for (const { case: c } of entries) {
+    if (!declared.has(c.id)) throw new Error(`case ${c.id} is missing from RULE_VECTORS[${c.rule}]`);
+  }
+}
+
 // Every case of every family, in family order then module order, each with the module that runs it.
 function collect() {
   const entries = [];
@@ -47,6 +67,7 @@ function collect() {
   for (const rule of RULES) {
     if (!entries.some((entry) => entry.case.rule === rule.id)) throw new Error(`rule ${rule.id} has no case`);
   }
+  assertRuleVectors(entries);
   return entries;
 }
 

@@ -11,9 +11,15 @@ import {
   ed25519KeyFromSeed,
   emissionEntries,
   fetchDecision,
+  formatIPv4,
+  formatIPv6,
+  IPV4_BLOCKS,
+  IPV6_BLOCKS,
   jcs,
   jwkOf,
   pairKey,
+  parseIPv4,
+  parseIPv6,
   parseSignatureHeader,
   parseWhsec,
   subscriptionKey,
@@ -72,6 +78,79 @@ test('classifyAddress', () => {
     family: 'ipv6',
     address: '::ffff:10.0.0.1',
   });
+});
+
+// Both registry tables must classify the first and last address of their own block exactly as the deepest row says.
+const FAMILIES = [
+  { family: 'ipv4', rows: IPV4_BLOCKS, parse: parseIPv4, format: formatIPv4, width: 4 },
+  { family: 'ipv6', rows: IPV6_BLOCKS, parse: parseIPv6, format: formatIPv6, width: 16 },
+];
+// The two translation rows hand the decision to the embedded IPv4 address instead of their own reachable column.
+const CHAINED_ROWS = new Set(['ipv4_mapped', 'nat64_well_known']);
+
+const decodeRow = (kind, row) => {
+  const [literal, prefixText] = row.block.split('/');
+  const parsed = kind.parse(literal);
+  if (!parsed.ok) throw new Error(`${row.block}: unparsable network literal`);
+  return { name: row.name, reachable: row.reachable, bytes: parsed.bytes, prefix: Number(prefixText) };
+};
+
+// First address clears every host bit below the prefix, last address sets them all.
+const edgeOf = (kind, row, last) => {
+  const bytes = Uint8Array.from(row.bytes);
+  for (let i = 0; i < kind.width; i++) {
+    const kept = Math.min(Math.max(row.prefix - i * 8, 0), 8);
+    const networkBits = (0xff << (8 - kept)) & 0xff;
+    const hostBits = last ? 0xff >> kept : 0;
+    bytes[i] = ((bytes[i] & networkBits) | hostBits) & 0xff;
+  }
+  return bytes;
+};
+
+// Containment arithmetic on byte prefixes, written here rather than taken from the classifier.
+const holdsPrefix = (bytes, network, prefix) => {
+  const whole = prefix >> 3;
+  for (let i = 0; i < whole; i++) if (bytes[i] !== network[i]) return false;
+  const rest = prefix & 7;
+  if (rest === 0) return true;
+  const mask = (0xff << (8 - rest)) & 0xff;
+  return (bytes[whole] & mask) === (network[whole] & mask);
+};
+
+const deepestRow = (rows, bytes) => {
+  let best = null;
+  for (const row of rows) {
+    if (!holdsPrefix(bytes, row.bytes, row.prefix)) continue;
+    if (!best || row.prefix > best.prefix) best = row;
+  }
+  return best;
+};
+
+test('registry rows decide both edges of every block', () => {
+  for (const kind of FAMILIES) {
+    const rows = kind.rows.map((row) => decodeRow(kind, row));
+    for (const row of rows) {
+      for (const last of [false, true]) {
+        const bytes = edgeOf(kind, row, last);
+        const address = kind.format(bytes);
+        const where = `${row.block} ${row.name} ${last ? 'last' : 'first'} address ${address}`;
+        const verdict = classifyAddress(address);
+        assert.equal(verdict.family, kind.family, `${where}: classifyAddress said family ${verdict.family}`);
+        if (CHAINED_ROWS.has(row.name)) {
+          const embedded = formatIPv4(bytes.subarray(12, 16));
+          const inner = classifyAddress(embedded);
+          const reasons = [row.name, `${row.name}/${inner.reason}`];
+          assert.ok(reasons.includes(verdict.reason), `${where}: expected ${reasons.join(' or ')} but got ${verdict.reason}`);
+          assert.equal(verdict.decision, inner.decision, `${where}: expected ${inner.decision} from embedded ${embedded} but got ${verdict.decision}`);
+          continue;
+        }
+        const deepest = deepestRow(rows, bytes);
+        assert.equal(verdict.reason, deepest.name, `${where}: expected ${deepest.name} but got ${verdict.reason}`);
+        const decision = deepest.reachable ? 'allow' : 'reject';
+        assert.equal(verdict.decision, decision, `${where}: expected ${decision} for ${deepest.name} but got ${verdict.decision}`);
+      }
+    }
+  }
 });
 
 test('checkUrl', () => {

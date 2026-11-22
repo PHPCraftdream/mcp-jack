@@ -59,10 +59,10 @@ export const cases = [
   { id: 'ep-gate-unverified-terminated', rule: 'R5.1', description: 'an unverified pair refuses a terminated notification', kind: 'gate', input: { verified: false, message: 'terminated' }, expect: { action: 'refuse' } },
 
   // R5.2: cache, allowlist, out-of-band hook, well-known document, challenge; first success wins.
-  { id: 'ep-route-cache-first', rule: 'R5.2', description: 'all four routes present resolves to the cache route first', kind: 'route', input: { cache: true, allowlist: { entries: [ENTRY] }, hook: true, doc: { text: DOC, path: '/hooks/alice' }, challenge: { status: 200, bodyText: ECHO_BODY, nonce: NONCE } }, expect: { result: 'accept', route: 'cache', reason: null } },
-  { id: 'ep-route-allowlist-second', rule: 'R5.2', description: 'an absent cache resolves to the allowlist route', kind: 'route', input: { cache: false, allowlist: { entries: [ENTRY] }, hook: true, doc: { text: DOC, path: '/hooks/alice' }, challenge: null }, expect: { result: 'accept', route: 'allowlist', reason: null } },
-  { id: 'ep-route-hook-third', rule: 'R5.2', description: 'cache and allowlist absent resolves to the out of band hook', kind: 'route', input: { cache: false, allowlist: null, hook: true, doc: { text: DOC, path: '/hooks/alice' }, challenge: null }, expect: { result: 'accept', route: 'out_of_band', reason: null } },
-  { id: 'ep-route-doc-fourth', rule: 'R5.2', description: 'only the well-known document and challenge remain so the document route wins', kind: 'route', input: { cache: false, allowlist: null, hook: false, doc: { text: DOC, path: '/hooks/alice' }, challenge: { status: 200, bodyText: ECHO_BODY, nonce: NONCE } }, expect: { result: 'accept', route: 'well_known', reason: null } },
+  { id: 'ep-route-cache-first', rule: 'R5.2', description: 'all four routes present resolves to the cache route first', kind: 'route', input: { cache: true, allowlist: { entries: [ENTRY] }, hook: true, doc: { status: 200, bodyText: DOC, path: '/hooks/alice' }, challenge: { status: 200, bodyText: ECHO_BODY, nonce: NONCE } }, expect: { result: 'accept', route: 'cache', reason: null } },
+  { id: 'ep-route-allowlist-second', rule: 'R5.2', description: 'an absent cache resolves to the allowlist route', kind: 'route', input: { cache: false, allowlist: { entries: [ENTRY] }, hook: true, doc: { status: 200, bodyText: DOC, path: '/hooks/alice' }, challenge: null }, expect: { result: 'accept', route: 'allowlist', reason: null } },
+  { id: 'ep-route-hook-third', rule: 'R5.2', description: 'cache and allowlist absent resolves to the out of band hook', kind: 'route', input: { cache: false, allowlist: null, hook: true, doc: { status: 200, bodyText: DOC, path: '/hooks/alice' }, challenge: null }, expect: { result: 'accept', route: 'out_of_band', reason: null } },
+  { id: 'ep-route-doc-fourth', rule: 'R5.2', description: 'only the well-known document and challenge remain so the document route wins', kind: 'route', input: { cache: false, allowlist: null, hook: false, doc: { status: 200, bodyText: DOC, path: '/hooks/alice' }, challenge: { status: 200, bodyText: ECHO_BODY, nonce: NONCE } }, expect: { result: 'accept', route: 'well_known', reason: null } },
   { id: 'ep-route-nothing', rule: 'R5.2', description: 'no evidence at all is rejected as no_route', kind: 'route', input: { cache: false, allowlist: null, hook: false, doc: null, challenge: null }, expect: { result: 'reject', route: null, reason: 'no_route' } },
   { id: 'ep-route-challenge-mismatch', rule: 'R5.2', description: 'a challenge echo that does not match the nonce is a mismatch rejection', kind: 'route', input: { cache: false, allowlist: null, hook: false, doc: null, challenge: { status: 200, bodyText: ECHO_BODY_OTHER, nonce: NONCE } }, expect: { result: 'reject', route: null, reason: 'mismatch' } },
 
@@ -77,6 +77,10 @@ export const cases = [
   { id: 'ep-accept-echo-pair', rule: 'R5.3', description: 'an echo bound to a different principal is rejected as pair', kind: 'accept-echo', input: { nonce: NONCE, expected: NONCE, issuedAt: 1000, now: 1100, pair: ['alice', HOOK], expectedPair: ['bob', HOOK] }, expect: { result: 'reject', code: 'challenge_failed', reason: 'pair' } },
   { id: 'ep-accept-echo-wrong-nonce', rule: 'R5.3', description: 'an echo of the wrong nonce is rejected as mismatch', kind: 'accept-echo', input: { nonce: NONCE_OTHER, expected: NONCE, issuedAt: 1000, now: 1100, pair: PAIR, expectedPair: PAIR }, expect: { result: 'reject', code: 'challenge_failed', reason: 'mismatch' } },
   { id: 'ep-accept-echo-json-pair', rule: 'R5.3', description: 'two separately written pair arrays with the same two strings are the same pair by value', kind: 'accept-echo', input: { nonce: NONCE, expected: NONCE, issuedAt: 1000, now: 1100, pair: ['alice', 'https://hooks.example.test/hooks/alice'], expectedPair: ['alice', 'https://hooks.example.test/hooks/alice'] }, expect: { result: 'accept' } },
+  { id: 'ep-accept-echo-pair-both-missing', rule: 'R5.3', description: 'an attempt and an expectation with no pair at all never match, so the echo is rejected as pair', kind: 'accept-echo', input: { nonce: NONCE, expected: NONCE, issuedAt: 1000, now: 1100 }, expect: { result: 'reject', code: 'challenge_failed', reason: 'pair' } },
+  { id: 'ep-accept-echo-pair-both-invalid', rule: 'R5.3', description: 'two one-element arrays are not pairs and never match each other, so the echo is rejected as pair', kind: 'accept-echo', input: { nonce: NONCE, expected: NONCE, issuedAt: 1000, now: 1100, pair: ['alice'], expectedPair: ['alice'] }, expect: { result: 'reject', code: 'challenge_failed', reason: 'pair' } },
+  { id: 'ep-accept-echo-pair-expected-invalid', rule: 'R5.3', description: 'a valid attempt pair with no expected pair is rejected as pair', kind: 'accept-echo', input: { nonce: NONCE, expected: NONCE, issuedAt: 1000, now: 1100, pair: PAIR, expectedPair: null }, expect: { result: 'reject', code: 'challenge_failed', reason: 'pair' } },
+  { id: 'ep-accept-echo-pair-string-vs-string', rule: 'R5.3', description: 'two equal bare strings are not pairs and never match each other, so the echo is rejected as pair', kind: 'accept-echo', input: { nonce: NONCE, expected: NONCE, issuedAt: 1000, now: 1100, pair: 'alice', expectedPair: 'alice' }, expect: { result: 'reject', code: 'challenge_failed', reason: 'pair' } },
 
   // R5.4: a 2xx JSON object whose challenge member equals the nonce, body at most 4096 bytes.
   { id: 'ep-echo-200', rule: 'R5.4', description: 'a 200 JSON object echoing the nonce is accepted', kind: 'echo', input: { status: 200, bodyText: ECHO_BODY, nonce: NONCE }, expect: { result: 'accept' } },
@@ -106,7 +110,7 @@ export const cases = [
 
   // R5.8: the out-of-band hook, its false falls through and its null is not installed.
   { id: 'ep-route-hook-true', rule: 'R5.8', description: 'the installed out of band hook returns true and accepts', kind: 'route', input: { cache: false, allowlist: null, hook: true, doc: null, challenge: null }, expect: { result: 'accept', route: 'out_of_band', reason: null } },
-  { id: 'ep-route-hook-false-doc', rule: 'R5.8', description: 'a false hook falls through to the well-known document', kind: 'route', input: { cache: false, allowlist: null, hook: false, doc: { text: DOC, path: '/hooks/alice' }, challenge: null }, expect: { result: 'accept', route: 'well_known', reason: null } },
+  { id: 'ep-route-hook-false-doc', rule: 'R5.8', description: 'a false hook falls through to the well-known document', kind: 'route', input: { cache: false, allowlist: null, hook: false, doc: { status: 200, bodyText: DOC, path: '/hooks/alice' }, challenge: null }, expect: { result: 'accept', route: 'well_known', reason: null } },
   { id: 'ep-route-hook-null', rule: 'R5.8', description: 'a null hook is not installed so nothing routes', kind: 'route', input: { cache: false, allowlist: null, hook: null, doc: null, challenge: null }, expect: { result: 'reject', route: null, reason: 'no_route' } },
 
   // R5.9: the well-known document, its per-origin url and its capped cache ttl.
@@ -123,6 +127,13 @@ export const cases = [
   { id: 'ep-doc-ttl-absent', rule: 'R5.9', description: 'an absent max-age falls back to 300 s', kind: 'ttl', input: {}, expect: { result: 'accept', ttl: 300 } },
   { id: 'ep-wellknown-url-hook', rule: 'R5.9', description: 'the well-known url is built from the hook origin', kind: 'wellknown-url', input: { url: HOOK }, expect: { result: 'accept', url: WELL_KNOWN } },
   { id: 'ep-wellknown-url-port', rule: 'R5.9', description: 'an explicit port is preserved in the well-known url', kind: 'wellknown-url', input: { url: 'https://hooks.example.test:8443/x' }, expect: { result: 'accept', url: WELL_KNOWN_PORT } },
+
+  // R5.9, R5.12: the document is route evidence only through the hardened fetch, a 200 and at most 8192 bytes.
+  { id: 'ep-route-doc-status-404', rule: 'R5.9', description: 'a 404 document fetch never counts as route 4', kind: 'route', input: { cache: false, allowlist: null, hook: false, doc: { status: 404, bodyText: DOC, path: '/hooks/alice' }, challenge: null }, expect: { result: 'reject', route: null, reason: 'no_route' } },
+  { id: 'ep-route-doc-status-404-falls-to-challenge', rule: 'R5.9', description: 'a 404 document fetch leaves the challenge route as the only evidence', kind: 'route', input: { cache: false, allowlist: null, hook: false, doc: { status: 404, bodyText: DOC, path: '/hooks/alice' }, challenge: { status: 200, bodyText: ECHO_BODY, nonce: NONCE } }, expect: { result: 'accept', route: 'challenge', reason: null } },
+  { id: 'ep-route-doc-too-large', rule: 'R5.9', description: 'a document one byte over the 8192-byte cap never counts as route 4', kind: 'route', input: { cache: false, allowlist: null, hook: false, doc: { status: 200, bodyText: DOC_8193, path: '/hooks/alice' }, challenge: null }, expect: { result: 'reject', route: null, reason: 'no_route' } },
+  { id: 'ep-route-doc-blocked-address', rule: 'R5.12', description: 'a document fetched from a blocked address never counts as route 4', kind: 'route', input: { cache: false, allowlist: null, hook: false, doc: { url: WELL_KNOWN, answers: ['10.0.0.5'], status: 200, bodyText: DOC, path: '/hooks/alice' }, challenge: null }, expect: { result: 'reject', route: null, reason: 'no_route' } },
+  { id: 'ep-route-doc-8192', rule: 'R5.9', description: 'a document of exactly 8192 bytes is inside the cap and covers /hooks/alice', kind: 'route', input: { cache: false, allowlist: null, hook: false, doc: { status: 200, bodyText: DOC_8192, path: '/hooks/alice' }, challenge: null }, expect: { result: 'accept', route: 'well_known', reason: null } },
 
   // R5.10: a receivers entry is a byte prefix of the path at a segment boundary, case-sensitive, undecoded.
   { id: 'ep-covers-trailing-slash-child', rule: 'R5.10', description: 'a /hooks/ entry covers the child path /hooks/a', kind: 'covers', input: { text: DOC, path: '/hooks/a' }, expect: { covered: true, entry: '/hooks/' } },
@@ -231,13 +242,18 @@ const routeInput = (input) => ({
   cache: input.cache,
   allowlist: input.allowlist ? allowlistMatches(input.allowlist.entries, input.url ?? HOOK) : null,
   hook: input.hook,
-  doc: input.doc ? documentOf(input.doc) : null,
+  doc: docEvidence(input.doc),
   challenge: input.challenge ? challengeEcho(only(input.challenge, ECHO_KEYS)) : null,
 });
 
-const documentOf = ({ text, path }) => {
-  const parsed = parseReceiverDoc(text);
-  return { doc: parsed.ok ? parsed.receivers : [], path };
+// R5.9, R5.12: a document is route evidence only once the hardened fetch accepts it; a failed fetch contributes nothing.
+// The origin's well-known url and a public answer stand in when a case names no url or answers of its own.
+const DOC_FETCH_DEFAULT = { url: WELL_KNOWN, answers: ['93.184.216.34'] };
+
+const docEvidence = (doc) => {
+  if (!doc) return null;
+  const verdict = receiverDocRequest(only({ ...DOC_FETCH_DEFAULT, ...doc }, DOC_REQUEST_KEYS));
+  return verdict.ok ? { doc: verdict.receivers, path: doc.path } : null;
 };
 
 const only = (source, keys) => {

@@ -1,6 +1,6 @@
 // Reference receiver of spec/06-webhooks.md sections 1, 3, 4 and 5 and rule R7.6; pure and deterministic, `now` is an argument, no clock, no randomness, no I/O.
 import { crossCheckWebhookKey } from './card.mjs';
-import { b64u, b64uDecodeStrict, parseWhsec } from './primitives.mjs';
+import { b64u, b64uDecodeStrict, parseWhsec, sha256 } from './primitives.mjs';
 import { asymVerify, checkSchemes, decodeEntries, parseSignatureHeader, v1Verify, w1Verify } from './signatures.mjs';
 import { nonceOk } from './verification.mjs';
 
@@ -133,6 +133,13 @@ function keyBytes(value) {
   return Buffer.alloc(0);
 }
 
+// R4.5: `kid = base64url(SHA-256(raw 32-byte public key))`, so a raw configured server key names its own kid.
+function serverKidOf(publicKey) {
+  if (publicKey === null) return null;
+  const raw = b64uDecodeStrict(publicKey);
+  return raw === null ? null : b64u(sha256(raw));
+}
+
 // R4.5, R7.3: accepted keys, with every key equal to the configured MCP server key dropped by kid or by raw key.
 function acceptedKeys(list, serverKid, serverPublicKey) {
   const out = [];
@@ -164,7 +171,7 @@ function fieldsOk(type, message) {
   if (type === 'terminated') {
     if (!isObject(message.error)) return false;
     if (!Number.isInteger(message.error.code) || typeof message.error.message !== 'string') return false;
-    return !hasOwn(message, 'data') || isObject(message.data);
+    return !hasOwn(message.error, 'data') || isObject(message.error.data);
   }
   if (!hasOwn(message, 'data')) return false;
   if (hasOwn(message, 'cursor') && !(typeof message.cursor === 'string' || message.cursor === null)) return false;
@@ -179,6 +186,8 @@ export function createReceiver(config = {}) {
   const enforce = config.enforce_server_identity === true;
   const serverKid = typeof config.mcp_server_kid === 'string' ? config.mcp_server_kid : null;
   const serverPublicKey = typeof config.mcp_server_public_key === 'string' ? config.mcp_server_public_key : null;
+  // R4.5: the raw server key alone still names the kid a jack header must not carry.
+  const serverKeyId = serverKid ?? serverKidOf(serverPublicKey);
   const keys = acceptedKeys(config.keys, serverKid, serverPublicKey);
   const requireKeyCheck = config.webhook_key_check === REQUIRE_CHECK;
   const webhookKeyTool = config.webhook_key_tool ?? null;
@@ -251,7 +260,7 @@ export function createReceiver(config = {}) {
       const values = all.get(H_JACK);
       if (!values || values.length === 0) return reject('missing_jack_auth');
       const callbackUrl = deferred ? candidates[matched].callback_url : jack.callback_urls?.[subscriptionId];
-      const options = { keys, now, window: jackWindow, mcpServerKid: serverKid };
+      const options = { keys, now, window: jackWindow, mcpServerKid: serverKeyId };
       const checked = w1Verify(
         values[0],
         { aud: jack.aud, subscriptionId, webhookId, timestamp, callbackUrl, body: raw },
@@ -298,6 +307,11 @@ export function createReceiver(config = {}) {
     return { status: 200, body: { status: 'accepted' }, delivered: [message], code: null, recorded: true };
   }
 
+  // R3.8: the id is routed on the same receiver, so state recorded by earlier steps stays observable.
+  function route(ids) {
+    for (const id of Array.isArray(ids) ? ids : []) routed.add(id);
+  }
+
   // R3.1-R3.18: the observable routing, termination, secret and dedup state.
   function snapshot() {
     return {
@@ -311,7 +325,7 @@ export function createReceiver(config = {}) {
     };
   }
 
-  return { handle, snapshot };
+  return { handle, route, snapshot };
 }
 
 // R1.8: the four attempt offsets in seconds since t0.

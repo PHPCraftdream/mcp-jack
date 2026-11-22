@@ -21,8 +21,8 @@ const SEC_A = `whsec_${sha256('mcp-jack webhook secret: a').subarray(0, 32).toSt
 const SEC_B = `whsec_${sha256('mcp-jack webhook secret: b').subarray(0, 32).toString('base64')}`;
 const GRACE_ENDS_AT = NOW + 300;
 const GAP_BODY = '{"type":"gap","cursor":"cursor_7f3a"}';
-const TERMINATED_BODY = '{"type":"terminated","error":{"code":"-32024","message":"Forbidden"}}';
-const TERMINATED_DATA_BODY = '{"type":"terminated","error":{"code":"-32024","message":"Forbidden","data":{"reason":"Access revoked"}}}';
+const TERMINATED_BODY = '{"type":"terminated","error":{"code":-32024,"message":"Forbidden"}}';
+const TERMINATED_DATA_BODY = '{"type":"terminated","error":{"code":-32024,"message":"Forbidden","data":{"reason":"Access revoked"}}}';
 const OMIT = Symbol('omit');
 
 const jcsInputOf = (principal, canonicalUrl, name, argJson) =>
@@ -129,8 +129,14 @@ export const cases = [
   secretCase('sub-secrets-no-previous', 'without a previous secret only the current one signs', { previous: null, now: GRACE_ENDS_AT - 1 }, ['current']),
 
   { id: 'sub-envelope-gap', rule: 'R8.7', description: 'a gap envelope is exactly the gap body with the fresh cursor', kind: 'envelope', input: { kind: 'gap', cursor: 'cursor_7f3a' }, expect: { result: 'accept', body_text: GAP_BODY } },
-  { id: 'sub-envelope-terminated', rule: 'R8.8', description: 'a terminated envelope without data carries only code and message', kind: 'envelope', input: { kind: 'terminated', code: '-32024', message: 'Forbidden' }, expect: { result: 'accept', body_text: TERMINATED_BODY } },
-  { id: 'sub-envelope-terminated-data', rule: 'R8.8', description: 'a terminated envelope appends the optional data member last', kind: 'envelope', input: { kind: 'terminated', code: '-32024', message: 'Forbidden', data: { reason: 'Access revoked' } }, expect: { result: 'accept', body_text: TERMINATED_DATA_BODY } },
+  { id: 'sub-envelope-terminated', rule: 'R8.8', description: 'a terminated envelope with an integer code and no data carries only code and message', kind: 'envelope', input: { kind: 'terminated', code: -32024, message: 'Forbidden' }, expect: { result: 'accept', body_text: TERMINATED_BODY } },
+  { id: 'sub-envelope-terminated-data', rule: 'R8.8', description: 'a terminated envelope with an integer code appends the optional data member last', kind: 'envelope', input: { kind: 'terminated', code: -32024, message: 'Forbidden', data: { reason: 'Access revoked' } }, expect: { result: 'accept', body_text: TERMINATED_DATA_BODY } },
+  { id: 'sub-envelope-terminated-code-string', rule: 'R8.8', description: 'a string error code is not an integer', kind: 'envelope', input: { kind: 'terminated', code: '-32024', message: 'Forbidden' }, expect: { result: 'reject', code: 'invalid_envelope' } },
+  { id: 'sub-envelope-terminated-code-fraction', rule: 'R8.8', description: 'a fractional error code is not an integer', kind: 'envelope', input: { kind: 'terminated', code: -32024.5, message: 'Forbidden' }, expect: { result: 'reject', code: 'invalid_envelope' } },
+  { id: 'sub-envelope-terminated-message-missing', rule: 'R8.8', description: 'a terminated envelope without message is rejected', kind: 'envelope', input: { kind: 'terminated', code: -32024 }, expect: { result: 'reject', code: 'invalid_envelope' } },
+  { id: 'sub-envelope-terminated-message-nonstring', rule: 'R8.8', description: 'a numeric message is not a string', kind: 'envelope', input: { kind: 'terminated', code: -32024, message: 403 }, expect: { result: 'reject', code: 'invalid_envelope' } },
+  { id: 'sub-envelope-terminated-data-nonobject', rule: 'R8.8', description: 'an array data member is not an object', kind: 'envelope', input: { kind: 'terminated', code: -32024, message: 'Forbidden', data: ['Access revoked'] }, expect: { result: 'reject', code: 'invalid_envelope' } },
+  { id: 'sub-envelope-terminated-data-null', rule: 'R8.8', description: 'a null data member is not an object', kind: 'envelope', input: { kind: 'terminated', code: -32024, message: 'Forbidden', data: null }, expect: { result: 'reject', code: 'invalid_envelope' } },
 
   cursorCase('sub-cursor-ok', 'a printable 12-character cursor is accepted', 'cursor_7f3a', { result: 'accept' }),
   cursorCase('sub-cursor-null', 'a null cursor is accepted', null, { result: 'accept' }),
@@ -175,8 +181,13 @@ export function run(c) {
     }
     case 'envelope': {
       if (input.kind === 'gap') return { result: 'accept', body_text: gapEnvelope(input.cursor) };
-      const error = { code: input.code, message: input.message };
-      if ('data' in input) error.data = input.data;
+      if (!Number.isInteger(input.code)) return { result: 'reject', code: 'invalid_envelope' };
+      if (typeof input.message !== 'string') return { result: 'reject', code: 'invalid_envelope' };
+      const hasData = 'data' in input && input.data !== undefined;
+      if (hasData && (input.data === null || Array.isArray(input.data) || typeof input.data !== 'object')) {
+        return { result: 'reject', code: 'invalid_envelope' };
+      }
+      const error = { code: input.code, message: input.message, ...(hasData ? { data: input.data } : {}) };
       return { result: 'accept', body_text: terminatedEnvelope(error) };
     }
     case 'cursor':
