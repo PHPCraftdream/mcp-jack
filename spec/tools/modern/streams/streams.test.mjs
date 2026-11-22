@@ -219,7 +219,7 @@ describe('signed streams (s1)', () => {
     // 4.5: one millisecond past the threshold is idle, by arrival time and by
     // silence alike; a BOM or a comment moves no verified frame to a later time.
     const idle = client.filter((c) => c.expect.terminal.code === 'stream_idle');
-    assert.equal(idle.length, 4);
+    assert.equal(idle.length, 5);
     const byId = (id) => {
       const c = idle.find((v) => v.id === id);
       assert.ok(c !== undefined, id);
@@ -233,6 +233,8 @@ describe('signed streams (s1)', () => {
     const bom = byId('stream-idle-bom-late-chunk');
     assert.equal(bom.expect.terminal.frames_verified, 0);
     assert.ok(gaps(bom).some((g) => g > bom.state.stream_idle_ms));
+    const mirror = byId('stream-idle-blank-line-late-chunk');
+    assert.equal(mirror.expect.terminal.frames_verified, 0);
     const comment = byId('stream-idle-comment-silence');
     assert.equal(comment.expect.terminal.frames_verified, 1);
     assert.ok(comment.arrival_ms.length > 0);
@@ -262,6 +264,14 @@ describe('signed streams (s1)', () => {
     const zero = client.find((c) => c.id === 'stream-signal-limit-zero');
     assert.equal(zero.expect.terminal.code, 'stream_frame_too_large');
     assert.equal(zero.expect.terminal.frames_verified, 1);
+
+    // 5.2: the end frame itself can cross the cutoff; the stream cannot complete.
+    const endCut = client.find((c) => c.id === 'stream-frame-end-after-cutoff');
+    assert.equal(endCut.expect.terminal.code, 'stream_after_cutoff');
+    assert.equal(endCut.expect.terminal.frames_verified, 1);
+    const noEndCut = client.find((c) => c.id === 'stream-frame-after-cutoff');
+    assert.equal(noEndCut.expect.terminal.code, 'stream_after_cutoff');
+    assert.equal(noEndCut.expect.terminal.frames_verified, 0);
 
     // 6.2: the stdio consumer aborts on a data value holding a raw LF.
     const stdio = client.filter((c) => c.consumer === 'stdio');

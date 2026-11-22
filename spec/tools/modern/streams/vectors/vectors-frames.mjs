@@ -203,6 +203,11 @@ const STALE = {
 const CUTOFF = signChain({
   frames: [{ seq: 0, ts: NOW + 10, data: MSG }],
 });
+// 5.2: the end frame itself can be the frame that crosses the cutoff, after a
+// valid message frame below it.
+const CUTOFF_END = signChain({
+  frames: [{ seq: 0, ts: NOW, data: MSG }, { seq: 1, ts: NOW + 10, data: '' }],
+});
 
 // 22, 23: a three-frame chain, then frame 1 broken in two ways.
 const CHAIN3 = signChain({
@@ -435,16 +440,25 @@ const IDLE_BEATS = {
 const beatChunks = IDLE_BEATS.body.split('\n\n').filter((s) => s !== '').map((s) => chunk(bytes(`${s}\n\n`)));
 const TICKS = baseState({ now: NOW, frame_nows: [NOW, NOW + 90, NOW + 180], stream_idle_ms: 90000 });
 const BEAT_STATE = baseState({ now: NOW, frame_nows: [NOW, NOW + 80, NOW + 160, NOW + 160], stream_idle_ms: 90000 });
-// 2.14, 4.5: the leading BOM shifts every body offset by three, so the only
-// chunk that carries the last byte of frame 0 is the one whose arrival time the
-// deadline is measured against. BOM_SPLIT leaves the first 10 body bytes, inside
-// frame 0's event line, in the first chunk; frame 0's blank line falls in the
-// second, which arrives one millisecond past the threshold.
 const BOM_BYTES = Buffer.from([0xef, 0xbb, 0xbf]);
-const BOM_SPLIT = 10; // inside the first frame's event line
+// 2.14, 4.5: the split sits exactly between frame 0's second-to-last and last
+// byte, the newline that completes its terminating blank line. A lookup that
+// forgets the BOM's three bytes maps that byte into the first chunk and accepts
+// the frame; the correct lookup times it in the late chunk and the stream goes
+// idle with nothing verified.
+const BOM_SPLIT = FRAME0.length - 1;
+const BOM_BODY = Buffer.concat([BOM_BYTES, bytes(SINGLE.body)]);
 const BOM_CHUNKS = [
-  chunk(Buffer.concat([BOM_BYTES, bytes(SINGLE.body.slice(0, BOM_SPLIT))])),
-  chunk(bytes(SINGLE.body.slice(BOM_SPLIT))),
+  chunk(BOM_BODY.subarray(0, BOM_BYTES.length + BOM_SPLIT)),
+  chunk(BOM_BODY.subarray(BOM_BYTES.length + BOM_SPLIT)),
+];
+// 2.6, 4.5: the same boundary without a BOM, so the late chunk carries only the
+// final newline of the frame's blank line and the frame is still late.
+const BLANK_SPLIT = FRAME0.length - 1;
+const BLANK_BODY = bytes(SINGLE.body);
+const BLANK_CHUNKS = [
+  chunk(BLANK_BODY.subarray(0, BLANK_SPLIT)),
+  chunk(BLANK_BODY.subarray(BLANK_SPLIT)),
 ];
 // 2.12, 4.5: a comment carries no frame, so it resets nothing.
 const COMMENT_CHUNKS = [chunk(bytes(FRAME0)), chunk(bytes(': keepalive\n'))];
@@ -651,12 +665,22 @@ export const frameVectors = [
   ),
   clientVector(
     'stream-frame-after-cutoff',
-    'frame ts equal to the successor activation (4.3 step 4)',
+    'a frame at the cutoff has no valid successor: no end frame can follow, and stream_after_cutoff takes precedence over stream_truncated (5.2)',
     {
       state: baseState({ successor_activation: NOW + 10 }),
       headers: authHeaders(CUTOFF.jack_auth),
       chunks: one(CUTOFF.body),
       expect: bad('stream_after_cutoff', 0),
+    },
+  ),
+  clientVector(
+    'stream-frame-end-after-cutoff',
+    'the end frame itself is at the cutoff, after a valid message below it (4.3 step 4, 5.2)',
+    {
+      state: baseState({ successor_activation: NOW + 10 }),
+      headers: authHeaders(CUTOFF_END.jack_auth),
+      chunks: one(CUTOFF_END.body),
+      expect: bad('stream_after_cutoff', 1, [MSG]),
     },
   ),
   clientVector(
@@ -884,10 +908,19 @@ export const frameVectors = [
     baseState({ stream_idle_ms: 90000 }), [], undefined, bad('stream_idle', 0, []), 90001,
   ),
   {
-    ...clientVector('stream-idle-bom-late-chunk', 'a BOM shifts the offsets, so the frame is timed in the chunk that carried its last byte (4.5, 2.14)', {
+    ...clientVector('stream-idle-bom-late-chunk', 'the split is between frame 0\'s last two bytes, so a BOM-unaware lookup accepts the frame and the correct one times it late (2.14, 4.5)', {
       state: baseState({ stream_idle_ms: 90000 }),
       headers: authHeaders(SINGLE.jack_auth),
       chunks: BOM_CHUNKS,
+      expect: bad('stream_idle', 0),
+    }),
+    arrival_ms: [0, 90001],
+  },
+  {
+    ...clientVector('stream-idle-blank-line-late-chunk', 'an event completes only at its terminating blank line, so a late final newline makes the frame late (2.6, 4.5)', {
+      state: baseState({ stream_idle_ms: 90000 }),
+      headers: authHeaders(SINGLE.jack_auth),
+      chunks: BLANK_CHUNKS,
       expect: bad('stream_idle', 0),
     }),
     arrival_ms: [0, 90001],
