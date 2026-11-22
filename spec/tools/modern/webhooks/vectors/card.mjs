@@ -77,6 +77,10 @@ export const cases = [
   // R7.6: the optional cross-check of the card key set against the jack.server.webhook_key tool result.
   { id: 'card-webhook-key-agree', rule: 'R7.6', description: 'a tool result publishing the same key set agrees with the card', kind: 'webhook-key-check', input: { keys: ['newbie'], toolResult: toolResult([jwkOf(K.newbie)]), require: true }, expect: { result: 'accept' } },
   { id: 'card-webhook-key-differ', rule: 'R7.6', description: 'a tool result publishing a different key is webhook_key_mismatch', kind: 'webhook-key-check', input: { keys: ['newbie'], toolResult: toolResult([jwkOf(K.newbie2)]), require: true }, expect: { result: 'reject', code: 'webhook_key_mismatch' } },
+  { id: 'card-webhook-key-card-alg', rule: 'R7.6', description: 'a card side record whose alg is not EdDSA fails validation, so the required check is a mismatch', kind: 'webhook-key-check', input: { card_keys: [{ ...jwkOf(K.newbie), alg: 'RS256' }], keys: [], require: true, toolResult: toolResult([jwkOf(K.newbie)]) }, expect: { result: 'reject', code: 'webhook_key_mismatch' } },
+  { id: 'card-webhook-key-card-use', rule: 'R7.6', description: 'a card side record whose use is not sig fails validation, so the required check is a mismatch', kind: 'webhook-key-check', input: { card_keys: [{ ...jwkOf(K.newbie), use: 'enc' }], keys: [], require: true, toolResult: toolResult([jwkOf(K.newbie)]) }, expect: { result: 'reject', code: 'webhook_key_mismatch' } },
+  { id: 'card-webhook-key-tool-alg', rule: 'R7.6', description: 'a tool result key whose alg is not EdDSA fails validation, so the required check is a mismatch', kind: 'webhook-key-check', input: { keys: ['newbie'], require: true, toolResult: toolResult([{ ...jwkOf(K.newbie), alg: 'RS256' }]) }, expect: { result: 'reject', code: 'webhook_key_mismatch' } },
+  { id: 'card-webhook-key-tool-use', rule: 'R7.6', description: 'a tool result key whose use is not sig fails validation, so the required check is a mismatch', kind: 'webhook-key-check', input: { keys: ['newbie'], require: true, toolResult: toolResult([{ ...jwkOf(K.newbie), use: 'enc' }]) }, expect: { result: 'reject', code: 'webhook_key_mismatch' } },
   { id: 'card-webhook-key-missing', rule: 'R7.6', description: 'a required check with no tool result is webhook_key_missing', kind: 'webhook-key-check', input: { keys: ['newbie'], toolResult: null, require: true }, expect: { result: 'reject', code: 'webhook_key_missing' } },
   { id: 'card-webhook-key-not-required', rule: 'R7.6', description: 'a receiver that does not require the check ignores the absent tool result', kind: 'webhook-key-check', input: { keys: ['newbie'], toolResult: null, require: false }, expect: { result: 'accept' } },
   { id: 'card-webhook-key-agree-discovery', rule: 'R7.6', description: 'a tool result publishing both keys discovery accepted agrees with the card', kind: 'webhook-key-discovery', input: { mcpUrl: MCP_URL, cardUrl: CARD_URL, response: { status: 200, headers: {}, card: CARD }, toolResult: toolResult([jwkOf(K.newbie), jwkOf(K.newbie2)]) }, expect: { result: 'accept' } },
@@ -131,11 +135,8 @@ export function run(c) {
       return verdict.ok ? { result: 'accept' } : { result: 'reject', code: verdict.code };
     }
     case 'webhook-key-check': {
-      const verdict = crossCheckWebhookKey({
-        keys: input.keys.map((name) => jwkOf(K[name])),
-        toolResult: input.toolResult,
-        require: input.require,
-      });
+      const own = input.card_keys === undefined ? input.keys.map((name) => jwkOf(K[name])) : input.card_keys;
+      const verdict = crossCheckWebhookKey({ keys: own, toolResult: input.toolResult, require: input.require });
       return verdict.ok ? { result: 'accept' } : { result: 'reject', code: verdict.code };
     }
     case 'webhook-key-discovery': {

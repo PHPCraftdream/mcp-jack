@@ -157,12 +157,15 @@ export function cardKeyForKid(keys, kid) {
   return key ? { ok: true, key } : { ok: false, code: 'unknown_webhook_key' };
 }
 
-// R7.6: the card key set and the signed `jack.server.webhook_key` tool result must agree, member by member.
+// R7.6: both sides are validated with the R7.3 rules before the comparison, so an invalid alg or use never compares equal.
 export function crossCheckWebhookKey({ keys = [], toolResult = null, require = false } = {}) {
   if (require !== true) return { ok: true };
   const published = toolResult?.webhook_key?.signing_keys?.keys;
   if (!Array.isArray(published)) return { ok: false, code: 'webhook_key_missing' };
-  if (canonicalKeySet(keys) !== canonicalKeySet(published)) return { ok: false, code: 'webhook_key_mismatch' };
+  const card = validatedKeySet(keys);
+  const tool = validatedKeySet(published);
+  if (!card.ok || !tool.ok) return { ok: false, code: 'webhook_key_mismatch' };
+  if (canonicalKeySet(card.keys) !== canonicalKeySet(tool.keys)) return { ok: false, code: 'webhook_key_mismatch' };
   return { ok: true };
 }
 
@@ -175,6 +178,17 @@ const cardCacheTtl = (headers) => {
     return Math.min(Number(token.slice('max-age='.length)), MAX_CARD_TTL);
   }
   return DEFAULT_CARD_TTL;
+};
+
+const validatedKeySet = (values) => {
+  const list = Array.isArray(values) ? values : [];
+  const keys = [];
+  for (const entry of list) {
+    const verdict = validateJwk(entry);
+    if (!verdict.ok) return { ok: false, reason: verdict.reason };
+    keys.push(verdict.key);
+  }
+  return { ok: true, keys };
 };
 
 const canonicalKeySet = (values) => {

@@ -25,6 +25,7 @@ export const IPV4_BLOCKS = [
   { block: '192.31.196.0/24', name: 'as112_v4', reachable: true },
   { block: '192.52.193.0/24', name: 'amt', reachable: true },
   { block: '192.88.99.0/24', name: 'deprecated_6to4_relay_anycast', reachable: false },
+  { block: '192.88.99.2/32', name: '6a44_relay_anycast', reachable: false }, // 6a44-relay Anycast, Globally Reachable False.
   { block: '192.168.0.0/16', name: 'private_use', reachable: false },
   { block: '192.175.48.0/24', name: 'as112_direct_delegation', reachable: true },
   { block: '198.18.0.0/15', name: 'benchmarking', reachable: false },
@@ -55,12 +56,13 @@ export const IPV6_BLOCKS = [
   { block: '2001::/32', name: 'teredo', reachable: false },
   { block: '2001:1::1/128', name: 'pcp_anycast', reachable: true },
   { block: '2001:1::2/128', name: 'turn_anycast', reachable: true },
+  { block: '2001:1::3/128', name: 'dns_sd_srp_anycast', reachable: true }, // DNS-SD Service Registration Protocol Anycast, Globally Reachable True.
   { block: '2001:2::/48', name: 'benchmarking', reachable: false },
   { block: '2001:3::/32', name: 'amt', reachable: true },
   { block: '2001:4:112::/48', name: 'as112_v6', reachable: true },
   { block: '2001:10::/28', name: 'orchid', reachable: false },
-  { block: '2001:20::/28', name: 'orchidv2', reachable: false },
-  { block: '2001:30::/28', name: 'drone_remote_id', reachable: false },
+  { block: '2001:20::/28', name: 'orchidv2', reachable: true }, // ORCHIDv2, Globally Reachable True.
+  { block: '2001:30::/28', name: 'drone_remote_id', reachable: true }, // Drone Remote ID Protocol Entity Tags (DETs) Prefix, Globally Reachable True.
   { block: '2001:db8::/32', name: 'documentation', reachable: false },
   { block: '2002::/16', name: 'six_to_four', reachable: false },
   { block: '2620:4f:8000::/48', name: 'as112_direct_delegation', reachable: true },

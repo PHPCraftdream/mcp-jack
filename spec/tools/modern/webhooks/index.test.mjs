@@ -28,11 +28,11 @@ const FILES = [
 const COUNTS = {
   'webhook-signature-vectors.json': 45,
   'webhook-w1-vectors.json': 25,
-  'webhook-receiver-vectors.json': 99,
-  'webhook-endpoint-verification-vectors.json': 90,
-  'ssrf-vectors.json': 118,
+  'webhook-receiver-vectors.json': 107,
+  'webhook-endpoint-verification-vectors.json': 93,
+  'ssrf-vectors.json': 120,
   'webhook-subscription-vectors.json': 49,
-  'server-card-keys-vectors.json': 39,
+  'server-card-keys-vectors.json': 43,
 };
 
 const byId = (mod, id) => {
@@ -65,7 +65,7 @@ test('case ids are unique', () => {
   for (const name of Object.keys(COUNTS)) assert.ok(FILES.includes(name), `${name} is not a generated file`);
   for (const name of FILES) assert.ok(Object.hasOwn(COUNTS, name), `${name} has no pinned count`);
   for (const mod of MODULES) assert.equal(mod.cases.length, COUNTS[mod.file], mod.file);
-  assert.equal(total, 465);
+  assert.equal(total, 482);
 });
 
 test('every rule has a vector', () => {

@@ -129,6 +129,7 @@ export const cases = [
   secretCase('sub-secrets-no-previous', 'without a previous secret only the current one signs', { previous: null, now: GRACE_ENDS_AT - 1 }, ['current']),
 
   { id: 'sub-envelope-gap', rule: 'R8.7', description: 'a gap envelope is exactly the gap body with the fresh cursor', kind: 'envelope', input: { kind: 'gap', cursor: 'cursor_7f3a' }, expect: { result: 'accept', body_text: GAP_BODY } },
+  // R8.8: the terminated cases go through the serializer, so its own guards decide the six negatives.
   { id: 'sub-envelope-terminated', rule: 'R8.8', description: 'a terminated envelope with an integer code and no data carries only code and message', kind: 'envelope', input: { kind: 'terminated', code: -32024, message: 'Forbidden' }, expect: { result: 'accept', body_text: TERMINATED_BODY } },
   { id: 'sub-envelope-terminated-data', rule: 'R8.8', description: 'a terminated envelope with an integer code appends the optional data member last', kind: 'envelope', input: { kind: 'terminated', code: -32024, message: 'Forbidden', data: { reason: 'Access revoked' } }, expect: { result: 'accept', body_text: TERMINATED_DATA_BODY } },
   { id: 'sub-envelope-terminated-code-string', rule: 'R8.8', description: 'a string error code is not an integer', kind: 'envelope', input: { kind: 'terminated', code: '-32024', message: 'Forbidden' }, expect: { result: 'reject', code: 'invalid_envelope' } },
@@ -181,14 +182,14 @@ export function run(c) {
     }
     case 'envelope': {
       if (input.kind === 'gap') return { result: 'accept', body_text: gapEnvelope(input.cursor) };
-      if (!Number.isInteger(input.code)) return { result: 'reject', code: 'invalid_envelope' };
-      if (typeof input.message !== 'string') return { result: 'reject', code: 'invalid_envelope' };
-      const hasData = 'data' in input && input.data !== undefined;
-      if (hasData && (input.data === null || Array.isArray(input.data) || typeof input.data !== 'object')) {
+      const error = { code: input.code, message: input.message };
+      if ('data' in input) error.data = input.data;
+      try {
+        return { result: 'accept', body_text: terminatedEnvelope(error) };
+      } catch {
+        // R8.8: the serializer's guards are the contract; a bad envelope is rejected, never silently rewritten.
         return { result: 'reject', code: 'invalid_envelope' };
       }
-      const error = { code: input.code, message: input.message, ...(hasData ? { data: input.data } : {}) };
-      return { result: 'accept', body_text: terminatedEnvelope(error) };
     }
     case 'cursor':
       return cursorOk(input.value) ? { result: 'accept' } : { result: 'reject' };

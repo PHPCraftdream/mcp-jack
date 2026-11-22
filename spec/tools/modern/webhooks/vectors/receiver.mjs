@@ -40,6 +40,7 @@ const withoutMember = (member) => (value) => {
 const withMember = (member, replacement) => (value) => ({ ...value, [member]: replacement });
 const EVENT = occurrenceBody();
 const EVENT_OTHER = `{"eventId":"evt_2","name":"incident.created","timestamp":"${STAMP}","data":{}}`;
+const OFFSET_TIMESTAMP_BODY = occurrenceBody(withMember('timestamp', '2026-01-01T01:30:00.500+01:30'));
 const GAP = '{"type":"gap","cursor":"cursor_7f3a"}';
 const TERM = '{"type":"terminated","error":{"code":-32024,"message":"Forbidden"}}';
 const CHALLENGE = b64u(sha256('challenge:1').subarray(0, 16));
@@ -676,6 +677,54 @@ export const cases = [
     stepOf({ body: occurrenceBody() }),
   ], {
     steps: [acceptedStep([EVENT_MSG])],
+    final_state: finalState([SUB_ID], boundSecrets(SUB_ID), [ID_EVENT]),
+  }),
+  sequenceCase('rcv-r318-occurrence-data-array', 'R3.18', 'an occurrence whose data is an array is not an object, so it fails field validation', BASE, [
+    stepOf({ body: occurrenceBody(withMember('data', [])) }),
+  ], {
+    steps: [rejected('malformed_body')],
+    final_state: finalState([SUB_ID], boundSecrets(SUB_ID), []),
+  }),
+  sequenceCase('rcv-r318-occurrence-data-string', 'R3.18', 'an occurrence whose data is a string is not an object, so it fails field validation', BASE, [
+    stepOf({ body: occurrenceBody(withMember('data', 'x')) }),
+  ], {
+    steps: [rejected('malformed_body')],
+    final_state: finalState([SUB_ID], boundSecrets(SUB_ID), []),
+  }),
+  sequenceCase('rcv-r318-occurrence-data-null', 'R3.18', 'an occurrence whose data is null is not an object, so it fails field validation', BASE, [
+    stepOf({ body: occurrenceBody(withMember('data', null)) }),
+  ], {
+    steps: [rejected('malformed_body')],
+    final_state: finalState([SUB_ID], boundSecrets(SUB_ID), []),
+  }),
+  sequenceCase('rcv-r318-occurrence-timestamp-not-a-date', 'R3.18', 'an occurrence whose timestamp is not a date fails field validation', BASE, [
+    stepOf({ body: occurrenceBody(withMember('timestamp', 'not-a-date')) }),
+  ], {
+    steps: [rejected('malformed_body')],
+    final_state: finalState([SUB_ID], boundSecrets(SUB_ID), []),
+  }),
+  sequenceCase('rcv-r318-occurrence-timestamp-feb-30', 'R3.18', 'an occurrence whose timestamp is a nonexistent calendar day fails field validation', BASE, [
+    stepOf({ body: occurrenceBody(withMember('timestamp', '2026-02-30T00:00:00Z')) }),
+  ], {
+    steps: [rejected('malformed_body')],
+    final_state: finalState([SUB_ID], boundSecrets(SUB_ID), []),
+  }),
+  sequenceCase('rcv-r318-occurrence-timestamp-date-only', 'R3.18', 'an occurrence whose timestamp has no time part fails field validation', BASE, [
+    stepOf({ body: occurrenceBody(withMember('timestamp', '2026-01-01')) }),
+  ], {
+    steps: [rejected('malformed_body')],
+    final_state: finalState([SUB_ID], boundSecrets(SUB_ID), []),
+  }),
+  sequenceCase('rcv-r318-occurrence-timestamp-no-zone', 'R3.18', 'an occurrence whose timestamp has no zone designator fails field validation', BASE, [
+    stepOf({ body: occurrenceBody(withMember('timestamp', '2026-01-01T00:00:00')) }),
+  ], {
+    steps: [rejected('malformed_body')],
+    final_state: finalState([SUB_ID], boundSecrets(SUB_ID), []),
+  }),
+  sequenceCase('rcv-r318-occurrence-timestamp-offset', 'R3.18', 'an occurrence with fractional seconds and a numeric offset is accepted and forwarded unchanged', BASE, [
+    stepOf({ body: OFFSET_TIMESTAMP_BODY }),
+  ], {
+    steps: [acceptedStep([JSON.parse(OFFSET_TIMESTAMP_BODY)])],
     final_state: finalState([SUB_ID], boundSecrets(SUB_ID), [ID_EVENT]),
   }),
 
