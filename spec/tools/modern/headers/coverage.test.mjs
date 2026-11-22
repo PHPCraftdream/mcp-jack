@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import {
   ALL_RULES, ANNOTATION_REASONS, EXEMPT_RULES, NON_VECTOR_RULES, PROJECTION_REASON, REASONS, VECTOR_RULES,
 } from './spec-data.mjs';
-import generator from './index.mjs';
+import generator, { assertRulePartition } from './index.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../..');
 const SPEC = readFileSync(join(ROOT, '04-modern-profile.md'), 'utf8');
@@ -106,7 +106,7 @@ test('case reasons come from the closed lists', () => {
 test('case counts are pinned per rule', () => {
   assert.deepEqual(Object.fromEntries(ALL_RULES.map((r) => [r, byRule(r)])), {
     S1: 13, S2: 6, S3: 8, S4: 9, S5: 5, S6: 41, S7: 3, S8: 3, S9: 2, S10: 1, S11: 4, S12: 3,
-    C1: 1, C2: 8, C3: 24, C4: 18, C5: 53, C6: 21, C7: 0, C8: 0, C9: 38, C10: 0, C11: 7, C12: 0,
+    C1: 1, C2: 8, C3: 24, C4: 18, C5: 55, C6: 22, C7: 0, C8: 0, C9: 38, C10: 0, C11: 7, C12: 0,
   });
 });
 
@@ -149,16 +149,20 @@ test('the spec exemption table names exactly the exempt rules', () => {
   assert.deepEqual(specExemptRows(SPEC).sort(), [...NON_VECTOR_RULES].sort());
 });
 
-test('every vector is mapped to its rule and every non-exempt rule has one', () => {
-  const map = new Map();
-  for (const c of CASES) {
-    assert.ok(ALL_RULES.includes(c.rule), c.id + ': unknown rule ' + c.rule);
-    map.set(c.rule, [...(map.get(c.rule) ?? []), c.id]);
-  }
-  const mapped = [...map.values()].flat();
-  assert.equal(mapped.length, CASES.length);
-  assert.equal(new Set(mapped).size, mapped.length);
-  assert.deepEqual([...new Set(mapped)].sort(), [...new Set(CASES.map((c) => c.id))].sort());
-  for (const rule of VECTOR_RULES) assert.ok((map.get(rule) ?? []).length > 0, rule);
-  for (const rule of NON_VECTOR_RULES) assert.equal((map.get(rule) ?? []).length, 0, rule);
+test('the generated cases satisfy the rule partition', () => {
+  assert.doesNotThrow(() => assertRulePartition(CASES));
+});
+
+test('the partition checker rejects a corrupted partition', () => {
+  // A non-exempt rule that loses all of its vectors.
+  assert.throws(() => assertRulePartition(CASES.filter((c) => c.rule !== 'C11')), /C11 has no mapped vector id/);
+  // An exempt rule that carries a vector.
+  assert.throws(() => assertRulePartition([...CASES, { id: 'unexpected-c7', rule: 'C7' }]), /exempt rule C7 has vectors/);
+  // A rule id outside the closed list.
+  assert.throws(() => assertRulePartition([...CASES, { id: 'unexpected-s99', rule: 'S99' }]), /unknown rule S99/);
+  // A case id mapped twice, which would hide a dropped vector.
+  assert.throws(
+    () => assertRulePartition([...CASES, { id: CASES[0].id, rule: CASES[0].rule }]),
+    /case id is mapped twice/,
+  );
 });

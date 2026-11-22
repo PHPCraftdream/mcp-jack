@@ -277,6 +277,14 @@ export const ANNOTATION_CASES = [
     expect: { valid: false, reason: 'annotation_not_statically_reachable' },
   },
   {
+    id: 'ann-unreachable-allof-property-annotated', rule: 'C5', kind: 'validate',
+    description: 'an annotation on a property inside an allOf subschema is not reachable from the schema root',
+    tool: { name: 'compose', inputSchema: {
+      allOf: [{ properties: { region: { type: 'string', 'x-mcp-header': 'Region' } } }],
+    } },
+    expect: { valid: false, reason: 'annotation_not_statically_reachable' },
+  },
+  {
     id: 'ann-unreachable-not', rule: 'C5', kind: 'validate',
     description: 'an annotation inside not is not reachable',
     tool: { name: 'choices', inputSchema: {
@@ -568,6 +576,14 @@ export const ANNOTATION_CASES = [
     expect: { valid: true, reason: null },
   },
   {
+    id: 'ann-valid-allof-property-named-x-mcp-header', rule: 'C5', kind: 'validate',
+    description: 'a property named x-mcp-header inside an allOf subschema is a property, not an annotation',
+    tool: { name: 'compose', inputSchema: {
+      allOf: [{ properties: { 'x-mcp-header': { type: 'string' } } }],
+    } },
+    expect: { valid: true, reason: null },
+  },
+  {
     id: 'ann-project-property-named-x-mcp-header', rule: 'C6', kind: 'project',
     description: 'a property named x-mcp-header is projected like any other property',
     tool: { name: 'lookup', inputSchema: {
@@ -593,6 +609,15 @@ export const ANNOTATION_CASES = [
     } },
     arguments: { properties: 'v2' },
     expect: { outcome: 'headers', headers: [['Mcp-Param-Props', 'v2']] },
+  },
+  {
+    id: 'ann-project-allof-property-named-x-mcp-header', rule: 'C6', kind: 'project',
+    description: 'a property named x-mcp-header under allOf is not annotated, so nothing is projected',
+    tool: { name: 'compose', inputSchema: {
+      allOf: [{ properties: { 'x-mcp-header': { type: 'string' } } }],
+    } },
+    arguments: { 'x-mcp-header': 'v1' },
+    expect: { outcome: 'headers', headers: [] },
   },
 
   // C11: event type descriptors validate as in C5 and project as in C6.
