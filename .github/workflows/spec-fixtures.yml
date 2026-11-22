@@ -84,13 +84,12 @@ jobs:
           node-version: 22
       - name: Self-tests of the modern-profile generators
         run: node --test "spec/tools/modern/**/*.test.mjs"
-      - name: Check committed modern fixtures before regeneration
-        run: node spec/tools/modern/gen-modern.mjs --check
       - name: Generate modern fixtures
         run: node spec/tools/modern/gen-modern.mjs
       - name: Verify modern regeneration is deterministic
         run: node spec/tools/modern/gen-modern.mjs --check
       - name: Upload generated modern fixtures
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: spec-modern-generated-fixtures
@@ -98,3 +97,7 @@ jobs:
             spec/fixtures/modern/
             spec/tests/modern/CASES.md
           if-no-files-found: error
+      - name: Committed modern fixtures are up to date
+        run: |
+          git diff --exit-code -- spec/fixtures/modern spec/tests/modern
+          test -z "$(git status --porcelain -- spec/fixtures/modern spec/tests/modern)"
