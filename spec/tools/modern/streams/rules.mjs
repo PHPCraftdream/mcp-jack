@@ -5,7 +5,7 @@ import { openVectors } from './vectors/vectors-open.mjs';
 import { frameVectors } from './vectors/vectors-frames.mjs';
 import { CLIENT_CODES } from './reference.mjs';
 
-export const CLIENT_COUNT = 78;
+export const CLIENT_COUNT = 80;
 
 // The client cases in file order; 4.6 takes the first case per code from here.
 export const CASES = [...openVectors, ...frameVectors];
@@ -181,6 +181,7 @@ export const REQUIREMENTS = {
       'stream-idle-heartbeat',
       'stream-idle-open-silence',
       'stream-idle-bom-late-chunk',
+      'stream-idle-blank-line-late-chunk',
       'stream-idle-comment-silence',
     ],
     requirement: 'idle timeout counted from the last verified frame',
@@ -195,7 +196,10 @@ export const REQUIREMENTS = {
     requirement: 'verify a frame before parsing its JSON',
   },
   '5.2': {
-    vectors: ['stream-open-cutoff', 'stream-frame-after-cutoff', 'stream-ok-cutoff-below'],
+    vectors: [
+      'stream-open-cutoff', 'stream-frame-after-cutoff', 'stream-frame-end-after-cutoff',
+      'stream-ok-cutoff-below',
+    ],
     requirement: 'client cutoff rejection at or after the successor activation',
   },
   '5.3': {
