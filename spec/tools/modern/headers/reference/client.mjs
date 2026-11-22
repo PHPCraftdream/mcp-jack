@@ -5,6 +5,14 @@ import { encodeHeaderValue, isToken, textOfValue } from './values.mjs';
 const ANNOTATION_KEY = 'x-mcp-header';
 const NAME_MAP_KEYWORDS = new Set(['properties', 'patternProperties', '$defs', 'definitions', 'dependentSchemas']);
 
+// Keywords whose value is a schema or an array of schemas; a schema reached
+// through one of them is still a schema, so its members are keywords.
+const SCHEMA_KEYWORDS = new Set([
+  'allOf', 'anyOf', 'oneOf', 'not', 'if', 'then', 'else', 'items', 'prefixItems',
+  'contains', 'additionalProperties', 'additionalItems', 'propertyNames',
+  'unevaluatedProperties', 'unevaluatedItems',
+]);
+
 const isObj = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 // A path is statically reachable iff it alternates properties -> name pairs from
@@ -28,9 +36,12 @@ const hasControl = (s) => {
 
 // Structural traversal: the recursion carries whether the current node is a
 // schema (its members are keywords) or a name map (its members are property,
-// pattern or definition names). A member named x-mcp-header is an annotation only
-// in a schema node, so a property that is itself named "properties" keeps its own
-// annotation and a property named "x-mcp-header" is never an annotation keyword.
+// pattern or definition names). Only the value of a name-map keyword is a name
+// map; the value of an applicator keyword (allOf, items, not, ...) is a schema
+// again. A member named x-mcp-header is an annotation only in a schema node, so a
+// property that is itself named "properties" keeps its own annotation and a
+// property named "x-mcp-header" — at the root, in a name map or inside an allOf
+// subschema — is never an annotation keyword.
 export function collectAnnotations(inputSchema) {
   const out = [];
   const push = (node, path) => out.push({ path, propPath: staticPropertyPath(path), node, name: node[ANNOTATION_KEY] });
@@ -47,6 +58,12 @@ export function collectAnnotations(inputSchema) {
     }
   }
 
+  // The value of an applicator keyword is a schema, or an array of schemas.
+  function walkSubschema(node, path) {
+    if (Array.isArray(node)) node.forEach((child, index) => walkSubschema(child, [...path, String(index)]));
+    else walkSchema(node, path);
+  }
+
   function walkNameMap(node, path) {
     if (!isObj(node)) return;
     for (const name of Object.keys(node)) walkSchema(node[name], [...path, name]);
@@ -57,6 +74,7 @@ export function collectAnnotations(inputSchema) {
     for (const key of Object.keys(node)) {
       if (key === ANNOTATION_KEY) push(node, path);
       else if (NAME_MAP_KEYWORDS.has(key)) walkNameMap(node[key], [...path, key]);
+      else if (SCHEMA_KEYWORDS.has(key)) walkSubschema(node[key], [...path, key]);
       else walkValue(node[key], [...path, key]);
     }
   }

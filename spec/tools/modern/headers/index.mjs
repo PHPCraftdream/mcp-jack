@@ -85,6 +85,32 @@ function assertRequestShape(c, value) {
   else throw new Error(c.id + ': unknown request outcome ' + value.outcome);
 }
 
+// Rule partition (spec section 8), exported so the coverage test can prove the
+// checker rejects a corrupted partition instead of rebuilding a mapping of its
+// own. Every case must cite a known rule, every non-exempt rule must map to at
+// least one case id, no case id may be mapped twice and no exempt rule may carry
+// a vector.
+export function assertRulePartition(cases) {
+  const ruleMap = new Map();
+  for (const c of cases) {
+    if (!ALL_RULES.includes(c.rule)) throw new Error(c.id + ': case cites unknown rule ' + c.rule);
+    if (!ruleMap.has(c.rule)) ruleMap.set(c.rule, []);
+    ruleMap.get(c.rule).push(c.id);
+  }
+  const mappedIds = [...ruleMap.values()].flat();
+  if (mappedIds.length !== cases.length) {
+    throw new Error('rule map: ' + mappedIds.length + ' mapped ids for ' + cases.length + ' cases');
+  }
+  if (new Set(mappedIds).size !== mappedIds.length) throw new Error('rule map: a case id is mapped twice');
+  for (const rule of VECTOR_RULES) {
+    if ((ruleMap.get(rule) ?? []).length === 0) throw new Error('rule ' + rule + ' has no mapped vector id');
+  }
+  for (const rule of NON_VECTOR_RULES) {
+    if ((ruleMap.get(rule) ?? []).length > 0) throw new Error('exempt rule ' + rule + ' has vectors');
+  }
+  return ruleMap;
+}
+
 export default {
   family: 'headers',
   build() {
@@ -206,27 +232,9 @@ export default {
     const overlap = byRefIds.find((id) => ids.includes(id));
     if (overlap !== undefined) throw new Error('case id reused by a by-reference entry: ' + overlap);
 
-    // Rule partition (spec section 8): every non-exempt rule maps to at least one
-    // existing vector id, every vector is mapped to its own rule, and no exempt
-    // rule has a vector. The coverage test compares the spec's exemption table to
-    // EXEMPT_RULES.
-    const ruleMap = new Map();
-    for (const c of allCases) {
-      if (!ALL_RULES.includes(c.rule)) throw new Error(c.id + ': case cites unknown rule ' + c.rule);
-      if (!ruleMap.has(c.rule)) ruleMap.set(c.rule, []);
-      ruleMap.get(c.rule).push(c.id);
-    }
-    const mappedIds = [...ruleMap.values()].flat();
-    if (mappedIds.length !== allCases.length) {
-      throw new Error('rule map: ' + mappedIds.length + ' mapped ids for ' + allCases.length + ' cases');
-    }
-    if (new Set(mappedIds).size !== mappedIds.length) throw new Error('rule map: a case id is mapped twice');
-    for (const rule of VECTOR_RULES) {
-      if ((ruleMap.get(rule) ?? []).length === 0) throw new Error('rule ' + rule + ' has no mapped vector id');
-    }
-    for (const rule of NON_VECTOR_RULES) {
-      if ((ruleMap.get(rule) ?? []).length > 0) throw new Error('exempt rule ' + rule + ' has vectors');
-    }
+    // Spec section 8: the checked partition of vectors over rules. The coverage
+    // test compares the spec's exemption table to EXEMPT_RULES.
+    assertRulePartition(allCases);
 
     // 7. Files, in insertion order.
     const files = {
