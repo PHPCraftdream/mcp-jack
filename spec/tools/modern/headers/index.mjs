@@ -18,7 +18,7 @@ import { buildCasesMarkdown } from './vectors/markdown.mjs';
 // Wire shape of a resolved request expectation. Section 8: every refusal carries
 // the full wire outcome, and a forward carries the era, the forwarded request
 // and the nonce bookkeeping flag.
-const REFUSAL_KEYS = ['consumes_nonce', 'content_type', 'era', 'error', 'id', 'jsonrpc', 'outcome', 'signed'];
+const REFUSAL_KEYS = ['consumes_nonce', 'content_type', 'era', 'error', 'http_status', 'id', 'jsonrpc', 'outcome', 'signed'];
 const FORWARD_KEYS = ['consumes_nonce', 'era', 'forward', 'outcome'];
 const FORWARD_FIELDS = ['headers', 'method', 'target'];
 

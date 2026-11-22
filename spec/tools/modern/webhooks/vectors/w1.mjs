@@ -66,7 +66,7 @@ const katCase = (id, rule, description, claimOf) => {
     description,
     kind: 'kat-w1',
     input: { key: 'newbie', ...wireOf(claimOf) },
-    expect: { result: 'accept', header: w1Direct(K.newbie, parts), signing_string_b64u: b64uLocal(B(signingString(parts))) },
+    expect: { result: 'accept', header: w1Direct(K.newbie.priv, parts), signing_string_b64u: b64uLocal(B(signingString(parts))) },
   };
 };
 

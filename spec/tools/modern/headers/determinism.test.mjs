@@ -21,7 +21,7 @@ const FILES = [REQUEST_FILE, ENCODING_FILE, ANNOTATION_FILE, ERA_FILE];
 // The wire shape of a resolved expectation, from index.mjs and spec section 8.
 const FORWARD_KEYS = ['consumes_nonce', 'era', 'forward', 'outcome'];
 const FORWARD_FIELDS = ['headers', 'method', 'target'];
-const REFUSAL_KEYS = ['consumes_nonce', 'content_type', 'era', 'error', 'id', 'jsonrpc', 'outcome', 'signed'];
+const REFUSAL_KEYS = ['consumes_nonce', 'content_type', 'era', 'error', 'http_status', 'id', 'jsonrpc', 'outcome', 'signed'];
 
 test('family name is headers', () => {
   assert.equal(generator.family, 'headers');
