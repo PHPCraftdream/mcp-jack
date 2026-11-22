@@ -8,9 +8,10 @@ import { META_VERSION_KEY, REASONS } from './spec-data.mjs';
 const V = '2026-07-28';
 const CT = ['Content-Type', 'application/json'];
 const meta = { [META_VERSION_KEY]: V, 'io.modelcontextprotocol/clientCapabilities': {} };
-const call = (params = { name: 'get_weather' }) => JSON.stringify({
-  jsonrpc: '2.0', id: 1, method: 'tools/call', params: { ...params, _meta: meta },
+const bodyOf = (method, params = {}) => JSON.stringify({
+  jsonrpc: '2.0', id: 1, method, params: { ...params, _meta: meta },
 });
+const call = (params = { name: 'get_weather' }) => bodyOf('tools/call', params);
 const mirrors = () => [['MCP-Protocol-Version', V], ['Mcp-Method', 'tools/call'], ['Mcp-Name', 'get_weather'], CT];
 const run = (request, profile = 'modern') => classifyRequest({
   profile, request: { method: 'POST', target: '/mcp', ...request },
@@ -46,7 +47,7 @@ test('each mirror mutation is refused with its own reason', () => {
     ['second Mcp-Name', { headers: [...mirrors(), ['Mcp-Name', 'get_weather']], body_text: call() }, 'header_repeated'],
     ['raw newline in name', { headers: set('Mcp-Name', 'get_\nweather'), body_text: call() }, 'header_value_invalid'],
     ['nul in param value', { headers: [...mirrors(), ['Mcp-Param-X', 'a\u0000b']], body_text: call() }, 'header_value_invalid'],
-    ['body without name', { headers: mirrors(), body_text: call({}) }, 'name_source_missing'],
+    ['tools/call without name', { headers: mirrors(), body_text: call({}) }, 'refuse_invalid_request'],
   ];
   for (const [label, request, reason] of rows) assert.equal(outcomeOf(run(request)), reason, label);
 });
@@ -55,6 +56,31 @@ test('Mcp-Name on a method without a source field is refused', () => {
   const body_text = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: { _meta: meta } });
   const headers = [['MCP-Protocol-Version', V], ['Mcp-Method', 'tools/list'], ['Mcp-Name', 'get_weather'], CT];
   assert.equal(outcomeOf(run({ headers, body_text })), 'name_header_not_applicable');
+});
+
+test('a tools/call without params.name is refused by body classification', () => {
+  const expected = {
+    outcome: 'refuse_invalid_request', era: null, signed: true,
+    http_status: 400, content_type: 'application/json',
+    error: { code: 'invalid_request', message: 'tools/call requires a string params.name' },
+    consumes_nonce: true,
+  };
+  assert.deepEqual(run({ headers: mirrors(), body_text: call({}) }), expected);
+  assert.deepEqual(run({ headers: mirrors(), body_text: call({}) }, 'legacy'), expected);
+  assert.deepEqual(run({ headers: mirrors(), body_text: call({ name: 7 }) }, 'both'), expected);
+  const notification = JSON.stringify({ jsonrpc: '2.0', method: 'tools/call', params: { _meta: meta } });
+  assert.deepEqual(run({ headers: mirrors(), body_text: notification }), expected);
+});
+
+test('a method with a name source but no string value is name_source_missing', () => {
+  const rows = [
+    ['prompts/get', bodyOf('prompts/get')],
+    ['events/subscribe', bodyOf('events/subscribe')],
+  ];
+  for (const [method, body_text] of rows) {
+    const headers = [['MCP-Protocol-Version', V], ['Mcp-Method', method], ['Mcp-Name', 'x'], CT];
+    assert.equal(outcomeOf(run({ headers, body_text })), 'name_source_missing', method);
+  }
 });
 
 test('era decision and method rules', () => {
@@ -80,7 +106,7 @@ test('era decision and method rules', () => {
     ['MCP-Protocol-Version', V], ['Mcp-Method', 'tools/call'], ['Mcp-Name', 'get_weather'], CT, ['Mcp-Session-Id', 's1'],
   ]);
 
-  const noVersion = run({ headers: [['Mcp-Method', 'tools/call'], ['Mcp-Name', 'get_weather']], body_text: call({}) }, 'both');
+  const noVersion = run({ headers: [['Mcp-Method', 'tools/call'], ['Mcp-Name', 'get_weather']], body_text: call() }, 'both');
   assert.equal(outcomeOf(noVersion), 'version_header_missing');
 
   const legacyMalformed = run({
@@ -147,6 +173,12 @@ test('annotation validation', () => {
   assert.deepEqual(validateAnnotations({ properties: { '': { type: 'string', 'x-mcp-header': 'Empty' } } }), {
     valid: true, reason: null,
   });
+  assert.deepEqual(validateAnnotations({ properties: { properties: { type: 'string', 'x-mcp-header': 'Props' } } }), {
+    valid: true, reason: null,
+  });
+  assert.deepEqual(validateAnnotations({
+    properties: { outer: { type: 'object', properties: { properties: { type: 'string', 'x-mcp-header': 'Inner' } } } },
+  }), { valid: true, reason: null });
   const rows = [
     ['empty', region({ type: 'string', 'x-mcp-header': '' }), 'annotation_name_empty'],
     ['not a token', region({ type: 'string', 'x-mcp-header': 'Re gion' }), 'annotation_name_not_token'],
@@ -187,6 +219,16 @@ test('projection', () => {
   assert.deepEqual(projectArguments(empty, { '': 'e' }), {
     outcome: 'headers', headers: [['Mcp-Param-Empty', 'e']],
   });
+  const propsNamed = { properties: { properties: { type: 'string', 'x-mcp-header': 'Props' } } };
+  assert.deepEqual(projectArguments(propsNamed, { properties: 'v2' }), {
+    outcome: 'headers', headers: [['Mcp-Param-Props', 'v2']],
+  });
+  const nested = {
+    properties: { outer: { type: 'object', properties: { properties: { type: 'string', 'x-mcp-header': 'Inner' } } } },
+  };
+  assert.deepEqual(projectArguments(nested, { outer: { properties: 'p' } }), {
+    outcome: 'headers', headers: [['Mcp-Param-Inner', 'p']],
+  });
 });
 
 test('era detection requires a recognised JSON-RPC error', () => {
@@ -226,6 +268,13 @@ test('era detection requires a recognised JSON-RPC error', () => {
   const disjoint = ',"data":{"supported":["2099-01-01"]}';
   assert.deepEqual(era({ verified: true, status: 400, body_text: envelope(-32022, disjoint) }, ['2026-07-28']), {
     era: 'modern', action: 'abort', reason: 'unsupported_version_no_overlap',
+  });
+  const mixed = ',"data":{"supported":["2026-07-28",7]}';
+  assert.deepEqual(era({ verified: true, status: 400, body_text: envelope(-32022, mixed) }, ['2026-07-28']), {
+    era: 'modern', action: 'abort', reason: 'unsupported_version_no_overlap',
+  });
+  assert.deepEqual(era({ verified: true, status: 400, body_text: '{"jsonrpc":"1.0","id":1,"error":{"code":"invalid_request","message":"x"}}' }), {
+    era: 'legacy', action: 'fallback_initialize', reason: 'no_modern_error',
   });
   const notFound = '{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}';
   assert.deepEqual(era({ verified: true, status: 404, body_text: notFound }), {

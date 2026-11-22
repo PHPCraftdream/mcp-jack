@@ -105,8 +105,8 @@ test('case reasons come from the closed lists', () => {
 
 test('case counts are pinned per rule', () => {
   assert.deepEqual(Object.fromEntries(ALL_RULES.map((r) => [r, byRule(r)])), {
-    S1: 13, S2: 6, S3: 8, S4: 9, S5: 5, S6: 39, S7: 3, S8: 3, S9: 2, S10: 1, S11: 4, S12: 3,
-    C1: 1, C2: 8, C3: 24, C4: 18, C5: 51, C6: 20, C7: 0, C8: 0, C9: 36, C10: 0, C11: 7, C12: 0,
+    S1: 13, S2: 6, S3: 8, S4: 9, S5: 5, S6: 41, S7: 3, S8: 3, S9: 2, S10: 1, S11: 4, S12: 3,
+    C1: 1, C2: 8, C3: 24, C4: 18, C5: 53, C6: 21, C7: 0, C8: 0, C9: 38, C10: 0, C11: 7, C12: 0,
   });
 });
 
@@ -126,4 +126,39 @@ test('the by-reference entry points at real response vectors', () => {
   const ids = new Set(RESPONSE_VECTORS.cases.map((c) => c.id));
   for (const v of entry.vectors) assert.ok(ids.has(v), v);
   assert.deepEqual(entry.vectors, ['res-wrong-request-binding', 'res-accept']);
+});
+
+// The section 8 exemption table must name exactly the exempt rules: deleting a
+// row while keeping the rule heading has to fail.
+function specExemptRows(spec) {
+  const lines = spec.split('\n');
+  const start = lines.indexOf('| Rule | Why no vector | Carried by |');
+  assert.ok(start >= 0, 'exemption table header not found');
+  const ids = [];
+  for (let i = start + 1; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (!line.startsWith('|')) break;
+    if (/^\|\s*-+/.test(line)) continue;
+    const match = line.match(/^\| `([^`]+)` \|/);
+    if (match) ids.push(match[1]);
+  }
+  return ids;
+}
+
+test('the spec exemption table names exactly the exempt rules', () => {
+  assert.deepEqual(specExemptRows(SPEC).sort(), [...NON_VECTOR_RULES].sort());
+});
+
+test('every vector is mapped to its rule and every non-exempt rule has one', () => {
+  const map = new Map();
+  for (const c of CASES) {
+    assert.ok(ALL_RULES.includes(c.rule), c.id + ': unknown rule ' + c.rule);
+    map.set(c.rule, [...(map.get(c.rule) ?? []), c.id]);
+  }
+  const mapped = [...map.values()].flat();
+  assert.equal(mapped.length, CASES.length);
+  assert.equal(new Set(mapped).size, mapped.length);
+  assert.deepEqual([...new Set(mapped)].sort(), [...new Set(CASES.map((c) => c.id))].sort());
+  for (const rule of VECTOR_RULES) assert.ok((map.get(rule) ?? []).length > 0, rule);
+  for (const rule of NON_VECTOR_RULES) assert.equal((map.get(rule) ?? []).length, 0, rule);
 });

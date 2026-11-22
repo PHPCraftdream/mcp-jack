@@ -1,6 +1,6 @@
 {
   "format": "mcp-jack-modern-request-vectors-v1",
-  "note": "Classification-level cases of spec 04 sections 3-5. Request authentication (mcp-jack/v1) and the legacy dispatch rules of spec 02 run before every case and are covered by request-vectors.json.",
+  "note": "Classification-level cases of spec 04 sections 3-6. Request authentication (mcp-jack/v1) runs before every case; the one era-neutral classification case cites the spec 02 section 2 item 4 refusal, and the legacy dispatch rules of spec 02 are covered by request-vectors.json.",
   "clock": {
     "now": 1767225600,
     "window_seconds": 30
@@ -2822,7 +2822,7 @@
     {
       "id": "req-name-source-missing-tools-call",
       "rule": "S6",
-      "description": "a tools/call body without params.name is refused rather than forwarded",
+      "description": "a tools/call without params.name is refused by body classification before any Section 5 rule",
       "profile": "modern",
       "request": {
         "method": "POST",
@@ -2846,6 +2846,90 @@
           ]
         ],
         "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{}}}}"
+      },
+      "expect": {
+        "outcome": "refuse_invalid_request",
+        "era": null,
+        "signed": true,
+        "http_status": 400,
+        "content_type": "application/json",
+        "error": {
+          "code": "invalid_request",
+          "message": "tools/call requires a string params.name"
+        },
+        "consumes_nonce": true
+      }
+    },
+    {
+      "id": "req-name-source-missing-prompts-get",
+      "rule": "S6",
+      "description": "prompts/get without params.name has no mirror source",
+      "profile": "modern",
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "MCP-Protocol-Version",
+            "2026-07-28"
+          ],
+          [
+            "Mcp-Method",
+            "prompts/get"
+          ],
+          [
+            "Mcp-Name",
+            "x"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"prompts/get\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{}}}}"
+      },
+      "expect": {
+        "outcome": "refuse",
+        "era": "modern",
+        "signed": true,
+        "http_status": 400,
+        "content_type": "application/json",
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+          "code": -32020,
+          "message": "Header mismatch: the body has no string value for the Mcp-Name source field"
+        },
+        "consumes_nonce": true
+      }
+    },
+    {
+      "id": "req-name-source-missing-events-subscribe",
+      "rule": "S6",
+      "description": "events/subscribe without params.name has no mirror source",
+      "profile": "modern",
+      "request": {
+        "method": "POST",
+        "target": "/mcp",
+        "headers": [
+          [
+            "MCP-Protocol-Version",
+            "2026-07-28"
+          ],
+          [
+            "Mcp-Method",
+            "events/subscribe"
+          ],
+          [
+            "Mcp-Name",
+            "x"
+          ],
+          [
+            "Content-Type",
+            "application/json"
+          ]
+        ],
+        "body_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"events/subscribe\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{}}}}"
       },
       "expect": {
         "outcome": "refuse",

@@ -64,7 +64,7 @@ export const REASONS = {
 };
 
 // Verification order of the server rules as implemented (ids only).
-export const SERVER_ORDER = ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9', 'S10', 'S11', 'S12'];
+export const SERVER_ORDER = ['S3', 'S1', 'S2', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9', 'S10', 'S11', 'S12'];
 
 // Closed list of x-mcp-header validation reasons (spec C5).
 export const ANNOTATION_REASONS = [
@@ -108,6 +108,16 @@ export const NON_VECTOR_RULES = Object.keys(EXEMPT_RULES);
 export const ERA_ACTIONS = ['stay_modern', 'fallback_initialize', 'retry_with_supported', 'abort'];
 export const ERA_REASONS = ['unverified', 'no_modern_error', 'jack_envelope', 'modern_method_not_found', 'unsupported_version_no_overlap', 'no_era_signal'];
 export const MODERN_ERA_ERROR_CODES = [-32020, -32021, -32022];
+
+// spec 02 section 2 item 4: a tools/call body whose params.name is not a string is
+// refused at body classification, before the era decision, in the spec 01
+// section 4 envelope. The response is signed (01 section 5). The message is
+// fixed here so every implementation emits the same bytes.
+export const CLASSIFICATION_REFUSAL = {
+  http_status: 400,
+  code: 'invalid_request',
+  message: 'tools/call requires a string params.name',
+};
 export const SAFE_INT_MAX = 9007199254740991; // 2^53 - 1
 
 export const META_VERSION_KEY = 'io.modelcontextprotocol/protocolVersion';
