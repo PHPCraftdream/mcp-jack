@@ -29,7 +29,16 @@ const ID_TERM = 'msg_terminated_7Qk2mZ4rT9xV1bN6pL3sD8wY5cJ0hG2f';
 const HOOK = 'https://hooks.example.test/hooks/alice';
 const HOOK_OTHER = 'https://hooks.example.test/hooks/bob';
 const STAMP = '2026-01-01T00:00:00Z';
-const EVENT = `{"eventId":"evt_1","name":"incident.created","timestamp":"${STAMP}","data":{"severity":"P1"}}`;
+// R3.18: the accepted occurrence every occurrence negative below deviates from by exactly one field.
+const OCCURRENCE = { eventId: 'evt_1', name: 'incident.created', timestamp: STAMP, data: { severity: 'P1' } };
+const occurrenceBody = (mutate = (value) => value) => JSON.stringify(mutate({ ...OCCURRENCE }));
+const withoutMember = (member) => (value) => {
+  const copy = { ...value };
+  delete copy[member];
+  return copy;
+};
+const withMember = (member, replacement) => (value) => ({ ...value, [member]: replacement });
+const EVENT = occurrenceBody();
 const EVENT_OTHER = `{"eventId":"evt_2","name":"incident.created","timestamp":"${STAMP}","data":{}}`;
 const GAP = '{"type":"gap","cursor":"cursor_7f3a"}';
 const TERM = '{"type":"terminated","error":{"code":-32024,"message":"Forbidden"}}';
@@ -59,6 +68,8 @@ const PENDING_JACK = {
 };
 const PENDING_JACK_EMPTY = { ...PENDING_JACK, jack: JACK_EMPTY };
 const SERVER_KEY = { ...BASE, keys: ['newbie'], jack: JACK, mcp_server_kid: K.svc.kid };
+// R4.5: the same server key configured only by its raw public key, so its kid arrives through the bytes.
+const SERVER_KEY_RAW = { ...BASE, keys: ['svc', 'newbie'], jack: JACK, mcp_server_public_key: K.svc.public_key };
 // R7.6: the shape of the `jack.server.webhook_key` tool result.
 const webhookKeyTool = (keys) => ({
   webhook_key: { signing_keys: { keys }, egress_ip_ranges: [] },
@@ -191,8 +202,6 @@ const stepOf = (opts, now = NOW) => ({
 });
 const stepWith = (headers, body, now = NOW) => ({ now, headers, body_text: body });
 const stepRepeat = (opts) => ({ now: NOW, headers: delivery(opts), body_repeat: { char: 'a', count: opts.body.length } });
-// R3.8: a step that restates the configuration is the same receiver told to route the id since the last attempt.
-const afterRouting = (config, step) => ({ ...step, config });
 
 const sequenceCase = (id, rule, description, config, steps, expect) => ({
   id,
@@ -235,16 +244,19 @@ const LAST_ERROR_ROWS = [
 
 // R3.18: one otherwise valid, correctly signed body per violated field, each 400 malformed_body.
 const FIELD_ROWS = [
-  ['rcv-r318-occurrence-missing-event-id', 'an occurrence without eventId fails field validation', `{"name":"incident.created","timestamp":"${STAMP}","data":{}}`],
-  ['rcv-r318-occurrence-event-id-not-string', 'an occurrence with a numeric eventId fails field validation', `{"eventId":42,"name":"incident.created","timestamp":"${STAMP}","data":{}}`],
-  ['rcv-r318-occurrence-missing-name', 'an occurrence without name fails field validation', `{"eventId":"evt_1","timestamp":"${STAMP}","data":{}}`],
-  ['rcv-r318-occurrence-missing-timestamp', 'an occurrence without its timestamp member fails field validation', `{"eventId":"evt_1","name":"incident.created","data":{}}`],
-  ['rcv-r318-occurrence-missing-data', 'an occurrence without data fails field validation', `{"eventId":"evt_1","name":"incident.created","timestamp":"${STAMP}"}`],
-  ['rcv-r318-occurrence-cursor-bad-type', 'an occurrence whose cursor is a number fails field validation', `{"eventId":"evt_1","name":"incident.created","timestamp":"${STAMP}","data":{},"cursor":5}`],
+  ['rcv-r318-occurrence-missing-event-id', 'an occurrence without eventId fails field validation', occurrenceBody(withoutMember('eventId'))],
+  ['rcv-r318-occurrence-event-id-not-string', 'an occurrence with a numeric eventId fails field validation', occurrenceBody(withMember('eventId', 42))],
+  ['rcv-r318-occurrence-missing-name', 'an occurrence without name fails field validation', occurrenceBody(withoutMember('name'))],
+  ['rcv-r318-occurrence-missing-timestamp', 'an occurrence without its timestamp member fails field validation', occurrenceBody(withoutMember('timestamp'))],
+  ['rcv-r318-occurrence-missing-data', 'an occurrence without data fails field validation', occurrenceBody(withoutMember('data'))],
+  ['rcv-r318-occurrence-cursor-bad-type', 'an occurrence whose cursor is a number fails field validation', occurrenceBody(withMember('cursor', 5))],
   ['rcv-r318-gap-missing-cursor', 'a gap envelope without cursor fails field validation', '{"type":"gap"}'],
   ['rcv-r318-terminated-missing-error', 'a terminated envelope without error fails field validation', '{"type":"terminated"}'],
   ['rcv-r318-terminated-code-not-integer', 'a terminated envelope whose error code is the string minus 32024 fails field validation', '{"type":"terminated","error":{"code":"-32024","message":"Forbidden"}}'],
-  ['rcv-r318-terminated-data-not-object', 'a terminated envelope whose data is a string fails field validation', '{"type":"terminated","error":{"code":-32024,"message":"Forbidden"},"data":"x"}'],
+  ['rcv-r318-terminated-message-missing', 'a terminated envelope whose error has no message fails field validation', '{"type":"terminated","error":{"code":-32024}}'],
+  ['rcv-r318-terminated-message-not-string', 'a terminated envelope whose error message is a number fails field validation', '{"type":"terminated","error":{"code":-32024,"message":403}}'],
+  ['rcv-r318-terminated-data-not-object', 'a terminated envelope whose error.data is a string fails field validation', '{"type":"terminated","error":{"code":-32024,"message":"Forbidden","data":"x"}}'],
+  ['rcv-r318-terminated-data-array', 'a terminated envelope whose error.data is an array fails field validation', '{"type":"terminated","error":{"code":-32024,"message":"Forbidden","data":[]}}'],
 ];
 
 export const cases = [
@@ -455,11 +467,12 @@ export const cases = [
     steps: [rejected('subscription_not_routed')],
     final_state: finalState([], boundSecrets(SUB_ID), []),
   }),
-  sequenceCase('rcv-r38-not-routed-then-retry', 'R3.8', 'a 503 for an unrouted id records nothing, so the retried copy is accepted once routing is on', NOT_ROUTED, [
+  sequenceCase('rcv-r38-not-routed-then-retry', 'R3.8', 'the route is installed on the same receiver, so an id wrongly recorded by the 503 would surface as a lost acceptance or as duplicate', NOT_ROUTED, [
     stepOf({ body: EVENT }),
-    afterRouting(BASE, stepOf({ body: EVENT, ts: NOW + 1 }, NOW + 1)),
+    { ...stepOf({ body: EVENT, ts: NOW + 1 }, NOW + 1), route: [SUB_ID] },
+    { ...stepOf({ body: EVENT, ts: NOW + 2 }, NOW + 2), route: [SUB_ID] },
   ], {
-    steps: [rejected('subscription_not_routed'), acceptedStep([EVENT_MSG])],
+    steps: [rejected('subscription_not_routed'), acceptedStep([EVENT_MSG]), duplicateStep()],
     final_state: finalState([SUB_ID], boundSecrets(SUB_ID), [ID_EVENT]),
   }),
 
@@ -568,6 +581,18 @@ export const cases = [
     steps: [acceptedStep([EVENT_MSG])],
     final_state: finalState([SUB_ID], boundSecrets(SUB_ID), [ID_EVENT]),
   }),
+  sequenceCase('rcv-r315-server-key-raw', 'R4.5', 'a jack header naming the kid derived from the configured raw MCP server public key is refused before the key lookup', SERVER_KEY_RAW, [
+    stepOf({ body: EVENT, keys: ['newbie'], jack: JACK, jackKey: 'svc' }),
+  ], {
+    steps: [rejected('webhook_key_is_server_key')],
+    final_state: finalState([SUB_ID], boundSecrets(SUB_ID), []),
+  }),
+  sequenceCase('rcv-r315-dedicated-key-after-raw-config', 'R4.5', 'the dedicated webhook key is still accepted when the server key is configured only by its raw public key', SERVER_KEY_RAW, [
+    stepOf({ body: EVENT, keys: ['newbie'], jack: JACK }),
+  ], {
+    steps: [acceptedStep([EVENT_MSG])],
+    final_state: finalState([SUB_ID], boundSecrets(SUB_ID), [ID_EVENT]),
+  }),
   sequenceCase('rcv-r315-pending-jack-other-url', 'R3.15', 'on the pending path w1 binds the entry callback url, so another url does not verify', PENDING_JACK_EMPTY, [
     stepOf({ body: VERIFICATION, id: ID_VERIFY, keys: ['newbie'], jack: JACK_EMPTY, callbackUrl: HOOK_OTHER, subscriptionId: SUB_ID }),
   ], {
@@ -647,6 +672,12 @@ export const cases = [
     steps: [rejected('malformed_body')],
     final_state: finalState([SUB_ID], boundSecrets(SUB_ID), []),
   })),
+  sequenceCase('rcv-r318-occurrence-control', 'R3.18', 'the accepted occurrence the negatives above each deviate from by exactly one field', BASE, [
+    stepOf({ body: occurrenceBody() }),
+  ], {
+    steps: [acceptedStep([EVENT_MSG])],
+    final_state: finalState([SUB_ID], boundSecrets(SUB_ID), [ID_EVENT]),
+  }),
 
   sequenceCase('rcv-r56-pending-secret-binds', 'R5.6', 'a pending secret answers the verification and is bound to the header id', PENDING, [
     stepOf({ body: VERIFICATION, id: ID_VERIFY }),
@@ -714,10 +745,10 @@ export function run(c) {
   const input = c.input;
   switch (c.kind) {
     case 'sequence': {
-      let receiver = createReceiver(configOf(input.config));
+      const receiver = createReceiver(configOf(input.config));
       const steps = input.steps.map((step) => {
-        // R3.8: a step that restates the configuration is the receiver told to route the id since the last attempt.
-        if (step.config !== undefined) receiver = createReceiver(configOf(step.config));
+        // R3.8: the id is routed on this same receiver, so state recorded by earlier steps stays observable.
+        if (step.route !== undefined) receiver.route(step.route);
         const out = receiver.handle({
           now: step.now,
           headers: step.headers,

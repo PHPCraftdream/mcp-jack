@@ -313,6 +313,7 @@ export const cases = [
   { id: 'sig-stale-timestamp', rule: 'R3.9', description: 'a timestamp 301 seconds old is stale', kind: 'verify', input: verifyInput({ signature_header: v1Header(SEC_A, { timestamp: NOW - 301 }), timestamp: NOW - 301 }), expect: { result: 'reject', code: 'stale_timestamp' } },
   { id: 'sig-future-timestamp', rule: 'R3.9', description: 'a timestamp 301 seconds ahead is a future timestamp', kind: 'verify', input: verifyInput({ signature_header: v1Header(SEC_A, { timestamp: NOW + 301 }), timestamp: NOW + 301 }), expect: { result: 'reject', code: 'future_timestamp' } },
   { id: 'sig-timestamp-boundary', rule: 'R3.9', description: 'a timestamp exactly 300 seconds old is accepted', kind: 'verify', input: verifyInput({ signature_header: v1Header(SEC_A, { timestamp: NOW - 300 }), timestamp: NOW - 300 }), expect: { result: 'accept' } },
+  { id: 'sig-stale-and-bad-signature', rule: 'R3.9', description: 'a stale delivery whose HMAC fails answers bad_signature, never stale_timestamp', kind: 'verify', input: verifyInput({ signature_header: v1Header(SEC_B, { timestamp: NOW - 301 }), timestamp: NOW - 301 }), expect: { result: 'reject', code: 'bad_signature' } },
 
   { id: 'sig-multi-accept-second', rule: 'R2.7', description: 'the second of two v1 entries verifies', kind: 'verify', input: verifyInput({ signature_header: `${v1Header(SEC_B)} ${v1A}` }), expect: { result: 'accept' } },
   { id: 'sig-multi-none', rule: 'R2.7', description: 'no entry of two v1 signatures verifies with the registered secret', kind: 'verify', input: verifyInput({ signature_header: `${v1Header(SEC_B)} ${v1Header(SEC_64)}` }), expect: { result: 'reject', code: 'bad_signature' } },
@@ -383,11 +384,9 @@ export function run(c) {
   }
 }
 
+// R3.9, R3.13: grammar, schemes, decoding, HMAC, then freshness, then the asymmetric step: the row order of the section 3 table.
 function pipeline(input) {
   const envelope = input.envelope;
-  const timestamp = Number(envelope.webhook_timestamp);
-  if (input.now - timestamp > input.window) return { result: 'reject', code: 'stale_timestamp' };
-  if (timestamp - input.now > input.window) return { result: 'reject', code: 'future_timestamp' };
   const parsed = parseSignatureHeader(envelope.signature_header);
   if (!parsed.ok) return { result: 'reject', code: parsed.code };
   const schemes = checkSchemes(parsed.entries);
@@ -401,6 +400,9 @@ function pipeline(input) {
     if (mac.ok) break;
   }
   if (!mac.ok) return { result: 'reject', code: 'bad_signature' };
+  const timestamp = Number(envelope.webhook_timestamp);
+  if (input.now - timestamp > input.window) return { result: 'reject', code: 'stale_timestamp' };
+  if (timestamp - input.now > input.window) return { result: 'reject', code: 'future_timestamp' };
   if (input.enforce === 'server') {
     if (input.keys.length === 0) return { result: 'reject', code: 'no_server_keys' };
     const asym = asymVerify(decoded.entries, input.keys.map((name) => K[name]), parts);

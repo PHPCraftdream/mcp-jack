@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from './index.mjs';
-import { RULES, RULE_IDS } from './rules.mjs';
+import { RULES, RULE_VECTORS } from './rules.mjs';
 import { parseWhsec } from './reference.mjs';
 import { NOW, stableStringify } from '../../gen/core.mjs';
 import * as signatures from './vectors/signatures.mjs';
@@ -23,6 +23,17 @@ const FILES = [
   'webhook-subscription-vectors.json',
   'server-card-keys-vectors.json',
 ];
+
+// Pinned per-file case counts: adding or dropping a case must update this table on purpose.
+const COUNTS = {
+  'webhook-signature-vectors.json': 45,
+  'webhook-w1-vectors.json': 25,
+  'webhook-receiver-vectors.json': 99,
+  'webhook-endpoint-verification-vectors.json': 90,
+  'ssrf-vectors.json': 118,
+  'webhook-subscription-vectors.json': 49,
+  'server-card-keys-vectors.json': 39,
+};
 
 const byId = (mod, id) => {
   const found = mod.cases.find((c) => c.id === id);
@@ -51,27 +62,34 @@ test('case ids are unique', () => {
     total += own.length;
   }
   assert.equal(new Set(ids).size, ids.length);
-  assert.ok(total > 250);
+  for (const name of Object.keys(COUNTS)) assert.ok(FILES.includes(name), `${name} is not a generated file`);
+  for (const name of FILES) assert.ok(Object.hasOwn(COUNTS, name), `${name} has no pinned count`);
+  for (const mod of MODULES) assert.equal(mod.cases.length, COUNTS[mod.file], mod.file);
+  assert.equal(total, 465);
 });
 
 test('every rule has a vector', () => {
   assert.equal(RULES.length, 80);
-  const cases = MODULES.flatMap((mod) => mod.cases);
-  const known = new Set(cases.map((c) => c.id));
-  assert.equal(known.size, cases.length);
-  const mapped = new Map(RULES.map((rule) => [rule.id, []]));
-  for (const c of cases) {
-    assert.ok(RULE_IDS.has(c.rule), `case ${c.id} names unknown rule ${c.rule}`);
-    mapped.get(c.rule).push(c.id);
-  }
-  let ids = 0;
+  assert.equal(Object.keys(RULE_VECTORS).length, RULES.length);
+  const ruleIds = new Set(RULES.map((rule) => rule.id));
+  for (const rule of RULES) assert.ok(Object.hasOwn(RULE_VECTORS, rule.id), `RULE_VECTORS is missing ${rule.id}`);
+  for (const key of Object.keys(RULE_VECTORS)) assert.ok(ruleIds.has(key), `RULE_VECTORS declares unknown rule ${key}`);
   for (const rule of RULES) {
-    const own = mapped.get(rule.id);
-    assert.ok(own.length > 0, `rule ${rule.id} has no case`);
-    for (const id of own) assert.ok(known.has(id), `rule ${rule.id} maps missing case id ${id}`);
-    ids += own.length;
+    const own = RULE_VECTORS[rule.id];
+    assert.ok(Array.isArray(own) && own.length > 0, `rule ${rule.id} declares no case ids`);
   }
-  assert.equal(ids, cases.length);
+  const cases = MODULES.flatMap((mod) => mod.cases);
+  const known = new Map(cases.map((c) => [c.id, c]));
+  const union = [];
+  for (const rule of RULES) {
+    for (const id of RULE_VECTORS[rule.id]) {
+      assert.ok(known.has(id), `rule ${rule.id} declares unknown case ${id}`);
+      assert.equal(known.get(id).rule, rule.id, `case ${id} is declared under ${rule.id} but carries ${known.get(id).rule}`);
+      union.push(id);
+    }
+  }
+  assert.equal(new Set(union).size, union.length);
+  assert.deepEqual(new Set(union), new Set(known.keys()));
 });
 
 test('build exposes the sentinel surface', () => {

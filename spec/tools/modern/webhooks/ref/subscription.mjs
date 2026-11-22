@@ -84,9 +84,15 @@ export function activeSecrets({ current, previous, graceEndsAt, now } = {}) {
 // R8.7: the exact gap body, member order as written.
 export const gapEnvelope = (cursor) => JSON.stringify({ type: 'gap', cursor });
 
-// R8.8: the exact terminated body; data is present only when supplied.
-export const terminatedEnvelope = ({ code, message, data }) =>
-  JSON.stringify({ type: 'terminated', error: { code, message, ...(data === undefined ? {} : { data }) } });
+// R8.8: the exact terminated body; code is the integer JSON-RPC code, data is present only when supplied.
+export const terminatedEnvelope = ({ code, message, data }) => {
+  if (!Number.isInteger(code)) throw new Error('terminatedEnvelope requires an integer code');
+  if (typeof message !== 'string') throw new Error('terminatedEnvelope requires a string message');
+  if (data !== undefined && (data === null || Array.isArray(data) || typeof data !== 'object')) {
+    throw new Error('terminatedEnvelope data must be a non-null, non-array object');
+  }
+  return JSON.stringify({ type: 'terminated', error: { code, message, ...(data === undefined ? {} : { data }) } });
+};
 
 // R8.9: null, or 1-512 characters of printable ASCII 0x21-0x7E.
 export function cursorOk(value) {

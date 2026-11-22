@@ -76,7 +76,7 @@ export function acceptJwkSet(signingKeys, { mcpServerKid = null, mcpServerPublic
   const rejected = [];
   for (const jwk of entries) {
     const verdict = validateJwk(jwk);
-    if (verdict.ok) accepted.push({ kid: verdict.key.kid, public_key: verdict.key.public_key, pub: verdict.key.pub });
+    if (verdict.ok) accepted.push(verdict.key);
     else rejected.push({ kid: jwk?.kid ?? null, reason: verdict.reason });
   }
   const surviving = [];
@@ -110,8 +110,9 @@ export function parseCidrList(values) {
   return { accepted, rejected };
 }
 
-// R7.2: one card fetch decision, in the order https, same origin, redirect, status, time, size, json, keys.
-export function fetchDecision({ mcpUrl, cardUrl, response, elapsed_ms } = {}) {
+// R7.2: one card fetch decision, in the order https, same origin, redirect, status, time, size, json, keys; the keys step drops the configured MCP server key.
+// R7.3: the configured MCP server key (kid and optional raw public key) is applied at the JWK step of discovery, so a card that publishes the server key yields no accepted key from that member.
+export function fetchDecision({ mcpUrl, cardUrl, response, elapsed_ms, mcpServerKid = null, mcpServerPublicKey = null } = {}) {
   const card = checkUrl(cardUrl);
   if (!card.ok) return { ok: false, code: 'not_https', reason: card.reason ?? card.code };
   if (!sameOrigin(cardUrl, mcpUrl)) return { ok: false, code: 'cross_origin', reason: 'origin_mismatch' };
@@ -138,7 +139,7 @@ export function fetchDecision({ mcpUrl, cardUrl, response, elapsed_ms } = {}) {
   }
   const info = webhookInfo(parsed, { mcpUrl });
   if (!info.ok) return { ok: false, code: info.code, reason: 'no_remote' };
-  const keys = acceptJwkSet(info.signingKeys);
+  const keys = acceptJwkSet(info.signingKeys, { mcpServerKid, mcpServerPublicKey });
   return {
     ok: true,
     keys: keys.accepted,

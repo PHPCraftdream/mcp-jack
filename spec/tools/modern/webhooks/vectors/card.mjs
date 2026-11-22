@@ -27,8 +27,6 @@ const remote = (url, extensionsInfo) => ({ type: 'streamable-http', url, ...(ext
 const card = (...remotes) => ({ remotes });
 const CARD = card(remote(MCP_URL, info([KEY_A, KEY_B], EGRESS)));
 const bodyOf = (value) => b64u(Buffer.from(JSON.stringify(value), 'utf8'));
-// R7.6: a fixture name as the accepted key shape, keeping the JWK members the canonical comparison reduces to.
-const keyOf = (name) => ({ ...jwkOf(K[name]), public_key: K[name].public_key, pub: K[name].pub });
 const toolResult = (keys) => ({ webhook_key: { signing_keys: { keys }, egress_ip_ranges: EGRESS } });
 const bodyOfResponse = (response) => {
   if (response.card !== undefined) return bodyOf(response.card);
@@ -53,6 +51,7 @@ export const cases = [
   { id: 'card-fetch-accept-cache', rule: 'R7.2', description: 'a valid card is accepted and max-age=60 caps the cache ttl', kind: 'fetch', input: { mcpUrl: MCP_URL, cardUrl: CARD_URL, response: { status: 200, headers: { 'cache-control': 'max-age=60' }, card: CARD } }, expect: { result: 'accept', keys: [KEY_A.kid, KEY_B.kid], egress: EGRESS, rejected: [], cache_ttl: 60 } },
   { id: 'card-fetch-elapsed-10000', rule: 'R7.2', description: 'a card fetch of exactly 10000 ms is inside the time cap and caches 300 s without a max-age', kind: 'fetch', input: { mcpUrl: MCP_URL, cardUrl: CARD_URL, elapsed_ms: 10000, response: { status: 200, headers: {}, card: CARD } }, expect: { result: 'accept', keys: [KEY_A.kid, KEY_B.kid], egress: EGRESS, rejected: [], cache_ttl: 300 } },
   { id: 'card-fetch-elapsed-10001', rule: 'R7.2', description: 'a card fetch of 10001 ms is one over the time cap, so timeout', kind: 'fetch', input: { mcpUrl: MCP_URL, cardUrl: CARD_URL, elapsed_ms: 10001, response: { status: 200, headers: {}, card: CARD } }, expect: { result: 'reject', code: 'timeout' } },
+  { id: 'card-fetch-server-key-and-dedicated', rule: 'R7.3', description: 'a card publishing the raw MCP server key next to the dedicated key yields only the dedicated key', kind: 'fetch', input: { mcpUrl: MCP_URL, cardUrl: CARD_URL, mcp_server_public_key: K.svc.public_key, response: { status: 200, headers: {}, card: card(remote(MCP_URL, info([KEY_S, KEY_A], EGRESS))) } }, expect: { result: 'accept', keys: [KEY_A.kid], egress: EGRESS, rejected: [{ kid: KEY_S.kid, reason: 'mcp_server_key' }], cache_ttl: 300 } },
 
   { id: 'card-jwk-valid', rule: 'R7.3', description: 'two well formed JWKs are both accepted', kind: 'jwk-set', input: { signing_keys: [KEY_A, KEY_B] }, expect: { accepted: [KEY_A.kid, KEY_B.kid], rejected: [] } },
   { id: 'card-jwk-kty', rule: 'R7.3', description: 'a non OKP kty is rejected as kty', kind: 'jwk-set', input: { signing_keys: [{ ...KEY_A, kty: 'RSA' }] }, expect: { accepted: [], rejected: [{ kid: KEY_A.kid, reason: 'kty' }] } },
@@ -63,6 +62,7 @@ export const cases = [
   { id: 'card-jwk-kid-mismatch', rule: 'R7.3', description: 'a kid that is not base64url(SHA-256(x)) is kid_mismatch', kind: 'jwk-set', input: { signing_keys: [{ ...KEY_A, kid: 'A'.repeat(43) }] }, expect: { accepted: [], rejected: [{ kid: 'A'.repeat(43), reason: 'kid_mismatch' }] } },
   { id: 'card-jwk-duplicate-kid', rule: 'R7.3', description: 'a repeated kid moves every key with that kid out as duplicate_kid', kind: 'jwk-set', input: { signing_keys: [KEY_A, { ...KEY_A }] }, expect: { accepted: [], rejected: [{ kid: KEY_A.kid, reason: 'duplicate_kid' }, { kid: KEY_A.kid, reason: 'duplicate_kid' }] } },
   { id: 'card-jwk-server-key', rule: 'R7.3', description: 'the configured MCP server key is moved out as mcp_server_key and the webhook key stays', kind: 'jwk-set', input: { signing_keys: [KEY_A, KEY_S], mcp_server_kid: K.svc.kid }, expect: { accepted: [KEY_A.kid], rejected: [{ kid: KEY_S.kid, reason: 'mcp_server_key' }] } },
+  { id: 'card-jwk-server-key-raw', rule: 'R7.3', description: 'the configured raw server public key drops the server key even though its kid is not named', kind: 'jwk-set', input: { signing_keys: [KEY_A, KEY_S], mcp_server_public_key: K.svc.public_key }, expect: { accepted: [KEY_A.kid], rejected: [{ kid: KEY_S.kid, reason: 'mcp_server_key' }] } },
 
   { id: 'card-rotation-both-trusted', rule: 'R7.4', description: 'the old and the new key published together are both accepted', kind: 'jwk-set', input: { signing_keys: [KEY_B, KEY_C] }, expect: { accepted: [KEY_B.kid, KEY_C.kid], rejected: [] } },
   { id: 'card-rotation-old-removed', rule: 'R7.4', description: 'a kid no longer in the card is unknown_webhook_key', kind: 'kid', input: { keys: ['newbie'], kid: K.newbie2.kid }, expect: { result: 'reject', code: 'unknown_webhook_key' } },
@@ -79,6 +79,8 @@ export const cases = [
   { id: 'card-webhook-key-differ', rule: 'R7.6', description: 'a tool result publishing a different key is webhook_key_mismatch', kind: 'webhook-key-check', input: { keys: ['newbie'], toolResult: toolResult([jwkOf(K.newbie2)]), require: true }, expect: { result: 'reject', code: 'webhook_key_mismatch' } },
   { id: 'card-webhook-key-missing', rule: 'R7.6', description: 'a required check with no tool result is webhook_key_missing', kind: 'webhook-key-check', input: { keys: ['newbie'], toolResult: null, require: true }, expect: { result: 'reject', code: 'webhook_key_missing' } },
   { id: 'card-webhook-key-not-required', rule: 'R7.6', description: 'a receiver that does not require the check ignores the absent tool result', kind: 'webhook-key-check', input: { keys: ['newbie'], toolResult: null, require: false }, expect: { result: 'accept' } },
+  { id: 'card-webhook-key-agree-discovery', rule: 'R7.6', description: 'a tool result publishing both keys discovery accepted agrees with the card', kind: 'webhook-key-discovery', input: { mcpUrl: MCP_URL, cardUrl: CARD_URL, response: { status: 200, headers: {}, card: CARD }, toolResult: toolResult([jwkOf(K.newbie), jwkOf(K.newbie2)]) }, expect: { result: 'accept' } },
+  { id: 'card-webhook-key-mismatch-discovery', rule: 'R7.6', description: 'a tool result narrowing the card set to one of its two keys is webhook_key_mismatch', kind: 'webhook-key-discovery', input: { mcpUrl: MCP_URL, cardUrl: CARD_URL, response: { status: 200, headers: {}, card: CARD }, toolResult: toolResult([jwkOf(K.newbie2)]) }, expect: { result: 'reject', code: 'webhook_key_mismatch' } },
 ];
 
 export function run(c) {
@@ -94,7 +96,10 @@ export function run(c) {
       return { result: 'accept', signing_keys: verdict.signingKeys, egress: verdict.egressIpRanges, remote_url: verdict.remote_url };
     }
     case 'jwk-set': {
-      const options = input.mcp_server_kid === undefined ? {} : { mcpServerKid: input.mcp_server_kid };
+      const options = {
+        ...(input.mcp_server_kid === undefined ? {} : { mcpServerKid: input.mcp_server_kid }),
+        ...(input.mcp_server_public_key === undefined ? {} : { mcpServerPublicKey: input.mcp_server_public_key }),
+      };
       const verdict = acceptJwkSet({ keys: input.signing_keys }, options);
       return { accepted: verdict.accepted.map((key) => key.kid), rejected: verdict.rejected };
     }
@@ -108,6 +113,8 @@ export function run(c) {
         mcpUrl: input.mcpUrl,
         cardUrl: input.cardUrl,
         elapsed_ms: input.elapsed_ms,
+        ...(input.mcp_server_kid === undefined ? {} : { mcpServerKid: input.mcp_server_kid }),
+        ...(input.mcp_server_public_key === undefined ? {} : { mcpServerPublicKey: input.mcp_server_public_key }),
         response: { status: answer.status, headers: answer.headers ?? {}, body_b64u: bodyOfResponse(answer) },
       });
       if (!verdict.ok) return { result: 'reject', code: verdict.code };
@@ -125,11 +132,22 @@ export function run(c) {
     }
     case 'webhook-key-check': {
       const verdict = crossCheckWebhookKey({
-        keys: input.keys.map(keyOf),
+        keys: input.keys.map((name) => jwkOf(K[name])),
         toolResult: input.toolResult,
         require: input.require,
       });
       return verdict.ok ? { result: 'accept' } : { result: 'reject', code: verdict.code };
+    }
+    case 'webhook-key-discovery': {
+      const response = input.response;
+      const verdict = fetchDecision({
+        mcpUrl: input.mcpUrl,
+        cardUrl: input.cardUrl,
+        response: { status: response.status, headers: response.headers ?? {}, body_b64u: bodyOfResponse(response) },
+      });
+      if (!verdict.ok) return { result: 'reject', code: verdict.code };
+      const check = crossCheckWebhookKey({ keys: verdict.keys, toolResult: input.toolResult, require: true });
+      return check.ok ? { result: 'accept' } : { result: 'reject', code: check.code };
     }
     default:
       throw new Error(`${c.id}: unknown kind ${c.kind}`);

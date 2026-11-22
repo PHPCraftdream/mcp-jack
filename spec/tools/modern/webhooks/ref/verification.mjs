@@ -61,7 +61,9 @@ export function acceptEcho({ nonce, expected, issuedAt, now, ttl = 600, consumed
   if (!constTimeEqual(Buffer.from(nonce, 'utf8'), Buffer.from(expected, 'utf8'))) return bad('mismatch');
   if (!(now - issuedAt <= ttl)) return bad('expired');
   if (consumed === true) return bad('reused');
-  if (pairKey(pair) !== pairKey(expectedPair)) return bad('pair');
+  // R5.3: a pair that is not two non-empty strings is never a match, so two invalid pairs never compare equal.
+  const attempt = pairKey(pair);
+  if (attempt === null || attempt !== pairKey(expectedPair)) return bad('pair');
   return { ok: true };
 }
 
