@@ -135,8 +135,10 @@ const isEventStream = (headers) =>
 
 function parseBody(chunks) {
   const buf = Buffer.concat((chunks ?? []).map((chunk) => Buffer.from(chunk, 'base64url')));
-  // At most one BOM at the very start is ignored and unsigned (2.14).
-  return buf.subarray(0, BOM.length).equals(BOM) ? buf.subarray(BOM.length) : buf;
+  // 2.14: one leading BOM is ignored. `skip` maps an offset in the stripped
+  // bytes back to the original chunk bytes that 4.5 measures time against.
+  const skip = buf.subarray(0, BOM.length).equals(BOM) ? BOM.length : 0;
+  return { buf: buf.subarray(skip), skip };
 }
 
 function parseField(line) {
@@ -279,7 +281,7 @@ export function verifyStream({ response, state, silentAfterMs, arrivalMs, consum
     return { messages: [], terminal: { state: 'error', code: open.code, frames_verified: 0 } };
   }
 
-  const body = parseBody(response.stream_b64u);
+  const { buf: body, skip } = parseBody(response.stream_b64u);
   const nows = state.frame_nows;
   // 4.5: decoded chunk lengths map a body offset back to its arrival time.
   const chunkLens = (response.stream_b64u ?? []).map((c) => Buffer.from(c, 'base64url').length);
@@ -306,7 +308,8 @@ export function verifyStream({ response, state, silentAfterMs, arrivalMs, consum
 
   for (const event of parseEvents(body)) {
     // 4.5 first: a frame that arrives after the deadline is not verified.
-    const t = timeAt(event.end - 1);
+    // `skip` maps the stripped offset back to the chunk that carried the byte.
+    const t = timeAt(event.end - 1 + skip);
     if (t - last > idleMs) return fail('stream_idle');
     if (ended) return fail('stream_out_of_order'); // 2.16: nothing may follow the end frame
     const frame = parseFrame(event.lines);
@@ -355,11 +358,15 @@ export function verifyStream({ response, state, silentAfterMs, arrivalMs, consum
     messages.push(frame.data);
   }
 
-  // 4.4 and 4.5: a measured silence means the harness stopped reading a live
-  // connection, not that the body ended.
-  if (!ended && silentAfterMs !== undefined && silentAfterMs !== null) {
-    if (silentAfterMs > idleMs) return fail('stream_idle');
-    return { messages, terminal: { state: 'ok' } };
+  // 4.4 and 4.5: without an end frame the deadline runs from the last verified
+  // frame to the last byte received plus any measured trailing silence.
+  if (!ended) {
+    const totalBytes = chunkLens.reduce((n, len) => n + len, 0);
+    const chunkTime = totalBytes > 0 ? timeAt(totalBytes - 1) : 0;
+    const silent = silentAfterMs ?? 0;
+    if (chunkTime - last + silent > idleMs) return fail('stream_idle');
+    // A measured silence means the harness stopped reading a live connection.
+    if (silentAfterMs !== undefined && silentAfterMs !== null) return { messages, terminal: { state: 'ok' } };
   }
 
   if (!ended) return fail('stream_truncated');

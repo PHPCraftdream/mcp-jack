@@ -217,15 +217,26 @@ describe('signed streams (s1)', () => {
     const gaps = (c) => c.arrival_ms.slice(1).map((t, i) => t - c.arrival_ms[i]);
 
     // 4.5: one millisecond past the threshold is idle, by arrival time and by
-    // silence alike.
+    // silence alike; a BOM or a comment moves no verified frame to a later time.
     const idle = client.filter((c) => c.expect.terminal.code === 'stream_idle');
-    assert.equal(idle.length, 2);
-    const over = idle.find((c) => c.arrival_ms !== undefined);
-    assert.ok(over !== undefined);
-    assert.ok(gaps(over).includes(over.state.stream_idle_ms + 1));
-    const silent = idle.find((c) => c.arrival_ms === undefined);
+    assert.equal(idle.length, 4);
+    const byId = (id) => {
+      const c = idle.find((v) => v.id === id);
+      assert.ok(c !== undefined, id);
+      return c;
+    };
+    const timeout = byId('stream-idle-timeout');
+    assert.ok(gaps(timeout).includes(timeout.state.stream_idle_ms + 1));
+    const silent = byId('stream-idle-open-silence');
     assert.deepEqual(silent.response.stream_b64u, []);
     assert.ok(silent.silent_after_ms > silent.state.stream_idle_ms);
+    const bom = byId('stream-idle-bom-late-chunk');
+    assert.equal(bom.expect.terminal.frames_verified, 0);
+    assert.ok(gaps(bom).some((g) => g > bom.state.stream_idle_ms));
+    const comment = byId('stream-idle-comment-silence');
+    assert.equal(comment.expect.terminal.frames_verified, 1);
+    assert.ok(comment.arrival_ms.length > 0);
+    assert.ok(comment.silent_after_ms > 0);
 
     // 4.5: heartbeats keep every gap under the threshold and still exceed it in
     // total; a gap of exactly the threshold between verified frames is alive.
@@ -257,12 +268,17 @@ describe('signed streams (s1)', () => {
     assert.ok(stdio.length > 0);
     assert.ok(stdio.some((c) => c.expect.terminal.code === 'stream_bad_frame'));
 
-    // 6.3: six close shapes state whether the last message was the response; only
-    // the one carrying the opening request's result completes it.
+    // 6.3: seven close shapes state whether the last message was the response;
+    // only the one carrying the opening request's result completes it, and a
+    // body without an end frame is truncated instead (4.4).
     const closes = client.filter((c) => c.id.startsWith('stream-close-'));
-    assert.equal(closes.length, 6);
+    assert.equal(closes.length, 7);
     for (const c of closes) assert.equal(typeof c.expect.mcp_complete, 'boolean', c.id);
     assert.equal(closes.filter((c) => c.expect.mcp_complete).length, 1);
+    const noEnd = closes.find((c) => c.id === 'stream-close-no-end-frame');
+    assert.ok(noEnd !== undefined);
+    assert.equal(noEnd.expect.terminal.code, 'stream_truncated');
+    assert.equal(noEnd.expect.mcp_complete, false);
 
     // 2.17, 9: the two cap vectors keep their one huge data value as a marker.
     const atCap = client.find((c) => c.id === 'stream-ok-frame-max-boundary');
