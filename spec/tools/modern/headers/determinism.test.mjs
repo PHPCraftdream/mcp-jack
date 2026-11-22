@@ -22,6 +22,7 @@ const FILES = [REQUEST_FILE, ENCODING_FILE, ANNOTATION_FILE, ERA_FILE];
 const FORWARD_KEYS = ['consumes_nonce', 'era', 'forward', 'outcome'];
 const FORWARD_FIELDS = ['headers', 'method', 'target'];
 const REFUSAL_KEYS = ['consumes_nonce', 'content_type', 'era', 'error', 'http_status', 'id', 'jsonrpc', 'outcome', 'signed'];
+const CLASSIFICATION_KEYS = ['consumes_nonce', 'content_type', 'era', 'error', 'http_status', 'outcome', 'signed'];
 
 test('family name is headers', () => {
   assert.equal(generator.family, 'headers');
@@ -46,10 +47,10 @@ test('build returns the four files and a markdown string', () => {
   assert.equal(out.files[ANNOTATION_FILE].reason_codes.length, 8);
   assert.deepEqual(out.files[ERA_FILE].modern_error_codes, [-32020, -32021, -32022]);
 
-  assert.equal(out.files[REQUEST_FILE].cases.length, 96);
+  assert.equal(out.files[REQUEST_FILE].cases.length, 98);
   assert.equal(out.files[ENCODING_FILE].cases.length, 51);
-  assert.equal(out.files[ANNOTATION_FILE].cases.length, 78);
-  assert.equal(out.files[ERA_FILE].cases.length, 36);
+  assert.equal(out.files[ANNOTATION_FILE].cases.length, 81);
+  assert.equal(out.files[ERA_FILE].cases.length, 38);
 
   // Exactly one by-reference entry, asserted field by field. Its description is
   // free text, so only its type is pinned.
@@ -88,15 +89,15 @@ test('case ids are unique across the family', () => {
   const ids = FILES.flatMap((name) => out.files[name].cases.map((c) => c.id));
   for (const entry of out.files[REQUEST_FILE].by_reference) ids.push(entry.id);
   assert.equal(new Set(ids).size, ids.length);
-  // 261 cases plus the single by-reference entry.
-  assert.equal(ids.length, 262);
+  // 268 cases plus the single by-reference entry.
+  assert.equal(ids.length, 269);
 });
 
 test('stored request expectations carry the full wire shape', () => {
   const out = generator.build();
   for (const c of out.files[REQUEST_FILE].cases) {
     const expect = c.expect;
-    assert.ok(expect.outcome === 'forward' || expect.outcome === 'refuse', c.id);
+    assert.ok(['forward', 'refuse', 'refuse_invalid_request'].includes(expect.outcome), c.id);
     if (expect.outcome === 'forward') {
       assert.deepEqual(Object.keys(expect).sort(), FORWARD_KEYS, c.id);
       assert.deepEqual(Object.keys(expect.forward).sort(), FORWARD_FIELDS, c.id);
@@ -104,7 +105,7 @@ test('stored request expectations carry the full wire shape', () => {
       assert.ok(expect.era === 'legacy' || expect.era === 'modern', c.id);
       assert.equal(expect.forward.target, '/mcp', c.id);
       assert.ok(Array.isArray(expect.forward.headers), c.id);
-    } else {
+    } else if (expect.outcome === 'refuse') {
       assert.deepEqual(Object.keys(expect).sort(), REFUSAL_KEYS, c.id);
       assert.equal(expect.signed, true, c.id);
       assert.equal(expect.content_type, 'application/json', c.id);
@@ -119,6 +120,16 @@ test('stored request expectations carry the full wire shape', () => {
         expect.id === null || typeof expect.id === 'string' || typeof expect.id === 'number',
         c.id,
       );
+    } else {
+      assert.deepEqual(Object.keys(expect).sort(), CLASSIFICATION_KEYS, c.id);
+      assert.equal(expect.signed, true, c.id);
+      assert.equal(expect.content_type, 'application/json', c.id);
+      assert.equal(expect.http_status, 400, c.id);
+      assert.equal(expect.consumes_nonce, true, c.id);
+      assert.equal(expect.era, null, c.id);
+      assert.deepEqual(Object.keys(expect.error).sort(), ['code', 'message'], c.id);
+      assert.equal(expect.error.code, 'invalid_request', c.id);
+      assert.ok(typeof expect.error.message === 'string' && expect.error.message.length > 0, c.id);
     }
   }
 });
@@ -128,10 +139,11 @@ test('markdown names every file and its count', () => {
   for (const name of FILES) assert.ok(md.includes(name), name);
   assert.ok(md.includes('## Rule coverage'));
   assert.ok(md.includes('## By-reference cases'));
-  assert.ok(md.includes('96 cases'));
+  assert.ok(md.includes('98 cases'));
   assert.ok(md.includes('51 cases'));
-  assert.ok(md.includes('78 cases'));
-  assert.ok(md.includes('36 cases'));
+  assert.ok(md.includes('81 cases'));
+  assert.ok(md.includes('38 cases'));
   assert.ok(md.includes('cache-replay'));
+  assert.ok(!md.includes('undefined'));
   assert.ok(md.endsWith('\n') && !md.endsWith('\n\n'));
 });

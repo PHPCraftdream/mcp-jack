@@ -2,7 +2,7 @@
 // The era decision (S3) runs first; every other rule runs only in the modern era.
 // The request is already authenticated (01 section 4) and its body already
 // acceptable under 02 section 2, so anything else is a caller bug, not an outcome.
-import { META_VERSION_KEY, MODERN_MIN, NAME_SOURCE, REASONS } from '../spec-data.mjs';
+import { CLASSIFICATION_REFUSAL, META_VERSION_KEY, MODERN_MIN, NAME_SOURCE, REASONS } from '../spec-data.mjs';
 import { compareVersion, decodeHeaderValue, isFieldValue, isVersion } from './values.mjs';
 
 const MIRROR_NAMES = ['mcp-protocol-version', 'mcp-method', 'mcp-name'];
@@ -59,6 +59,20 @@ export function classifyRequest({ profile, request }) {
     else bodyKind = 'notification';
   }
   const requestId = bodyKind === 'request' ? body.id : null;
+
+  // 02 section 2 item 4 runs before any rule of section 5: a tools/call whose
+  // params.name is not a string is refused at classification, era-neutral, in the
+  // 01 section 4 envelope. It never reaches the era decision.
+  if ((bodyKind === 'request' || bodyKind === 'notification')
+    && body.method === 'tools/call'
+    && typeof body.params?.name !== 'string') {
+    return {
+      outcome: 'refuse_invalid_request', era: null, signed: true,
+      http_status: CLASSIFICATION_REFUSAL.http_status, content_type: 'application/json',
+      error: { code: CLASSIFICATION_REFUSAL.code, message: CLASSIFICATION_REFUSAL.message },
+      consumes_nonce: true,
+    };
+  }
 
   // S3 runs first: any well-formed modern version in a header instance or in the
   // signed _meta version selects the modern era. Ambiguity never buys the legacy
@@ -123,8 +137,14 @@ export function classifyRequest({ profile, request }) {
       if (names.length > 0) return refuse('name_header_not_applicable', era, requestId);
     } else {
       const sourceValue = body.params?.[sourceKey];
-      // The mirror cannot be validated without a string source value.
-      if (typeof sourceValue !== 'string') return refuse('name_source_missing', era, requestId);
+      // The mirror cannot be validated without a string source value. tools/call
+      // never reaches this point: classification refused it above.
+      if (typeof sourceValue !== 'string') {
+        if (body.method === 'tools/call') {
+          throw new Error('classifyRequest: tools/call without a string params.name reached S6');
+        }
+        return refuse('name_source_missing', era, requestId);
+      }
       if (names.length === 0) {
         if (isRequest) return refuse('name_header_missing', era, requestId);
       } else {

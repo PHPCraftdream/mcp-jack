@@ -26,6 +26,11 @@ const reasonToken = (expect) => Object.keys(REASONS).find((token) => REASONS[tok
 // `<http_status>` `<jsonrpc_code>` `<reason>`, from the reason table of 5.1.
 const requestExpected = (c) => {
   if (c.expect.outcome === 'forward') return 'forward (' + c.expect.era + ')';
+  // The classification refusal of 02 section 2 item 4 has a string error code and
+  // no reason token in the 5.1 table, so it names the classification instead.
+  if (c.expect.outcome === 'refuse_invalid_request') {
+    return c.expect.http_status + ' `' + c.expect.error.code + '` (classification, era-neutral)';
+  }
   return c.expect.http_status + ' `' + c.expect.error.code + '` `' + reasonToken(c.expect) + '`';
 };
 

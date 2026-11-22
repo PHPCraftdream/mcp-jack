@@ -82,6 +82,12 @@ export const ERA_CASES = [
     clientVersions: ['2026-07-28'],
     expect: { era: 'modern', action: 'abort', reason: 'unsupported_version_no_overlap' },
   },
+  {
+    id: 'era-400-unsupported-version-mixed', rule: 'C9', description: 'a supported array with a non-string element is not usable, even when a string overlaps',
+    response: { verified: true, status: 400, body_text: '{"jsonrpc":"2.0","id":1,"error":{"code":-32022,"message":"Unsupported protocol version","data":{"supported":["2026-07-28",7]}}}' },
+    clientVersions: ['2026-07-28'],
+    expect: { era: 'modern', action: 'abort', reason: 'unsupported_version_no_overlap' },
+  },
 
   // 400 without a recognised error
   {
@@ -125,6 +131,12 @@ export const ERA_CASES = [
     response: { verified: true, status: 400, body_text: '{"error":{"code":"streaming_unsupported","message":"Streaming is not enabled"}}' },
     clientVersions: ['2026-07-28'],
     expect: { era: 'legacy', action: 'fallback_initialize', reason: 'jack_envelope' },
+  },
+  {
+    id: 'era-400-jsonrpc-not-2', rule: 'C9', description: 'a string-code body that carries a jsonrpc member is not Jack\'s envelope and is unrecognised',
+    response: { verified: true, status: 400, body_text: '{"jsonrpc":"1.0","id":1,"error":{"code":"invalid_request","message":"x"}}' },
+    clientVersions: ['2026-07-28'],
+    expect: { era: 'legacy', action: 'fallback_initialize', reason: 'no_modern_error' },
   },
   {
     id: 'era-400-empty-body', rule: 'C9', description: 'an empty 400 body carries no era signal and reads legacy',

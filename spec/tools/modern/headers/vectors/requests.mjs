@@ -504,10 +504,24 @@ export const REQUEST_CASES = [
       forward: { method: 'POST', target: '/mcp', headers: [['MCP-Protocol-Version', V], ['Mcp-Method', 'events/unsubscribe'], ['Mcp-Name', ENC_EVENT_UNSUBSCRIBE], CT] } },
   },
   {
-    id: 'req-name-source-missing-tools-call', rule: 'S6', description: 'a tools/call body without params.name is refused rather than forwarded',
+    id: 'req-name-source-missing-tools-call', rule: 'S6', description: 'a tools/call without params.name is refused by body classification before any Section 5 rule',
     profile: 'modern',
     request: { method: 'POST', target: '/mcp', headers: [['MCP-Protocol-Version', V], ['Mcp-Method', 'tools/call'], ['Mcp-Name', 'x'], CT],
       body_text: callBody('tools/call', {}) },
+    expect: { outcome: 'refuse_invalid_request' },
+  },
+  {
+    id: 'req-name-source-missing-prompts-get', rule: 'S6', description: 'prompts/get without params.name has no mirror source',
+    profile: 'modern',
+    request: { method: 'POST', target: '/mcp', headers: [['MCP-Protocol-Version', V], ['Mcp-Method', 'prompts/get'], ['Mcp-Name', 'x'], CT],
+      body_text: callBody('prompts/get', {}) },
+    expect: { outcome: 'refuse', era: 'modern', reason: 'name_source_missing', id: 1 },
+  },
+  {
+    id: 'req-name-source-missing-events-subscribe', rule: 'S6', description: 'events/subscribe without params.name has no mirror source',
+    profile: 'modern',
+    request: { method: 'POST', target: '/mcp', headers: [['MCP-Protocol-Version', V], ['Mcp-Method', 'events/subscribe'], ['Mcp-Name', 'x'], CT],
+      body_text: callBody('events/subscribe', {}) },
     expect: { outcome: 'refuse', era: 'modern', reason: 'name_source_missing', id: 1 },
   },
   {

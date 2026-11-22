@@ -137,9 +137,11 @@ The decision, as a table (profile `both`):
 | malformed | well-formed, `>= MODERN-MIN` | modern | `S4` refuses the malformed header |
 | malformed | absent or pre-2026 | legacy | none |
 
-A request declaring a pre-2026 version in `H` (as 2025-06-18 and 2025-11-25 require) stays legacy-era.
+A request declaring a pre-2026 version in `H` (as 2025-06-18 and 2025-11-25 require) stays legacy-era, unless the signed `_meta` version declares a modern version: then the request is modern-era and `S4` refuses the mismatch.
 
 Non-`POST` under `both`: there is no body, so only `H` counts.
+
+Body classification (02 section 2) runs before `S3` and is era-neutral, so a few bodies never reach the era decision at all. The one that matters for these rules is a `tools/call` whose `params.name` is not a string: 02 section 2 item 4 already refuses it with `400 invalid_request` before any rule of section 5 runs (`S6`).
 
 A client-sent JSON-RPC *response* object (02 section 2 item 3) has no `method`, no `params` and therefore no `M`: it is classified by the same rule with `H` as its only mirror. It is not modern merely because it is a response object; when both mirrors are absent it is legacy-era like any other request, and in that case it is forwarded with its headers untouched (`S12` applies only in the modern era).
 
@@ -297,6 +299,8 @@ In order:
 | 5 | Decoded text not byte-equal to the source string (no case folding, no Unicode normalization) | `name_header_mismatch` |
 
 Jack MUST NOT accept `Mcp-Name` on a method without a source field: there is no body value it could mirror. A method in the table whose body value is missing or not a string is refused with `name_source_missing` rather than forwarded, because the mirror cannot be validated at all.
+
+`tools/call` is the exception. A `tools/call` body whose `params.name` is not a string is refused by 02 section 2 item 4 during body classification, era-neutral and before `S3`, with `400 invalid_request` in the 01 section 4 envelope `{"error":{"code":"invalid_request","message":"<text>"}}`. That response is signed like every other response (01 section 5); only a response to a failed authentication may be unsigned. Spec 02 leaves the message text to the implementation, so these vectors fix one string for byte-identity: `tools/call requires a string params.name`. A `tools/call` body therefore never reaches `name_source_missing`; that reason applies to `resources/read` (`params.uri`), `prompts/get` (`params.name`) and the four events methods.
 
 `S7` — `Mcp-Param-*` (modern era).
 
@@ -468,9 +472,9 @@ The transport table, as a rule:
 | any other status, unsigned, unverified or malformed response, network error | no signal; the operation fails |
 
 - A **recognised JSON-RPC error** is a JSON object whose `jsonrpc` is exactly `"2.0"`, that has an `id` member (`null` allowed; the member must be present), and whose `error` is an object with an integer `code` and a string `message`. Anything else is not recognised: it neither selects an era nor proves a method missing. A bare `{"error":{"code":-32020}}` object is exactly the shape a legacy endpoint or an intermediary can produce, so it reads legacy.
-- For `-32022` the `supported` list in `error.data` must be a non-empty array of strings that contains at least one version the client implements; the client then retries with those mutually implemented versions (`retry_with_supported`). Otherwise the outcome is `unsupported_version_no_overlap` and the operation fails.
+- For `-32022` the `supported` list in `error.data` must be an array whose elements are **all** strings, and it must contain at least one version the client implements; the client then retries with those mutually implemented versions (`retry_with_supported`). Any other list — absent, not an array, empty, or an array with any non-string element such as `["2026-07-28", 7]` — is not usable, and together with a usable list that has no commonly implemented version the outcome is `unsupported_version_no_overlap`, and the operation fails.
 - For a `400` that reads legacy the client falls back to `initialize` and stays legacy for that origin.
-- Jack's own `{"error":{...}}` envelope is an object with no `jsonrpc` member whose `error.code` is a string, and it is never a modern-era signal. A body that does carry `jsonrpc: "2.0"` but whose `error.code` is not an integer is simply an unrecognised body and reads `no_modern_error`.
+- Jack's own `{"error":{...}}` envelope is an object whose `jsonrpc` member is **absent** and whose `error.code` is a string, and it is never a modern-era signal. A body that carries any `jsonrpc` member — including `"1.0"` — or whose `error.code` is not an integer is simply an unrecognised body and reads `no_modern_error`.
 
 The outcome of a detection is one `{era, action, reason}` triple from this closed vocabulary; the vectors assert it verbatim:
 
@@ -479,7 +483,7 @@ The outcome of a detection is one `{era, action, reason}` triple from this close
 | verified 2xx | `modern` | `stay_modern` | `null` |
 | `400` with a recognised `-32020` or `-32021` | `modern` | `stay_modern` | `null` |
 | `400` with a recognised `-32022` and a mutually implemented version | `modern` | `retry_with_supported` | `null`, plus `supported` |
-| `400` with a recognised `-32022` and no mutual version | `modern` | `abort` | `unsupported_version_no_overlap` |
+| `400` with a recognised `-32022` and no usable list or no mutual version | `modern` | `abort` | `unsupported_version_no_overlap` |
 | `400` whose body is Jack's own envelope | `legacy` | `fallback_initialize` | `jack_envelope` |
 | `400` with any other unrecognised body | `legacy` | `fallback_initialize` | `no_modern_error` |
 | `404` with a recognised `-32601` | `modern` | `stay_modern` | `modern_method_not_found` |
@@ -523,6 +527,8 @@ Conventions of the family:
 - Every request vector assumes an already authenticated request with a fixed clock and no nonce bookkeeping, because request authentication, nonce recording and legacy dispatch refusals are covered by `fixtures/request-vectors.json`.
 - The family reuses the clock and audience constants of `tools/gen/core.mjs`.
 - Every refusal expectation carries the full wire outcome: `signed`, `http_status`, `content_type`, `jsonrpc`, `id`, `error.code`, `error.message` and `consumes_nonce`. A vector that omits one of them is a defect in the generator, and the generator asserts the shape.
+- A request vector may also carry the era-neutral classification outcome `refuse_invalid_request` (02 section 2 item 4): status `400`, `Content-Type: application/json`, the 01 section 4 envelope with `error.code` `invalid_request` and the fixed message of `S6`, signed, and no `jsonrpc` or `id` member.
+- The partition below is machine-checked: every non-exempt rule must map to at least one existing vector id, every vector must be mapped to its own rule, and the rule ids of this table must equal the generator's exemption set — deleting a row while keeping the rule heading fails the tests.
 
 Every numbered rule is either covered by at least one vector or listed here with the SDK test that carries it (the generator and its tests enforce this partition):
 

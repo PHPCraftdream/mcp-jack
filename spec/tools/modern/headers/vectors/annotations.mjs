@@ -552,6 +552,22 @@ export const ANNOTATION_CASES = [
     expect: { valid: true, reason: null },
   },
   {
+    id: 'ann-valid-property-named-properties', rule: 'C5', kind: 'validate',
+    description: 'a property named properties keeps its own annotation',
+    tool: { name: 'lookup', inputSchema: {
+      properties: { properties: { type: 'string', 'x-mcp-header': 'Props' } },
+    } },
+    expect: { valid: true, reason: null },
+  },
+  {
+    id: 'ann-valid-nested-property-named-properties', rule: 'C5', kind: 'validate',
+    description: 'a property named properties nested under a name map keeps its annotation',
+    tool: { name: 'lookup', inputSchema: {
+      properties: { outer: { type: 'object', properties: { properties: { type: 'string', 'x-mcp-header': 'Inner' } } } },
+    } },
+    expect: { valid: true, reason: null },
+  },
+  {
     id: 'ann-project-property-named-x-mcp-header', rule: 'C6', kind: 'project',
     description: 'a property named x-mcp-header is projected like any other property',
     tool: { name: 'lookup', inputSchema: {
@@ -568,6 +584,15 @@ export const ANNOTATION_CASES = [
     } },
     arguments: { '': 'e' },
     expect: { outcome: 'headers', headers: [['Mcp-Param-Empty', 'e']] },
+  },
+  {
+    id: 'ann-project-property-named-properties', rule: 'C6', kind: 'project',
+    description: 'a property named properties is projected like any other property',
+    tool: { name: 'lookup', inputSchema: {
+      properties: { properties: { type: 'string', 'x-mcp-header': 'Props' } },
+    } },
+    arguments: { properties: 'v2' },
+    expect: { outcome: 'headers', headers: [['Mcp-Param-Props', 'v2']] },
   },
 
   // C11: event type descriptors validate as in C5 and project as in C6.

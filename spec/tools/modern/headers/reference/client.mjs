@@ -3,6 +3,9 @@ import { META_VERSION_KEY, MODERN_ERA_ERROR_CODES, NAME_SOURCE, PROJECTION_REASO
 import { encodeHeaderValue, isToken, textOfValue } from './values.mjs';
 
 const ANNOTATION_KEY = 'x-mcp-header';
+const NAME_MAP_KEYWORDS = new Set(['properties', 'patternProperties', '$defs', 'definitions', 'dependentSchemas']);
+
+const isObj = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 // A path is statically reachable iff it alternates properties -> name pairs from
 // the schema root (any other segment, an odd length or the root itself is not).
@@ -23,30 +26,42 @@ const hasControl = (s) => {
   return false;
 };
 
-const NAME_MAPS = new Set(['properties', 'patternProperties', '$defs', 'definitions', 'dependentSchemas']);
-
-// Depth-first document order: object members in Object.keys order, array elements
-// by index. `path` is the path of the object holding the annotation, so the
-// annotation member itself is not a segment. A member named x-mcp-header inside a
-// name map is a property, pattern, definition or schema key, never an annotation.
+// Structural traversal: the recursion carries whether the current node is a
+// schema (its members are keywords) or a name map (its members are property,
+// pattern or definition names). A member named x-mcp-header is an annotation only
+// in a schema node, so a property that is itself named "properties" keeps its own
+// annotation and a property named "x-mcp-header" is never an annotation keyword.
 export function collectAnnotations(inputSchema) {
   const out = [];
-  const walk = (node, path) => {
+  const push = (node, path) => out.push({ path, propPath: staticPropertyPath(path), node, name: node[ANNOTATION_KEY] });
+
+  function walkValue(node, path) {
     if (Array.isArray(node)) {
-      node.forEach((child, i) => walk(child, [...path, String(i)]));
+      node.forEach((child, index) => walkValue(child, [...path, String(index)]));
       return;
     }
-    if (node === null || typeof node !== 'object') return;
-    const inNameMap = path.length > 0 && NAME_MAPS.has(path[path.length - 1]);
+    if (!isObj(node)) return;
     for (const key of Object.keys(node)) {
-      if (key === ANNOTATION_KEY && !inNameMap) {
-        out.push({ path, propPath: staticPropertyPath(path), node, name: node[key] });
-      } else {
-        walk(node[key], [...path, key]);
-      }
+      if (key === ANNOTATION_KEY) push(node, path);
+      else walkValue(node[key], [...path, key]);
     }
-  };
-  walk(inputSchema, []);
+  }
+
+  function walkNameMap(node, path) {
+    if (!isObj(node)) return;
+    for (const name of Object.keys(node)) walkSchema(node[name], [...path, name]);
+  }
+
+  function walkSchema(node, path) {
+    if (!isObj(node)) return;
+    for (const key of Object.keys(node)) {
+      if (key === ANNOTATION_KEY) push(node, path);
+      else if (NAME_MAP_KEYWORDS.has(key)) walkNameMap(node[key], [...path, key]);
+      else walkValue(node[key], [...path, key]);
+    }
+  }
+
+  walkSchema(inputSchema, []);
   return out;
 }
 
@@ -147,17 +162,18 @@ export function detectEra({ response, clientVersions = [] }) {
     if (error !== null && MODERN_ERA_ERROR_CODES.includes(error.code)) {
       if (error.code !== -32022) return { era: 'modern', action: 'stay_modern', reason: null };
       const supported = error.data?.supported;
-      const mutual = Array.isArray(supported)
-        ? supported.filter((version) => typeof version === 'string' && clientVersions.includes(version))
-        : [];
+      // A usable list is an array whose elements are all strings; a mixed array, a
+      // non-array, an empty array or a missing member is not usable at all.
+      const usable = Array.isArray(supported) && supported.every((version) => typeof version === 'string');
+      const mutual = usable ? supported.filter((version) => clientVersions.includes(version)) : [];
       if (mutual.length > 0) return { era: 'modern', action: 'retry_with_supported', reason: null, supported: mutual };
       return { era: 'modern', action: 'abort', reason: 'unsupported_version_no_overlap' };
     }
     const body = parseBody(response.body_text);
-    // Jack's own envelope has no jsonrpc member; a JSON-RPC-shaped body with a
-    // non-integer code is simply an unrecognised body.
+    // Jack's own envelope has no jsonrpc member at all; a body that carries one
+    // (any value, including "1.0") is not Jack's envelope.
     const jackEnvelope = isContainer(body) && isContainer(body.error)
-      && typeof body.error.code === 'string' && body.jsonrpc !== '2.0';
+      && typeof body.error.code === 'string' && !Object.hasOwn(body, 'jsonrpc');
     return { era: 'legacy', action: 'fallback_initialize', reason: jackEnvelope ? 'jack_envelope' : 'no_modern_error' };
   }
   if (status === 404) {

@@ -4,7 +4,10 @@
 // writes nothing: the parent writes build().files into spec/fixtures/modern/
 // and build().casesMarkdown into spec/tests/MODERN-HEADERS-CASES.md.
 import { AUD, NOW, WINDOW } from '../../gen/core.mjs';
-import { ALL_RULES, EXEMPT_RULES, MODERN_MIN, PROJECTION_REASON, REASONS } from './spec-data.mjs';
+import {
+  ALL_RULES, CLASSIFICATION_REFUSAL, EXEMPT_RULES, MODERN_MIN, NON_VECTOR_RULES,
+  PROJECTION_REASON, REASONS, VECTOR_RULES,
+} from './spec-data.mjs';
 import {
   buildMirrors, classifyRequest, decodeHeaderValue, detectEra, encodeHeaderValue,
   projectArguments, textOfValue, validateAnnotations, deepEqual, stableStringify,
@@ -21,6 +24,7 @@ import { buildCasesMarkdown } from './vectors/markdown.mjs';
 const REFUSAL_KEYS = ['consumes_nonce', 'content_type', 'era', 'error', 'http_status', 'id', 'jsonrpc', 'outcome', 'signed'];
 const FORWARD_KEYS = ['consumes_nonce', 'era', 'forward', 'outcome'];
 const FORWARD_FIELDS = ['headers', 'method', 'target'];
+const CLASSIFICATION_KEYS = ['consumes_nonce', 'content_type', 'era', 'error', 'http_status', 'outcome', 'signed'];
 
 // Rules that refuse with the reason of another rule: S3 decides the era and the
 // following S4 refuses, S10 is defined as the refusals of S1, S2, S4, S5 and
@@ -57,6 +61,30 @@ function assertRefusalShape(c, want) {
   }
 }
 
+// 02 section 2 item 4: the era-neutral classification refusal has no jsonrpc or
+// id member, a string error.code and the fixed message of spec-data.
+function assertClassificationShape(c, want) {
+  if (!deepEqual(keysOf(want), CLASSIFICATION_KEYS)) throw new Error(c.id + ': classification keys ' + keysOf(want).join(','));
+  if (want.outcome !== 'refuse_invalid_request') throw new Error(c.id + ': classification outcome');
+  if (want.signed !== true) throw new Error(c.id + ': classification must be signed');
+  if (want.content_type !== 'application/json') throw new Error(c.id + ': classification content_type');
+  if (want.era !== null) throw new Error(c.id + ': classification is era-neutral');
+  if (want.consumes_nonce !== true) throw new Error(c.id + ': classification consumes_nonce must be true');
+  if (want.http_status !== CLASSIFICATION_REFUSAL.http_status) throw new Error(c.id + ': classification http_status');
+  if (!deepEqual(keysOf(want.error), ['code', 'message'])) throw new Error(c.id + ': classification error keys');
+  if (want.error.code !== CLASSIFICATION_REFUSAL.code) throw new Error(c.id + ': classification error code');
+  if (want.error.message !== CLASSIFICATION_REFUSAL.message) throw new Error(c.id + ': classification error message');
+}
+
+// One dispatcher, so the reference output is checked against the shape of the
+// outcome it actually produced.
+function assertRequestShape(c, value) {
+  if (value.outcome === 'forward') assertForwardShape(c, value);
+  else if (value.outcome === 'refuse') assertRefusalShape(c, value);
+  else if (value.outcome === 'refuse_invalid_request') assertClassificationShape(c, value);
+  else throw new Error(c.id + ': unknown request outcome ' + value.outcome);
+}
+
 export default {
   family: 'headers',
   build() {
@@ -70,6 +98,15 @@ export default {
       if (c.expect.outcome === 'forward') {
         resolved = { outcome: 'forward', era: c.expect.era, forward: c.expect.forward, consumes_nonce: true };
         assertForwardShape(c, resolved);
+      } else if (c.expect.outcome === 'refuse_invalid_request') {
+        if (c.rule !== 'S6') throw new Error(c.id + ': classification outcome must cite rule S6');
+        resolved = {
+          outcome: 'refuse_invalid_request', era: null, signed: true,
+          http_status: CLASSIFICATION_REFUSAL.http_status, content_type: 'application/json',
+          error: { code: CLASSIFICATION_REFUSAL.code, message: CLASSIFICATION_REFUSAL.message },
+          consumes_nonce: true,
+        };
+        assertClassificationShape(c, resolved);
       } else {
         const reason = REASONS[c.expect.reason];
         if (reason === undefined) throw new Error(c.id + ': unknown reason ' + c.expect.reason);
@@ -87,8 +124,7 @@ export default {
       const got = classifyRequest({ profile: c.profile, request: c.request });
       if (!deepEqual(got, resolved)) throw disagree(c, got, resolved);
       // The reference output itself must carry the section 8 wire shape.
-      if (resolved.outcome === 'forward') assertForwardShape(c, got);
-      else assertRefusalShape(c, got);
+      assertRequestShape(c, got);
       return { ...c, expect: resolved };
     });
 
@@ -163,17 +199,40 @@ export default {
 
     // 6. Case ids are unique across the whole family, and no case id is also a
     // by-reference id.
-    const ids = [...resolvedRequests, ...resolvedEncoding, ...resolvedAnnotations, ...resolvedEra].map((c) => c.id);
+    const allCases = [...resolvedRequests, ...resolvedEncoding, ...resolvedAnnotations, ...resolvedEra];
+    const ids = allCases.map((c) => c.id);
     const duplicate = ids.find((id, i) => ids.indexOf(id) !== i);
     if (duplicate !== undefined) throw new Error('duplicate case id: ' + duplicate);
     const overlap = byRefIds.find((id) => ids.includes(id));
     if (overlap !== undefined) throw new Error('case id reused by a by-reference entry: ' + overlap);
 
+    // Rule partition (spec section 8): every non-exempt rule maps to at least one
+    // existing vector id, every vector is mapped to its own rule, and no exempt
+    // rule has a vector. The coverage test compares the spec's exemption table to
+    // EXEMPT_RULES.
+    const ruleMap = new Map();
+    for (const c of allCases) {
+      if (!ALL_RULES.includes(c.rule)) throw new Error(c.id + ': case cites unknown rule ' + c.rule);
+      if (!ruleMap.has(c.rule)) ruleMap.set(c.rule, []);
+      ruleMap.get(c.rule).push(c.id);
+    }
+    const mappedIds = [...ruleMap.values()].flat();
+    if (mappedIds.length !== allCases.length) {
+      throw new Error('rule map: ' + mappedIds.length + ' mapped ids for ' + allCases.length + ' cases');
+    }
+    if (new Set(mappedIds).size !== mappedIds.length) throw new Error('rule map: a case id is mapped twice');
+    for (const rule of VECTOR_RULES) {
+      if ((ruleMap.get(rule) ?? []).length === 0) throw new Error('rule ' + rule + ' has no mapped vector id');
+    }
+    for (const rule of NON_VECTOR_RULES) {
+      if ((ruleMap.get(rule) ?? []).length > 0) throw new Error('exempt rule ' + rule + ' has vectors');
+    }
+
     // 7. Files, in insertion order.
     const files = {
       'modern-request-vectors.json': {
         format: 'mcp-jack-modern-request-vectors-v1',
-        note: 'Classification-level cases of spec 04 sections 3-5. Request authentication (mcp-jack/v1) and the legacy dispatch rules of spec 02 run before every case and are covered by request-vectors.json.',
+        note: 'Classification-level cases of spec 04 sections 3-6. Request authentication (mcp-jack/v1) runs before every case; the one era-neutral classification case cites the spec 02 section 2 item 4 refusal, and the legacy dispatch rules of spec 02 are covered by request-vectors.json.',
         clock: { now: NOW, window_seconds: WINDOW },
         aud: AUD,
         modern_min: MODERN_MIN,
