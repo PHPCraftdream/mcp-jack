@@ -321,7 +321,7 @@
     {
       "id": "era-400-code-string",
       "rule": "C9",
-      "description": "a string error code is not an integer, so a -32020 shape reads legacy",
+      "description": "a string error code is not an integer, and the body carries jsonrpc, so it is neither recognised nor Jack's envelope",
       "response": {
         "verified": true,
         "status": 400,

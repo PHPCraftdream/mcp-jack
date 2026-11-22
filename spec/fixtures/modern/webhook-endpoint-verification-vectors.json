@@ -527,6 +527,81 @@
       }
     },
     {
+      "id": "ep-accept-echo-pair-empty-principal",
+      "rule": "R5.3",
+      "description": "two pairs whose principal is the empty string are not usable pairs and never match",
+      "kind": "accept-echo",
+      "input": {
+        "nonce": "KfROIaIYzOA4LouilLN_Jw",
+        "expected": "KfROIaIYzOA4LouilLN_Jw",
+        "issuedAt": 1000,
+        "now": 1100,
+        "pair": [
+          "",
+          "https://hooks.example.test/hooks/alice"
+        ],
+        "expectedPair": [
+          "",
+          "https://hooks.example.test/hooks/alice"
+        ]
+      },
+      "expect": {
+        "result": "reject",
+        "code": "challenge_failed",
+        "reason": "pair"
+      }
+    },
+    {
+      "id": "ep-accept-echo-pair-empty-url",
+      "rule": "R5.3",
+      "description": "two pairs whose url is the empty string are not usable pairs and never match",
+      "kind": "accept-echo",
+      "input": {
+        "nonce": "KfROIaIYzOA4LouilLN_Jw",
+        "expected": "KfROIaIYzOA4LouilLN_Jw",
+        "issuedAt": 1000,
+        "now": 1100,
+        "pair": [
+          "alice",
+          ""
+        ],
+        "expectedPair": [
+          "alice",
+          ""
+        ]
+      },
+      "expect": {
+        "result": "reject",
+        "code": "challenge_failed",
+        "reason": "pair"
+      }
+    },
+    {
+      "id": "ep-accept-echo-pair-both-empty",
+      "rule": "R5.3",
+      "description": "two pairs whose members are both empty are not usable pairs and never match",
+      "kind": "accept-echo",
+      "input": {
+        "nonce": "KfROIaIYzOA4LouilLN_Jw",
+        "expected": "KfROIaIYzOA4LouilLN_Jw",
+        "issuedAt": 1000,
+        "now": 1100,
+        "pair": [
+          "",
+          ""
+        ],
+        "expectedPair": [
+          "",
+          ""
+        ]
+      },
+      "expect": {
+        "result": "reject",
+        "code": "challenge_failed",
+        "reason": "pair"
+      }
+    },
+    {
       "id": "ep-echo-200",
       "rule": "R5.4",
       "description": "a 200 JSON object echoing the nonce is accepted",

@@ -169,7 +169,7 @@ Fixed clock: now = 1767225600, aud = `https://svc.example.test`. These are class
 | `dec-utf8-surrogate` | C4 | decode | an encoded surrogate is not valid UTF-8 | bad_encoding |
 | `dec-cross-check-plain-sentinel` | C4 | decode | the encoded form of the sentinel-shaped plain text decodes back to it | ok |
 
-## x-mcp-header validation and projection (`fixtures/modern/x-mcp-header-vectors.json`, 81 cases)
+## x-mcp-header validation and projection (`fixtures/modern/x-mcp-header-vectors.json`, 84 cases)
 
 | id | rule | kind | description | expected |
 |---|---|---|---|---|
@@ -209,6 +209,7 @@ Fixed clock: now = 1767225600, aud = `https://svc.example.test`. These are class
 | `ann-unreachable-oneof` | C5 | validate | an annotation inside oneOf is not reachable | invalid (annotation_not_statically_reachable) |
 | `ann-unreachable-anyof` | C5 | validate | an annotation inside anyOf is not reachable | invalid (annotation_not_statically_reachable) |
 | `ann-unreachable-allof` | C5 | validate | an annotation inside a property-level allOf is not reachable | invalid (annotation_not_statically_reachable) |
+| `ann-unreachable-allof-property-annotated` | C5 | validate | an annotation on a property inside an allOf subschema is not reachable from the schema root | invalid (annotation_not_statically_reachable) |
 | `ann-unreachable-not` | C5 | validate | an annotation inside not is not reachable | invalid (annotation_not_statically_reachable) |
 | `ann-unreachable-if` | C5 | validate | an annotation inside if is not reachable | invalid (annotation_not_statically_reachable) |
 | `ann-unreachable-then` | C5 | validate | an annotation inside then is not reachable | invalid (annotation_not_statically_reachable) |
@@ -244,9 +245,11 @@ Fixed clock: now = 1767225600, aud = `https://svc.example.test`. These are class
 | `ann-valid-empty-property-name` | C5 | validate | an empty property name is legal and its annotation is reachable | valid |
 | `ann-valid-property-named-properties` | C5 | validate | a property named properties keeps its own annotation | valid |
 | `ann-valid-nested-property-named-properties` | C5 | validate | a property named properties nested under a name map keeps its annotation | valid |
+| `ann-valid-allof-property-named-x-mcp-header` | C5 | validate | a property named x-mcp-header inside an allOf subschema is a property, not an annotation | valid |
 | `ann-project-property-named-x-mcp-header` | C6 | project | a property named x-mcp-header is projected like any other property | 1 header(s) |
 | `ann-project-empty-property-name` | C6 | project | an empty property name is projected like any other property | 1 header(s) |
 | `ann-project-property-named-properties` | C6 | project | a property named properties is projected like any other property | 1 header(s) |
+| `ann-project-allof-property-named-x-mcp-header` | C6 | project | a property named x-mcp-header under allOf is not annotated, so nothing is projected | 0 header(s) |
 | `ann-event-valid` | C11 | validate-event | an annotated event inputSchema is valid | valid |
 | `ann-event-invalid-type` | C11 | validate-event | a non-primitive annotated event property is invalid | invalid (annotation_type_not_primitive) |
 | `ann-event-invalid-unreachable` | C11 | validate-event | an annotation under items in an event schema is not reachable | invalid (annotation_not_statically_reachable) |
@@ -276,7 +279,7 @@ Fixed clock: now = 1767225600, aud = `https://svc.example.test`. These are class
 | `era-400-no-jsonrpc` | C9 | 400 | true | an object without jsonrpc is not a recognised error and reads legacy | legacy / fallback_initialize / no_modern_error |
 | `era-400-no-id` | C9 | 400 | true | an error without an id member is not recognised and reads legacy | legacy / fallback_initialize / no_modern_error |
 | `era-400-message-not-string` | C9 | 400 | true | a non-string error message is not recognised and reads legacy | legacy / fallback_initialize / no_modern_error |
-| `era-400-code-string` | C9 | 400 | true | a string error code is not an integer, so a -32020 shape reads legacy | legacy / fallback_initialize / no_modern_error |
+| `era-400-code-string` | C9 | 400 | true | a string error code is not an integer, and the body carries jsonrpc, so it is neither recognised nor Jack's envelope | legacy / fallback_initialize / no_modern_error |
 | `era-400-jack-envelope` | C9 | 400 | true | the Jack string-code envelope is never a modern signal | legacy / fallback_initialize / jack_envelope |
 | `era-400-jack-streaming-envelope` | C9 | 400 | true | a streaming_unsupported envelope is also a Jack envelope | legacy / fallback_initialize / jack_envelope |
 | `era-400-jsonrpc-not-2` | C9 | 400 | true | a string-code body that carries a jsonrpc member is not Jack's envelope and is unrecognised | legacy / fallback_initialize / no_modern_error |
@@ -324,8 +327,8 @@ Fixed clock: now = 1767225600, aud = `https://svc.example.test`. These are class
 | C2 | 8 |
 | C3 | 24 |
 | C4 | 18 |
-| C5 | 53 |
-| C6 | 21 |
+| C5 | 55 |
+| C6 | 22 |
 | C9 | 38 |
 | C11 | 7 |
 
@@ -339,7 +342,7 @@ Generated by `spec/tools/modern/streams/index.mjs`. Do not edit by hand.
 
 Fixed clock: now = 1767225600, window = 30 s, stream key `svc` (`kid` wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88), fixed sids q9nUNYuH-Xf_cgJBVu4_Dg and TbnUgTbCufgU5T_o0pXapA.
 
-## Client verification (`fixtures/modern/stream-vectors.json`, 78 cases)
+## Client verification (`fixtures/modern/stream-vectors.json`, 80 cases)
 
 | id | description | expected |
 |---|---|---|
@@ -376,7 +379,8 @@ Fixed clock: now = 1767225600, window = 30 s, stream key `svc` (`kid` wltl591Lbt
 | `stream-frame-seq-reorder` | frames delivered 0, 2, 1 (4.3 step 2) | `stream_out_of_order` after 1 frames, 1 messages |
 | `stream-frame-ts-regress` | frame 1 ts below frame 0 ts (4.3 step 3) | `stream_stale_frame` after 1 frames, 1 messages |
 | `stream-frame-ts-stale` | frame 1 is 31 s behind its clock sample, frame 0 is exactly 30 s (4.3 step 3) | `stream_stale_frame` after 1 frames, 1 messages |
-| `stream-frame-after-cutoff` | frame ts equal to the successor activation (4.3 step 4) | `stream_after_cutoff` after 0 frames, 0 messages |
+| `stream-frame-after-cutoff` | a frame at the cutoff has no valid successor: no end frame can follow, and stream_after_cutoff takes precedence over stream_truncated (5.2) | `stream_after_cutoff` after 0 frames, 0 messages |
+| `stream-frame-end-after-cutoff` | the end frame itself is at the cutoff, after a valid message below it (4.3 step 4, 5.2) | `stream_after_cutoff` after 1 frames, 1 messages |
 | `stream-frame-bad-signature` | frame 1 signed over the open sig instead of frame 0 sig (4.3 step 5) | `stream_bad_signature` after 1 frames, 1 messages |
 | `stream-frame-tampered-data` | frame 1 data changed after signing, its signature kept (4.3 step 5) | `stream_bad_signature` after 1 frames, 1 messages |
 | `stream-frame-wrong-sid` | frame 0 signed with another sid, the chain value unchanged (2.15, 4.3 step 5) | `stream_bad_signature` after 0 frames, 0 messages |
@@ -409,7 +413,8 @@ Fixed clock: now = 1767225600, window = 30 s, stream key `svc` (`kid` wltl591Lbt
 | `stream-idle-timeout` | a gap one millisecond past streamIdleMs is idle (4.5) | `stream_idle` after 1 frames, 1 messages |
 | `stream-idle-heartbeat` | heartbeats reset the timer, so 160 s with no 90 s gap stays alive (3.5, 4.5) | ok (3 messages) |
 | `stream-idle-open-silence` | a valid opener followed by more than streamIdleMs of silence (4.5) | `stream_idle` after 0 frames, 0 messages |
-| `stream-idle-bom-late-chunk` | a BOM shifts the offsets, so the frame is timed in the chunk that carried its last byte (4.5, 2.14) | `stream_idle` after 0 frames, 0 messages |
+| `stream-idle-bom-late-chunk` | the split is between frame 0's last two bytes, so a BOM-unaware lookup accepts the frame and the correct one times it late (2.14, 4.5) | `stream_idle` after 0 frames, 0 messages |
+| `stream-idle-blank-line-late-chunk` | an event completes only at its terminating blank line, so a late final newline makes the frame late (2.6, 4.5) | `stream_idle` after 0 frames, 0 messages |
 | `stream-idle-comment-silence` | a comment at 80000 ms plus 20000 ms of silence is 100000 ms without a verified frame (4.5) | `stream_idle` after 1 frames, 1 messages |
 | `stream-stdio-ok` | stdio consumer writes one line per message frame (6.2) | ok (2 messages) |
 | `stream-stdio-raw-lf` | a data value with raw LFs aborts the stdio consumer (6.2) | `stream_bad_frame` after 1 frames, 0 messages |
@@ -473,11 +478,11 @@ Fixed clock: now = 1767225600, window = 30 s, stream key `svc` (`kid` wltl591Lbt
 | `4.2` | open steps 1-7: presence, grammar, scheme, kid, window, cutoff, signature | `stream-open-missing-auth`, `stream-open-duplicate-auth`, `stream-open-extra-param`, `stream-open-bad-sid`, `stream-open-scheme-s2`, `stream-open-scheme-v1`, `stream-open-unknown-kid`, `stream-open-wrong-key`, `stream-open-ts-old`, `stream-open-ts-future`, `stream-open-cutoff`, `stream-open-bad-signature`, `stream-open-splice` |
 | `4.3` | frame steps 1-6 over the reassembled body and the sampled clock | `stream-frame-id-field`, `stream-frame-retry-field`, `stream-frame-extra-jack-param`, `stream-frame-double-jack`, `stream-frame-unknown-event`, `stream-frame-end-with-data`, `stream-frame-message-empty-data`, `stream-frame-invalid-utf8`, `stream-frame-oversize`, `stream-frame-seq-first-not-zero`, `stream-frame-seq-gap`, `stream-frame-seq-repeat`, `stream-frame-seq-reorder`, `stream-frame-ts-regress`, `stream-frame-ts-stale`, `stream-frame-after-cutoff`, `stream-signal-too-large`, `stream-stdio-raw-lf`, `stream-ok-signal-lookalike-code`, `stream-ok-byte-split`, `stream-ok-window-boundary`, `stream-ok-long-stream` |
 | `4.4` | truncation and partial delivery | `stream-truncated-no-end`, `stream-truncated-empty-body`, `stream-truncated-mid-frame` |
-| `4.5` | idle timeout counted from the last verified frame | `stream-idle-timeout`, `stream-idle-boundary-alive`, `stream-idle-heartbeat`, `stream-idle-open-silence`, `stream-idle-bom-late-chunk`, `stream-idle-comment-silence` |
+| `4.5` | idle timeout counted from the last verified frame | `stream-idle-timeout`, `stream-idle-boundary-alive`, `stream-idle-heartbeat`, `stream-idle-open-silence`, `stream-idle-bom-late-chunk`, `stream-idle-blank-line-late-chunk`, `stream-idle-comment-silence` |
 | `4.6` | the closed list of thirteen client codes, each reached once | `stream-open-missing-auth`, `stream-open-duplicate-auth`, `stream-open-scheme-s2`, `stream-open-unknown-kid`, `stream-open-ts-old`, `stream-open-wrong-key`, `stream-frame-id-field`, `stream-frame-seq-first-not-zero`, `stream-frame-ts-regress`, `stream-truncated-no-end`, `stream-idle-timeout`, `stream-frame-oversize`, `stream-open-cutoff` |
 | `4.7` | verify a frame before parsing its JSON | `stream-frame-tampered-data`, `stream-frame-bad-signature`, `stream-stdio-raw-lf` |
 | `5.1` | - | - exempt (see spec Exemptions) |
-| `5.2` | client cutoff rejection at or after the successor activation | `stream-open-cutoff`, `stream-frame-after-cutoff`, `stream-ok-cutoff-below` |
+| `5.2` | client cutoff rejection at or after the successor activation | `stream-open-cutoff`, `stream-frame-after-cutoff`, `stream-frame-end-after-cutoff`, `stream-ok-cutoff-below` |
 | `5.3` | no re-signing, no kid switch, no continuation | `stream-frame-after-cutoff`, `stream-ok-cutoff-below` |
 | `6.1` | - | - exempt (see spec Exemptions) |
 | `6.2` | one stdout line per verified message frame | `stream-stdio-ok`, `stream-stdio-raw-lf`, `stream-stdio-signal` |
@@ -485,7 +490,7 @@ Fixed clock: now = 1767225600, window = 30 s, stream key `svc` (`kid` wltl591Lbt
 
 ## Counts
 
-- client cases: 78 (46 errors, 32 positives)
+- client cases: 80 (48 errors, 32 positives)
 - build cases: 8
 - error codes covered 13 of 13
 - rules mapped 30
@@ -504,12 +509,12 @@ Fixed clock: now = 1767225600 (2026-01-01T00:00:00Z). Fixture identities: `newbi
 | --- | --- |
 | `webhook-signature-vectors.json` | 45 |
 | `webhook-w1-vectors.json` | 25 |
-| `webhook-receiver-vectors.json` | 99 |
-| `webhook-endpoint-verification-vectors.json` | 90 |
-| `ssrf-vectors.json` | 118 |
+| `webhook-receiver-vectors.json` | 107 |
+| `webhook-endpoint-verification-vectors.json` | 93 |
+| `ssrf-vectors.json` | 120 |
 | `webhook-subscription-vectors.json` | 49 |
-| `server-card-keys-vectors.json` | 39 |
-| **total** | **465** |
+| `server-card-keys-vectors.json` | 43 |
+| **total** | **482** |
 
 ## Cases per rule
 
@@ -550,7 +555,7 @@ Fixed clock: now = 1767225600 (2026-01-01T00:00:00Z). Fixture identities: `newbi
 | R3.15 | w1 verification when configured | `rcv-r315-missing-jack`, `rcv-r315-malformed-jack`, `rcv-r315-unknown-key`, `rcv-r315-jack-window`, `rcv-r315-other-callback`, `rcv-r315-pending-jack-other-url`, `rcv-r315-pending-jack-other-subscription`, `rcv-r315-pending-jack-missing` |
 | R3.16 | deduplication by webhook-id | `rcv-r316-duplicate-answer`, `rcv-r316-duplicate-retry`, `rcv-r316-duplicate-different-body` |
 | R3.17 | success response and body | `rcv-r317-challenge-echo`, `rcv-r317-error-body`, `rcv-r318-terminated-stops-routing` |
-| R3.18 | parse and dispatch | `rcv-r318-gap-forward`, `rcv-r318-terminated-forward`, `rcv-r318-malformed-body`, `rcv-r318-occurrence-missing-event-id`, `rcv-r318-occurrence-event-id-not-string`, `rcv-r318-occurrence-missing-name`, `rcv-r318-occurrence-missing-timestamp`, `rcv-r318-occurrence-missing-data`, `rcv-r318-occurrence-cursor-bad-type`, `rcv-r318-gap-missing-cursor`, `rcv-r318-terminated-missing-error`, `rcv-r318-terminated-code-not-integer`, `rcv-r318-terminated-message-missing`, `rcv-r318-terminated-message-not-string`, `rcv-r318-terminated-data-not-object`, `rcv-r318-terminated-data-array`, `rcv-r318-occurrence-control` |
+| R3.18 | parse and dispatch | `rcv-r318-gap-forward`, `rcv-r318-terminated-forward`, `rcv-r318-malformed-body`, `rcv-r318-occurrence-missing-event-id`, `rcv-r318-occurrence-event-id-not-string`, `rcv-r318-occurrence-missing-name`, `rcv-r318-occurrence-missing-timestamp`, `rcv-r318-occurrence-missing-data`, `rcv-r318-occurrence-cursor-bad-type`, `rcv-r318-gap-missing-cursor`, `rcv-r318-terminated-missing-error`, `rcv-r318-terminated-code-not-integer`, `rcv-r318-terminated-message-missing`, `rcv-r318-terminated-message-not-string`, `rcv-r318-terminated-data-not-object`, `rcv-r318-terminated-data-array`, `rcv-r318-occurrence-control`, `rcv-r318-occurrence-data-array`, `rcv-r318-occurrence-data-string`, `rcv-r318-occurrence-data-null`, `rcv-r318-occurrence-timestamp-not-a-date`, `rcv-r318-occurrence-timestamp-feb-30`, `rcv-r318-occurrence-timestamp-date-only`, `rcv-r318-occurrence-timestamp-no-zone`, `rcv-r318-occurrence-timestamp-offset` |
 | R4.1 | jack w1 header grammar | `w1-malformed-scheme`, `w1-malformed-no-space`, `w1-malformed-param-set`, `w1-malformed-duplicate-param`, `w1-malformed-short-kid`, `w1-malformed-sig-chars` |
 | R4.2 | signing string | `w1-kat-basic`, `w1-kat-unicode-body`, `w1-neg-body` |
 | R4.3 | binding of audience, callback url and subscription | `w1-accept`, `w1-neg-aud`, `w1-neg-subscription`, `w1-neg-webhook-id`, `w1-neg-timestamp`, `w1-neg-callback-url` |
@@ -559,7 +564,7 @@ Fixed clock: now = 1767225600 (2026-01-01T00:00:00Z). Fixture identities: `newbi
 | R4.6 | presence when a signing key is configured | `w1-missing`, `w1-rotation-accept` |
 | R5.1 | verified pair before delivery | `ep-gate-verified-verification`, `ep-gate-verified-event`, `ep-gate-verified-gap`, `ep-gate-verified-terminated`, `ep-gate-unverified-verification`, `ep-gate-unverified-event`, `ep-gate-unverified-gap`, `ep-gate-unverified-terminated` |
 | R5.2 | route order and verification cache | `ep-route-cache-first`, `ep-route-allowlist-second`, `ep-route-hook-third`, `ep-route-doc-fourth`, `ep-route-nothing`, `ep-route-challenge-mismatch` |
-| R5.3 | challenge nonce | `ep-nonce-22-chars`, `ep-nonce-21-chars`, `ep-nonce-23-chars`, `ep-nonce-plus-char`, `ep-accept-echo-consumed`, `ep-accept-echo-expired`, `ep-accept-echo-fresh`, `ep-accept-echo-pair`, `ep-accept-echo-wrong-nonce`, `ep-accept-echo-json-pair`, `ep-accept-echo-pair-both-missing`, `ep-accept-echo-pair-both-invalid`, `ep-accept-echo-pair-expected-invalid`, `ep-accept-echo-pair-string-vs-string` |
+| R5.3 | challenge nonce | `ep-nonce-22-chars`, `ep-nonce-21-chars`, `ep-nonce-23-chars`, `ep-nonce-plus-char`, `ep-accept-echo-consumed`, `ep-accept-echo-expired`, `ep-accept-echo-fresh`, `ep-accept-echo-pair`, `ep-accept-echo-wrong-nonce`, `ep-accept-echo-json-pair`, `ep-accept-echo-pair-both-missing`, `ep-accept-echo-pair-both-invalid`, `ep-accept-echo-pair-expected-invalid`, `ep-accept-echo-pair-string-vs-string`, `ep-accept-echo-pair-empty-principal`, `ep-accept-echo-pair-empty-url`, `ep-accept-echo-pair-both-empty` |
 | R5.4 | challenge echo | `ep-echo-200`, `ep-echo-204`, `ep-echo-status-500`, `ep-echo-not-json`, `ep-echo-array-body`, `ep-echo-missing-challenge`, `ep-echo-wrong-nonce`, `ep-echo-too-large` |
 | R5.5 | challenge inside the subscribe call | `ep-challenge-only-evidence`, `ep-challenge-route-mismatch` |
 | R5.6 | receiver side pending-secret verification | `rcv-r56-pending-secret-binds`, `rcv-r56-pending-wrong-secret`, `rcv-r56-pending-challenge-json-config`, `rcv-r56-pending-challenge-with-jack` |
@@ -573,8 +578,8 @@ Fixed clock: now = 1767225600 (2026-01-01T00:00:00Z). Fixture identities: `newbi
 | R6.2 | url parts | `ssrf-url-userinfo`, `ssrf-url-fragment`, `ssrf-url-empty-host`, `ssrf-url-port-zero`, `ssrf-url-port-high`, `ssrf-url-space`, `ssrf-url-bracket-open`, `ssrf-url-zone-id`, `ssrf-url-query-only`, `ssrf-url-port-443` |
 | R6.3 | host forms | `ssrf-host-name`, `ssrf-host-trailing-dot`, `ssrf-host-uppercase`, `ssrf-host-ipv6-literal`, `ssrf-host-double-dot`, `ssrf-host-short`, `ssrf-host-int`, `ssrf-host-hex`, `ssrf-host-octal`, `ssrf-host-five-octets`, `ssrf-host-empty-label`, `ssrf-host-leading-hyphen`, `ssrf-host-trailing-hyphen`, `ssrf-host-single-label`, `ssrf-host-numeric-tld`, `ssrf-host-idn`, `ssrf-host-stray-bracket` |
 | R6.4 | ipv4 literal handling | `ssrf-addr-global`, `ssrf-addr-loopback`, `ssrf-addr-leading-zero`, `ssrf-addr-bracketed-loopback` |
-| R6.5 | ipv4 block table | `ssrf-v4-this-network`, `ssrf-v4-this-host`, `ssrf-v4-this-host-global`, `ssrf-v4-private-10`, `ssrf-v4-shared`, `ssrf-v4-loopback`, `ssrf-v4-link-local`, `ssrf-v4-private-172`, `ssrf-v4-ietf`, `ssrf-v4-service-continuity`, `ssrf-v4-service-continuity-longest`, `ssrf-v4-dummy`, `ssrf-v4-nat64-discovery-170`, `ssrf-v4-nat64-discovery-171`, `ssrf-v4-doc-192-0-2`, `ssrf-v4-6to4-relay`, `ssrf-v4-private-192`, `ssrf-v4-benchmark`, `ssrf-v4-doc-198-51-100`, `ssrf-v4-doc-203-0-113`, `ssrf-v4-multicast`, `ssrf-v4-reserved`, `ssrf-v4-limited-broadcast`, `ssrf-v4-pcp-anycast`, `ssrf-v4-turn-anycast`, `ssrf-v4-as112`, `ssrf-v4-amt`, `ssrf-v4-as112-direct`, `ssrf-v4-global-google`, `ssrf-v4-global-example` |
-| R6.6 | ipv6 block table | `ssrf-v6-unspecified`, `ssrf-v6-loopback`, `ssrf-v6-compat`, `ssrf-v6-discard`, `ssrf-v6-dummy-prefix`, `ssrf-v6-dummy-prefix-first`, `ssrf-v6-dummy-prefix-last`, `ssrf-v6-ietf`, `ssrf-v6-teredo-prefix`, `ssrf-v6-teredo`, `ssrf-v6-benchmark`, `ssrf-v6-orchid`, `ssrf-v6-orchidv2`, `ssrf-v6-drone`, `ssrf-v6-doc`, `ssrf-v6-6to4`, `ssrf-v6-doc-3fff`, `ssrf-v6-srv6`, `ssrf-v6-ula`, `ssrf-v6-link-local`, `ssrf-v6-multicast`, `ssrf-v6-pcp-anycast`, `ssrf-v6-turn-anycast`, `ssrf-v6-amt`, `ssrf-v6-as112`, `ssrf-v6-as112-direct`, `ssrf-v6-global-cloudflare`, `ssrf-v6-global-google` |
+| R6.5 | ipv4 block table | `ssrf-v4-this-network`, `ssrf-v4-this-host`, `ssrf-v4-this-host-global`, `ssrf-v4-private-10`, `ssrf-v4-shared`, `ssrf-v4-loopback`, `ssrf-v4-link-local`, `ssrf-v4-private-172`, `ssrf-v4-ietf`, `ssrf-v4-service-continuity`, `ssrf-v4-service-continuity-longest`, `ssrf-v4-dummy`, `ssrf-v4-nat64-discovery-170`, `ssrf-v4-nat64-discovery-171`, `ssrf-v4-doc-192-0-2`, `ssrf-v4-6to4-relay`, `ssrf-v4-6a44-relay`, `ssrf-v4-private-192`, `ssrf-v4-benchmark`, `ssrf-v4-doc-198-51-100`, `ssrf-v4-doc-203-0-113`, `ssrf-v4-multicast`, `ssrf-v4-reserved`, `ssrf-v4-limited-broadcast`, `ssrf-v4-pcp-anycast`, `ssrf-v4-turn-anycast`, `ssrf-v4-as112`, `ssrf-v4-amt`, `ssrf-v4-as112-direct`, `ssrf-v4-global-google`, `ssrf-v4-global-example` |
+| R6.6 | ipv6 block table | `ssrf-v6-unspecified`, `ssrf-v6-loopback`, `ssrf-v6-compat`, `ssrf-v6-discard`, `ssrf-v6-dummy-prefix`, `ssrf-v6-dummy-prefix-first`, `ssrf-v6-dummy-prefix-last`, `ssrf-v6-ietf`, `ssrf-v6-teredo-prefix`, `ssrf-v6-teredo`, `ssrf-v6-benchmark`, `ssrf-v6-orchid`, `ssrf-v6-orchidv2`, `ssrf-v6-drone`, `ssrf-v6-doc`, `ssrf-v6-6to4`, `ssrf-v6-doc-3fff`, `ssrf-v6-srv6`, `ssrf-v6-ula`, `ssrf-v6-link-local`, `ssrf-v6-multicast`, `ssrf-v6-pcp-anycast`, `ssrf-v6-turn-anycast`, `ssrf-v6-dns-sd-srp`, `ssrf-v6-amt`, `ssrf-v6-as112`, `ssrf-v6-as112-direct`, `ssrf-v6-global-cloudflare`, `ssrf-v6-global-google` |
 | R6.7 | translation and tunneling forms | `ssrf-chain-mapped-loopback`, `ssrf-chain-mapped-private`, `ssrf-chain-mapped-global`, `ssrf-chain-nat64-private`, `ssrf-chain-nat64-global`, `ssrf-chain-nat64-local`, `ssrf-chain-6to4-public`, `ssrf-chain-teredo-private` |
 | R6.8 | resolution and connection | `ssrf-deliver-name`, `ssrf-deliver-port`, `ssrf-deliver-no-answer`, `ssrf-deliver-second-blocked`, `ssrf-deliver-ipv6-literal` |
 | R6.9 | dns rebinding | `ssrf-deliver-rebind`, `ssrf-deliver-recheck-same` |
@@ -585,7 +590,7 @@ Fixed clock: now = 1767225600 (2026-01-01T00:00:00Z). Fixture identities: `newbi
 | R7.3 | jwk validation | `card-fetch-server-key-and-dedicated`, `card-jwk-valid`, `card-jwk-kty`, `card-jwk-crv`, `card-jwk-x-encoding`, `card-jwk-x-key`, `card-jwk-kid-missing`, `card-jwk-kid-mismatch`, `card-jwk-duplicate-kid`, `card-jwk-server-key`, `card-jwk-server-key-raw`, `card-jwk-x-length`, `card-jwk-alg`, `card-jwk-use` |
 | R7.4 | key rotation | `card-rotation-both-trusted`, `card-rotation-old-removed`, `card-rotation-both-known` |
 | R7.5 | egress ip ranges | `card-egress-valid`, `card-egress-malformed` |
-| R7.6 | jack.server.webhook_key cross-check | `rcv-r76-agree`, `rcv-r76-mismatch`, `rcv-r76-missing`, `card-webhook-key-agree`, `card-webhook-key-differ`, `card-webhook-key-missing`, `card-webhook-key-not-required`, `card-webhook-key-agree-discovery`, `card-webhook-key-mismatch-discovery` |
+| R7.6 | jack.server.webhook_key cross-check | `rcv-r76-agree`, `rcv-r76-mismatch`, `rcv-r76-missing`, `card-webhook-key-agree`, `card-webhook-key-differ`, `card-webhook-key-card-alg`, `card-webhook-key-card-use`, `card-webhook-key-tool-alg`, `card-webhook-key-tool-use`, `card-webhook-key-missing`, `card-webhook-key-not-required`, `card-webhook-key-agree-discovery`, `card-webhook-key-mismatch-discovery` |
 | R8.1 | subscription key | `sub-principal-alice`, `sub-principal-bob` |
 | R8.2 | canonical url form | `sub-url-canonical-uppercase-host`, `sub-url-default-port`, `sub-url-trailing-dot`, `sub-url-empty-path`, `sub-url-query-kept`, `sub-url-http-rejected`, `sub-url-userinfo-rejected`, `sub-url-dot-segment-rejected` |
 | R8.3 | canonical json arguments | `sub-args-absent`, `sub-args-explicit-null`, `sub-args-key-order`, `sub-args-number-int`, `sub-args-number-float`, `sub-args-number-exponent`, `sub-args-negative-zero`, `sub-args-positive-zero`, `sub-args-unicode-nfc`, `sub-args-unicode-nfd`, `sub-args-large-number`, `sub-args-different-args-same-url` |
@@ -606,4 +611,4 @@ Fixed clock: now = 1767225600 (2026-01-01T00:00:00Z). Fixture identities: `newbi
 - `webhook-subscription-vectors.json`: kinds sub-id, ttl, secrets, envelope, cursor
 - `server-card-keys-vectors.json`: kinds info, remote, fetch, jwk-set, kid, cidr-list, webhook-key-check, webhook-key-discovery
 
-Total: 465 cases, 80 rules covered.
+Total: 482 cases, 80 rules covered.

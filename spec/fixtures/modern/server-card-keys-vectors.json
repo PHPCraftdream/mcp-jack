@@ -1147,6 +1147,158 @@
       }
     },
     {
+      "id": "card-webhook-key-card-alg",
+      "rule": "R7.6",
+      "description": "a card side record whose alg is not EdDSA fails validation, so the required check is a mismatch",
+      "kind": "webhook-key-check",
+      "input": {
+        "card_keys": [
+          {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ",
+            "kid": "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg",
+            "alg": "RS256"
+          }
+        ],
+        "keys": [],
+        "require": true,
+        "toolResult": {
+          "webhook_key": {
+            "signing_keys": {
+              "keys": [
+                {
+                  "kty": "OKP",
+                  "crv": "Ed25519",
+                  "x": "71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ",
+                  "kid": "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg"
+                }
+              ]
+            },
+            "egress_ip_ranges": [
+              "203.0.113.0/24",
+              "2001:db8::/32"
+            ]
+          }
+        }
+      },
+      "expect": {
+        "result": "reject",
+        "code": "webhook_key_mismatch"
+      }
+    },
+    {
+      "id": "card-webhook-key-card-use",
+      "rule": "R7.6",
+      "description": "a card side record whose use is not sig fails validation, so the required check is a mismatch",
+      "kind": "webhook-key-check",
+      "input": {
+        "card_keys": [
+          {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ",
+            "kid": "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg",
+            "use": "enc"
+          }
+        ],
+        "keys": [],
+        "require": true,
+        "toolResult": {
+          "webhook_key": {
+            "signing_keys": {
+              "keys": [
+                {
+                  "kty": "OKP",
+                  "crv": "Ed25519",
+                  "x": "71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ",
+                  "kid": "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg"
+                }
+              ]
+            },
+            "egress_ip_ranges": [
+              "203.0.113.0/24",
+              "2001:db8::/32"
+            ]
+          }
+        }
+      },
+      "expect": {
+        "result": "reject",
+        "code": "webhook_key_mismatch"
+      }
+    },
+    {
+      "id": "card-webhook-key-tool-alg",
+      "rule": "R7.6",
+      "description": "a tool result key whose alg is not EdDSA fails validation, so the required check is a mismatch",
+      "kind": "webhook-key-check",
+      "input": {
+        "keys": [
+          "newbie"
+        ],
+        "require": true,
+        "toolResult": {
+          "webhook_key": {
+            "signing_keys": {
+              "keys": [
+                {
+                  "kty": "OKP",
+                  "crv": "Ed25519",
+                  "x": "71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ",
+                  "kid": "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg",
+                  "alg": "RS256"
+                }
+              ]
+            },
+            "egress_ip_ranges": [
+              "203.0.113.0/24",
+              "2001:db8::/32"
+            ]
+          }
+        }
+      },
+      "expect": {
+        "result": "reject",
+        "code": "webhook_key_mismatch"
+      }
+    },
+    {
+      "id": "card-webhook-key-tool-use",
+      "rule": "R7.6",
+      "description": "a tool result key whose use is not sig fails validation, so the required check is a mismatch",
+      "kind": "webhook-key-check",
+      "input": {
+        "keys": [
+          "newbie"
+        ],
+        "require": true,
+        "toolResult": {
+          "webhook_key": {
+            "signing_keys": {
+              "keys": [
+                {
+                  "kty": "OKP",
+                  "crv": "Ed25519",
+                  "x": "71JMCNs18t7E5IysFMZEKsnlr9Cw0kahC_h5FkDWrdQ",
+                  "kid": "imZX4AkHSrS_UT1wZ5oEPklelGqIooKk4TfK3ht5LYg",
+                  "use": "enc"
+                }
+              ]
+            },
+            "egress_ip_ranges": [
+              "203.0.113.0/24",
+              "2001:db8::/32"
+            ]
+          }
+        }
+      },
+      "expect": {
+        "result": "reject",
+        "code": "webhook_key_mismatch"
+      }
+    },
+    {
       "id": "card-webhook-key-missing",
       "rule": "R7.6",
       "description": "a required check with no tool result is webhook_key_missing",
