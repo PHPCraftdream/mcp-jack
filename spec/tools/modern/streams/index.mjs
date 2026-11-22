@@ -52,7 +52,8 @@ const streamCompare = (c, got) => {
   if (mc !== undefined) {
     const last = got.messages[got.messages.length - 1];
     // 6.3: a body that ended without a verified jack-end is never complete.
-    const complete = got.terminal.state === 'ok' && last !== undefined && isRpcResponse(last, c.state.request_id);
+    // A live observation (silent_after_ms) has no end frame yet, so it is never complete either.
+    const complete = got.terminal.state === 'ok' && c.silent_after_ms == null && last !== undefined && isRpcResponse(last, c.state.request_id);
     if (complete !== mc) throw disagree(`${c.id} mcp_complete`, complete, mc);
   }
 };
