@@ -115,7 +115,7 @@ export const ERA_CASES = [
     expect: { era: 'legacy', action: 'fallback_initialize', reason: 'no_modern_error' },
   },
   {
-    id: 'era-400-code-string', rule: 'C9', description: 'a string error code is not an integer, so a -32020 shape reads legacy',
+    id: 'era-400-code-string', rule: 'C9', description: 'a string error code is not an integer, and the body carries jsonrpc, so it is neither recognised nor Jack\'s envelope',
     response: { verified: true, status: 400, body_text: '{"jsonrpc":"2.0","id":1,"error":{"code":"-32020","message":"x"}}' },
     clientVersions: ['2026-07-28'],
     expect: { era: 'legacy', action: 'fallback_initialize', reason: 'no_modern_error' },

@@ -1802,7 +1802,7 @@
     },
     {
       "id": "stream-frame-after-cutoff",
-      "description": "frame ts equal to the successor activation (4.3 step 4)",
+      "description": "a frame at the cutoff has no valid successor: no end frame can follow, and stream_after_cutoff takes precedence over stream_truncated (5.2)",
       "state": {
         "now": 1767225600,
         "window_seconds": 30,
@@ -1839,6 +1839,50 @@
           "state": "error",
           "code": "stream_after_cutoff",
           "frames_verified": 0
+        }
+      }
+    },
+    {
+      "id": "stream-frame-end-after-cutoff",
+      "description": "the end frame itself is at the cutoff, after a valid message below it (4.3 step 4, 5.2)",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "pinned_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+        "pinned_server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+        "request_sig": "OsOug0yCJZPIkJ5Huk2UcIxlstzaz4b22EBRHfQHO0YgoHkDflI7kNPpSGO4HzueDASfxlEQRL1Kt45PN0pfBw",
+        "request_id": 1,
+        "successor_activation": 1767225610,
+        "frame_max_bytes": 1048576
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "X-Accel-Buffering",
+            "no"
+          ],
+          [
+            "Jack-Auth",
+            "s1 kid=wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88,ts=1767225600,sid=q9nUNYuH-Xf_cgJBVu4_Dg,sig=LTE8doFNPgqOVb_LI-8rW-i295JexxTPR85x5XRzOLCTtIOlz8r4uuZZ1lr2QZeLdk15masENOU9rZScH8TBAQ"
+          ]
+        ],
+        "stream_b64u": [
+          "ZXZlbnQ6IG1lc3NhZ2UKZGF0YTogeyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoibm90aWZpY2F0aW9ucy9wcm9ncmVzcyIsInBhcmFtcyI6eyJwcm9ncmVzc1Rva2VuIjoidDEiLCJwcm9ncmVzcyI6MX19CmphY2s6IHNlcT0wLHRzPTE3NjcyMjU2MDAsc2lnPXVycERmZ09OOUxmSEVPNXhJdGJlQmpsNlRZMXd3VlpFcTEzemJGMUxzcXd5ZG81R2ZCbTZIUkFZLUpMa296S0U0dnlydFBVeTlpMF9xNDNyMnR1N0RBCgpldmVudDogamFjay1lbmQKZGF0YToKamFjazogc2VxPTEsdHM9MTc2NzIyNTYxMCxzaWc9ZENFLURWRU1FT2ZLUVI2RWFmRlFDQmNTUEd3TmQ1NUplQmUwTHREYVA0bkg3SGpmZWRyVTlRZTJBNkJENzBHWkgyelJXbDBuRF96NVZnT1RFTTg4REEKCg"
+        ]
+      },
+      "expect": {
+        "messages": [
+          "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progressToken\":\"t1\",\"progress\":1}}"
+        ],
+        "terminal": {
+          "state": "error",
+          "code": "stream_after_cutoff",
+          "frames_verified": 1
         }
       }
     },
@@ -3272,7 +3316,7 @@
     },
     {
       "id": "stream-idle-bom-late-chunk",
-      "description": "a BOM shifts the offsets, so the frame is timed in the chunk that carried its last byte (4.5, 2.14)",
+      "description": "the split is between frame 0's last two bytes, so a BOM-unaware lookup accepts the frame and the correct one times it late (2.14, 4.5)",
       "state": {
         "now": 1767225600,
         "window_seconds": 30,
@@ -3301,8 +3345,56 @@
           ]
         ],
         "stream_b64u": [
-          "77u_ZXZlbnQ6IG1lcw",
-          "c2FnZQpkYXRhOiB7Impzb25ycGMiOiIyLjAiLCJtZXRob2QiOiJub3RpZmljYXRpb25zL3Byb2dyZXNzIiwicGFyYW1zIjp7InByb2dyZXNzVG9rZW4iOiJ0MSIsInByb2dyZXNzIjoxfX0KamFjazogc2VxPTAsdHM9MTc2NzIyNTYwMCxzaWc9dXJwRGZnT045TGZIRU81eEl0YmVCamw2VFkxd3dWWkVxMTN6YkYxTHNxd3lkbzVHZkJtNkhSQVktSkxrb3pLRTR2eXJ0UFV5OWkwX3E0M3IydHU3REEKCmV2ZW50OiBqYWNrLWVuZApkYXRhOgpqYWNrOiBzZXE9MSx0cz0xNzY3MjI1NjAwLHNpZz1EMnV6ZWpJam1EUHZZU0o1MFUyODN1UlRSeGJRdXY2M1pLQVduc0ZVZlRRQkhNeE96SUx4LWp5U0JuVE1kQXZPWHNvaDVBRXo2d1MzY281d0VuQnpEUQoK"
+          "77u_ZXZlbnQ6IG1lc3NhZ2UKZGF0YTogeyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoibm90aWZpY2F0aW9ucy9wcm9ncmVzcyIsInBhcmFtcyI6eyJwcm9ncmVzc1Rva2VuIjoidDEiLCJwcm9ncmVzcyI6MX19CmphY2s6IHNlcT0wLHRzPTE3NjcyMjU2MDAsc2lnPXVycERmZ09OOUxmSEVPNXhJdGJlQmpsNlRZMXd3VlpFcTEzemJGMUxzcXd5ZG81R2ZCbTZIUkFZLUpMa296S0U0dnlydFBVeTlpMF9xNDNyMnR1N0RBCg",
+          "CmV2ZW50OiBqYWNrLWVuZApkYXRhOgpqYWNrOiBzZXE9MSx0cz0xNzY3MjI1NjAwLHNpZz1EMnV6ZWpJam1EUHZZU0o1MFUyODN1UlRSeGJRdXY2M1pLQVduc0ZVZlRRQkhNeE96SUx4LWp5U0JuVE1kQXZPWHNvaDVBRXo2d1MzY281d0VuQnpEUQoK"
+        ]
+      },
+      "expect": {
+        "messages": [],
+        "terminal": {
+          "state": "error",
+          "code": "stream_idle",
+          "frames_verified": 0
+        }
+      },
+      "arrival_ms": [
+        0,
+        90001
+      ]
+    },
+    {
+      "id": "stream-idle-blank-line-late-chunk",
+      "description": "an event completes only at its terminating blank line, so a late final newline makes the frame late (2.6, 4.5)",
+      "state": {
+        "now": 1767225600,
+        "window_seconds": 30,
+        "pinned_server_kid": "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+        "pinned_server_public_key": "wjtM7aRy1vnp-ZPuyY_99ncsbRVv28vGJTIZzFXvOMw",
+        "request_sig": "OsOug0yCJZPIkJ5Huk2UcIxlstzaz4b22EBRHfQHO0YgoHkDflI7kNPpSGO4HzueDASfxlEQRL1Kt45PN0pfBw",
+        "request_id": 1,
+        "successor_activation": null,
+        "frame_max_bytes": 1048576,
+        "stream_idle_ms": 90000
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          [
+            "Content-Type",
+            "text/event-stream"
+          ],
+          [
+            "X-Accel-Buffering",
+            "no"
+          ],
+          [
+            "Jack-Auth",
+            "s1 kid=wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88,ts=1767225600,sid=q9nUNYuH-Xf_cgJBVu4_Dg,sig=LTE8doFNPgqOVb_LI-8rW-i295JexxTPR85x5XRzOLCTtIOlz8r4uuZZ1lr2QZeLdk15masENOU9rZScH8TBAQ"
+          ]
+        ],
+        "stream_b64u": [
+          "ZXZlbnQ6IG1lc3NhZ2UKZGF0YTogeyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoibm90aWZpY2F0aW9ucy9wcm9ncmVzcyIsInBhcmFtcyI6eyJwcm9ncmVzc1Rva2VuIjoidDEiLCJwcm9ncmVzcyI6MX19CmphY2s6IHNlcT0wLHRzPTE3NjcyMjU2MDAsc2lnPXVycERmZ09OOUxmSEVPNXhJdGJlQmpsNlRZMXd3VlpFcTEzemJGMUxzcXd5ZG81R2ZCbTZIUkFZLUpMa296S0U0dnlydFBVeTlpMF9xNDNyMnR1N0RBCg",
+          "CmV2ZW50OiBqYWNrLWVuZApkYXRhOgpqYWNrOiBzZXE9MSx0cz0xNzY3MjI1NjAwLHNpZz1EMnV6ZWpJam1EUHZZU0o1MFUyODN1UlRSeGJRdXY2M1pLQVduc0ZVZlRRQkhNeE96SUx4LWp5U0JuVE1kQXZPWHNvaDVBRXo2d1MzY281d0VuQnpEUQoK"
         ]
       },
       "expect": {

@@ -162,6 +162,24 @@ function acceptedKeys(list, serverKid, serverPublicKey) {
   return out;
 }
 
+// R1.3: the timestamp profile occurrences carry: a date, a time, an optional fraction and a mandatory zone.
+const ISO_TIMESTAMP = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](\d{2}):(\d{2}))$/;
+const MONTH_DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+// R1.3: the ranges are checked by arithmetic, since `Date` would normalize an impossible day into a real one.
+function isoTimestampOk(value) {
+  if (typeof value !== 'string') return false;
+  const match = ISO_TIMESTAMP.exec(value);
+  if (match === null) return false;
+  const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number);
+  if (month < 1 || month > 12) return false;
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const monthDays = month === 2 && leap ? 29 : MONTH_DAYS[month - 1];
+  if (day < 1 || day > monthDays) return false;
+  if (hour > 23 || minute > 59 || second > 59) return false;
+  return match[7] === undefined || (Number(match[7]) <= 23 && Number(match[8]) <= 59);
+}
+
 // R1.3, R5.6, R8.8, R3.18: the field set of one parsed envelope or event occurrence.
 function fieldsOk(type, message) {
   if (type === 'verification') return nonceOk(message.challenge);
@@ -173,9 +191,9 @@ function fieldsOk(type, message) {
     if (!Number.isInteger(message.error.code) || typeof message.error.message !== 'string') return false;
     return !hasOwn(message.error, 'data') || isObject(message.error.data);
   }
-  if (!hasOwn(message, 'data')) return false;
+  if (!hasOwn(message, 'data') || !isObject(message.data)) return false;
   if (hasOwn(message, 'cursor') && !(typeof message.cursor === 'string' || message.cursor === null)) return false;
-  return nonEmpty(message.eventId) && nonEmpty(message.name) && nonEmpty(message.timestamp);
+  return nonEmpty(message.eventId) && nonEmpty(message.name) && isoTimestampOk(message.timestamp);
 }
 
 // R3.1-R3.18, R4.5, R4.6, R7.6: build a receiver from its configuration.

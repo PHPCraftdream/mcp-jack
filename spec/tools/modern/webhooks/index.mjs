@@ -12,10 +12,10 @@ import * as card from './vectors/card.mjs';
 export const family = 'webhooks';
 const FAMILIES = [signatures, w1, receiver, endpoint, ssrf, subscription, card];
 const REQUIRED = ['id', 'rule', 'kind', 'input', 'expect'];
-// A description stays optional: the generated index lists cases by id, so a module may omit it.
-// When a case carries one it must be a non-empty string, checked with the required members.
+// A description is required: the spec's vector-file schema promises one on every case.
+// It must be a non-empty string, checked with the required members.
 function checkDescription(c) {
-  if (c.description === undefined) return;
+  if (c.description === undefined) throw new Error(`case ${c.id} is missing its description`);
   if (typeof c.description !== 'string' || c.description.length === 0) {
     throw new Error(`case ${c.id} has a non-string description`);
   }

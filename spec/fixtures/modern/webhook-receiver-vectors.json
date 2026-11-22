@@ -5900,6 +5900,590 @@
       }
     },
     {
+      "id": "rcv-r318-occurrence-data-array",
+      "rule": "R3.18",
+      "description": "an occurrence whose data is an array is not an object, so it fails field validation",
+      "kind": "sequence",
+      "input": {
+        "config": {
+          "secrets": [
+            {
+              "secret": "whsec_XnU10kns2Fq27j9gLmtVokIK8FOLWR23RQF1a6WdHNY=",
+              "subscription_id": "sub_a3f1c8e2b0d49f7e"
+            }
+          ],
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ]
+        },
+        "steps": [
+          {
+            "now": 1767225600,
+            "headers": [
+              [
+                "webhook-id",
+                "msg_7Qk2mZ4rT9xV1bN6pL3sD8wY5cJ0hG2f"
+              ],
+              [
+                "webhook-timestamp",
+                "1767225600"
+              ],
+              [
+                "webhook-signature",
+                "v1,fo81al4BsYH0Ji9KMTdk/7un0eSydr+vTzQM6YyWBSU="
+              ],
+              [
+                "X-MCP-Subscription-Id",
+                "sub_a3f1c8e2b0d49f7e"
+              ]
+            ],
+            "body_text": "{\"eventId\":\"evt_1\",\"name\":\"incident.created\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"data\":[]}"
+          }
+        ]
+      },
+      "expect": {
+        "steps": [
+          {
+            "status": 400,
+            "body": {
+              "error": {
+                "code": "malformed_body",
+                "message": "body is not a json object"
+              }
+            },
+            "delivered": [],
+            "code": "malformed_body",
+            "recorded": false
+          }
+        ],
+        "final_state": {
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ],
+          "terminated": [],
+          "secrets": [
+            {
+              "subscription_id": "sub_a3f1c8e2b0d49f7e",
+              "callback_url": null
+            }
+          ],
+          "accepted": []
+        }
+      }
+    },
+    {
+      "id": "rcv-r318-occurrence-data-string",
+      "rule": "R3.18",
+      "description": "an occurrence whose data is a string is not an object, so it fails field validation",
+      "kind": "sequence",
+      "input": {
+        "config": {
+          "secrets": [
+            {
+              "secret": "whsec_XnU10kns2Fq27j9gLmtVokIK8FOLWR23RQF1a6WdHNY=",
+              "subscription_id": "sub_a3f1c8e2b0d49f7e"
+            }
+          ],
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ]
+        },
+        "steps": [
+          {
+            "now": 1767225600,
+            "headers": [
+              [
+                "webhook-id",
+                "msg_7Qk2mZ4rT9xV1bN6pL3sD8wY5cJ0hG2f"
+              ],
+              [
+                "webhook-timestamp",
+                "1767225600"
+              ],
+              [
+                "webhook-signature",
+                "v1,RQY2SQ39LgisLAIREvrGgaOET4qslryy2M+8uGV0npk="
+              ],
+              [
+                "X-MCP-Subscription-Id",
+                "sub_a3f1c8e2b0d49f7e"
+              ]
+            ],
+            "body_text": "{\"eventId\":\"evt_1\",\"name\":\"incident.created\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"data\":\"x\"}"
+          }
+        ]
+      },
+      "expect": {
+        "steps": [
+          {
+            "status": 400,
+            "body": {
+              "error": {
+                "code": "malformed_body",
+                "message": "body is not a json object"
+              }
+            },
+            "delivered": [],
+            "code": "malformed_body",
+            "recorded": false
+          }
+        ],
+        "final_state": {
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ],
+          "terminated": [],
+          "secrets": [
+            {
+              "subscription_id": "sub_a3f1c8e2b0d49f7e",
+              "callback_url": null
+            }
+          ],
+          "accepted": []
+        }
+      }
+    },
+    {
+      "id": "rcv-r318-occurrence-data-null",
+      "rule": "R3.18",
+      "description": "an occurrence whose data is null is not an object, so it fails field validation",
+      "kind": "sequence",
+      "input": {
+        "config": {
+          "secrets": [
+            {
+              "secret": "whsec_XnU10kns2Fq27j9gLmtVokIK8FOLWR23RQF1a6WdHNY=",
+              "subscription_id": "sub_a3f1c8e2b0d49f7e"
+            }
+          ],
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ]
+        },
+        "steps": [
+          {
+            "now": 1767225600,
+            "headers": [
+              [
+                "webhook-id",
+                "msg_7Qk2mZ4rT9xV1bN6pL3sD8wY5cJ0hG2f"
+              ],
+              [
+                "webhook-timestamp",
+                "1767225600"
+              ],
+              [
+                "webhook-signature",
+                "v1,nx8FtZy2igOLmAu2v2lcwiit5n0qNx9JXHmv6s9HF78="
+              ],
+              [
+                "X-MCP-Subscription-Id",
+                "sub_a3f1c8e2b0d49f7e"
+              ]
+            ],
+            "body_text": "{\"eventId\":\"evt_1\",\"name\":\"incident.created\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"data\":null}"
+          }
+        ]
+      },
+      "expect": {
+        "steps": [
+          {
+            "status": 400,
+            "body": {
+              "error": {
+                "code": "malformed_body",
+                "message": "body is not a json object"
+              }
+            },
+            "delivered": [],
+            "code": "malformed_body",
+            "recorded": false
+          }
+        ],
+        "final_state": {
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ],
+          "terminated": [],
+          "secrets": [
+            {
+              "subscription_id": "sub_a3f1c8e2b0d49f7e",
+              "callback_url": null
+            }
+          ],
+          "accepted": []
+        }
+      }
+    },
+    {
+      "id": "rcv-r318-occurrence-timestamp-not-a-date",
+      "rule": "R3.18",
+      "description": "an occurrence whose timestamp is not a date fails field validation",
+      "kind": "sequence",
+      "input": {
+        "config": {
+          "secrets": [
+            {
+              "secret": "whsec_XnU10kns2Fq27j9gLmtVokIK8FOLWR23RQF1a6WdHNY=",
+              "subscription_id": "sub_a3f1c8e2b0d49f7e"
+            }
+          ],
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ]
+        },
+        "steps": [
+          {
+            "now": 1767225600,
+            "headers": [
+              [
+                "webhook-id",
+                "msg_7Qk2mZ4rT9xV1bN6pL3sD8wY5cJ0hG2f"
+              ],
+              [
+                "webhook-timestamp",
+                "1767225600"
+              ],
+              [
+                "webhook-signature",
+                "v1,BO7i7I3NCtDxTOHtf+1Msrm7Dhe0nDXY3f8b4i40UFo="
+              ],
+              [
+                "X-MCP-Subscription-Id",
+                "sub_a3f1c8e2b0d49f7e"
+              ]
+            ],
+            "body_text": "{\"eventId\":\"evt_1\",\"name\":\"incident.created\",\"timestamp\":\"not-a-date\",\"data\":{\"severity\":\"P1\"}}"
+          }
+        ]
+      },
+      "expect": {
+        "steps": [
+          {
+            "status": 400,
+            "body": {
+              "error": {
+                "code": "malformed_body",
+                "message": "body is not a json object"
+              }
+            },
+            "delivered": [],
+            "code": "malformed_body",
+            "recorded": false
+          }
+        ],
+        "final_state": {
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ],
+          "terminated": [],
+          "secrets": [
+            {
+              "subscription_id": "sub_a3f1c8e2b0d49f7e",
+              "callback_url": null
+            }
+          ],
+          "accepted": []
+        }
+      }
+    },
+    {
+      "id": "rcv-r318-occurrence-timestamp-feb-30",
+      "rule": "R3.18",
+      "description": "an occurrence whose timestamp is a nonexistent calendar day fails field validation",
+      "kind": "sequence",
+      "input": {
+        "config": {
+          "secrets": [
+            {
+              "secret": "whsec_XnU10kns2Fq27j9gLmtVokIK8FOLWR23RQF1a6WdHNY=",
+              "subscription_id": "sub_a3f1c8e2b0d49f7e"
+            }
+          ],
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ]
+        },
+        "steps": [
+          {
+            "now": 1767225600,
+            "headers": [
+              [
+                "webhook-id",
+                "msg_7Qk2mZ4rT9xV1bN6pL3sD8wY5cJ0hG2f"
+              ],
+              [
+                "webhook-timestamp",
+                "1767225600"
+              ],
+              [
+                "webhook-signature",
+                "v1,jpDs1YDrU6/6+hJyCntcJQV92wHF0gvr6bYSaH2gJj8="
+              ],
+              [
+                "X-MCP-Subscription-Id",
+                "sub_a3f1c8e2b0d49f7e"
+              ]
+            ],
+            "body_text": "{\"eventId\":\"evt_1\",\"name\":\"incident.created\",\"timestamp\":\"2026-02-30T00:00:00Z\",\"data\":{\"severity\":\"P1\"}}"
+          }
+        ]
+      },
+      "expect": {
+        "steps": [
+          {
+            "status": 400,
+            "body": {
+              "error": {
+                "code": "malformed_body",
+                "message": "body is not a json object"
+              }
+            },
+            "delivered": [],
+            "code": "malformed_body",
+            "recorded": false
+          }
+        ],
+        "final_state": {
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ],
+          "terminated": [],
+          "secrets": [
+            {
+              "subscription_id": "sub_a3f1c8e2b0d49f7e",
+              "callback_url": null
+            }
+          ],
+          "accepted": []
+        }
+      }
+    },
+    {
+      "id": "rcv-r318-occurrence-timestamp-date-only",
+      "rule": "R3.18",
+      "description": "an occurrence whose timestamp has no time part fails field validation",
+      "kind": "sequence",
+      "input": {
+        "config": {
+          "secrets": [
+            {
+              "secret": "whsec_XnU10kns2Fq27j9gLmtVokIK8FOLWR23RQF1a6WdHNY=",
+              "subscription_id": "sub_a3f1c8e2b0d49f7e"
+            }
+          ],
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ]
+        },
+        "steps": [
+          {
+            "now": 1767225600,
+            "headers": [
+              [
+                "webhook-id",
+                "msg_7Qk2mZ4rT9xV1bN6pL3sD8wY5cJ0hG2f"
+              ],
+              [
+                "webhook-timestamp",
+                "1767225600"
+              ],
+              [
+                "webhook-signature",
+                "v1,ZTGiYQBvMfMeUEOvc7l8ZynVdF+WWBlfLkYFQO5xtwc="
+              ],
+              [
+                "X-MCP-Subscription-Id",
+                "sub_a3f1c8e2b0d49f7e"
+              ]
+            ],
+            "body_text": "{\"eventId\":\"evt_1\",\"name\":\"incident.created\",\"timestamp\":\"2026-01-01\",\"data\":{\"severity\":\"P1\"}}"
+          }
+        ]
+      },
+      "expect": {
+        "steps": [
+          {
+            "status": 400,
+            "body": {
+              "error": {
+                "code": "malformed_body",
+                "message": "body is not a json object"
+              }
+            },
+            "delivered": [],
+            "code": "malformed_body",
+            "recorded": false
+          }
+        ],
+        "final_state": {
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ],
+          "terminated": [],
+          "secrets": [
+            {
+              "subscription_id": "sub_a3f1c8e2b0d49f7e",
+              "callback_url": null
+            }
+          ],
+          "accepted": []
+        }
+      }
+    },
+    {
+      "id": "rcv-r318-occurrence-timestamp-no-zone",
+      "rule": "R3.18",
+      "description": "an occurrence whose timestamp has no zone designator fails field validation",
+      "kind": "sequence",
+      "input": {
+        "config": {
+          "secrets": [
+            {
+              "secret": "whsec_XnU10kns2Fq27j9gLmtVokIK8FOLWR23RQF1a6WdHNY=",
+              "subscription_id": "sub_a3f1c8e2b0d49f7e"
+            }
+          ],
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ]
+        },
+        "steps": [
+          {
+            "now": 1767225600,
+            "headers": [
+              [
+                "webhook-id",
+                "msg_7Qk2mZ4rT9xV1bN6pL3sD8wY5cJ0hG2f"
+              ],
+              [
+                "webhook-timestamp",
+                "1767225600"
+              ],
+              [
+                "webhook-signature",
+                "v1,iOmsAay+1C1zVFDARM8xsekVqm8PAyUdCUWQ0Gv2oQw="
+              ],
+              [
+                "X-MCP-Subscription-Id",
+                "sub_a3f1c8e2b0d49f7e"
+              ]
+            ],
+            "body_text": "{\"eventId\":\"evt_1\",\"name\":\"incident.created\",\"timestamp\":\"2026-01-01T00:00:00\",\"data\":{\"severity\":\"P1\"}}"
+          }
+        ]
+      },
+      "expect": {
+        "steps": [
+          {
+            "status": 400,
+            "body": {
+              "error": {
+                "code": "malformed_body",
+                "message": "body is not a json object"
+              }
+            },
+            "delivered": [],
+            "code": "malformed_body",
+            "recorded": false
+          }
+        ],
+        "final_state": {
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ],
+          "terminated": [],
+          "secrets": [
+            {
+              "subscription_id": "sub_a3f1c8e2b0d49f7e",
+              "callback_url": null
+            }
+          ],
+          "accepted": []
+        }
+      }
+    },
+    {
+      "id": "rcv-r318-occurrence-timestamp-offset",
+      "rule": "R3.18",
+      "description": "an occurrence with fractional seconds and a numeric offset is accepted and forwarded unchanged",
+      "kind": "sequence",
+      "input": {
+        "config": {
+          "secrets": [
+            {
+              "secret": "whsec_XnU10kns2Fq27j9gLmtVokIK8FOLWR23RQF1a6WdHNY=",
+              "subscription_id": "sub_a3f1c8e2b0d49f7e"
+            }
+          ],
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ]
+        },
+        "steps": [
+          {
+            "now": 1767225600,
+            "headers": [
+              [
+                "webhook-id",
+                "msg_7Qk2mZ4rT9xV1bN6pL3sD8wY5cJ0hG2f"
+              ],
+              [
+                "webhook-timestamp",
+                "1767225600"
+              ],
+              [
+                "webhook-signature",
+                "v1,2IxduSu/vzPDr0EqSC0FFGYsejm30SF2QA4/4xv8f6k="
+              ],
+              [
+                "X-MCP-Subscription-Id",
+                "sub_a3f1c8e2b0d49f7e"
+              ]
+            ],
+            "body_text": "{\"eventId\":\"evt_1\",\"name\":\"incident.created\",\"timestamp\":\"2026-01-01T01:30:00.500+01:30\",\"data\":{\"severity\":\"P1\"}}"
+          }
+        ]
+      },
+      "expect": {
+        "steps": [
+          {
+            "status": 200,
+            "body": {
+              "status": "accepted"
+            },
+            "delivered": [
+              {
+                "eventId": "evt_1",
+                "name": "incident.created",
+                "timestamp": "2026-01-01T01:30:00.500+01:30",
+                "data": {
+                  "severity": "P1"
+                }
+              }
+            ],
+            "code": null,
+            "recorded": true
+          }
+        ],
+        "final_state": {
+          "routed": [
+            "sub_a3f1c8e2b0d49f7e"
+          ],
+          "terminated": [],
+          "secrets": [
+            {
+              "subscription_id": "sub_a3f1c8e2b0d49f7e",
+              "callback_url": null
+            }
+          ],
+          "accepted": [
+            "msg_7Qk2mZ4rT9xV1bN6pL3sD8wY5cJ0hG2f"
+          ]
+        }
+      }
+    },
+    {
       "id": "rcv-r56-pending-secret-binds",
       "rule": "R5.6",
       "description": "a pending secret answers the verification and is bound to the header id",

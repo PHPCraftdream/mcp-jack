@@ -49,7 +49,7 @@ test('build returns the four files and a markdown string', () => {
 
   assert.equal(out.files[REQUEST_FILE].cases.length, 98);
   assert.equal(out.files[ENCODING_FILE].cases.length, 51);
-  assert.equal(out.files[ANNOTATION_FILE].cases.length, 81);
+  assert.equal(out.files[ANNOTATION_FILE].cases.length, 84);
   assert.equal(out.files[ERA_FILE].cases.length, 38);
 
   // Exactly one by-reference entry, asserted field by field. Its description is
@@ -89,8 +89,8 @@ test('case ids are unique across the family', () => {
   const ids = FILES.flatMap((name) => out.files[name].cases.map((c) => c.id));
   for (const entry of out.files[REQUEST_FILE].by_reference) ids.push(entry.id);
   assert.equal(new Set(ids).size, ids.length);
-  // 268 cases plus the single by-reference entry.
-  assert.equal(ids.length, 269);
+  // 271 cases plus the single by-reference entry.
+  assert.equal(ids.length, 272);
 });
 
 test('stored request expectations carry the full wire shape', () => {
@@ -141,7 +141,7 @@ test('markdown names every file and its count', () => {
   assert.ok(md.includes('## By-reference cases'));
   assert.ok(md.includes('98 cases'));
   assert.ok(md.includes('51 cases'));
-  assert.ok(md.includes('81 cases'));
+  assert.ok(md.includes('84 cases'));
   assert.ok(md.includes('38 cases'));
   assert.ok(md.includes('cache-replay'));
   assert.ok(!md.includes('undefined'));

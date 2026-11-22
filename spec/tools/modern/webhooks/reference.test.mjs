@@ -80,6 +80,70 @@ test('classifyAddress', () => {
   });
 });
 
+// Independently written copy of both registry tables: block text and the registry's "Globally Reachable" value.
+// The test reads this list, never the reachable column of the tables under test, so an omitted row or a flipped
+// value fails instead of describing itself.
+const EXPECTED = {
+  ipv4: [
+    ['0.0.0.0/8', false],
+    ['0.0.0.0/32', false],
+    ['10.0.0.0/8', false],
+    ['100.64.0.0/10', false],
+    ['127.0.0.0/8', false],
+    ['169.254.0.0/16', false],
+    ['172.16.0.0/12', false],
+    ['192.0.0.0/24', false],
+    ['192.0.0.0/29', false],
+    ['192.0.0.8/32', false],
+    ['192.0.0.9/32', true],
+    ['192.0.0.10/32', true],
+    ['192.0.0.170/32', false],
+    ['192.0.0.171/32', false],
+    ['192.0.2.0/24', false],
+    ['192.31.196.0/24', true],
+    ['192.52.193.0/24', true],
+    ['192.88.99.0/24', false],
+    ['192.88.99.2/32', false],
+    ['192.168.0.0/16', false],
+    ['192.175.48.0/24', true],
+    ['198.18.0.0/15', false],
+    ['198.51.100.0/24', false],
+    ['203.0.113.0/24', false],
+    ['224.0.0.0/4', false],
+    ['240.0.0.0/4', false],
+    ['255.255.255.255/32', false],
+  ],
+  ipv6: [
+    ['::/128', false],
+    ['::1/128', false],
+    ['::/96', false],
+    ['::ffff:0:0/96', false],
+    ['64:ff9b::/96', true],
+    ['64:ff9b:1::/48', false],
+    ['100::/64', false],
+    ['100:0:0:1::/64', false],
+    ['2001::/23', false],
+    ['2001::/32', false],
+    ['2001:1::1/128', true],
+    ['2001:1::2/128', true],
+    ['2001:1::3/128', true],
+    ['2001:2::/48', false],
+    ['2001:3::/32', true],
+    ['2001:4:112::/48', true],
+    ['2001:10::/28', false],
+    ['2001:20::/28', true],
+    ['2001:30::/28', true],
+    ['2001:db8::/32', false],
+    ['2002::/16', false],
+    ['2620:4f:8000::/48', true],
+    ['3fff::/20', false],
+    ['5f00::/16', false],
+    ['fc00::/7', false],
+    ['fe80::/10', false],
+    ['ff00::/8', false],
+  ],
+};
+
 // Both registry tables must classify the first and last address of their own block exactly as the deepest row says.
 const FAMILIES = [
   { family: 'ipv4', rows: IPV4_BLOCKS, parse: parseIPv4, format: formatIPv4, width: 4 },
@@ -88,11 +152,11 @@ const FAMILIES = [
 // The two translation rows hand the decision to the embedded IPv4 address instead of their own reachable column.
 const CHAINED_ROWS = new Set(['ipv4_mapped', 'nat64_well_known']);
 
-const decodeRow = (kind, row) => {
-  const [literal, prefixText] = row.block.split('/');
+const decodeRow = (kind, block, reachable) => {
+  const [literal, prefixText] = block.split('/');
   const parsed = kind.parse(literal);
-  if (!parsed.ok) throw new Error(`${row.block}: unparsable network literal`);
-  return { name: row.name, reachable: row.reachable, bytes: parsed.bytes, prefix: Number(prefixText) };
+  if (!parsed.ok) throw new Error(`${block}: unparsable network literal`);
+  return { block, reachable, bytes: parsed.bytes, prefix: Number(prefixText) };
 };
 
 // First address clears every host bit below the prefix, last address sets them all.
@@ -128,26 +192,50 @@ const deepestRow = (rows, bytes) => {
 
 test('registry rows decide both edges of every block', () => {
   for (const kind of FAMILIES) {
-    const rows = kind.rows.map((row) => decodeRow(kind, row));
-    for (const row of rows) {
+    const expected = EXPECTED[kind.family].map(([block, reachable]) => decodeRow(kind, block, reachable));
+    const rows = new Map(kind.rows.map((row) => [row.block, row]));
+    const listed = new Set(expected.map((row) => row.block));
+    for (const row of expected) {
+      assert.ok(rows.has(row.block), `${kind.family} ${row.block}: EXPECTED block is missing from the table under test`);
+    }
+    for (const block of rows.keys()) {
+      assert.ok(listed.has(block), `${kind.family} ${block}: table block is missing from EXPECTED`);
+    }
+    for (const row of expected) {
+      const name = rows.get(row.block).name;
+      const reachable = rows.get(row.block).reachable;
+      assert.equal(
+        reachable,
+        row.reachable,
+        `${kind.family} ${row.block} ${name}: the table says Globally Reachable ${reachable}, EXPECTED says ${row.reachable}`,
+      );
       for (const last of [false, true]) {
         const bytes = edgeOf(kind, row, last);
         const address = kind.format(bytes);
-        const where = `${row.block} ${row.name} ${last ? 'last' : 'first'} address ${address}`;
+        const where = `${kind.family} ${row.block} ${name} ${last ? 'last' : 'first'} address ${address}`;
         const verdict = classifyAddress(address);
         assert.equal(verdict.family, kind.family, `${where}: classifyAddress said family ${verdict.family}`);
-        if (CHAINED_ROWS.has(row.name)) {
+        if (CHAINED_ROWS.has(name)) {
           const embedded = formatIPv4(bytes.subarray(12, 16));
           const inner = classifyAddress(embedded);
-          const reasons = [row.name, `${row.name}/${inner.reason}`];
+          const reasons = [name, `${name}/${inner.reason}`];
           assert.ok(reasons.includes(verdict.reason), `${where}: expected ${reasons.join(' or ')} but got ${verdict.reason}`);
           assert.equal(verdict.decision, inner.decision, `${where}: expected ${inner.decision} from embedded ${embedded} but got ${verdict.decision}`);
           continue;
         }
-        const deepest = deepestRow(rows, bytes);
-        assert.equal(verdict.reason, deepest.name, `${where}: expected ${deepest.name} but got ${verdict.reason}`);
+        const deepest = deepestRow(expected, bytes);
+        const deepestName = rows.get(deepest.block).name;
+        assert.equal(
+          verdict.reason,
+          deepestName,
+          `${where}: deepest EXPECTED block ${deepest.block} (${deepestName}) but the classifier said ${verdict.reason}`,
+        );
         const decision = deepest.reachable ? 'allow' : 'reject';
-        assert.equal(verdict.decision, decision, `${where}: expected ${decision} for ${deepest.name} but got ${verdict.decision}`);
+        assert.equal(
+          verdict.decision,
+          decision,
+          `${where}: deepest EXPECTED block ${deepest.block} says Globally Reachable ${deepest.reachable}, so ${decision}, but the classifier said ${verdict.decision}`,
+        );
       }
     }
   }

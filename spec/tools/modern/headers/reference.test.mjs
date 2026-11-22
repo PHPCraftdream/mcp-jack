@@ -173,12 +173,22 @@ test('annotation validation', () => {
   assert.deepEqual(validateAnnotations({ properties: { '': { type: 'string', 'x-mcp-header': 'Empty' } } }), {
     valid: true, reason: null,
   });
-  assert.deepEqual(validateAnnotations({ properties: { properties: { type: 'string', 'x-mcp-header': 'Props' } } }), {
-    valid: true, reason: null,
-  });
-  assert.deepEqual(validateAnnotations({
-    properties: { outer: { type: 'object', properties: { properties: { type: 'string', 'x-mcp-header': 'Inner' } } } },
-  }), { valid: true, reason: null });
+  // Validation alone would still pass if the annotation were dropped, so every
+  // schema expected to be valid must also project its header (or none at all).
+  const reachable = [
+    ['property named properties', { properties: { properties: { type: 'string', 'x-mcp-header': 'Props' } } },
+      { properties: 'v2' }, [['Mcp-Param-Props', 'v2']]],
+    ['nested property named properties', {
+      properties: { outer: { type: 'object', properties: { properties: { type: 'string', 'x-mcp-header': 'Inner' } } } },
+    }, { outer: { properties: 'p' } }, [['Mcp-Param-Inner', 'p']]],
+    ['property named x-mcp-header inside allOf', {
+      allOf: [{ properties: { 'x-mcp-header': { type: 'string' } } }],
+    }, { 'x-mcp-header': 'v1' }, []],
+  ];
+  for (const [label, schema, args, headers] of reachable) {
+    assert.deepEqual(validateAnnotations(schema), { valid: true, reason: null }, label);
+    assert.deepEqual(projectArguments(schema, args), { outcome: 'headers', headers }, label);
+  }
   const rows = [
     ['empty', region({ type: 'string', 'x-mcp-header': '' }), 'annotation_name_empty'],
     ['not a token', region({ type: 'string', 'x-mcp-header': 'Re gion' }), 'annotation_name_not_token'],
@@ -218,16 +228,6 @@ test('projection', () => {
   const empty = { properties: { '': { type: 'string', 'x-mcp-header': 'Empty' } } };
   assert.deepEqual(projectArguments(empty, { '': 'e' }), {
     outcome: 'headers', headers: [['Mcp-Param-Empty', 'e']],
-  });
-  const propsNamed = { properties: { properties: { type: 'string', 'x-mcp-header': 'Props' } } };
-  assert.deepEqual(projectArguments(propsNamed, { properties: 'v2' }), {
-    outcome: 'headers', headers: [['Mcp-Param-Props', 'v2']],
-  });
-  const nested = {
-    properties: { outer: { type: 'object', properties: { properties: { type: 'string', 'x-mcp-header': 'Inner' } } } },
-  };
-  assert.deepEqual(projectArguments(nested, { outer: { properties: 'p' } }), {
-    outcome: 'headers', headers: [['Mcp-Param-Inner', 'p']],
   });
 });
 
