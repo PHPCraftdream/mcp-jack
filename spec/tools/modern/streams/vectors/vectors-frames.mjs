@@ -183,7 +183,9 @@ const REGRESS = chainWith([
   { seq: 2, ts: NOW + 4, data: '' },
 ]);
 // 20: the open header is ten seconds old, so frame 0 sits exactly one window
-// behind its own clock sample and frame 1 one second past it.
+// behind its own clock sample and frame 1 one second past it. The end frame
+// carries NOW, its own sample, so a verifier that wrongly accepts the stale
+// frame 1 still verifies the end frame and finishes `ok`.
 const STALE_OPEN = openOnly({ openTs: NOW - 10 });
 const STALE = {
   ...chainFrom({
@@ -191,13 +193,15 @@ const STALE = {
     frames: [
       { seq: 0, ts: NOW - 40, data: MSG },
       { seq: 1, ts: NOW - 31, data: MSG2 },
-      { seq: 2, ts: NOW - 31, data: '' },
+      { seq: 2, ts: NOW, data: '' },
     ],
   }),
   jack_auth: STALE_OPEN.jack_auth,
 };
+// 5.2: a frame at the cutoff has no valid successor frame, so the body simply
+// stops after it instead of ending with an end frame of its own.
 const CUTOFF = signChain({
-  frames: [{ seq: 0, ts: NOW + 10, data: MSG }, { seq: 1, ts: NOW + 10, data: '' }],
+  frames: [{ seq: 0, ts: NOW + 10, data: MSG }],
 });
 
 // 22, 23: a three-frame chain, then frame 1 broken in two ways.
@@ -269,12 +273,19 @@ const UNKNOWN_EVENT_BODY = serializeFrame({
   sig: SINGLE.frames[0].sig,
 }) + END_FRAME;
 
-// 30: an end frame signed over a non-empty value (2.9).
+// 30: an end frame signed over a non-empty value (2.9). A valid empty end frame
+// follows, chained from the signature this frame actually carries, so a verifier
+// that wrongly accepts it still finds a well-formed end frame and finishes `ok`.
 const END_DATA = signChain({
   frames: [{ seq: 0, ts: NOW, data: MSG }, { seq: 1, ts: NOW, data: 'x' }],
 });
+const END_DATA_END_SIG = signMessage(
+  SVC.priv,
+  frameSigningString({ sid: SID, seq: 2, ts: NOW, prev: END_DATA.frames[1].sig, hash: dataHash('') }),
+);
 const END_DATA_BODY = frameOf(END_DATA.frames[0], 'message', MSG)
-  + serializeFrame({ kind: 'jack-end', data: 'x', seq: 1, ts: NOW, sig: END_DATA.frames[1].sig });
+  + serializeFrame({ kind: 'jack-end', data: 'x', seq: 1, ts: NOW, sig: END_DATA.frames[1].sig })
+  + serializeFrame({ kind: 'jack-end', data: '', seq: 2, ts: NOW, sig: END_DATA_END_SIG });
 
 // 31: event message, no data lines, so the empty value (2.9). A verifier that
 // wrongly accepts it as an empty message still finds a valid end frame, signed
@@ -424,6 +435,19 @@ const IDLE_BEATS = {
 const beatChunks = IDLE_BEATS.body.split('\n\n').filter((s) => s !== '').map((s) => chunk(bytes(`${s}\n\n`)));
 const TICKS = baseState({ now: NOW, frame_nows: [NOW, NOW + 90, NOW + 180], stream_idle_ms: 90000 });
 const BEAT_STATE = baseState({ now: NOW, frame_nows: [NOW, NOW + 80, NOW + 160, NOW + 160], stream_idle_ms: 90000 });
+// 2.14, 4.5: the leading BOM shifts every body offset by three, so the only
+// chunk that carries the last byte of frame 0 is the one whose arrival time the
+// deadline is measured against. BOM_SPLIT leaves the first 10 body bytes, inside
+// frame 0's event line, in the first chunk; frame 0's blank line falls in the
+// second, which arrives one millisecond past the threshold.
+const BOM_BYTES = Buffer.from([0xef, 0xbb, 0xbf]);
+const BOM_SPLIT = 10; // inside the first frame's event line
+const BOM_CHUNKS = [
+  chunk(Buffer.concat([BOM_BYTES, bytes(SINGLE.body.slice(0, BOM_SPLIT))])),
+  chunk(bytes(SINGLE.body.slice(BOM_SPLIT))),
+];
+// 2.12, 4.5: a comment carries no frame, so it resets nothing.
+const COMMENT_CHUNKS = [chunk(bytes(FRAME0)), chunk(bytes(': keepalive\n'))];
 // 50, 6.3: a close chain carries one progress frame, then the last message
 // frame in whatever shape it has, then the end frame.
 const closeChain = (last) => chainWith([
@@ -440,6 +464,12 @@ const CLOSE_WRONG_ID = closeChain(RESULT_WRONG_ID);
 const CLOSE_NO_JSONRPC = closeChain(RESULT_NO_JSONRPC);
 const CLOSE_BOTH = closeChain(RESULT_BOTH);
 const CLOSE_ID_TYPE = closeChain(RESULT_BAD_ID_TYPE);
+// 4.4, 6.3: the final response of the opening request, with no verified end
+// frame after it, so the body is truncated and the request never completes.
+const CLOSE_NO_END = chainWith([
+  { seq: 0, ts: NOW, data: prog(1) },
+  { seq: 1, ts: NOW, data: EVENTS_RESULT(REQUEST_ID) },
+]);
 
 // 2.18: a lookalike is an ordinary message, so it is delivered and the stream
 // still ends with its own end frame.
@@ -449,12 +479,19 @@ const lookVector = (id, description, data) => clientVector(id, description, {
   chunks: one(lookStream(data).body),
   expect: ok([data]),
 });
-// 4.5: one arrival time per chunk, and the opener of IDLE_OPEN is the only
+// 4.5: one arrival time per chunk, and the opener of `chain` is the only
 // verified event when a vector carries no frames.
-const idleVector = (id, description, state, chunks, arrival_ms, expect, silent_after_ms) => ({
-  ...clientVector(id, description, { state, headers: authHeaders(IDLE_OPEN.jack_auth), chunks, expect, silent_after_ms }),
+const idleVectorFor = (chain) => (
+  id, description, state, chunks, arrival_ms, expect, silent_after_ms,
+) => ({
+  ...clientVector(id, description, {
+    state, headers: authHeaders(chain.jack_auth), chunks, expect, silent_after_ms,
+  }),
   ...(arrival_ms === undefined ? {} : { arrival_ms }),
 });
+const idleVector = idleVectorFor(IDLE_OPEN);
+// The same idle form over a body that does carry frames.
+const singleIdleVector = idleVectorFor(SINGLE);
 // 6.3: every close chain ends `ok`; mcp_complete says whether its last message
 // frame is the final JSON-RPC response of the opening request.
 const closeVector = (id, description, chain, messages, complete) => clientVector(id, description, {
@@ -846,6 +883,25 @@ export const frameVectors = [
     'stream-idle-open-silence', 'a valid opener followed by more than streamIdleMs of silence (4.5)',
     baseState({ stream_idle_ms: 90000 }), [], undefined, bad('stream_idle', 0, []), 90001,
   ),
+  {
+    ...clientVector('stream-idle-bom-late-chunk', 'a BOM shifts the offsets, so the frame is timed in the chunk that carried its last byte (4.5, 2.14)', {
+      state: baseState({ stream_idle_ms: 90000 }),
+      headers: authHeaders(SINGLE.jack_auth),
+      chunks: BOM_CHUNKS,
+      expect: bad('stream_idle', 0),
+    }),
+    arrival_ms: [0, 90001],
+  },
+  {
+    ...clientVector('stream-idle-comment-silence', 'a comment at 80000 ms plus 20000 ms of silence is 100000 ms without a verified frame (4.5)', {
+      state: baseState({ stream_idle_ms: 90000 }),
+      headers: authHeaders(SINGLE.jack_auth),
+      chunks: COMMENT_CHUNKS,
+      silent_after_ms: 20000,
+      expect: bad('stream_idle', 1, [MSG]),
+    }),
+    arrival_ms: [0, 80000],
+  },
   clientVector('stream-stdio-ok', 'stdio consumer writes one line per message frame (6.2)', {
     state: baseState(),
     headers: authHeaders(CHAIN3.jack_auth),
@@ -887,4 +943,14 @@ export const frameVectors = [
     CLOSE_BOTH, [prog(1), RESULT_BOTH], false),
   closeVector('stream-close-lookalike-id-type', 'a response whose id is a string leaves it open (6.3)',
     CLOSE_ID_TYPE, [prog(1), RESULT_BAD_ID_TYPE], false),
+  clientVector('stream-close-no-end-frame', 'a final response without a verified jack-end is truncated and never MCP-complete (4.4, 6.3)', {
+    state: baseState(),
+    headers: authHeaders(CLOSE_NO_END.jack_auth),
+    chunks: one(CLOSE_NO_END.body),
+    expect: {
+      messages: [prog(1), EVENTS_RESULT(REQUEST_ID)],
+      terminal: { state: 'error', code: 'stream_truncated', frames_verified: 2 },
+      mcp_complete: false,
+    },
+  }),
 ];

@@ -3,7 +3,6 @@
 // case is the reference buildStream output over one fixed input.
 import { NOW, WINDOW } from '../../../gen/core.mjs';
 import {
-  MAX_FRAME,
   MSG,
   MSG2,
   MSG3,
@@ -21,7 +20,8 @@ import { buildStream, parseSignal } from '../reference.mjs';
 const PRETTY = '{\n  "jsonrpc": "2.0",\n  "method": "notifications/message",\n  "params": {"data": "multi"}\n}';
 const UNI = '{"jsonrpc":"2.0","method":"notifications/message","params":{"data":"café 漢字"}}';
 // 3.2: the exact transport notification an oversize handler message becomes.
-const OVERSIZE = `{"jsonrpc":"2.0","method":"notifications/jack/stream_error","params":{"code":"stream_frame_too_large","limit":${MAX_FRAME}}}`;
+const SMALL_CAP = 1024;
+const OVERSIZE = `{"jsonrpc":"2.0","method":"notifications/jack/stream_error","params":{"code":"stream_frame_too_large","limit":${SMALL_CAP}}}`;
 
 const INPUT = { request_sig: REQ_SIG, kid: SVC.kid, status: 200, sid: SID, open_ts: NOW };
 
@@ -48,7 +48,7 @@ const DEFS = [
     { seq: 0, ts: NOW, data: UNI },
     { seq: 1, ts: NOW + 1, data: '' },
   ]],
-  ['build-oversize-error-frame', 'the 3.2 oversize notification signed, then the end frame', [
+  ['build-oversize-error-frame', 'a 1025-byte handler message against a 1024-byte cap: the signal then the end frame', [
     { seq: 0, ts: NOW, data: OVERSIZE },
     { seq: 1, ts: NOW + 1, data: '' },
   ]],
@@ -109,9 +109,11 @@ export const buildCaseChecks = buildVectors.map((c) => {
   // The open header is checked against state.now too, so a stream longer than
   // one window keeps its open ts as the clock.
   const now = Math.abs(last - c.input.open_ts) <= WINDOW ? last : c.input.open_ts;
+  // The oversize case is signed against the 1024-byte cap it reports.
+  const cap = c.id === 'build-oversize-error-frame' ? { frame_max_bytes: SMALL_CAP } : {};
   return {
     id: c.id,
-    state: baseState({ now, frame_nows: tses }),
+    state: baseState({ now, frame_nows: tses, ...cap }),
     expectedMessages: c.input.frames.filter((f) => f.data !== '').map((f) => f.data),
     expectedTerminal: terminalOf(c.input.frames),
   };

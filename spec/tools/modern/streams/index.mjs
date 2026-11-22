@@ -51,7 +51,8 @@ const streamCompare = (c, got) => {
   if (!deepEqual(got, want)) throw disagree(c.id, got, want);
   if (mc !== undefined) {
     const last = got.messages[got.messages.length - 1];
-    const complete = last !== undefined && isRpcResponse(last, c.state.request_id);
+    // 6.3: a body that ended without a verified jack-end is never complete.
+    const complete = got.terminal.state === 'ok' && last !== undefined && isRpcResponse(last, c.state.request_id);
     if (complete !== mc) throw disagree(`${c.id} mcp_complete`, complete, mc);
   }
 };

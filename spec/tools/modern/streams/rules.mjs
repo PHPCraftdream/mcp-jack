@@ -5,7 +5,7 @@ import { openVectors } from './vectors/vectors-open.mjs';
 import { frameVectors } from './vectors/vectors-frames.mjs';
 import { CLIENT_CODES } from './reference.mjs';
 
-export const CLIENT_COUNT = 75;
+export const CLIENT_COUNT = 78;
 
 // The client cases in file order; 4.6 takes the first case per code from here.
 export const CASES = [...openVectors, ...frameVectors];
@@ -180,6 +180,8 @@ export const REQUIREMENTS = {
       'stream-idle-boundary-alive',
       'stream-idle-heartbeat',
       'stream-idle-open-silence',
+      'stream-idle-bom-late-chunk',
+      'stream-idle-comment-silence',
     ],
     requirement: 'idle timeout counted from the last verified frame',
   },
@@ -212,6 +214,7 @@ export const REQUIREMENTS = {
       'stream-close-lookalike-no-jsonrpc',
       'stream-close-lookalike-both',
       'stream-close-lookalike-id-type',
+      'stream-close-no-end-frame',
     ],
     requirement: 'the final JSON-RPC response is the last message frame',
   },
