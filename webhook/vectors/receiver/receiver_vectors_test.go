@@ -266,7 +266,7 @@ func loadFixtureKeys(t *testing.T) map[string]card.Key {
 		if err != nil {
 			t.Fatalf("decode fixture public key %q: %v", entry.Name, err)
 		}
-		keys[entry.Name] = card.Key{KID: entry.KID, Raw: pub}
+		keys[entry.Name] = card.Key{KID: entry.KID, Raw: pub, PublicKey: entry.PublicKey}
 	}
 	return keys
 }

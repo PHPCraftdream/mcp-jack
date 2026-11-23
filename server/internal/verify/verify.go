@@ -519,6 +519,8 @@ func (v *Verifier) runNative(res Result, auth jack.RequestAuth, now int64, calle
 	native := v.cfg.Native
 	if msg.Tool == ToolServerKey {
 		native = v.cfg.ServerKeys
+	} else if msg.Tool == ToolWebhookKey {
+		native = v.cfg.WebhookKeys
 	}
 	call := &NativeCall{
 		Tool: msg.Tool, Arguments: msg.Arguments, Caller: caller, Kid: auth.Kid, TS: auth.TS,
