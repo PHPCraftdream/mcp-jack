@@ -43,8 +43,8 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          go test -count=1 -v -run '^Test(ModernRequestVectors|ModernHeaderEncodingVectors|ModernXMcpHeaderVectors|ModernEraDetectionVectors|WebhookSignatureVectors|WebhookW1Vectors|WebhookReceiverVectors|WebhookEndpointVerificationVectors|WebhookSubscriptionVectors|WebhookSSRFVectors|WebhookServerCardKeysVectors)$' ./server/internal/modern/vectors ./webhook/vectors/... | tee modern-vector-summary.log
-          test "$(grep -c VECTOR-SUMMARY modern-vector-summary.log)" -ge 11
+          go test -count=1 -v -run '^Test(ModernRequestVectors|ModernHeaderEncodingVectors|ModernXMcpHeaderVectors|ModernEraDetectionVectors|WebhookSignatureVectors|WebhookW1Vectors|WebhookReceiverVectors|WebhookEndpointVerificationVectors|WebhookSubscriptionVectors|WebhookSSRFVectors|WebhookServerCardKeysVectors|StreamVectors|StreamBuildVectors)$' ./server/internal/modern/vectors ./webhook/vectors/... ./server/internal/stream/vectors | tee modern-vector-summary.log
+          test "$(grep -c VECTOR-SUMMARY modern-vector-summary.log)" -ge 13
           ! grep -E 'VECTOR-SUMMARY .*(excluded=[1-9]|deviation=[1-9])' modern-vector-summary.log
 
   go-race:
@@ -242,8 +242,8 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          test "$(grep -cE 'VECTOR-SUMMARY corpus=(modern-request|header-encoding|x-mcp-header|era-detection|webhook-|ssrf|server-card-keys)' test-output.log)" -ge 11
-          ! grep -E 'VECTOR-SUMMARY corpus=(modern-request|header-encoding|x-mcp-header|era-detection|webhook-|ssrf|server-card-keys).*(excluded=[1-9]|deviation=[1-9])' test-output.log
+          test "$(grep -cE 'VECTOR-SUMMARY corpus=(modern-request|header-encoding|x-mcp-header|era-detection|webhook-|ssrf|server-card-keys|stream)' test-output.log)" -ge 13
+          ! grep -E 'VECTOR-SUMMARY corpus=(modern-request|header-encoding|x-mcp-header|era-detection|webhook-|ssrf|server-card-keys|stream).*(excluded=[1-9]|deviation=[1-9])' test-output.log
 
   interop:
     name: interop matrix (3x3)
