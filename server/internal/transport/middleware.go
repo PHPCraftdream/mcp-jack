@@ -15,10 +15,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
 	"github.com/PHPCraftdream/mcp-jack/server/internal/modern"
 	"github.com/PHPCraftdream/mcp-jack/server/internal/rpcbody"
+	"github.com/PHPCraftdream/mcp-jack/server/internal/stream"
 	verify "github.com/PHPCraftdream/mcp-jack/server/internal/verify"
 )
 
@@ -57,6 +59,12 @@ type HandlerConfig struct {
 	// or both. The zero value is legacy and keeps 0.1.x behaviour
 	// byte-identical.
 	Profile modern.Profile
+	// Streams configures signed response streams (spec 05 section 3): the frame
+	// cap, the per-identity concurrency limit, the maximum duration and the
+	// heartbeat grant. Nil keeps the defaults of that section. A modern-profile
+	// request that opted in with `Jack-Accept: s1` and whose handler answers
+	// text/event-stream is signed as a stream; every other answer is unchanged.
+	Streams *StreamOptions
 }
 
 type handler struct {
@@ -71,6 +79,10 @@ type handler struct {
 	respLimit int64
 	// profile selects the era handling of every request (spec 04 section 3).
 	profile modern.Profile
+	// streams holds the normalized signed-stream options (spec 05 section 3).
+	streams stream.Options
+	// limiter bounds concurrent streams per authenticated identity (3.3).
+	limiter *stream.Limiter
 	next    http.Handler
 }
 
@@ -87,9 +99,18 @@ type handler struct {
 // writes, is not stopped by the cap and can still delay the answer. A negative
 // MaxResponseBytes is an error.
 //
-// Streaming (text/event-stream) responses are not supported in v0.1 (spec
-// README Q1): they are answered with 501 instead of being passed through
-// unsigned. The 501 takes precedence over the size overflow.
+// An event-stream (text/event-stream) answer is not passed through unsigned: it
+// is answered with the signed 501 streaming_unsupported, except for the signed
+// stream of the next paragraph. The 501 takes precedence over the size
+// overflow.
+//
+// In the modern deployment profile a POST request that carried the unsigned
+// Jack-Accept: s1 header and has a JSON-RPC id is answered as a signed stream
+// instead (spec 05): the open header is written at the first commit and the
+// frames are signed as the handler produces them, so the buffered-body rules
+// (MaxResponseBytes, response_too_large) do not apply to a stream. A stream is
+// refused before any of its bytes with the signed 429 stream_limit_exceeded
+// when the per-identity limit is reached (spec 05 section 3.3).
 //
 // A stream is detected early when the Content-Type is text/event-stream at the
 // moment next commits its response headers (first WriteHeader, Write or
@@ -104,6 +125,10 @@ type handler struct {
 // write errors can still delay the answer. The adapter never detaches or
 // abandons next; panics from next propagate unchanged.
 func NewHandler(cfg HandlerConfig, next http.Handler) (http.Handler, error) {
+	var streamsErr error
+	if cfg.Streams != nil {
+		streamsErr = cfg.Streams.Validate()
+	}
 	switch {
 	case cfg.Verifier == nil:
 		return nil, errors.New("server: HandlerConfig.Verifier must be set")
@@ -122,6 +147,8 @@ func NewHandler(cfg HandlerConfig, next http.Handler) (http.Handler, error) {
 		return nil, errors.New("server: HandlerConfig.MaxResponseBytes must not be negative")
 	case cfg.Profile != "" && !modern.ValidProfile(cfg.Profile):
 		return nil, errors.New("server: HandlerConfig.Profile must be legacy, modern or both")
+	case streamsErr != nil:
+		return nil, streamsErr
 	}
 	profile := cfg.Profile
 	if profile == "" {
@@ -149,7 +176,12 @@ func NewHandler(cfg HandlerConfig, next http.Handler) (http.Handler, error) {
 	if public != nil {
 		kid = jack.KeyID(public)
 	}
-	return &handler{v: cfg.Verifier, key: cfg.ServerKey, signer: cfg.ResponseSigner, keys: cfg.ResponseKeys, public: public, kid: kid, limit: limit, respLimit: respLimit, profile: profile, next: next}, nil
+	opts := StreamOptions{}
+	if cfg.Streams != nil {
+		opts = *cfg.Streams
+	}
+	opts = opts.Normalize(time.Duration(verify.Window(cfg.Verifier)) * time.Second)
+	return &handler{v: cfg.Verifier, key: cfg.ServerKey, signer: cfg.ResponseSigner, keys: cfg.ResponseKeys, public: public, kid: kid, limit: limit, respLimit: respLimit, profile: profile, streams: opts, limiter: stream.NewLimiter(opts.MaxConcurrentStreams), next: next}, nil
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -214,7 +246,7 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request, eraAware bool) {
 			h.native(w, res, false)
 			return
 		}
-		h.forward(w, r, body, res)
+		h.forward(w, r, body, res, false)
 	default:
 		h.serveModern(w, r, target, body, res)
 	}
@@ -248,7 +280,7 @@ func (h *handler) serveModern(w http.ResponseWriter, r *http.Request, target str
 				h.native(w, res, false)
 				return
 			}
-			h.forward(w, r, body, res) // the original r.Header is untouched
+			h.forward(w, r, body, res, false) // the original r.Header is untouched
 			return
 		}
 		res = verify.Dispatch(h.v, res)
@@ -261,7 +293,7 @@ func (h *handler) serveModern(w http.ResponseWriter, r *http.Request, target str
 			return
 		}
 		r.Header = headerMap(out.Forward.Headers)
-		h.forward(w, r, body, res)
+		h.forward(w, r, body, res, true)
 	default:
 		h.rejectInternal(w, res)
 	}
@@ -439,8 +471,9 @@ func (h *handler) rejectInternal(w http.ResponseWriter, res verify.Result) {
 }
 
 // forward hands an authorized request to the wrapped server and signs what it
-// answers.
-func (h *handler) forward(w http.ResponseWriter, r *http.Request, body []byte, res verify.Result) {
+// answers. modernEra is true when the request was handled as modern-era, which
+// is the only era that may open a signed stream (spec 05 section 1.2).
+func (h *handler) forward(w http.ResponseWriter, r *http.Request, body []byte, res verify.Result, modernEra bool) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	// Verified caller identity hand-off (spec 02 section 3): only the SDK-
@@ -448,12 +481,39 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, body []byte, r
 	// an immutable read view from verify.IdentityFromContext. Forwarded
 	// requests always have a registered caller.
 	ctx = verify.WithIdentity(ctx, res.Identity)
+	// 1.1, 3.8: only a modern-era POST that opted in may stream, and only when
+	// its body was a request with a JSON-RPC id.
+	optIn := modernEra && r.Method == http.MethodPost && stream.AcceptsS1(r.Header.Values("Jack-Accept"))
+	admissible := false
+	if optIn {
+		if msg, ok := rpcbody.Classify(body); ok && msg.Kind == rpcbody.KindRequest &&
+			len(msg.ID) > 0 && !bytes.Equal(bytes.TrimSpace(msg.ID), []byte("null")) {
+			admissible = true
+		}
+	}
+	hook := &streamHook{handler: h, result: res, body: body, w: w, cancel: cancel,
+		identity: streamIdentity(res), enabled: admissible, notRequest: optIn && !admissible}
+	defer hook.finish()
+	if optIn {
+		// 3.5: the wrapped handler emits heartbeats as plain signed frames, so
+		// it needs the granted interval.
+		ctx = withStreamGrant(ctx, h.streams.Heartbeat)
+	}
 	inner := r.Clone(ctx)
 	inner.Body = io.NopCloser(bytes.NewReader(body))
 	inner.ContentLength = int64(len(body))
 
-	bw := &bufferedWriter{header: http.Header{}, cancel: cancel, limit: h.respLimit}
+	bw := &bufferedWriter{header: http.Header{}, cancel: cancel, limit: h.respLimit, stream: hook}
 	h.next.ServeHTTP(bw, inner)
+	if hook.refused() {
+		// finish frees the limiter slot on every path (spec 05 section 3.3).
+		hook.fail()
+		return
+	}
+	if hook.streaming() {
+		// The stream owns the wire; the deferred finish ends it (3.7).
+		return
+	}
 
 	// The final header is checked too: header changes after the commit are
 	// not observable by the writer, and the wire result must stay a signed 501.
@@ -573,6 +633,9 @@ type bufferedWriter struct {
 	// limit is the maximum number of buffered body bytes.
 	limit      int64
 	overflowed bool
+	// stream, when set, may turn a committed text/event-stream answer into a
+	// signed stream instead of refusing it.
+	stream *streamHook
 }
 
 func (b *bufferedWriter) Header() http.Header { return b.header }
@@ -584,6 +647,9 @@ func (b *bufferedWriter) commit() {
 	}
 	b.committed = true
 	if isEventStream(b.header.Get("Content-Type")) {
+		if b.stream != nil && b.stream.start() {
+			return
+		}
 		b.refused = true
 		if b.cancel != nil {
 			b.cancel()
@@ -603,6 +669,9 @@ func (b *bufferedWriter) Write(p []byte) (int, error) {
 	if !b.committed {
 		b.status = http.StatusOK
 		b.commit()
+	}
+	if b.stream != nil && b.stream.streaming() {
+		return b.stream.write(p)
 	}
 	if b.refused {
 		return 0, errStreamRefused
@@ -629,6 +698,10 @@ func (b *bufferedWriter) Flush() {
 	if !b.committed {
 		b.status = http.StatusOK
 		b.commit()
+	}
+	if b.stream != nil && b.stream.streaming() {
+		b.stream.flush()
+		return
 	}
 }
 

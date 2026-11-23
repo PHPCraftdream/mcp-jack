@@ -125,6 +125,8 @@ func (provider *Provider) selectSigner(snapshot rotation.ServerSnapshot, clock r
 
 // AuthorizeResponse does not trust the body/tool when selecting an identity and does not fall back.
 // Final is single-use; Release is required after the physical write, including on any error.
+// Cutoff is the selected key's successor activation, nil when unknown; a stream signer
+// releases the lease after the open header because a stream has no single physical write.
 func (provider *Provider) AuthorizeResponse(input server.ResponseKeyRequest) (server.ResponseKeyAuthorization, error) {
 	if provider == nil || provider.store == nil {
 		return server.ResponseKeyAuthorization{}, ErrUnavailable
@@ -155,6 +157,7 @@ func (provider *Provider) AuthorizeResponse(input server.ResponseKeyRequest) (se
 	if err != nil {
 		return server.ResponseKeyAuthorization{}, ErrUnavailable
 	}
+	cutoff := selectedCutoff(snapshot, signer)
 	if !matchesNativeResponse(page, snapshot, signer) {
 		return server.ResponseKeyAuthorization{}, ErrUnavailable
 	}
@@ -162,6 +165,7 @@ func (provider *Provider) AuthorizeResponse(input server.ResponseKeyRequest) (se
 	authorization := server.ResponseKeyAuthorization{
 		Signer:    signer,
 		Timestamp: clock.HighWater,
+		Cutoff:    cutoff,
 		Release: func() {
 			if released.CompareAndSwap(false, true) {
 				release()
@@ -184,6 +188,27 @@ func (provider *Provider) AuthorizeResponse(input server.ResponseKeyRequest) (se
 	}
 	ready = true
 	return authorization, nil
+}
+
+// StreamCutoff reports the successor activation currently known for kid (spec 05
+// section 5.1) without acquiring a serving lease: the stream signer consults it
+// while the stream is open, so a successor announced after the stream opened is
+// honoured. A nil error with known false means the ring knows no successor.
+func (provider *Provider) StreamCutoff(kid string) (int64, bool, error) {
+	if provider == nil || provider.store == nil {
+		return 0, false, ErrUnavailable
+	}
+	snapshot, _, err := provider.store.Snapshot()
+	if err != nil {
+		return 0, false, ErrUnavailable
+	}
+	for _, key := range snapshot.Public.Keys {
+		if key.KID != kid || key.KnownCutoff == nil {
+			continue
+		}
+		return *key.KnownCutoff, true, nil
+	}
+	return 0, false, nil
 }
 
 var _ server.ResponseKeyProvider = (*Provider)(nil)

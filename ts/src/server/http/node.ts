@@ -90,7 +90,93 @@ export function serveNode(
     });
   }
 
+  /**
+   * 05 2.1/3.7: an event stream is written frame by frame, status and headers
+   * first, and the body is pumped instead of buffered. Returns once the stream
+   * ended, failed or the socket died; never throws.
+   */
+  async function writeEventStream(res: ServerResponse, resp: Response, controller: AbortController): Promise<void> {
+    const reader = resp.body?.getReader();
+    const stop = (): void => {
+      // 3.7: the client is gone; cancel the signed pump and the handler with it.
+      controller.abort();
+      if (reader !== undefined) void reader.cancel().catch(() => {});
+    };
+    // 3.7: a socket that dies while the loop waits in read() must cancel that read too,
+    // which cancels the signed pump and the handler body behind it.
+    controller.signal.addEventListener("abort", () => {
+      if (reader !== undefined) void reader.cancel().catch(() => {});
+    }, { once: true });
+    try {
+      for (const [name, value] of resp.headers) {
+        if (name.toLowerCase() === "set-cookie") continue;
+        // A stream has no length: it is written until it ends.
+        if (name.toLowerCase() === "content-length") continue;
+        res.setHeader(name, value);
+      }
+      const cookies = resp.headers.getSetCookie();
+      if (cookies.length > 0) res.setHeader("set-cookie", cookies);
+      res.statusCode = resp.status;
+      if (resp.statusText !== "") res.statusMessage = resp.statusText;
+      // The headers go on the wire now, not with the first chunk and never at
+      // the end of the stream.
+      res.flushHeaders();
+    } catch {
+      stop();
+      return;
+    }
+    if (reader === undefined) {
+      try {
+        res.end();
+      } catch {
+        // The socket may have died between the guard and the write.
+      }
+      return;
+    }
+    try {
+      for (;;) {
+        // Never write a byte after the socket died.
+        if (res.destroyed || res.writableEnded) {
+          stop();
+          return;
+        }
+        const next = await reader.read();
+        if (next.done) break;
+        if (res.destroyed || res.writableEnded) {
+          stop();
+          return;
+        }
+        res.write(next.value);
+      }
+    } catch {
+      // A read error or a write into a dead socket: same disconnect path.
+      stop();
+      return;
+    }
+    try {
+      if (!res.destroyed && !res.writableEnded) res.end();
+    } catch {
+      // The socket may have died between the guard and the write.
+    }
+  }
+
   async function serve(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    // 3.7: one controller per request, aborted when the socket dies, so the
+    // Fetch handler observes the disconnect through its request signal and
+    // jackStream(req).signal.
+    const controller = new AbortController();
+    const onSocketGone = (): void => {
+      // A response that already ended normally is not a disconnect.
+      if (!res.writableEnded) controller.abort();
+    };
+    req.on("aborted", onSocketGone);
+    req.on("close", () => {
+      // req 'close' also fires once a fully received body is done; only an
+      // incomplete message means the socket died mid-request.
+      if (!req.complete) onSocketGone();
+    });
+    res.on("close", onSocketGone);
+
     // Early check BEFORE reading anything so oversized requests are answered
     // without buffering the whole body.
     const cl = req.headers["content-length"];
@@ -168,6 +254,8 @@ export function serveNode(
     const fetchReq = new Request(url, {
       method,
       headers,
+      // The per-request signal of 3.7, so a disconnect reaches the handler.
+      signal: controller.signal,
       // A conditional spread, never an explicit undefined, keeps
       // exactOptionalPropertyTypes happy; undici throws for a GET body.
       ...(method !== "GET" && method !== "HEAD" && body.length > 0 ? { body } : {}),
@@ -197,6 +285,17 @@ export function serveNode(
     }
 
     if (res.writableEnded || res.destroyed) return;
+    // 05 2.1/1.4: only `text/event-stream` is streamed; every other answer is
+    // buffered byte for byte as before.
+    const contentType = resp.headers.get("content-type");
+    const mediaType = contentType === null ? "" : (contentType.split(";")[0]?.trim().toLowerCase() ?? "");
+    if (mediaType === "text/event-stream") {
+      await writeEventStream(res, resp, controller);
+      // Durable admission finishes AFTER the response is written (Go defer
+      // res.Done()); it is idempotent.
+      finishResponseAdmission(resp);
+      return;
+    }
     const out = Buffer.from(await resp.arrayBuffer());
     try {
       for (const [name, value] of resp.headers) {

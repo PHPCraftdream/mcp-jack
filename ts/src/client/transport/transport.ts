@@ -1,11 +1,17 @@
 /** Signing, response-verifying fetch wrapper (spec 01 sections 4 and 5; port of Go client/transport.go). */
 import { parseRequestAuth } from "../../core/auth-header.js";
 import { Code, JackError } from "../../core/errors.js";
+import { STREAM_ACCEPT_HEADER, STREAM_SCHEME } from "../../stream/codes.js";
 import { randomNonce, signRequest, verifyResponse } from "../signing/auth.js";
 import type { Clock, NonceSource } from "../signing/auth.js";
 import type { Signer } from "../signing/signer.js";
 import { checkDestination } from "./url-policy.js";
 import { RedirectRefusedError } from "../errors.js";
+// Type-only, so the config field adds no runtime edge; the re-emitting path of
+// spec 05 section 6.1 is the one value this module takes from the stream client.
+// `pump.ts` imports nothing from here, so the runtime graph stays acyclic.
+import type { StreamClientOptions } from "../stream/session.js";
+import { streamVerifyOptions, verifiedStreamResponse } from "../stream/pump.js";
 
 // The lib is ES2022 without DOM: derive the fetch types from the Node globals.
 type HeadersInit = NonNullable<RequestInit["headers"]>;
@@ -64,6 +70,13 @@ export interface SigningFetchConfig {
   nonceSource?: NonceSource;
   /** Response timestamp tolerance in seconds; <= 0/undefined means DEFAULT_WINDOW_SECONDS. */
   windowSeconds?: number;
+  /**
+   * Opt in to signed streams (spec 05 section 1.1): every request then carries
+   * `Jack-Accept: s1` and a `200` `text/event-stream` answer is verified and
+   * re-emitted (6.1) instead of being refused. Absent keeps the v1 behaviour
+   * byte for byte, `StreamingUnsupportedError` included.
+   */
+  readonly streams?: StreamClientOptions;
 }
 
 /** Per-request init for the signing fetch: exactly these fields are accepted and each is forwarded to the underlying fetch (method/headers/body are consumed by signing). Deliberately NOT the whole RequestInit: anything not listed here fails to compile instead of being silently dropped. `redirect` is forced to "error" (a signed request must never be replayed to another origin through a redirect) and has no override; `window`, `duplex` and `dispatcher` have no field here, so the type cannot promise what the wrapper drops. */
@@ -210,8 +223,8 @@ async function toBytes(body: BodyInit | null | undefined): Promise<Uint8Array> {
   throw new Error("jack client: form-data bodies cannot be signed byte-exactly");
 }
 
-/** Jack-Auth header values of one response (headers.get is case-insensitive; undici merges duplicates with ", "). */
-function jackAuthHeaderValues(headers: Headers): string[] {
+/** @internal: Jack-Auth header values of one response (headers.get is case-insensitive; undici merges duplicates with ", "); shared with the v1 fallback of openSignedStream. */
+export function jackAuthHeaderValues(headers: Headers): string[] {
   const v = headers.get("Jack-Auth");
   return v === null ? [] : v.split(", ");
 }
@@ -223,6 +236,109 @@ async function cancelBody(resp: Response): Promise<void> {
   } catch {
     // Cancellation must not mask the refusal error.
   }
+}
+
+/** @internal: every response header as a name/value pair, in iteration order (Headers has already joined duplicates). */
+export function headerPairs(headers: Headers): (readonly [string, string])[] {
+  const pairs: (readonly [string, string])[] = [];
+  headers.forEach((value, name) => {
+    pairs.push([name, value]);
+  });
+  return pairs;
+}
+
+/**
+ * @internal: forwards the caller's abort to a wrapper controller; the returned
+ * function detaches the listener. `AbortSignal.any` is not on the minimum Node,
+ * and an already-aborted caller signal (or an explicit null) is handled here.
+ */
+export function forwardAbort(signal: AbortSignal | null | undefined, controller: AbortController): () => void {
+  if (signal === undefined || signal === null) {
+    return () => undefined;
+  }
+  if (signal.aborted) {
+    controller.abort();
+    return () => undefined;
+  }
+  const abort = (): void => controller.abort();
+  signal.addEventListener("abort", abort, { once: true });
+  return () => signal.removeEventListener("abort", abort);
+}
+
+/** Response headers minus every Jack-Auth: the stream open value is consumed by the verifier and never re-exposed. */
+function responseHeadersWithoutJackAuth(headers: Headers): Headers {
+  const out = new Headers();
+  headers.forEach((value, name) => {
+    if (name.toLowerCase() !== "jack-auth") {
+      out.set(name, value);
+    }
+  });
+  return out;
+}
+
+/** One request signed by the single signing path, with the exact RequestInit to send. */
+export interface PreparedSignedRequest {
+  /** The URL exactly as signed and sent. */
+  readonly url: string;
+  /** The signed headers; an unsigned opt-in header may still be added (spec 05 section 1.1). */
+  readonly headers: Headers;
+  /** The exact RequestInit the wrapper sends. */
+  readonly init: RequestInit;
+  /** The `sig` parameter of the Jack-Auth value: the stream open binding of spec 05 section 2.5. */
+  readonly requestSig: string;
+  /** The effective caller signal (init or Request) before any wrapper override. */
+  readonly callerSignal: AbortSignal | null | undefined;
+}
+
+/**
+ * @internal
+ * The one signing path, factored so `openSignedStream` sends a byte-identical
+ * request: checkDestination first, then normalize, then the signer/clock/nonce,
+ * then signRequest, then parseRequestAuth. `overrideSignal` replaces the
+ * caller's signal in the returned init, so a stream path can own the response
+ * lifetime through one AbortController.
+ */
+export async function prepareSignedRequest(
+  config: SigningFetchConfig,
+  input: RequestInfo | URL,
+  init?: SigningFetchInit,
+  overrideSignal?: AbortSignal,
+): Promise<PreparedSignedRequest> {
+  checkDestination(rawDestination(input));
+  const normalized = await normalizeInput(input, init);
+  const signer = init?.jackSigner ?? config.signer;
+  const now = init?.jackFixedNow ?? (config.clock ?? defaultClock)();
+  const nonce = await (config.nonceSource ?? randomNonce)();
+
+  // The origin-form target exactly as sent on the wire: path plus ?query, no fragment.
+  const u = new URL(normalized.url);
+  const target = u.pathname + u.search;
+
+  const headerVal = signRequest(signer, config.aud, normalized.method, target, normalized.body, nonce, now);
+  // The request signature binds the response signing string (spec 01 section 5).
+  const requestSig = parseRequestAuth([headerVal]).sig;
+
+  normalized.headers.set("Jack-Auth", headerVal);
+  // Send the exact buffered bytes that were signed. `redirect` is forced to
+  // "error": a signed request must never be replayed to another origin through
+  // a redirect. `window` (browser-only), `duplex` (bodies are buffered, never
+  // streamed) and `dispatcher` (non-standard) are not forwarded. Conditional
+  // spreads keep exactOptionalPropertyTypes happy.
+  const signal = overrideSignal !== undefined ? overrideSignal : normalized.forwarded.signal;
+  const requestInit: RequestInit = {
+    method: normalized.method,
+    headers: normalized.headers,
+    redirect: "error",
+    ...(signal !== undefined ? { signal } : {}),
+    ...(normalized.forwarded.integrity !== undefined ? { integrity: normalized.forwarded.integrity } : {}),
+    ...(normalized.forwarded.referrer !== undefined ? { referrer: normalized.forwarded.referrer } : {}),
+    ...(normalized.forwarded.referrerPolicy !== undefined ? { referrerPolicy: normalized.forwarded.referrerPolicy } : {}),
+    ...(normalized.forwarded.mode !== undefined ? { mode: normalized.forwarded.mode } : {}),
+    ...(normalized.forwarded.credentials !== undefined ? { credentials: normalized.forwarded.credentials } : {}),
+    ...(normalized.forwarded.keepalive !== undefined ? { keepalive: normalized.forwarded.keepalive } : {}),
+    ...(normalized.body.length > 0 ? { body: normalized.body } : {}),
+  };
+  return { url: normalized.url, headers: normalized.headers, init: requestInit, requestSig, callerSignal: normalized.forwarded.signal };
 }
 
 /** The raw string form of a fetch input, as the URL policy sees it: a string as given, a URL by its serialised href, a Request by its (already normalised) url. */
@@ -304,76 +420,99 @@ async function refuseRedirected(resp: Response, requested: string): Promise<void
  *   unknown_server_key, timestamp_out_of_window, bad_signature — all with
  *   httpStatus 0 per spec 01 section 5, as Go's RoundTrip does too) and every
  *   configuration error propagates unchanged.
+ *
+ * Signed streams (spec 05): only with `config.streams` set does every request
+ * carry the unsigned `Jack-Accept: s1` opt-in header (never sent otherwise),
+ * and only then is a `200` `text/event-stream` answer verified and re-emitted
+ * instead of refused — the returned Response carries the 6.1 bytes, its own
+ * cancellation closes the connection, and a failed open header throws
+ * `StreamVerifyError` here (after the body is cancelled), exactly like a v1
+ * verification error. Later stream failures surface through the returned
+ * stream. Without `config.streams` nothing of that applies.
  */
 export function createSigningFetch(config: SigningFetchConfig, fetchImpl: typeof fetch = globalThis.fetch): SigningFetch {
   return async (input: RequestInfo | URL, init?: SigningFetchInit): Promise<Response> => {
-    checkDestination(rawDestination(input));
-    const normalized = await normalizeInput(input, init);
-    const signer = init?.jackSigner ?? config.signer;
-    const now = init?.jackFixedNow ?? (config.clock ?? defaultClock)();
-    const nonce = await (config.nonceSource ?? randomNonce)();
-
-    // The origin-form target exactly as sent on the wire: path plus ?query, no fragment.
-    const u = new URL(normalized.url);
-    const target = u.pathname + u.search;
-
-    const headerVal = signRequest(signer, config.aud, normalized.method, target, normalized.body, nonce, now);
-    // The request signature binds the response signing string (spec 01 section 5).
-    const requestSig = parseRequestAuth([headerVal]).sig;
-
-    normalized.headers.set("Jack-Auth", headerVal);
-    // Send the exact buffered bytes that were signed. `redirect` is forced to
-    // "error": a signed request must never be replayed to another origin
-    // through a redirect. `window` (browser-only), `duplex` (bodies are
-    // buffered, never streamed) and `dispatcher` (non-standard) are not
-    // forwarded. Conditional spreads keep exactOptionalPropertyTypes happy.
-    const resp = await fetchImpl(normalized.url, {
-      method: normalized.method,
-      headers: normalized.headers,
-      redirect: "error",
-      ...(normalized.forwarded.signal !== undefined ? { signal: normalized.forwarded.signal } : {}),
-      ...(normalized.forwarded.integrity !== undefined ? { integrity: normalized.forwarded.integrity } : {}),
-      ...(normalized.forwarded.referrer !== undefined ? { referrer: normalized.forwarded.referrer } : {}),
-      ...(normalized.forwarded.referrerPolicy !== undefined ? { referrerPolicy: normalized.forwarded.referrerPolicy } : {}),
-      ...(normalized.forwarded.mode !== undefined ? { mode: normalized.forwarded.mode } : {}),
-      ...(normalized.forwarded.credentials !== undefined ? { credentials: normalized.forwarded.credentials } : {}),
-      ...(normalized.forwarded.keepalive !== undefined ? { keepalive: normalized.forwarded.keepalive } : {}),
-      ...(normalized.body.length > 0 ? { body: normalized.body } : {}),
-    });
-
-    // Refuse redirect answers before anything is read or verified.
-    await refuseRedirected(resp, normalized.url);
-
-    // Streaming guard BEFORE buffering: a stream cannot be body-hashed, so it
-    // cannot be verified (spec 01 section 5, open question Q1). Headers.get
-    // already joins duplicate Content-Type lines with ", ": any member whose
-    // media type is text/event-stream (text before the first ';', SP/HTAB
-    // trimmed, ASCII case-insensitive) refuses the response.
-    const contentType = resp.headers.get("content-type");
-    if (contentType !== null && isEventStreamValue(contentType)) {
-      await cancelBody(resp);
-      throw new StreamingUnsupportedError();
+    // With streams opted in, one controller owns the response lifetime, so a
+    // cancelled stream closes the connection; without it exactly the caller's
+    // signal is forwarded, as before.
+    const abort = config.streams !== undefined ? new AbortController() : undefined;
+    const signed = await prepareSignedRequest(config, input, init, abort?.signal);
+    // 1.1: the opt-in token is unsigned and appears in no signing string, so it
+    // is set after signing; without `streams` no header is added.
+    if (config.streams !== undefined) {
+      signed.headers.set(STREAM_ACCEPT_HEADER, STREAM_SCHEME);
     }
-
-    const respBody = await readBodyCapped(resp, MAX_BODY_BYTES);
-
+    let unlink: () => void = () => undefined;
+    if (abort !== undefined) {
+      unlink = forwardAbort(signed.callerSignal, abort);
+    }
+    let keepLink = false;
     try {
-      // Response freshness reads the clock at verification time (Go calls the
-      // clock again here), not at request time.
-      const verifyNow = (config.clock ?? defaultClock)();
-      verifyResponse(config.serverKey, resp.status, jackAuthHeaderValues(resp.headers), requestSig, respBody, verifyNow, config.windowSeconds ?? 0);
-    } catch (err) {
-      if (err instanceof JackError && err.code === Code.MISSING_AUTH && resp.status === 401) {
-        // The unsigned 401 body is never trusted: status only (spec 01 section 5).
-        throw new UnauthenticatedResponseError(resp.status);
-      }
-      throw err;
-    }
+      const resp = await fetchImpl(signed.url, signed.init);
 
-    // Hand the caller the verified bytes as a fresh Response. A null body is
-    // required for statuses 204/205/304 (any body, even zero-length, throws
-    // there), and carries no meaning for empty bodies otherwise.
-    return new Response(respBody.length > 0 ? respBody : null, { status: resp.status, statusText: resp.statusText, headers: resp.headers });
+      // Refuse redirect answers before anything is read or verified.
+      await refuseRedirected(resp, signed.url);
+
+      // Headers.get already joins duplicate Content-Type lines with ", ": any
+      // member whose media type is text/event-stream (text before the first
+      // ';', SP/HTAB trimmed, ASCII case-insensitive) matches.
+      const contentType = resp.headers.get("content-type");
+      const eventStream = contentType !== null && isEventStreamValue(contentType);
+
+      // 1.4: a 200 with a text/event-stream media type is the signed stream.
+      if (config.streams !== undefined && abort !== undefined && resp.status === 200 && eventStream) {
+        const headers = headerPairs(resp.headers);
+        const verified = verifiedStreamResponse({
+          status: resp.status,
+          headers,
+          body: resp.body,
+          requestSig: signed.requestSig,
+          requestId: undefined,
+          options: streamVerifyOptions(config, config.streams, signed.requestSig),
+          abort,
+        });
+        void verified.done.then(unlink);
+        keepLink = true;
+        return new Response(verified.sse, {
+          status: resp.status,
+          statusText: resp.statusText,
+          headers: responseHeadersWithoutJackAuth(resp.headers),
+        });
+      }
+
+      // Streaming guard BEFORE buffering: a stream cannot be body-hashed, so it
+      // cannot be verified (spec 01 section 5, open question Q1). Only the v1
+      // path refuses, so streams-absent behaviour is unchanged.
+      if (config.streams === undefined && eventStream) {
+        await cancelBody(resp);
+        throw new StreamingUnsupportedError();
+      }
+
+      const respBody = await readBodyCapped(resp, MAX_BODY_BYTES);
+
+      try {
+        // Response freshness reads the clock at verification time (Go calls the
+        // clock again here), not at request time.
+        const verifyNow = (config.clock ?? defaultClock)();
+        verifyResponse(config.serverKey, resp.status, jackAuthHeaderValues(resp.headers), signed.requestSig, respBody, verifyNow, config.windowSeconds ?? 0);
+      } catch (err) {
+        if (err instanceof JackError && err.code === Code.MISSING_AUTH && resp.status === 401) {
+          // The unsigned 401 body is never trusted: status only (spec 01 section 5).
+          throw new UnauthenticatedResponseError(resp.status);
+        }
+        throw err;
+      }
+
+      // Hand the caller the verified bytes as a fresh Response. A null body is
+      // required for statuses 204/205/304 (any body, even zero-length, throws
+      // there), and carries no meaning for empty bodies otherwise.
+      return new Response(respBody.length > 0 ? respBody : null, { status: resp.status, statusText: resp.statusText, headers: resp.headers });
+    } finally {
+      // The link lives as long as the returned stream, else it ends with this call.
+      if (!keepLink) {
+        unlink();
+      }
+    }
   };
 }
 

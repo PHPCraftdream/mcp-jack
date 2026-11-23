@@ -115,6 +115,19 @@ func snapshotSignerKID(snapshot rotation.ServerSnapshot, signer pinnedSigner) st
 	return ""
 }
 
+// selectedCutoff returns the known successor activation of the selected key
+// (spec 05 section 5.1), or nil when the ring knows no successor for it.
+func selectedCutoff(snapshot rotation.ServerSnapshot, signer pinnedSigner) *int64 {
+	for _, key := range snapshot.Public.Keys {
+		if key.PublicKey != signer.public || key.KnownCutoff == nil {
+			continue
+		}
+		cutoff := *key.KnownCutoff
+		return &cutoff
+	}
+	return nil
+}
+
 func matchesNativeResponse(page *rotation.DecodedResult, snapshot rotation.ServerSnapshot, signer pinnedSigner) bool {
 	if page == nil {
 		return true
