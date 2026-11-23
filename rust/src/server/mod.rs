@@ -13,6 +13,7 @@ pub mod response_keys;
 #[cfg(target_os = "linux")]
 pub mod server_key;
 pub mod verify;
+pub mod webhook_key;
 
 #[cfg(target_os = "linux")]
 pub use durable::{durable_admission, durable_format, durable_recovery, durable_store};
