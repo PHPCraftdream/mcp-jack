@@ -130,6 +130,32 @@ test("a waiting concurrent delivery retries a failed enqueue and records the id 
   assert.deepEqual(receiver.snapshot().accepted, [WEBHOOK_ID]);
 });
 
+test("a waiting concurrent delivery calls enqueue only after the held first enqueue rejects, then once on its own", async () => {
+  let rejectEnqueue: (error: Error) => void = () => {};
+  const held = new Promise<void>((_resolve, reject) => { rejectEnqueue = reject; });
+  let calls = 0;
+  const receiver = receiverWith(async () => {
+    calls += 1;
+    if (calls === 1) await held;
+  });
+  const request = signedRequest(GAP);
+  const first = receiver.handle(request);
+  assert.equal(calls, 1, "the first delivery starts its enqueue immediately");
+  const second = receiver.handle(request);
+  assert.equal(await Promise.race([second, Promise.resolve("waiting")]), "waiting", "the copy waits for the first");
+  assert.equal(calls, 1, "the waiting copy has not called enqueue");
+  rejectEnqueue(new Error("durable enqueue failed"));
+  const [rejected, accepted] = await Promise.all([first, second]);
+  assert.equal(calls, 2, "the waiting copy performs exactly one fresh enqueue after the failure");
+  assert.equal(rejected.status, 503);
+  assert.equal(rejected.code, "enqueue_failed");
+  assert.equal(rejected.recorded, false);
+  assert.equal(accepted.status, 200);
+  assert.deepEqual(accepted.body, { status: "accepted" });
+  assert.equal(accepted.recorded, true);
+  assert.deepEqual(receiver.snapshot().accepted, [WEBHOOK_ID]);
+});
+
 test("verification echoes the challenge without enqueueing it", async () => {
   let calls = 0;
   const receiver = receiverWith(async () => { calls++; });
@@ -188,6 +214,57 @@ test("the Node adapter clamps an oversized body limit override to the protocol c
   const body = JSON.parse(result.body) as { error: { code: string } };
   assert.equal(result.status, 413);
   assert.equal(body.error.code, "body_too_large");
+  assert.equal(calls, 0);
+});
+
+test("the direct Node adapter rejects a NaN body limit", async () => {
+  let calls = 0;
+  const receiver = receiverWith(async () => { calls += 1; });
+  await assert.rejects(adaptNodeRequest(receiver, {
+    headers: {},
+    body: streamOf([new Uint8Array(1)]),
+    now: NOW,
+    maxBodyBytes: Number.NaN,
+  }), /maxBodyBytes must be an integer from 0 through 262144/);
+  assert.equal(calls, 0);
+});
+
+test("the direct Node adapter rejects a negative body limit", async () => {
+  let calls = 0;
+  const receiver = receiverWith(async () => { calls += 1; });
+  await assert.rejects(adaptNodeRequest(receiver, {
+    headers: {},
+    body: streamOf([new Uint8Array(1)]),
+    now: NOW,
+    maxBodyBytes: -1,
+  }), /maxBodyBytes must be an integer from 0 through 262144/);
+  assert.equal(calls, 0);
+});
+
+test("the direct Node adapter keeps clamping a limit above the protocol ceiling", async () => {
+  let calls = 0;
+  const receiver = receiverWith(async () => { calls += 1; });
+  const result = await adaptNodeRequest(receiver, {
+    headers: {},
+    body: streamOf([new Uint8Array(262144), new Uint8Array(1)]),
+    now: NOW,
+    maxBodyBytes: 300000,
+  });
+  const body = JSON.parse(result.body) as { error: { code: string } };
+  assert.equal(result.status, 413);
+  assert.equal(body.error.code, "body_too_large");
+  assert.equal(calls, 0);
+});
+
+test("the direct Node adapter rejects a fractional body limit", async () => {
+  let calls = 0;
+  const receiver = receiverWith(async () => { calls += 1; });
+  await assert.rejects(adaptNodeRequest(receiver, {
+    headers: {},
+    body: streamOf([new Uint8Array(1)]),
+    now: NOW,
+    maxBodyBytes: 1024.5,
+  }), /maxBodyBytes must be an integer from 0 through 262144/);
   assert.equal(calls, 0);
 });
 

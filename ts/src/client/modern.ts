@@ -90,21 +90,25 @@ export class EraNegotiationError extends Error {
 
 /**
  * The C8 cache key of one request within one era: era, method, the negotiated
- * version and the exact params text, NUL-separated. A response is bound to
- * exactly one signed request, so any change of method, params, era or version
- * is a different key.
+ * version (when one is present) and the exact params text, NUL-separated. A
+ * response is bound to exactly one signed request, so any change of method,
+ * params, era or version is a different key.
  *
  * `paramsText` is the exact params text placed on the wire, after `_meta`
  * insertion for a modern request: that is the text the signature covers, so
  * it is the only text that identifies the request C8 requires.
  *
  * `version` is the negotiated version and defaults to "": a caller that has
- * none yet keys the version-agnostic entry of its era, method and params,
- * which is exactly what a pre-negotiation caller of the older 3-argument
- * form gets.
+ * none yet keys the version-agnostic entry of its era, method and params in
+ * exactly the older three-part byte form (`era`, `method`, `paramsText`,
+ * NUL-separated), so an entry written by the first release of this function
+ * is still found. A negotiated version adds its own segment (`era`, `method`,
+ * `version`, `paramsText`, NUL-separated): a version is a non-empty date
+ * string and the params text is JSON, so the three-part and four-part shapes
+ * cannot collide.
  */
 export function resultCacheKey(method: string, paramsText: string, era: "legacy" | "modern", version = ""): string {
-  return era + "\u0000" + method + "\u0000" + version + "\u0000" + paramsText;
+  return era + "\u0000" + method + "\u0000" + (version === "" ? paramsText : version + "\u0000" + paramsText);
 }
 
 /** One cached verified result and the instant it stops being usable (exclusive). */
