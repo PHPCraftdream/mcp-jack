@@ -97,7 +97,7 @@ function installExitHandlers() {
 // Read the scenario table and validate its shape. Every problem names the file
 // and the scenario id so a broken table is never mistaken for a product bug.
 export function loadScenarios() {
-  const path = join(S.SCRIPT_DIR, 'modern-scenarios.json');
+  const path = join(S.SCRIPT_DIR, '..', 'modern-scenarios.json');
   const doc = S.readJson(path, 'modern scenario table');
   if (!isObject(doc)) S.fail(`invalid scenario table: ${path} is not a JSON object`);
   if (!isObject(doc.scenarios)) S.fail(`invalid scenario table: ${path} has no 'scenarios' object`);
