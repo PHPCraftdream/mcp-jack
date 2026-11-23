@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/PHPCraftdream/mcp-jack/server/internal/modern"
+	stream "github.com/PHPCraftdream/mcp-jack/server/internal/stream"
 	transport "github.com/PHPCraftdream/mcp-jack/server/internal/transport"
 	verify "github.com/PHPCraftdream/mcp-jack/server/internal/verify"
 )
@@ -57,6 +58,24 @@ type ResponseKeyAuthorization = transport.ResponseKeyAuthorization
 
 // ResponseKeyProvider is selected explicitly; persistence/clock/ring invariants belong to the provider.
 type ResponseKeyProvider = transport.ResponseKeyProvider
+
+// StreamOptions configures signed response streams (spec 05 section 3): the
+// frame cap, the per-identity concurrency limit, the maximum duration and the
+// heartbeat grant.
+type StreamOptions = stream.Options
+
+// DefaultStreamOptions returns the stream defaults of spec 05 section 3.
+func DefaultStreamOptions() StreamOptions { return StreamOptions{} }
+
+// StreamGrant reports the signed-stream limits the server granted to a
+// request handed to the wrapped handler (spec 05 section 3.5).
+type StreamGrant = transport.StreamGrant
+
+// StreamFromContext returns the signed-stream grant of a request handed to the
+// wrapped handler and reports whether the request opted in to a stream.
+func StreamFromContext(ctx context.Context) (StreamGrant, bool) {
+	return transport.StreamFromContext(ctx)
+}
 
 // NewHandler wraps next, an unmodified MCP server, so that only authenticated
 // and authorized requests reach it and every verified answer is signed.
