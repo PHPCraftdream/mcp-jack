@@ -1,11 +1,14 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
+	"github.com/PHPCraftdream/mcp-jack/client/internal/modern"
 )
 
 // HTTPError reports a non-2xx response whose verified body is
@@ -296,4 +299,355 @@ func (c *Client) AdminInviteRevoke(ctx context.Context, inviteID string) (Invite
 		return InviteRevokeResult{}, err
 	}
 	return out, nil
+}
+
+// The modern-era projected call flow (spec 04 section 6, C5/C6 and C10-C12).
+//
+// CallModernTool and CallModernEvent are modern-only helpers: they always
+// speak the modern era at modern.ModernMin and Config.Era does not affect
+// them. CallTool shares this exact flow when its era is modern.
+
+// The definition list methods and the events methods of the modern-era
+// projected flow.
+const (
+	modernMethodToolsList         = "tools/list"
+	modernMethodToolsCall         = "tools/call"
+	modernMethodEventsList        = "events/list"
+	modernMethodEventsPoll        = "events/poll"
+	modernMethodEventsStream      = "events/stream"
+	modernMethodEventsSubscribe   = "events/subscribe"
+	modernMethodEventsUnsubscribe = "events/unsubscribe"
+)
+
+// jackToolPrefix is the name prefix of the protocol-native jack.* tools: they
+// are not in tools/list and carry no x-mcp-header annotations, so a projected
+// tools/call skips the definition fetch and the projection for them.
+const jackToolPrefix = "jack."
+
+// modernToolsPlan is the tools plan: validated against tools/list and sent as
+// tools/call.
+var modernToolsPlan = modernCallPlan{
+	listMethod: modernMethodToolsList,
+	callMethod: modernMethodToolsCall,
+	kind:       "tool",
+}
+
+// modernEventsPlan is the events plan: validated against events/list, and its
+// callMethod is replaced by the requested events method.
+var modernEventsPlan = modernCallPlan{
+	listMethod: modernMethodEventsList,
+	kind:       "event type",
+}
+
+// modernRefusalCodeHeaderMismatch is the JSON-RPC -32020 header-mismatch
+// refusal that the C10 and C12 resync reacts to.
+const modernRefusalCodeHeaderMismatch = -32020
+
+// modernWireRequest is one generic modern-era JSON-RPC request: params is a
+// map so the caller decides which members it carries (C1 `_meta` alone for a
+// definition list, name, arguments and `_meta` for a projected call). Its
+// field order is not part of any wire contract.
+type modernWireRequest struct {
+	JSONRPC string         `json:"jsonrpc"`
+	ID      int64          `json:"id"`
+	Method  string         `json:"method"`
+	Params  map[string]any `json:"params"`
+}
+
+// marshalModernWireRequest marshals the body of one signed modern-era request.
+func marshalModernWireRequest(id int64, method string, params map[string]any) ([]byte, error) {
+	return json.Marshal(modernWireRequest{JSONRPC: "2.0", ID: id, Method: method, Params: params})
+}
+
+// modernListEntry is one tool or event type descriptor of a tools/list or
+// events/list result: the name and the raw inputSchema that carries the
+// x-mcp-header annotations.
+type modernListEntry struct {
+	Name        string          `json:"name"`
+	InputSchema json.RawMessage `json:"inputSchema"`
+}
+
+// modernToolsListResult is the result of a tools/list answer.
+type modernToolsListResult struct {
+	Tools []modernListEntry `json:"tools"`
+}
+
+// modernEventsListResult is the result of an events/list answer, in the Events
+// extension descriptor shape.
+type modernEventsListResult struct {
+	Events []modernListEntry `json:"events"`
+}
+
+// modernListResponse is the JSON-RPC envelope of a tools/list or events/list
+// answer. The result is kept raw because its shape is method-specific.
+type modernListResponse struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Result  json.RawMessage `json:"result"`
+	Error   *jsonrpcError   `json:"error"`
+}
+
+// decodeModernListResult decodes a verified 2xx tools/list or events/list
+// answer into out. As for decodeCallResponse a JSON-RPC error member is an
+// *RPCError, and a missing (absent or null) or malformed result is an error.
+func decodeModernListResult(raw []byte, out any) error {
+	var wire modernListResponse
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return fmt.Errorf("jack client: decoding json-rpc response: %w", err)
+	}
+	if wire.Error != nil {
+		return &RPCError{Code: wire.Error.Code, Message: wire.Error.Message, Data: wire.Error.Data}
+	}
+	result := bytes.TrimSpace(wire.Result)
+	if len(result) == 0 || bytes.Equal(result, []byte("null")) {
+		return fmt.Errorf("jack client: json-rpc response has no result")
+	}
+	if err := json.Unmarshal(result, out); err != nil {
+		return fmt.Errorf("jack client: decoding json-rpc result: %w", err)
+	}
+	return nil
+}
+
+// argumentsOrEmpty returns args, or the empty JSON object when args is nil:
+// nil arguments mean {} for both projection and the wire.
+func argumentsOrEmpty(args json.RawMessage) json.RawMessage {
+	if args == nil {
+		return json.RawMessage("{}")
+	}
+	return args
+}
+
+// modernFetchDefinitions performs one signed modern-era tools/list or
+// events/list request at version and returns the definitions that pass the
+// C5/C11 validation; an excluded definition is dropped, not an error (C5).
+//
+// The request carries params._meta only (C1) and no Mcp-Name, since neither
+// method has an S6 name source (C2). It is signed by signer, or by the
+// client's default signer when signer is nil. A non-2xx answer is an
+// *HTTPError, a JSON-RPC error member an *RPCError, and a missing or malformed
+// result an error.
+func (c *Client) modernFetchDefinitions(ctx context.Context, signer Signer, version, listMethod string) ([]modern.Definition, error) {
+	rm, err := modern.BuildRequestMirrors(version, listMethod, nil, modernClientInfo())
+	if err != nil {
+		return nil, err
+	}
+	body, err := marshalModernWireRequest(c.nextRequestID(), listMethod, map[string]any{"_meta": rm.Meta})
+	if err != nil {
+		return nil, err
+	}
+	status, _, raw, err := c.roundTrip(ctx, signer, body, rm.Headers)
+	if err != nil {
+		return nil, err
+	}
+	if status < 200 || status > 299 {
+		return nil, decodeVerifiedCall(status, raw, nil)
+	}
+	var entries []modernListEntry
+	switch listMethod {
+	case modernMethodToolsList:
+		var res modernToolsListResult
+		if err := decodeModernListResult(raw, &res); err != nil {
+			return nil, err
+		}
+		entries = res.Tools
+	case modernMethodEventsList:
+		var res modernEventsListResult
+		if err := decodeModernListResult(raw, &res); err != nil {
+			return nil, err
+		}
+		entries = res.Events
+	default:
+		return nil, fmt.Errorf("jack client: %q is not a definition list method", listMethod)
+	}
+	defs := make([]modern.Definition, 0, len(entries))
+	for _, e := range entries {
+		defs = append(defs, modern.Definition{Name: e.Name, InputSchema: e.InputSchema})
+	}
+	kept, _ := modern.FilterDefinitions(defs)
+	return kept, nil
+}
+
+// modernFindDefinition returns the kept definition whose Name equals name
+// exactly. A definition excluded by validation is not found.
+func modernFindDefinition(defs []modern.Definition, name string) (modern.Definition, bool) {
+	for _, def := range defs {
+		if def.Name == name {
+			return def, true
+		}
+	}
+	return modern.Definition{}, false
+}
+
+// modernNoDefinitionError names the tool or event type whose definition is
+// absent from, or was excluded by the C5/C11 validation of, its list result.
+func modernNoDefinitionError(kind, name string) error {
+	return fmt.Errorf("jack client: %s %q has no valid x-mcp-header definition", kind, name)
+}
+
+// modernSendProjectedCall performs one signed modern-era call at version whose
+// params are name, arguments and the same C1 _meta object. The headers are the
+// C2 mirror headers of the method, Mcp-Name included for its S6 name source,
+// followed by the projected Mcp-Param-* headers (C6). It is signed by signer,
+// or by the client's default signer when signer is nil.
+func (c *Client) modernSendProjectedCall(ctx context.Context, signer Signer, version, method, name string, args json.RawMessage, projected []modern.Header) (int, []byte, error) {
+	rm, err := modern.BuildRequestMirrors(version, method, map[string]any{"name": name}, modernClientInfo())
+	if err != nil {
+		return 0, nil, err
+	}
+	headers := make([]modern.Header, 0, len(rm.Headers)+len(projected))
+	headers = append(headers, rm.Headers...)
+	headers = append(headers, projected...)
+	params := map[string]any{
+		"name":      name,
+		"arguments": args,
+		"_meta":     rm.Meta,
+	}
+	body, err := marshalModernWireRequest(c.nextRequestID(), method, params)
+	if err != nil {
+		return 0, nil, err
+	}
+	status, _, raw, err := c.roundTrip(ctx, signer, body, headers)
+	return status, raw, err
+}
+
+// modernCallPlan names the definition list a projected call is validated
+// against, the wire method of the call, and the noun used when the definition
+// is missing.
+type modernCallPlan struct {
+	listMethod string
+	callMethod string
+	kind       string
+}
+
+// callProjected is the shared C5/C6 (and C11) flow at one protocol version:
+// fetch the definition list, keep the valid definitions, find the named one,
+// project the arguments into Mcp-Param-* headers, send the call, and after a
+// signed -32020 refusal refetch, re-project and retry once (C10/C12). It
+// returns the final verified status and body without decoding. Native jack.*
+// tools are not listed by tools/list and carry no annotations, so they skip the
+// definition fetch and projection and are sent once with the mirrors only.
+func (c *Client) callProjected(ctx context.Context, signer Signer, plan modernCallPlan, version, name string, args json.RawMessage) (int, []byte, error) {
+	// nil arguments mean {} for both projection and the wire.
+	args = argumentsOrEmpty(args)
+	if plan.callMethod == modernMethodToolsCall && strings.HasPrefix(name, jackToolPrefix) {
+		body, headers, err := buildModernCallBody(c.nextRequestID(), name, args, version)
+		if err != nil {
+			return 0, nil, err
+		}
+		status, _, raw, err := c.roundTrip(ctx, signer, body, headers)
+		return status, raw, err
+	}
+	defs, err := c.modernFetchDefinitions(ctx, signer, version, plan.listMethod)
+	if err != nil {
+		return 0, nil, err
+	}
+	def, ok := modernFindDefinition(defs, name)
+	if !ok {
+		return 0, nil, modernNoDefinitionError(plan.kind, name)
+	}
+	projected, err := modern.ProjectArguments(def.InputSchema, args)
+	if err != nil {
+		// Returned unwrapped so errors.Is finds the sentinel; no request is
+		// sent.
+		return 0, nil, err
+	}
+	status, raw, err := c.modernSendProjectedCall(ctx, signer, version, plan.callMethod, name, args, projected)
+	if err != nil {
+		return 0, nil, err
+	}
+	if status == 400 {
+		if code, _, recognised := modern.RecognisedError(raw); recognised && code == modernRefusalCodeHeaderMismatch {
+			// C10/C12 (SHOULD): the inputSchema may have changed, so
+			// refetch the definitions once, re-project and retry once.
+			defs, err = c.modernFetchDefinitions(ctx, signer, version, plan.listMethod)
+			if err != nil {
+				return 0, nil, err
+			}
+			def, ok = modernFindDefinition(defs, name)
+			if !ok {
+				return 0, nil, modernNoDefinitionError(plan.kind, name)
+			}
+			projected, err = modern.ProjectArguments(def.InputSchema, args)
+			if err != nil {
+				return 0, nil, err
+			}
+			status, raw, err = c.modernSendProjectedCall(ctx, signer, version, plan.callMethod, name, args, projected)
+			if err != nil {
+				return 0, nil, err
+			}
+		}
+	}
+	// The last answer is returned as-is: a second -32020, any other status and
+	// any other error is not retried again.
+	return status, raw, nil
+}
+
+// CallModernTool performs one modern-era tools/call with x-mcp-header
+// projection (spec 04 C5/C6): it fetches tools/list, drops definitions with an
+// annotation violation (the other tools are unaffected; C5), finds the tool,
+// projects its annotated arguments into Mcp-Param-* headers after the C2
+// mirrors, sends the call, and after a signed -32020 refusal refetches
+// tools/list once, re-projects and retries once (C10, SHOULD). Projection runs
+// before signing; the headers are not signed.
+//
+// It shares the exact projected flow of CallTool with EraModern: one
+// implementation (callProjected), two entry points. That includes the jack.*
+// skip (native tools are not in tools/list, so they are sent with the mirrors
+// only) and the single C10 retry.
+//
+// It always speaks the modern era at modern.ModernMin, whatever Config.Era
+// says. arguments is the raw JSON of params.arguments; nil sends and projects
+// `{}`. out is passed to json.Unmarshal over the verified structuredContent of
+// the final answer, exactly as CallTool does.
+//
+// Errors: a missing or excluded tool is an error naming it, and the call is
+// not sent; a projection mismatch is returned unwrapped, so
+// errors.Is(err, modern.ErrHeaderProjectionInvalidValue) holds (the call is not
+// sent); a non-2xx answer is a *HTTPError, a JSON-RPC error a *RPCError, a
+// result with isError a *ToolError; transport and verification errors pass
+// through unchanged and are never retried.
+func (c *Client) CallModernTool(ctx context.Context, tool string, arguments json.RawMessage, out any) error {
+	status, raw, err := c.callProjected(ctx, nil, modernToolsPlan, modern.ModernMin, tool, argumentsOrEmpty(arguments))
+	if err != nil {
+		return err
+	}
+	return decodeVerifiedCall(status, raw, out)
+}
+
+// CallModernEvent performs one modern-era Events request (events/poll,
+// events/stream, events/subscribe or events/unsubscribe) with the same
+// projection over the event type's inputSchema and the events/list resync of
+// C11/C12 (SHOULD).
+//
+// It shares the exact projected flow of CallModernTool and of CallTool with
+// EraModern: one implementation (callProjected), two entry points. The jack.*
+// skip of that flow is specific to tools/call, so every events method goes
+// through events/list, projection and the single C11/C12 retry.
+//
+// It always speaks the modern era at modern.ModernMin, whatever Config.Era
+// says. method is one of the four events methods and event is the event type
+// name, sent as params.name. arguments is the raw JSON of params.arguments;
+// nil sends and projects `{}`. out is passed to json.Unmarshal over the
+// verified structuredContent of the final answer.
+//
+// Errors: a method outside the four events methods is rejected before any
+// request; a missing or excluded event type is an error naming it, and the
+// call is not sent; a projection mismatch is returned unwrapped, so
+// errors.Is(err, modern.ErrHeaderProjectionInvalidValue) holds (the call is not
+// sent); a non-2xx answer is a *HTTPError, a JSON-RPC error a *RPCError, a
+// result with isError a *ToolError; transport and verification errors pass
+// through unchanged and are never retried.
+func (c *Client) CallModernEvent(ctx context.Context, method, event string, arguments json.RawMessage, out any) error {
+	switch method {
+	case modernMethodEventsPoll, modernMethodEventsStream, modernMethodEventsSubscribe, modernMethodEventsUnsubscribe:
+	default:
+		return fmt.Errorf("jack client: events method must be events/poll, events/stream, events/subscribe or events/unsubscribe")
+	}
+	plan := modernEventsPlan
+	plan.callMethod = method
+	status, raw, err := c.callProjected(ctx, nil, plan, modern.ModernMin, event, argumentsOrEmpty(arguments))
+	if err != nil {
+		return err
+	}
+	return decodeVerifiedCall(status, raw, out)
 }
