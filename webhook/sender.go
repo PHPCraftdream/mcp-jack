@@ -13,8 +13,10 @@ import (
 	"github.com/PHPCraftdream/mcp-jack/webhook/internal/urlcheck"
 )
 
-// SenderConfig configures signing, delivery policy, and retry scheduling.
-// Verifier is required.
+// SenderConfig configures signing, verification, and retry scheduling.
+// Verifier is required and supplies the delivery client: build one hardened
+// client with NewDeliveryClient, pass it to NewGate, and NewSender reuses the
+// gate's client so the well-known fetch and the deliveries share one policy.
 type SenderConfig = sender.Config
 
 // VerificationGate checks consent to delivery and manages verification challenges.
@@ -24,7 +26,8 @@ type VerificationGate = sender.VerificationGate
 // Sender signs and sends webhook messages.
 type Sender struct{ inner *sender.Sender }
 
-// NewSender constructs a sender with a hardened delivery client.
+// NewSender constructs a sender that reuses the verification gate's hardened
+// delivery client, so one transport policy covers both the gate and deliveries.
 func NewSender(cfg SenderConfig) (*Sender, error) {
 	inner, err := sender.New(cfg)
 	if err != nil {

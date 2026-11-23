@@ -134,14 +134,17 @@ func (c *Cache) Put(principal, canonicalURL string, ttl time.Duration) {
 
 // GateConfig supplies the verification routes, clock, and nonce source.
 type GateConfig struct {
-	Client        *delivery.Client // nil uses a hardened client with AllowedRanges
-	AllowedRanges []string
-	Allowlist     []string
-	Hook          func(ctx context.Context, principal, canonicalURL string) (bool, error)
-	Cache         *Cache       // nil uses a private cache driven by Now when provided
-	Now           func() int64 // nil uses Unix wall time in seconds; a supplied Cache retains its own clock
-	Random        io.Reader    // nil uses crypto/rand.Reader
-	NonceTTL      int64        // seconds; zero defaults to 600
+	// Client is required: the one hardened client shared with the sender.
+	// Build it once with webhook.NewDeliveryClient / delivery.NewClient and
+	// pass the same instance here, so the well-known fetch and the deliveries
+	// are governed by a single transport policy.
+	Client    *delivery.Client
+	Allowlist []string
+	Hook      func(ctx context.Context, principal, canonicalURL string) (bool, error)
+	Cache     *Cache       // nil uses a private cache driven by Now when provided
+	Now       func() int64 // nil uses Unix wall time in seconds; a supplied Cache retains its own clock
+	Random    io.Reader    // nil uses crypto/rand.Reader
+	NonceTTL  int64        // seconds; zero defaults to 600
 }
 
 type cachedDoc struct {
@@ -172,8 +175,13 @@ type Gate struct {
 	lastPruneAt int64
 }
 
-// NewGate creates a gate with a hardened client and private cache by default.
+// NewGate creates a gate around a caller-supplied hardened client and a
+// private cache by default. The client is required: creating one here would
+// let the gate and the sender apply different transport policies.
 func NewGate(cfg GateConfig) (*Gate, error) {
+	if cfg.Client == nil {
+		return nil, errors.New("endpoint: a delivery client is required")
+	}
 	if cfg.NonceTTL < 0 {
 		return nil, errors.New("endpoint: negative nonce TTL")
 	}
@@ -184,9 +192,6 @@ func NewGate(cfg GateConfig) (*Gate, error) {
 		cfg.Random = rand.Reader
 	}
 	cfg.Allowlist = slices.Clone(cfg.Allowlist)
-	if cfg.Client == nil {
-		cfg.Client = delivery.NewClient(delivery.Config{AllowedRanges: cfg.AllowedRanges})
-	}
 	if cfg.Cache == nil {
 		cfg.Cache = NewCache()
 		if clock := cfg.Now; clock != nil {
@@ -201,6 +206,11 @@ func NewGate(cfg GateConfig) (*Gate, error) {
 		pending: make(map[pair]nonceKey), nonces: make(map[nonceKey]nonceRecord),
 	}, nil
 }
+
+// Transport returns the hardened client this gate fetches with. It is the
+// instance the gate and the sender must share, so the well-known fetch and
+// the deliveries cannot diverge into two transport policies.
+func (g *Gate) Transport() *delivery.Client { return g.cfg.Client }
 
 func checkedPair(principal, canonicalURL string) (pair, urlcheck.URL, bool) {
 	u, err := urlcheck.Check(canonicalURL)

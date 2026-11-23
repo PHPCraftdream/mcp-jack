@@ -4,7 +4,7 @@ import { senderDecision } from "../receiver/core.js";
 import type { HardenedOutcome, HardenedTransport } from "../ssrf/client.js";
 import { checkCallbackUrl } from "../ssrf/url.js";
 import type { CallbackUrlCheck, CallbackUrlCode } from "../ssrf/url.js";
-import type { ChallengeSigner, EndpointVerification, EndpointVerifier } from "../verification/routes.js";
+import type { ChallengeSigner, EndpointVerification, EndpointVerifier, VerifiedPair } from "../verification/routes.js";
 import { newWebhookId } from "./message.js";
 import type { OutboundMessage } from "./message.js";
 
@@ -124,20 +124,27 @@ export class WebhookSender {
   }
 
   /** Checks verification routes without sending a challenge or an event. */
-  async gate(target: WebhookDeliveryTarget, message: OutboundMessage): Promise<GateDecision> {
+  async gate(
+    target: WebhookDeliveryTarget,
+    message: OutboundMessage,
+    expiresAt: number = this.#expiresAt(target),
+  ): Promise<GateDecision> {
     if (message.kind === "verification") return { action: "send-challenge", reason: null };
     const checked = checkTargetUrl(target);
     if (!checked.ok) return { action: "refuse", reason: callbackUrlError(checked.code) };
     const { principal, canonicalUrl = checked.canonical } = target;
     if (typeof principal !== "string" || principal.length === 0) return { action: "refuse", reason: "no_route" };
-    const verification = await this.options.verifier.verify({ principal, canonicalUrl }, this.#expiresAt(target));
+    const verification = await this.options.verifier.verify({ principal, canonicalUrl }, expiresAt);
     return verification.verified
       ? { action: "deliver", reason: null }
       : { action: "refuse", reason: verification.reason ?? "no_route" };
   }
 
   /** Verifies the endpoint, allowing a signed challenge if earlier routes do not verify it. */
-  async challenge(target: WebhookDeliveryTarget): Promise<EndpointVerification> {
+  async challenge(
+    target: WebhookDeliveryTarget,
+    expiresAt: number = this.#expiresAt(target),
+  ): Promise<EndpointVerification> {
     const challengeTarget = { ...target };
     const checked = checkTargetUrl(challengeTarget);
     if (!checked.ok) return { verified: false, route: null, reason: callbackUrlError(checked.code) };
@@ -150,12 +157,13 @@ export class WebhookSender {
       const timestamp = String(Math.floor(this.options.now()));
       return { headers: this.#headers(challengeTarget, webhookId, timestamp, body) };
     };
-    return this.options.verifier.verify({ principal, canonicalUrl }, this.#expiresAt(challengeTarget), { challenge: signer });
+    return this.options.verifier.verify({ principal, canonicalUrl }, expiresAt, { challenge: signer });
   }
 
   /**
    * Delivers a verified message, preserving its id and signing again on each retry.
    * An attempt starting after the R1.8 window is abandoned with `timeout`, using the injected clock, never wall time.
+   * Verification is re-checked before every attempt; an expired pair ends the delivery without sending.
    */
   async deliver(target: WebhookDeliveryTarget, message: OutboundMessage): Promise<DeliveryOutcome> {
     const { webhookId, body } = message;
@@ -167,9 +175,11 @@ export class WebhookSender {
     const deliveryTarget = { ...target };
     const checked = checkTargetUrl(deliveryTarget);
     if (!checked.ok) return { ...notSent, lastError: callbackUrlError(checked.code), gate: "refuse" };
-    const decision = await this.gate(deliveryTarget, message);
+    const expiresAt = this.#expiresAt(deliveryTarget);
+    const pair: VerifiedPair = { principal: deliveryTarget.principal, canonicalUrl: checked.canonical };
+    const decision = await this.gate(deliveryTarget, message, expiresAt);
     if (decision.action === "send-challenge") return { ...notSent, lastError: null, gate: "send-challenge" };
-    if (decision.action === "refuse" && !(await this.challenge(deliveryTarget)).verified) {
+    if (decision.action === "refuse" && !(await this.challenge(deliveryTarget, expiresAt)).verified) {
       return { ...notSent, lastError: "challenge_failed", gate: "send-challenge" };
     }
 
@@ -183,6 +193,10 @@ export class WebhookSender {
       const startedAt = attempt === 1 ? t0 : now();
       if (startedAt > t0 + RETRY_WINDOW_SECONDS) {
         return { webhookId, attempts: attempt - 1, accepted: false, lastError: "timeout", status: null, gate: "deliver" };
+      }
+      // A wait may outlive the verified pair; never send an event to an endpoint that is no longer verified.
+      if (!(await this.#stillVerified(pair, expiresAt))) {
+        return { webhookId, attempts: attempt - 1, accepted: false, lastError: "challenge_failed", status: null, gate: "refuse" };
       }
       const timestamp = String(Math.floor(startedAt));
       const headers = this.#headers(deliveryTarget, webhookId, timestamp, body);
@@ -212,6 +226,16 @@ export class WebhookSender {
 
   #expiresAt(target: WebhookDeliveryTarget): number {
     return target.verificationExpiresAt ?? Math.floor(this.options.now()) + this.#verificationTtlSeconds;
+  }
+
+  /** Re-checks the verified pair against its deadline before an attempt would touch the endpoint. */
+  async #stillVerified(pair: VerifiedPair, expiresAt: number): Promise<boolean> {
+    if (!(this.options.now() < expiresAt)) return false;
+    try {
+      return (await this.options.verifier.verify(pair, expiresAt)).verified;
+    } catch {
+      return false;
+    }
   }
 
   #headers(target: WebhookDeliveryTarget, webhookId: string, timestamp: string, body: Uint8Array): Record<string, string> {

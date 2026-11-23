@@ -139,3 +139,39 @@ test("sender delivery calls the public gate and withholds the event when the cha
   assert.equal(posts.length, 1);
   assert.equal(posts.some(({ body }) => body !== undefined && Buffer.from(body).equals(message.body)), false);
 });
+
+test("sender stops retrying once the verified pair expires", async () => {
+  let clock = NOW;
+  const now = () => clock;
+  const { transport, seen } = recordingTransport(() => ({ status: 503 }));
+  const cache = new VerificationCache({ now });
+  cache.set(PAIR, NOW + 45);
+  const verifier = new EndpointVerifier({ transport, cache, now, nonceSource: () => NONCE });
+  const sender = new WebhookSender({
+    transport, verifier, now, randomBytes,
+    sleep: async () => { clock = NOW + 60; },
+  });
+  const target = { ...TARGET, verificationExpiresAt: NOW + 45 };
+  const message = sampleEvent();
+  const { webhookId, attempts, accepted, lastError, status, gate } = await sender.deliver(target, message);
+  assert.deepEqual({ webhookId, attempts, accepted, lastError, status, gate }, {
+    webhookId: message.webhookId, attempts: 1, accepted: false, lastError: "challenge_failed", status: null, gate: "refuse",
+  });
+  assert.deepEqual(seen.map((request) => request.method), ["POST"]);
+  assert.deepEqual(seen[0]?.body, message.body);
+  assert.equal(seen.length, 1);
+});
+
+test("sender re-checks the pair before the first attempt", async () => {
+  const { transport, seen } = recordingTransport(() => ({ status: 200 }));
+  const cache = new VerificationCache({ now });
+  const verifier = new EndpointVerifier({ transport, allowlist: [PAIR.canonicalUrl], cache, now, nonceSource: () => NONCE });
+  const sender = new WebhookSender({ transport, verifier, now, randomBytes });
+  const target = { ...TARGET, verificationExpiresAt: NOW };
+  const message = sampleEvent();
+  const { attempts, accepted, lastError, gate } = await sender.deliver(target, message);
+  assert.deepEqual({ attempts, accepted, lastError, gate }, {
+    attempts: 0, accepted: false, lastError: "challenge_failed", gate: "refuse",
+  });
+  assert.deepEqual(seen, []);
+});

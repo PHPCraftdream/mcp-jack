@@ -305,9 +305,17 @@ func (r *Receiver) Handle(d Delivery) Result {
 		if len(values) == 0 {
 			return reject("missing_jack_auth")
 		}
-		callback := jack.CallbackURLs[sub]
-		if deferred {
-			callback = candidates[matched].CallbackURL
+		// w1 binds the callback URL. A pending secret is registered together
+		// with the URL the tool signed for its challenge (R5.6), so that entry
+		// is the only possible value there. Once the secret is bound to the
+		// subscription, the configured URL wins when present and the entry's
+		// URL is the fallback, so a challenge-bound secret still verifies the
+		// first event even without a configured URL.
+		callback := candidates[matched].CallbackURL
+		if candidates[matched].SubscriptionID == sub {
+			if override := jack.CallbackURLs[sub]; override != "" {
+				callback = override
+			}
 		}
 		parts := dsig.W1Parts{
 			Aud: jack.Aud, SubscriptionID: sub, WebhookID: id, Timestamp: timestamp,
@@ -341,11 +349,13 @@ func (r *Receiver) Handle(d Delivery) Result {
 		SubscriptionID: sub, WebhookID: id, Kind: message.Kind, Type: message.Type,
 		Challenge: message.Challenge, Cursor: message.Cursor, Raw: bytes.Clone(message.Raw),
 	}
+	if deferred && message.Kind != wire.KindVerification {
+		// Refuse before the durable enqueue: the application must never persist
+		// a message that this answer reports as unrouted.
+		return reject("subscription_not_routed")
+	}
 	if err := r.cfg.Enqueue(queued); err != nil {
 		return reject("enqueue_failed")
-	}
-	if deferred && message.Kind != wire.KindVerification {
-		return reject("subscription_not_routed")
 	}
 
 	r.accepted[id] = d.Now

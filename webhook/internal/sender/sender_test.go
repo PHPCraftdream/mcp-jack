@@ -74,14 +74,16 @@ func TestSenderProfileWebhookIDShapes(t *testing.T) {
 func TestSenderProfileAttemptRefusals(t *testing.T) {
 	cfg := profileSenderConfig()
 	lookups := 0
-	cfg.Resolver = delivery.ResolverFunc(func(context.Context, string) ([]string, error) {
-		lookups++
-		return []string{"127.0.0.1"}, nil
-	})
-	cfg.Dialer = delivery.DialerFunc(func(context.Context, string, string) (net.Conn, error) {
-		t.Error("refused request reached the dialer")
-		return nil, errors.New("unexpected dial")
-	})
+	cfg.Verifier = &stubGate{transport: delivery.NewClient(delivery.Config{
+		Resolver: delivery.ResolverFunc(func(context.Context, string) ([]string, error) {
+			lookups++
+			return []string{"127.0.0.1"}, nil
+		}),
+		Dialer: delivery.DialerFunc(func(context.Context, string, string) (net.Conn, error) {
+			t.Error("refused request reached the dialer")
+			return nil, errors.New("unexpected dial")
+		}),
+	})}
 	s := newProfileSender(t, cfg)
 	ctx := context.Background()
 	msg := profileSenderMessage()
@@ -110,13 +112,15 @@ func TestSenderProfileDeliverRetrySchedule(t *testing.T) {
 		now += int64(d / time.Second)
 		return nil
 	}
-	cfg.Resolver = delivery.ResolverFunc(func(context.Context, string) ([]string, error) {
-		attemptsAt = append(attemptsAt, now)
-		return []string{"192.0.0.9"}, nil // the profile allows PCP anycast
-	})
-	cfg.Dialer = delivery.DialerFunc(func(context.Context, string, string) (net.Conn, error) {
-		return nil, errors.New("injected connection refusal")
-	})
+	cfg.Verifier = &stubGate{transport: delivery.NewClient(delivery.Config{
+		Resolver: delivery.ResolverFunc(func(context.Context, string) ([]string, error) {
+			attemptsAt = append(attemptsAt, now)
+			return []string{"192.0.0.9"}, nil // the profile allows PCP anycast
+		}),
+		Dialer: delivery.DialerFunc(func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("injected connection refusal")
+		}),
+	})}
 	s := newProfileSender(t, cfg)
 	got := s.Deliver(context.Background(), profileSenderMessage())
 	if want := (sender.Result{Attempts: 4, LastError: "connection_refused"}); got != want {
@@ -175,13 +179,15 @@ func TestSenderProfileSuspensionDoesNotConsumeSchedule(t *testing.T) {
 		}
 		return nil
 	}
-	cfg.Resolver = delivery.ResolverFunc(func(context.Context, string) ([]string, error) {
-		attemptsAt = append(attemptsAt, now)
-		return []string{"192.0.0.9"}, nil
-	})
-	cfg.Dialer = delivery.DialerFunc(func(context.Context, string, string) (net.Conn, error) {
-		return nil, errors.New("injected connection refusal")
-	})
+	cfg.Verifier = &stubGate{transport: delivery.NewClient(delivery.Config{
+		Resolver: delivery.ResolverFunc(func(context.Context, string) ([]string, error) {
+			attemptsAt = append(attemptsAt, now)
+			return []string{"192.0.0.9"}, nil
+		}),
+		Dialer: delivery.DialerFunc(func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("injected connection refusal")
+		}),
+	})}
 	s := newProfileSender(t, cfg)
 	if got := s.Deliver(context.Background(), profileSenderMessage()); got.Attempts != 4 || got.Accepted {
 		t.Errorf("Deliver = %+v, want four failed attempts", got)

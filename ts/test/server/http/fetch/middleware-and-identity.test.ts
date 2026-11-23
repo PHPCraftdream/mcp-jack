@@ -9,11 +9,12 @@ import { NonceStore } from "../../../../src/server/registry/nonce.js";
 import { MemoryState } from "../../../../src/server/registry/state.js";
 import { Verifier } from "../../../../src/server/verify.js";
 import type { VerifyResult } from "../../../../src/server/verify.js";
-import { jackIdentity } from "../../../../src/server/http/fetch.js";
+import { jackFetchHandler, jackIdentity } from "../../../../src/server/http/fetch.js";
 import type { JackIdentity } from "../../../../src/server/verify.js";
+import type { DurableAdmission } from "../../../../src/server/durable/admission.js";
 import { loadRegistry } from "../../../support/fixtures/index.js";
 import { fixtureAud, fixtureNow, seedSignerByName } from "../../../support/client-harness.js";
-import { utf8, newRegistryState, toolCallBody, newHarness, signedRequest, assertSigned, errorCode, aliceSigner, rootSigner, toolCallBodyArgs, forwardedAnswer, promiseGate, answer } from "./support.js";
+import { utf8, newRegistryState, toolCallBody, newHarness, signedRequest, assertSigned, errorCode, aliceSigner, rootSigner, toolCallBodyArgs, forwardedAnswer, promiseGate, answer, seedByName } from "./support.js";
 
 test("middleware forwards and signs", async () => {
   const alice = aliceSigner();
@@ -132,6 +133,42 @@ test("middleware method not allowed", async () => {
   assert.equal(errorCode(new Uint8Array(await response.arrayBuffer())), "method_not_allowed");
   assert.equal(response.headers.get("jack-auth"), null, "the 405 precedes authentication, so it is unsigned");
   assert.equal(harness.seen.calls, 0);
+});
+
+test("middleware signs a HEAD refusal over the empty body after the nonce is recorded", async () => {
+  // A HEAD reaches verification only on the modern profile (fetch.ts refuses a
+  // legacy-era non-POST request with an UNSIGNED 405 before authentication).
+  // A modern HEAD is then refused by S2 as a JSON-RPC 405 before any body
+  // refusal, so the reachable non-rpcRefusal refusal of an authenticated HEAD
+  // is a POST-commit durable-admission failure: the reservation runs after
+  // the signature verifies and BEFORE the era rules, so the nonce is already
+  // recorded when it refuses. A HEAD response carries no content, so the
+  // refusal must sign the zero bytes the client actually receives.
+  const svc = seedByName("svc");
+  const durable: DurableAdmission = {
+    reserveForVerify: () => ({
+      accepted: false,
+      httpStatus: 503,
+      code: "state_changed",
+      message: "verification state changed",
+      nonceRecorded: true,
+      finish: () => {},
+    }),
+  };
+  const verifier = new Verifier({ aud: fixtureAud, state: newRegistryState(), durable, now: () => fixtureNow });
+  let calls = 0;
+  const handle = jackFetchHandler({ verifier, serverKey: svc.seed, profile: "modern" }, async () => {
+    calls += 1;
+    return new Response("nope");
+  });
+  const { request, sig } = signedRequest(aliceSigner(), "HEAD", "/mcp", new Uint8Array(0));
+  const response = await handle(request);
+
+  assert.equal(response.status, 503, "a post-commit durable-admission refusal keeps its status");
+  const body = await assertSigned(response, svc.signer.publicKey(), sig);
+  assert.equal(body.byteLength, 0, "a HEAD refusal transmits no body bytes");
+  assert.equal(response.headers.get("content-length"), "0");
+  assert.equal(calls, 0, "a refused request never reaches the wrapped handler");
 });
 
 test("middleware answers native tools itself", async () => {
