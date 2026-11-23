@@ -338,3 +338,55 @@ func TestAdminSequencesFileStatePersistence(t *testing.T) {
 		})
 	}
 }
+
+func TestWebhookKeyNativeDispatchOptIn(t *testing.T) {
+	const toolName = "jack.server.webhook_key"
+	if ToolWebhookKey != toolName {
+		t.Fatalf("ToolWebhookKey = %q, want %q", ToolWebhookKey, toolName)
+	}
+	if IsNativeTool(toolName) {
+		t.Fatalf("%q must not be in the default native allowlist", toolName)
+	}
+
+	caller := testPrivateKey(t, "alice")
+	callerPub := caller.Public().(ed25519.PublicKey)
+	callerKID := jack.KeyID(callerPub)
+	st := stateFromEntries(t, []spec.RegistryEntry{{
+		Kid: callerKID, PublicKey: jack.EncodeBase64URL(callerPub), Name: "alice",
+	}})
+	webhookPub := testPrivateKey(t, "newbie").Public().(ed25519.PublicKey)
+	webhookKey := WebhookKey{KID: jack.KeyID(webhookPub), PublicKey: jack.EncodeBase64URL(webhookPub)}
+	tool, err := NewWebhookKeyTool(WebhookKeyConfig{Keys: []WebhookKey{webhookKey}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{
+		Aud: gateAud, State: st, Nonces: NewNonceStore(), WebhookKeys: tool,
+		Now: func() int64 { return testNow },
+	}
+	v, err := NewVerifier(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"` + toolName + `"}}`)
+	req := signedVerifierRequest(t, caller, gateAud, "POST", "/mcp", testNow, 1, body)
+	res := v.Verify(req)
+	if !res.Accepted || res.Code != "" || !res.Native || res.Tool != toolName {
+		t.Fatalf("with WebhookKeys: result = %+v, want accepted native %s with no error code", res, toolName)
+	}
+	checkOutcome(t, "with WebhookKeys", res, spec.Expect{
+		Result: "accept", Kid: callerKID, NonceRecorded: true,
+		Structured: []byte(fmt.Sprintf(`{"webhook_key":{"signing_keys":{"keys":[{"kty":"OKP","crv":"Ed25519","x":%q,"kid":%q}]},"egress_ip_ranges":[]}}`, webhookKey.PublicKey, webhookKey.KID)),
+	})
+
+	// Reuse the exact signed request, but not the nonce store.
+	cfg.WebhookKeys, cfg.Nonces = nil, NewNonceStore()
+	v, err = NewVerifier(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res = v.Verify(req)
+	if res.Accepted || res.HTTPStatus != 403 || res.Code != jack.CodeOperationDenied {
+		t.Fatalf("without WebhookKeys: result = %+v, want 403 operation_denied", res)
+	}
+}

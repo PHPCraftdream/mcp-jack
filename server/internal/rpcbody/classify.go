@@ -27,26 +27,31 @@ type RPCMessage struct {
 	Arguments json.RawMessage
 }
 
-// Classify implements the body rules of spec 02 section 4. UTF-8 is
-// validated before decoding because encoding/json silently replaces invalid
-// bytes, and members are looked up through a map because encoding/json would
-// match struct fields case-insensitively. unacceptableBody rejects lone
-// surrogate escapes and over-deep nesting before decoding (spec 02 section 4
-// step 2); hasDuplicateMember rejects repeated member names so no member is
-// silently dropped by the map decoding.
-func Classify(body []byte) (RPCMessage, bool) {
+// Reasons reported by ClassifyReason for a body it refuses.
+const (
+	// ReasonNone marks an acceptable body.
+	ReasonNone = iota
+	// ReasonUnacceptable marks any refusal other than the tools/call name rule.
+	ReasonUnacceptable
+	// ReasonToolName marks a tools/call body whose params.name is not a string
+	// (spec 02 section 2 item 4).
+	ReasonToolName
+)
+
+// ClassifyReason is Classify with the reason a body was refused.
+func ClassifyReason(body []byte) (RPCMessage, int) {
 	if !utf8.Valid(body) {
-		return RPCMessage{}, false
+		return RPCMessage{}, ReasonUnacceptable
 	}
 	if unacceptableBody(body) || hasDuplicateMember(body) {
-		return RPCMessage{}, false
+		return RPCMessage{}, ReasonUnacceptable
 	}
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(body, &m); err != nil || m == nil {
-		return RPCMessage{}, false
+		return RPCMessage{}, ReasonUnacceptable
 	}
 	if version, ok := jsonvalue.String(m["jsonrpc"]); !ok || version != "2.0" {
-		return RPCMessage{}, false
+		return RPCMessage{}, ReasonUnacceptable
 	}
 
 	rawMethod, hasMethod := m["method"]
@@ -55,27 +60,39 @@ func Classify(body []byte) (RPCMessage, bool) {
 		_, hasResult := m["result"]
 		_, hasError := m["error"]
 		if hasID && hasResult != hasError {
-			return RPCMessage{Kind: KindResponse, ID: m["id"]}, true
+			return RPCMessage{Kind: KindResponse, ID: m["id"]}, ReasonNone
 		}
-		return RPCMessage{}, false
+		return RPCMessage{}, ReasonUnacceptable
 	}
 	method, ok := jsonvalue.String(rawMethod)
 	if !ok {
-		return RPCMessage{}, false
+		return RPCMessage{}, ReasonUnacceptable
 	}
 	msg := RPCMessage{Kind: KindRequest, ID: m["id"], Method: method}
 	if method == "tools/call" {
 		var params map[string]json.RawMessage
 		if err := json.Unmarshal(m["params"], &params); err != nil || params == nil {
-			return RPCMessage{}, false
+			return RPCMessage{}, ReasonUnacceptable
 		}
 		name, ok := jsonvalue.String(params["name"])
 		if !ok {
-			return RPCMessage{}, false
+			return RPCMessage{}, ReasonToolName
 		}
 		msg.Tool, msg.HasTool, msg.Arguments = name, true, params["arguments"]
 	}
-	return msg, true
+	return msg, ReasonNone
+}
+
+// Classify implements the body rules of spec 02 section 4. UTF-8 is
+// validated before decoding because encoding/json silently replaces invalid
+// bytes, and members are looked up through a map because encoding/json would
+// match struct fields case-insensitively. unacceptableBody rejects lone
+// surrogate escapes and over-deep nesting before decoding (spec 02 section 4
+// step 2); hasDuplicateMember rejects repeated member names so no member is
+// silently dropped by the map decoding.
+func Classify(body []byte) (RPCMessage, bool) {
+	msg, reason := ClassifyReason(body)
+	return msg, reason == ReasonNone
 }
 
 // maxBodyDepth is the maximum nesting depth of arrays and objects the body

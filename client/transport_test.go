@@ -902,3 +902,30 @@ func TestClientRefusesRedirectFromInjectedHTTP(t *testing.T) {
 		t.Fatalf("base calls = %d, want exactly 1 (no redirect followed)", base.calls)
 	}
 }
+
+// TestLegacyRecoveryNeeded pins the stale-404 guard of the legacy session
+// recovery: only a 404 that answers the session id which is still current may
+// re-run the handshake, so a delayed 404 for an older session cannot invalidate
+// a newer one.
+func TestLegacyRecoveryNeeded(t *testing.T) {
+	cases := []struct {
+		name    string
+		sent    string
+		current string
+		want    bool
+	}{
+		{"no session was sent and none is current", "", "", false},
+		{"the request carried no session", "", "sess-2", false},
+		{"the current session was cleared", "sess-1", "", false},
+		{"a stale 404 for an old session", "sess-1", "sess-2", false},
+		{"the 404 answers the current session", "sess-1", "sess-1", true},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			if got := legacyRecoveryNeeded(c.sent, c.current); got != c.want {
+				t.Fatalf("legacyRecoveryNeeded(%q, %q) = %v, want %v", c.sent, c.current, got, c.want)
+			}
+		})
+	}
+}
