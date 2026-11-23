@@ -29,9 +29,11 @@ import (
 const verificationNonce = "AAAAAAAAAAAAAAAAAAAAAA"
 
 type stubGate struct {
-	covers func(context.Context, string, string, time.Duration) *endpoint.Error
-	begin  func(string, string) (string, *endpoint.Error)
-	accept func(string, string, string, string, time.Duration) *endpoint.Error
+	covers    func(context.Context, string, string, time.Duration) *endpoint.Error
+	begin     func(string, string) (string, *endpoint.Error)
+	accept    func(string, string, string, string, time.Duration) *endpoint.Error
+	fresh     func(principal, url string) bool
+	transport *delivery.Client
 }
 
 func (g *stubGate) Covers(ctx context.Context, principal, url string, ttl time.Duration) *endpoint.Error {
@@ -55,6 +57,23 @@ func (g *stubGate) Accept(principal, url, nonce, echo string, ttl time.Duration)
 	return nil
 }
 
+// Fresh defaults to true so tests that only exercise a challenge keep working.
+func (g *stubGate) Fresh(principal, url string) bool {
+	if g.fresh != nil {
+		return g.fresh(principal, url)
+	}
+	return true
+}
+
+// Transport returns the injected client or, so that plain &stubGate{...}
+// literals keep working, a fresh default-policy client.
+func (g *stubGate) Transport() *delivery.Client {
+	if g.transport != nil {
+		return g.transport
+	}
+	return delivery.NewClient(delivery.Config{})
+}
+
 func TestSenderRequiresVerifier(t *testing.T) {
 	for _, gate := range []sender.VerificationGate{nil, (*endpoint.Gate)(nil)} {
 		cfg := profileSenderConfig()
@@ -62,6 +81,43 @@ func TestSenderRequiresVerifier(t *testing.T) {
 		if s, err := sender.New(cfg); s != nil || err == nil {
 			t.Errorf("New with %T = (%v, %v), want nil sender and error", gate, s, err)
 		}
+	}
+}
+
+// clientlessGate satisfies VerificationGate but exposes no delivery client.
+// The gate, not the sender config, owns the transport because the well-known
+// fetch and the deliveries must share one hardened policy; a gate that cannot
+// supply a client is a wiring bug the sender refuses to paper over.
+type clientlessGate struct{}
+
+func (clientlessGate) Covers(context.Context, string, string, time.Duration) *endpoint.Error {
+	return nil
+}
+
+func (clientlessGate) Begin(string, string) (string, *endpoint.Error) {
+	return verificationNonce, nil
+}
+
+func (clientlessGate) Accept(string, string, string, string, time.Duration) *endpoint.Error {
+	return nil
+}
+
+func (clientlessGate) Fresh(string, string) bool { return true }
+
+func (clientlessGate) Transport() *delivery.Client { return nil }
+
+func TestSenderRequiresGateTransport(t *testing.T) {
+	cfg := profileSenderConfig()
+	cfg.Verifier = clientlessGate{}
+	s, err := sender.New(cfg)
+	if s != nil {
+		t.Errorf("New with a clientless gate = %v, want nil sender", s)
+	}
+	if err == nil {
+		t.Fatal("New with a clientless gate returned nil error")
+	}
+	if got, want := err.Error(), "sender requires the verifier's delivery client"; got != want {
+		t.Errorf("New error = %q, want %q", got, want)
 	}
 }
 
@@ -334,21 +390,26 @@ func TestSenderVerifiesThroughHardenedTLS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.AllowedRanges = []string{"127.0.0.1/32"}
-	cfg.Resolver = delivery.ResolverFunc(func(_ context.Context, host string) ([]string, error) {
-		if host != "example.com" {
-			return nil, fmt.Errorf("unexpected lookup of %q", host)
-		}
-		return []string{"127.0.0.1"}, nil
+	// The client carries the injected policy; the gate and the sender both use
+	// this one instance, which is the sharing the transport rule requires.
+	client := delivery.NewClient(delivery.Config{
+		AllowedRanges: []string{"127.0.0.1/32"},
+		Resolver: delivery.ResolverFunc(func(_ context.Context, host string) ([]string, error) {
+			if host != "example.com" {
+				return nil, fmt.Errorf("unexpected lookup of %q", host)
+			}
+			return []string{"127.0.0.1"}, nil
+		}),
+		Dialer: delivery.DialerFunc(func(ctx context.Context, network, address string) (net.Conn, error) {
+			if want := net.JoinHostPort("127.0.0.1", port); address != want {
+				return nil, fmt.Errorf("dial target %q, want %q", address, want)
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, listener)
+		}),
 	})
-	cfg.Dialer = delivery.DialerFunc(func(ctx context.Context, network, address string) (net.Conn, error) {
-		if want := net.JoinHostPort("127.0.0.1", port); address != want {
-			return nil, fmt.Errorf("dial target %q, want %q", address, want)
-		}
-		return (&net.Dialer{}).DialContext(ctx, network, listener)
-	})
+	gate := sender.GateForTest(t, client, srv.Certificate())
+	cfg.Verifier = gate
 	s := newProfileSender(t, cfg)
-	gate := sender.GateForTest(t, s, srv.Certificate())
 	callback := msg
 	callback.CallbackURL = "https://" + net.JoinHostPort("example.com", port) + "/hook"
 	if got, want := s.Deliver(t.Context(), callback), (sender.Result{Accepted: true, Attempts: 1, Status: 200}); got != want {
@@ -361,6 +422,80 @@ func TestSenderVerifiesThroughHardenedTLS(t *testing.T) {
 	defer mu.Unlock()
 	if want := []string{"document", "challenge", "event"}; !slices.Equal(requests, want) {
 		t.Errorf("server saw %v, want %v", requests, want)
+	}
+}
+
+func TestSenderDeliverRechecksFreshnessBeforeEveryAttempt(t *testing.T) {
+	const t0 = int64(1767225600)
+	now := t0
+	var sleeps []time.Duration
+	cfg := profileSenderConfig()
+	freshCalls := 0
+	cfg.Verifier = &stubGate{fresh: func(string, string) bool {
+		freshCalls++
+		return freshCalls == 1
+	}}
+	cfg.Now = func() int64 { return now }
+	cfg.Sleep = func(_ context.Context, d time.Duration) error {
+		sleeps = append(sleeps, d)
+		now += int64(d / time.Second)
+		return nil
+	}
+	s := newProfileSender(t, cfg)
+	requests := 0
+	sender.UseDeliveryForTest(s, func(*http.Request, int64) (*delivery.Response, *delivery.Error) {
+		requests++
+		return &delivery.Response{Status: 503}, &delivery.Error{Code: "timeout"}
+	})
+	if got, want := s.Deliver(t.Context(), profileSenderMessage()), (sender.Result{LastError: "challenge_failed"}); got != want {
+		t.Errorf("Deliver = %+v, want %+v", got, want)
+	}
+	if requests != 1 {
+		t.Errorf("delivery requests = %d, want exactly one before the verdict expired", requests)
+	}
+	if want := []time.Duration{30 * time.Second}; !slices.Equal(sleeps, want) {
+		t.Errorf("sleeps = %v, want %v", sleeps, want)
+	}
+}
+
+func TestSenderDeliverExpiredVerdictEndsRetrySchedule(t *testing.T) {
+	const t0 = int64(1767225600)
+	now := t0
+	msg := profileSenderMessage()
+	msg.TTL = 2 * time.Second
+	client := delivery.NewClient(delivery.Config{})
+	gate, err := endpoint.NewGate(endpoint.GateConfig{
+		Client: client,
+		Now:    func() int64 { return now },
+		Hook:   func(context.Context, string, string) (bool, error) { return true, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gate.Transport() != client {
+		t.Fatal("gate does not expose the shared client")
+	}
+	cfg := profileSenderConfig()
+	cfg.Verifier = gate
+	cfg.Now = func() int64 { return now }
+	cfg.Sleep = func(_ context.Context, d time.Duration) error {
+		now += int64(d / time.Second)
+		return nil
+	}
+	s := newProfileSender(t, cfg)
+	requests := 0
+	sender.UseDeliveryForTest(s, func(*http.Request, int64) (*delivery.Response, *delivery.Error) {
+		requests++
+		if requests > 1 {
+			t.Fatal("a pair verified for two seconds received the 30 s retry")
+		}
+		return &delivery.Response{Status: 503}, &delivery.Error{Code: "timeout"}
+	})
+	if got, want := s.Deliver(t.Context(), msg), (sender.Result{LastError: "challenge_failed"}); got != want {
+		t.Errorf("Deliver = %+v, want %+v", got, want)
+	}
+	if requests != 1 {
+		t.Errorf("delivery requests = %d, want exactly one", requests)
 	}
 }
 

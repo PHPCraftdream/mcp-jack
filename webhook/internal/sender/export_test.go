@@ -41,21 +41,28 @@ func InTLSChildForTest(t *testing.T) bool {
 	return false
 }
 
-// GateForTest installs a real gate sharing the sender's hardened client. The
-// delivery package's test-only root injection is not available here, so the
-// isolated test process trusts cert through the standard x509 verifier.
-func GateForTest(t *testing.T, s *Sender, cert *x509.Certificate) *endpoint.Gate {
+// GateForTest builds the real verification gate around client for use in the
+// isolated TLS child process, so the sender and the gate share one transport.
+// The delivery package's test-only root injection is not available here, so the
+// certificate of the httptest server is installed as fallback roots; that
+// mutation is process-wide, which is exactly why InTLSChildForTest must have
+// isolated this process first. The certificate is optional only because the
+// hardened client never exposes it.
+func GateForTest(t *testing.T, client *delivery.Client, certs ...*x509.Certificate) *endpoint.Gate {
 	t.Helper()
 	if os.Getenv(tlsTestChild) != "1" {
 		t.Fatal("GateForTest requires InTLSChildForTest")
 	}
-	roots := x509.NewCertPool()
-	roots.AddCert(cert)
-	x509.SetFallbackRoots(roots)
-	gate, err := endpoint.NewGate(endpoint.GateConfig{Client: s.client.(*delivery.Client), Now: s.now})
+	if len(certs) > 0 {
+		roots := x509.NewCertPool()
+		for _, cert := range certs {
+			roots.AddCert(cert)
+		}
+		x509.SetFallbackRoots(roots)
+	}
+	gate, err := endpoint.NewGate(endpoint.GateConfig{Client: client})
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.verifier = gate
 	return gate
 }

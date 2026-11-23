@@ -398,6 +398,56 @@ func TestReceiverCoreReadsRotatedKeysOnNextDelivery(t *testing.T) {
 	}
 }
 
+// expiringSource stands in for a card fetcher whose key set has outlived its
+// cache lifetime: it serves the stored set only while live is true.
+type expiringSource struct {
+	keys card.Static
+	live bool
+}
+
+func (s *expiringSource) KeySet() card.KeySet {
+	if !s.live {
+		return card.KeySet{}
+	}
+	return s.keys.KeySet()
+}
+
+// An expired card key set must stop authenticating deliveries until a
+// successful refresh makes the same deliveries verify again.
+func TestReceiverRefusesExpiredCardKeys(t *testing.T) {
+	private, key := exampleKey(1)
+	t.Run("server identity enforced", func(t *testing.T) {
+		source := &expiringSource{keys: card.StaticKeys([]card.Key{key}), live: true}
+		cfg := receiverConfig()
+		cfg.Keys, cfg.EnforceServerIdentity = source, true
+		r := newReceiver(t, cfg)
+		signed := func(id string) receiver.Delivery {
+			d := signedDelivery(id, subA, gapBody, hmacKey, clock)
+			signV2a(&d, private, subA)
+			return d
+		}
+		checkOK(t, r.Handle(signed(idA)), accepted, true, gapBody)
+		source.live = false // The cache lifetime passed without a refresh.
+		checkError(t, r.Handle(signed(idB)), 503, "no_server_keys", "no accepted server key")
+		source.live = true // A successful refresh republished the keys.
+		checkOK(t, r.Handle(signed(idB)), accepted, true, gapBody)
+	})
+	t.Run("jack key lookup", func(t *testing.T) {
+		source := &expiringSource{keys: card.StaticKeys([]card.Key{key})}
+		cfg := receiverConfig()
+		cfg.Keys, cfg.Jack = source, jackConfig()
+		r := newReceiver(t, cfg)
+		delivery := func(id string) receiver.Delivery {
+			d := signedDelivery(id, subA, gapBody, hmacKey, clock)
+			d.Headers = append(d.Headers, jackHeader(d, private, key.KID, callbackA))
+			return d
+		}
+		checkError(t, r.Handle(delivery(idA)), 401, "unknown_webhook_key", "unknown webhook key")
+		source.live = true
+		checkOK(t, r.Handle(delivery(idA)), accepted, true, gapBody)
+	})
+}
+
 func TestReceiverCoreCrossCheckRejectsInvalidPublishedKey(t *testing.T) {
 	private, key := exampleKey(1)
 	_, otherKey := exampleKey(2)
@@ -449,6 +499,10 @@ func TestReceiverCorePendingBinding(t *testing.T) {
 	d := signedDelivery(idA, subA, eventBody, hmacKey, clock)
 	d.Headers = append(d.Headers, jackHeader(d, private, key.KID, callbackB))
 	checkError(t, r.Handle(d), 503, "subscription_not_routed", "the subscription is not routed")
+	// The refusal must happen before the durable enqueue.
+	if len(kinds) != 0 {
+		t.Fatalf("unrouted delivery reached enqueue: %v", kinds)
+	}
 	if state := r.State(); len(state.Accepted) != 0 || len(state.Routed) != 0 || state.Secrets[1].SubscriptionID != "" {
 		t.Fatalf("non-verification changed state: %+v", state)
 	}
@@ -473,8 +527,34 @@ func TestReceiverCorePendingBinding(t *testing.T) {
 	d = signedDelivery(idB, subA, gapBody, hmacKey, clock)
 	d.Headers = append(d.Headers, jackHeader(d, private, key.KID, callbackA))
 	checkOK(t, r.Handle(d), accepted, true, gapBody)
-	if !slices.Equal(kinds, []string{"event", "verification", "gap"}) {
+	if !slices.Equal(kinds, []string{"verification", "gap"}) {
 		t.Fatalf("enqueue order was %v", kinds)
+	}
+}
+
+// A successful w1 challenge binds the pending secret to the subscription id.
+// The first real event must then verify with that secret entry's callback URL,
+// which is the only callback URL the receiver knows when no override exists.
+func TestReceiverChallengeThenFirstEventUsesSecretCallbackURL(t *testing.T) {
+	private, key := exampleKey(1)
+	cfg := receiverConfig()
+	cfg.Keys, cfg.Routed = card.StaticKeys([]card.Key{key}), nil
+	cfg.Secrets = []receiver.Secret{{Key: []byte(hmacKey), CallbackURL: callbackB}}
+	cfg.Jack = &receiver.JackConfig{Aud: audience} // Nil CallbackURLs: no override.
+	r := newReceiver(t, cfg)
+
+	challengeDelivery := signedDelivery(idB, subA, verifyBody, hmacKey, clock)
+	challengeDelivery.Headers = append(challengeDelivery.Headers, jackHeader(challengeDelivery, private, key.KID, callbackB))
+	checkOK(t, r.Handle(challengeDelivery), `{"challenge":"`+challenge+`"}`, true)
+	if routed := r.State().Routed; !slices.Equal(routed, []string{subA}) {
+		t.Fatalf("challenge did not route the subscription: %v", routed)
+	}
+
+	eventDelivery := signedDelivery(idA, subA, eventBody, hmacKey, clock)
+	eventDelivery.Headers = append(eventDelivery.Headers, jackHeader(eventDelivery, private, key.KID, callbackB))
+	checkOK(t, r.Handle(eventDelivery), accepted, true, eventBody)
+	if accepted := r.State().Accepted; !slices.Equal(accepted, []string{idA, idB}) {
+		t.Fatalf("accepted ids = %v", accepted)
 	}
 }
 
@@ -553,16 +633,22 @@ func TestReceiverCoreRouteMakesRegisteredDeliveryEligible(t *testing.T) {
 	checkOK(t, r.Handle(d), accepted, true, gapBody)
 }
 
-func TestReceiverCorePendingEnqueueFailurePrecedesRoutingRefusal(t *testing.T) {
+// The unrouted pending-secret refusal now precedes the durable enqueue, so a
+// failing enqueue can no longer surface instead of the routing refusal.
+func TestReceiverCorePendingRoutingRefusalPrecedesEnqueue(t *testing.T) {
 	cfg := receiverConfig()
 	cfg.Secrets[0].SubscriptionID = ""
 	cfg.Routed = nil
-	cfg.Enqueue = func(receiver.Message) error { return errors.New("private storage detail") }
+	calls := 0
+	cfg.Enqueue = func(receiver.Message) error { calls++; return errors.New("private storage detail") }
 	r := newReceiver(t, cfg)
 	d := signedDelivery(idA, subA, eventBody, hmacKey, clock)
-	checkError(t, r.Handle(d), 503, "enqueue_failed", "durable enqueue failed")
+	checkError(t, r.Handle(d), 503, "subscription_not_routed", "the subscription is not routed")
+	if calls != 0 {
+		t.Fatalf("unrouted delivery reached enqueue %d times", calls)
+	}
 	if state := r.State(); len(state.Accepted) != 0 || len(state.Routed) != 0 || state.Secrets[0].SubscriptionID != "" {
-		t.Fatalf("enqueue failure changed state: %+v", state)
+		t.Fatalf("routing refusal changed state: %+v", state)
 	}
 }
 

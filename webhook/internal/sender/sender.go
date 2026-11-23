@@ -21,23 +21,31 @@ const (
 )
 
 // VerificationGate is the endpoint verification front-end of R5.1-R5.9.
-// Begin returns an unpadded base64url nonce on success.
+// Begin returns an unpadded base64url nonce on success. Fresh reports the
+// cached verdict without network I/O, and Transport exposes the hardened
+// client the gate fetches the well-known document with.
 type VerificationGate interface {
 	Covers(ctx context.Context, principal, canonicalURL string, ttl time.Duration) *endpoint.Error
 	Begin(principal, canonicalURL string) (string, *endpoint.Error)
 	Accept(principal, canonicalURL, nonce, echoed string, ttl time.Duration) *endpoint.Error
+	Fresh(principal, canonicalURL string) bool
+	Transport() *delivery.Client
 }
 
-// Config supplies signing material, verification, delivery policy and optional scheduling hooks.
+// Config supplies signing material, verification and optional scheduling hooks.
+// The verification gate also supplies the delivery transport, so there is no
+// separate policy to keep in sync: the well-known fetch and the deliveries
+// share one hardened client by construction.
 type Config struct {
-	Signing       SigningOptions
-	Verifier      VerificationGate // required
-	AllowedRanges []string
-	Resolver      delivery.Resolver
-	Dialer        delivery.Dialer
-	Now           func() int64                                     // defaults to Unix wall seconds
-	Sleep         func(ctx context.Context, d time.Duration) error // defaults to a context-aware timer
-	Suspended     func() bool                                      // optional; polled while waiting to attempt a delivery
+	Signing SigningOptions
+	// Verifier is required and supplies the delivery client.
+	Verifier VerificationGate
+	// Now defaults to Unix wall seconds.
+	Now func() int64
+	// Sleep defaults to a context-aware timer.
+	Sleep func(ctx context.Context, d time.Duration) error
+	// Suspended is optional and polled while waiting to attempt a delivery.
+	Suspended func() bool
 }
 
 type deliveryClient interface {
@@ -54,10 +62,16 @@ type Sender struct {
 	suspended func() bool
 }
 
-// New constructs a sender with a dedicated, policy-enforcing delivery client.
+// New constructs a sender that reuses the verification gate's hardened
+// delivery client. The gate supplies the transport (via Transport), so the
+// well-known fetch and the deliveries share one policy by construction.
 func New(cfg Config) (*Sender, error) {
 	if nilVerifier(cfg.Verifier) {
 		return nil, errors.New("sender requires an endpoint verification gate")
+	}
+	client := cfg.Verifier.Transport()
+	if client == nil {
+		return nil, errors.New("sender requires the verifier's delivery client")
 	}
 	signing, err := prepareSigning(cfg.Signing)
 	if err != nil {
@@ -70,9 +84,7 @@ func New(cfg Config) (*Sender, error) {
 		cfg.Sleep = sleepContext
 	}
 	return &Sender{
-		client: delivery.NewClient(delivery.Config{
-			AllowedRanges: cfg.AllowedRanges, Resolver: cfg.Resolver, Dialer: cfg.Dialer,
-		}),
+		client:   client,
 		verifier: cfg.Verifier, signing: signing, now: cfg.Now, sleep: cfg.Sleep, suspended: cfg.Suspended,
 	}, nil
 }
@@ -213,8 +225,10 @@ type Result struct {
 	Status    int
 }
 
-// Deliver verifies the endpoint once before running the R1.8 schedule with the
-// same message ID and bytes each time. Verification is not retried.
+// Deliver verifies the endpoint before running the R1.8 schedule with the same
+// message ID and bytes each time. Verification is re-checked before every
+// attempt, so an expired pair ends the delivery unverified instead of receiving
+// a late retry.
 func (s *Sender) Deliver(ctx context.Context, msg Message) Result {
 	if refusal := s.ensureVerified(ctx, msg); refusal != nil {
 		return Result{LastError: refusal.Code}
@@ -227,6 +241,11 @@ func (s *Sender) Deliver(ctx context.Context, msg Message) Result {
 	for attempt := 1; attempt <= wire.MaxAttempts; attempt++ {
 		if !s.waitUntil(ctx, &clock, next) {
 			return result
+		}
+		// A verdict can expire while the sender waits; every attempt, including
+		// the first, needs a fresh one or the pair is no longer consented.
+		if !s.verifier.Fresh(msg.Principal, msg.CallbackURL) {
+			return Result{LastError: "challenge_failed"}
 		}
 		if attempt == 1 {
 			start = clock.active

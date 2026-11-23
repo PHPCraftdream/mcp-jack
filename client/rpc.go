@@ -181,6 +181,10 @@ type Client struct {
 	// requests stay the 0.1.x bytes. mu guards both.
 	negotiated string
 	sessionID  string
+	// recoveries holds the in-flight legacy session recovery per rejected
+	// session id. Concurrent 404s for the same session share one handshake
+	// instead of racing to install and invalidate sessions. mu guards it.
+	recoveries map[string]*legacyRecovery
 }
 
 // audHasControl reports whether aud contains a byte below 0x20 or the byte
@@ -598,11 +602,13 @@ func (c *Client) call(ctx context.Context, signer Signer, tool string, arguments
 //
 // A 404 for a known session id means the session is gone (2025-11-25
 // transport). When the 404 answers the session that is still current, the
-// handshake is re-run once so the caller's next attempt starts a fresh session,
-// and the operation itself is never replayed: the 404 is returned to the
-// caller. A failed recovery handshake is returned as the call's error. A 404
-// for a session that was replaced while the request was in flight changes
-// nothing.
+// legacy session is recovered through recoverLegacySession, which runs at most
+// one handshake per rejected session id: concurrent 404s for the same session
+// wait for the single in-flight handshake instead of each starting one, so no
+// handshake can clear or overwrite a session a newer one installed. The
+// operation itself is never replayed: the 404 is returned to the caller. A
+// failed recovery handshake is returned as the call's error. A 404 for a
+// session that was replaced while the request was in flight changes nothing.
 func (c *Client) callWithArgs(ctx context.Context, signer Signer, tool string, args []byte, out any) error {
 	reqBody, err := buildLegacyCallBody(c.nextRequestID(), tool, args)
 	if err != nil {
@@ -614,14 +620,12 @@ func (c *Client) callWithArgs(ctx context.Context, signer Signer, tool string, a
 		return err
 	}
 	if status == http.StatusNotFound {
-		if _, currentSessionID := c.legacyState(); legacyRecoveryNeeded(sentSessionID, currentSessionID) {
-			version := negotiated
-			if version == "" {
-				version = legacyProtocolVersion
-			}
-			if herr := c.legacyHandshake(ctx, signer, version); herr != nil {
-				return fmt.Errorf("jack client: legacy session recovery: %w", herr)
-			}
+		version := negotiated
+		if version == "" {
+			version = legacyProtocolVersion
+		}
+		if herr := c.recoverLegacySession(ctx, signer, sentSessionID, version); herr != nil {
+			return fmt.Errorf("jack client: legacy session recovery: %w", herr)
 		}
 	}
 	return decodeVerifiedCall(status, raw, out)

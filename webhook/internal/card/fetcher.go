@@ -67,12 +67,18 @@ func NewFetcher(cfg FetcherConfig) (*Fetcher, error) {
 	return &Fetcher{client: cfg.Client, mcpURL: cfg.MCPURL, cardURL: cfg.CardURL, options: cfg.Options, now: now}, nil
 }
 
-// KeySet returns an independent copy of the last successful snapshot, even if
-// stale. It does not wait for an in-flight fetch.
+// KeySet returns an independent copy of the last successful snapshot while its
+// cache lifetime lasts, and the empty set once that lifetime has passed. An
+// expired snapshot must not be trusted: a failed Refresh leaves the previous
+// keys usable only until their expiry, and a successful Refresh restores them.
+// It does not wait for an in-flight fetch.
 func (f *Fetcher) KeySet() KeySet {
 	f.mu.RLock()
-	keys := f.keys
+	keys, expires := f.keys, f.expires
 	f.mu.RUnlock()
+	if expires.IsZero() || !f.now().Before(expires) {
+		return KeySet{}
+	}
 	return keys.clone()
 }
 

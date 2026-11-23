@@ -143,9 +143,9 @@ func TestFetcherTLS(t *testing.T) {
 		if !bytes.Equal(f.KeySet().Raw, both) || f.TTL() != 40*time.Second {
 			t.Fatalf("failed refresh changed snapshot or TTL: %+v, %v", f.KeySet(), f.TTL())
 		}
-		now += 40
-		if !bytes.Equal(f.KeySet().Raw, both) || f.TTL() != 0 {
-			t.Fatalf("stale snapshot or TTL incorrect: %+v, %v", f.KeySet(), f.TTL())
+		now += 40 // Past the 60 s lifetime: the snapshot must no longer be trusted.
+		if set := f.KeySet(); set.Raw != nil || len(set.Accepted) != 0 || len(set.Rejected) != 0 || f.TTL() != 0 {
+			t.Fatalf("expired snapshot still served: %+v, TTL %v", set, f.TTL())
 		}
 
 		publish(t, cardTestSigningKeys(t, []card.JWK{newKey}), "max-age=600")
@@ -155,6 +155,36 @@ func TestFetcherTLS(t *testing.T) {
 		}
 		if _, ok := card.KeyForKID(set.Accepted, old.Kid); ok {
 			t.Fatal("removed kid is still accepted")
+		}
+	})
+
+	t.Run("expiry and refresh restore trust", func(t *testing.T) {
+		now := int64(1000)
+		f := newFetcher(t, func() int64 { return now })
+		keys := cardTestSigningKeys(t, []card.JWK{old, newKey})
+		publish(t, keys, "max-age=60")
+		set := refresh(t, f)
+		if !bytes.Equal(set.Raw, keys) || len(set.Accepted) != 2 || f.TTL() != time.Minute {
+			t.Fatalf("fresh snapshot: %+v, TTL %v", set, f.TTL())
+		}
+
+		now += 61 // Past the lifetime without a refresh.
+		if set := f.KeySet(); set.Raw != nil || len(set.Accepted) != 0 || len(set.Rejected) != 0 || f.TTL() != 0 {
+			t.Fatalf("expired snapshot still served: %+v, TTL %v", set, f.TTL())
+		}
+
+		served.Store(&reply{status: http.StatusNotFound})
+		if err := f.Refresh(t.Context()); err == nil || err.Code != "http_status" {
+			t.Fatalf("failed refresh = %v, want http_status", err)
+		}
+		if set := f.KeySet(); set.Raw != nil || len(set.Accepted) != 0 || f.TTL() != 0 {
+			t.Fatalf("failed refresh revived expired keys: %+v, TTL %v", set, f.TTL())
+		}
+
+		publish(t, keys, "max-age=60")
+		set = refresh(t, f)
+		if !bytes.Equal(set.Raw, keys) || len(set.Accepted) != 2 || f.TTL() != time.Minute {
+			t.Fatalf("successful refresh did not restore trust: %+v, TTL %v", set, f.TTL())
 		}
 	})
 
@@ -210,7 +240,7 @@ func TestFetcherTLS(t *testing.T) {
 		bad := cardTestJWKMembers(old)
 		bad["alg"] = "RS256"
 		raw := cardTestSigningKeys(t, []any{bad, newKey})
-		publish(t, raw, "max-age=0")
+		publish(t, raw, "max-age=300")
 		f, err := card.NewFetcher(card.FetcherConfig{
 			Client: client, MCPURL: mcpURL, CardURL: baseURL + "/mcp/server-card", Now: func() int64 { return 0 },
 		})
@@ -219,7 +249,7 @@ func TestFetcherTLS(t *testing.T) {
 		}
 		set := refresh(t, f)
 		if !bytes.Equal(set.Raw, raw) || len(set.Accepted) != 1 || set.Accepted[0].KID != newKey.Kid ||
-			len(set.Rejected) != 1 || set.Rejected[0].Reason != "alg" || set.Rejected[0].KID == nil || *set.Rejected[0].KID != old.Kid || f.TTL() != 0 {
+			len(set.Rejected) != 1 || set.Rejected[0].Reason != "alg" || set.Rejected[0].KID == nil || *set.Rejected[0].KID != old.Kid || f.TTL() != 300*time.Second {
 			t.Fatalf("unexpected snapshot: %+v, TTL %v", set, f.TTL())
 		}
 		if code := card.CrossCheckWebhookKey(set.Raw, cardTestTool(t, newKey), true); code != "webhook_key_mismatch" {
