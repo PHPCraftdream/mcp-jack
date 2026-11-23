@@ -27,6 +27,13 @@
 //! `rotation_state_unavailable` — no other key is ever used. The static
 //! profile is unchanged. The `jack.server.key` tool itself is dispatched
 //! through `Verifier::with_server_keys` (verify.rs), not here.
+//!
+//! With [`JackLayer::with_profile`] set to [`Profile::Modern`] or
+//! [`Profile::Both`] the layer decides the request era after verification
+//! (spec 04 section 3) and applies the header rules `S1`-`S12`: mirror headers
+//! are validated, session headers are stripped, and a violation is refused with
+//! the signed JSON-RPC shape of `S10`. The default [`Profile::Legacy`] runs no
+//! rule of section 5 and stays byte-identical to 0.1.x.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -44,8 +51,14 @@ use tower_service::Service;
 
 use crate::auth_header::{format_response_auth, ResponseAuth};
 use crate::encoding::{encode_b64url, key_id};
+use crate::modern::{IMPLEMENTATION_NAME, IMPLEMENTATION_VERSION};
+use crate::server::modern::{classify_request, Era, ModernOutcome, ModernRequest, Profile};
 use crate::server::response_keys::{ReleaseGuard, ResponseKeyRequest, ResponseKeys};
 use crate::server::verify::{Verifier, VerifyResult};
+
+mod modern;
+
+use modern::{header_fields, strip_session_headers};
 
 /// Alias for boxed errors flowing through body polling; http-body's own alias
 /// is not nameable because the `http-body` crate is not a direct dependency.
@@ -152,6 +165,9 @@ pub struct JackLayer {
     signing: SigningProfile,
     limit: usize,
     response_limit: usize,
+    /// Deployment setting of the modern profile (spec 04 section 1); the
+    /// default [`Profile::Legacy`] runs no rule of section 5.
+    profile: Profile,
 }
 
 impl JackLayer {
@@ -178,6 +194,7 @@ impl JackLayer {
             verifier: cfg.verifier,
             limit,
             response_limit,
+            profile: Profile::default(),
         }
     }
 
@@ -203,7 +220,18 @@ impl JackLayer {
             verifier: cfg.verifier,
             limit,
             response_limit,
+            profile: Profile::default(),
         }
+    }
+
+    /// Selects the modern-profile deployment setting (spec 04 section 1): under
+    /// [`Profile::Modern`] or [`Profile::Both`] the layer decides the era per
+    /// request after verification and applies the header rules of section 5,
+    /// refusing with the signed JSON-RPC shape of `S10`. [`Profile::Legacy`],
+    /// the default, is byte-identical to 0.1.x.
+    pub fn with_profile(mut self, profile: Profile) -> Self {
+        self.profile = profile;
+        self
     }
 }
 
@@ -216,6 +244,7 @@ impl<S> Layer<S> for JackLayer {
             signing: self.signing.clone(),
             limit: self.limit,
             response_limit: self.response_limit,
+            profile: self.profile,
             inner,
         }
     }
@@ -229,6 +258,8 @@ pub struct JackService<S> {
     signing: SigningProfile,
     limit: usize,
     response_limit: usize,
+    /// Modern-profile deployment setting of the layer that built this service.
+    profile: Profile,
     inner: S,
 }
 
@@ -279,6 +310,7 @@ where
             signing: self.signing.clone(),
             limit: self.limit,
             response_limit: self.response_limit,
+            profile: self.profile,
             inner: ready_inner,
         };
         Box::pin(async move { this.serve(req).await })
@@ -308,7 +340,14 @@ where
     {
         let (parts, body) = req.into_parts();
 
-        if parts.method != Method::GET && parts.method != Method::POST {
+        // The 0.1.x pre-authentication method gate. In the modern era it must
+        // NOT run: spec 04 `S2` answers a non-`POST` request with a SIGNED 405
+        // after authentication and after the era decision, and a legacy-era
+        // request under `Profile::Both` is forwarded like any other.
+        if self.profile == Profile::Legacy
+            && parts.method != Method::GET
+            && parts.method != Method::POST
+        {
             return Ok(plain_error(
                 StatusCode::METHOD_NOT_ALLOWED,
                 "method_not_allowed",
@@ -383,18 +422,52 @@ where
         }
 
         let vreq = crate::server::verify::Request {
-            method,
-            target,
+            method: method.clone(),
+            target: target.clone(),
             auth_values,
             body: buffered.to_vec(),
         };
         let res = self.verifier.verify(&vreq);
         let response = if !res.accepted {
             self.reject(&res)
-        } else if res.native {
-            self.native(&res)
+        } else if self.profile == Profile::Legacy {
+            // Legacy profile: no rule of spec 04 section 5 runs, so the bytes
+            // are exactly those of 0.1.x.
+            if res.native {
+                self.native(&res, Era::Legacy)
+            } else {
+                self.forward(parts, buffered, &res).await?
+            }
         } else {
-            self.forward(parts, buffered, &res).await?
+            let headers = header_fields(&parts.headers);
+            let classified = classify_request(
+                self.profile,
+                &ModernRequest {
+                    method: &method,
+                    target: &target,
+                    headers: &headers,
+                    body: &buffered,
+                },
+            );
+            match classified {
+                // Unreachable after verification classified the body; kept for
+                // parity with the engine.
+                ModernOutcome::ClassificationRefusal { message } => {
+                    self.invalid_request(&res, message)
+                }
+                ModernOutcome::Refuse(refusal) => self.refuse_modern(&res, &refusal),
+                ModernOutcome::Forward { era, .. } => {
+                    let mut parts = parts;
+                    if era == Era::Modern {
+                        strip_session_headers(&mut parts.headers);
+                    }
+                    if res.native {
+                        self.native(&res, era)
+                    } else {
+                        self.forward(parts, buffered, &res).await?
+                    }
+                }
+            }
         };
         // The durable admission is finished only after the response is
         // produced, on every path (Go middleware: `defer res.Done()`).
@@ -467,7 +540,10 @@ where
     /// serde's default map key order is alphabetical, which would diverge from
     /// Go's field-order marshaling, so structs with declared field order are
     /// used instead of `json!`.
-    fn native(&self, res: &VerifyResult) -> http::Response<Full<Bytes>> {
+    /// In the modern era the result also carries `resultType: "complete"` and
+    /// Jack `_meta` server info (spec 04 `C7`); a legacy-era result is the
+    /// 0.1.x shape.
+    fn native(&self, res: &VerifyResult, era: Era) -> http::Response<Full<Bytes>> {
         let Some(structured) = &res.structured else {
             // Unreachable: native results always carry structured content, but
             // the fallback keeps the Go error path for refactors.
@@ -485,6 +561,9 @@ where
                 Err(_) => return self.internal(res),
             },
         };
+        // Spec 04 `C7`: only the modern era adds `resultType` and `_meta`, so a
+        // 2025-11-25 client keeps receiving the 0.1.x bytes.
+        let modern = era == Era::Modern;
         let payload = RpcResponse {
             jsonrpc: "2.0",
             id,
@@ -495,6 +574,13 @@ where
                 }],
                 structured_content: structured,
                 is_error: false,
+                result_type: modern.then_some("complete"),
+                meta: modern.then_some(ServerInfoMeta {
+                    server_info: ServerInfo {
+                        name: IMPLEMENTATION_NAME,
+                        version: IMPLEMENTATION_VERSION,
+                    },
+                }),
             },
         };
         // Unreachable failure: serde cannot fail on String/&str fields.
@@ -821,6 +907,24 @@ struct CallToolResult<'a> {
     structured_content: &'a serde_json::Value,
     #[serde(rename = "isError")]
     is_error: bool,
+    /// Spec 04 `C7`: present only in the modern era.
+    #[serde(rename = "resultType", skip_serializing_if = "Option::is_none")]
+    result_type: Option<&'a str>,
+    /// Spec 04 `C7`: Jack implementation info, modern era only.
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    meta: Option<ServerInfoMeta<'a>>,
+}
+
+#[derive(serde::Serialize)]
+struct ServerInfoMeta<'a> {
+    #[serde(rename = "io.modelcontextprotocol/serverInfo")]
+    server_info: ServerInfo<'a>,
+}
+
+#[derive(serde::Serialize)]
+struct ServerInfo<'a> {
+    name: &'a str,
+    version: &'a str,
 }
 
 #[derive(serde::Serialize)]

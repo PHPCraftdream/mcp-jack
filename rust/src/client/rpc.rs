@@ -6,8 +6,10 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 
 use crate::client::error::{parse_error_body, ClientError, HttpError, RpcError, ToolError};
+use crate::client::modern::{add_client_info, build_mirrors, ClientEra};
 use crate::client::signer::Signer;
 use crate::client::transport::{Clock, HttpRequest, NonceSource, SigningTransport, Transport};
+use crate::modern::{IMPLEMENTATION_NAME, IMPLEMENTATION_VERSION, MODERN_MIN};
 
 /// Everything NewClient needs to reach and trust one server.
 pub struct Config {
@@ -48,6 +50,9 @@ pub struct Client {
     /// nextID). Relaxed is sufficient: the value is returned and used
     /// directly, nothing is published through it.
     next_id: AtomicI64,
+    /// The era this client's requests are built in; default
+    /// [`ClientEra::Legacy`].
+    era: ClientEra,
 }
 
 // Manual impl: Debug must never expose signer or key material (spec 01
@@ -166,7 +171,22 @@ impl Client {
             transport,
             now,
             next_id: AtomicI64::new(0),
+            era: ClientEra::default(),
         })
+    }
+
+    /// Selects the era this client builds its requests in (spec 04 section 6).
+    /// The default [`ClientEra::Legacy`] keeps every 0.1.x byte of the request
+    /// unchanged; [`ClientEra::Modern`] adds `params._meta` and the
+    /// `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name` headers.
+    pub fn with_era(mut self, era: ClientEra) -> Self {
+        self.era = era;
+        self
+    }
+
+    /// The era this client builds its requests in.
+    pub fn era(&self) -> ClientEra {
+        self.era
     }
 
     /// Builds the JSON-RPC request body: fields in wire order and the
@@ -180,6 +200,52 @@ impl Client {
         format!(
             "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"tools/call\",\"params\":{{\"name\":{name},\"arguments\":{args_json}}}}}"
         )
+    }
+
+    /// One `tools/call` exchange: the JSON-RPC body and the request headers.
+    /// The legacy era is the 0.1.x body and `Content-Type` only; the modern era
+    /// adds `params._meta` (version, capabilities, client info) and the mirror
+    /// headers in `C2` order after `Content-Type`.
+    fn build_call(
+        &self,
+        id: i64,
+        tool: &str,
+        args_json: Option<&str>,
+    ) -> Result<(String, Vec<(String, String)>), ClientError> {
+        if self.era == ClientEra::Legacy {
+            return Ok((
+                Self::build_request_body(id, tool, args_json),
+                vec![("Content-Type".to_string(), "application/json".to_string())],
+            ));
+        }
+        // call_raw already validated the argument JSON: no second validation
+        // path, an unparsable value is treated as the empty arguments object.
+        let args: serde_json::Value = serde_json::from_str(args_json.unwrap_or("{}"))
+            .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
+        let mut params = serde_json::Map::new();
+        params.insert(
+            "name".to_owned(),
+            serde_json::Value::String(tool.to_owned()),
+        );
+        params.insert("arguments".to_owned(), args);
+
+        let mirrors = build_mirrors(
+            MODERN_MIN,
+            "tools/call",
+            &serde_json::Value::Object(params.clone()),
+        )
+        .map_err(|e| ClientError::Client(format!("jack client: {e}")))?;
+        let mut meta = mirrors.meta;
+        add_client_info(&mut meta, IMPLEMENTATION_NAME, IMPLEMENTATION_VERSION);
+        params.insert("_meta".to_owned(), meta);
+
+        let body = format!(
+            "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"tools/call\",\"params\":{}}}",
+            serde_json::Value::Object(params)
+        );
+        let mut headers = vec![("Content-Type".to_string(), "application/json".to_string())];
+        headers.extend(mirrors.headers);
+        Ok((body, headers))
     }
 
     /// One signed, verified tool call returning the raw structuredContent
@@ -204,12 +270,12 @@ impl Client {
         };
 
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
-        let req_json = Self::build_request_body(id, tool, args_json);
+        let (req_json, headers) = self.build_call(id, tool, args_json)?;
 
         let req = HttpRequest {
             method: "POST".to_string(),
             url: self.base_url.clone(),
-            headers: vec![("Content-Type".to_string(), "application/json".to_string())],
+            headers,
             body: req_json.into_bytes(),
         };
         // From<TransportError> for ClientError does the mapping: transport
@@ -386,6 +452,75 @@ mod tests {
         assert_eq!(
             empty,
             r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"jack.whoami","arguments":{}}}"#
+        );
+    }
+
+    /// Renders headers as a vector of `&str` pairs for compact assertions.
+    fn pairs(headers: &[(String, String)]) -> Vec<(&str, &str)> {
+        headers
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn build_call_legacy_and_modern_shapes() {
+        let mk = || Config {
+            base_url: BASE_URL.to_string(),
+            aud: AUD.to_string(),
+            signer: alice(),
+            server_key: svc_key(),
+            transport: Arc::new(UnreachableTransport),
+            now: None,
+            nonce: None,
+            window_seconds: 30,
+        };
+
+        // The default era is the 0.1.x shape: unchanged body, one header.
+        let legacy = Client::new(mk()).expect("valid config");
+        assert_eq!(legacy.era(), ClientEra::Legacy);
+        let (body, headers) = legacy
+            .build_call(1, "jack.whoami", None)
+            .expect("legacy build");
+        assert_eq!(
+            body,
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.whoami","arguments":{}}}"#
+        );
+        assert_eq!(pairs(&headers), [("Content-Type", "application/json")]);
+
+        let modern = Client::new(mk())
+            .expect("valid config")
+            .with_era(ClientEra::Modern);
+        assert_eq!(modern.era(), ClientEra::Modern);
+        let (body, headers) = modern
+            .build_call(1, "get_weather", Some(r#"{"region":"eu"}"#))
+            .expect("modern build");
+        let wire: serde_json::Value = serde_json::from_str(&body).expect("body is JSON");
+        assert_eq!(wire["jsonrpc"], "2.0");
+        assert_eq!(wire["id"], 1);
+        assert_eq!(wire["method"], "tools/call");
+        let params = wire["params"].as_object().expect("params object");
+        assert_eq!(params["name"], "get_weather");
+        assert_eq!(params["arguments"], serde_json::json!({"region": "eu"}));
+        assert_eq!(
+            params["_meta"],
+            serde_json::json!({
+                "io.modelcontextprotocol/protocolVersion": crate::modern::MODERN_MIN,
+                "io.modelcontextprotocol/clientCapabilities": {},
+                "io.modelcontextprotocol/clientInfo": {
+                    "name": crate::modern::IMPLEMENTATION_NAME,
+                    "version": crate::modern::IMPLEMENTATION_VERSION,
+                },
+            })
+        );
+        assert_eq!(
+            pairs(&headers),
+            [
+                ("Content-Type", "application/json"),
+                ("MCP-Protocol-Version", crate::modern::MODERN_MIN),
+                ("Mcp-Method", "tools/call"),
+                ("Mcp-Name", "get_weather"),
+            ]
         );
     }
 

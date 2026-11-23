@@ -5,6 +5,7 @@
 //! sections 3.1-3.3).
 
 pub mod error;
+pub mod modern;
 mod network;
 pub mod profile;
 mod request_signing;
@@ -25,6 +26,11 @@ pub use auth::{random_nonce, sign_request, SignedRequest, NONCE_SIZE};
 pub use error::{ClientError, HttpError, RpcError, ToolError, UnauthenticatedResponseError};
 #[cfg(feature = "client-http")]
 pub use http_transport::{HttpTransport, HttpTransportBuilder};
+pub use modern::{
+    build_mirrors, collect_annotations, detect_era, project_arguments, validate_annotations,
+    AnnotationError, ClientEra, EraDetection, MirrorError, Mirrors, PrivateResultCache,
+    ProjectionError,
+};
 pub use profile::{load_profile, save_profile, Profile};
 pub use rotation_auth::{verify_rotation_carrier, RotationCarrier, RotationResponseKey};
 #[cfg(all(target_os = "linux", feature = "client-http"))]

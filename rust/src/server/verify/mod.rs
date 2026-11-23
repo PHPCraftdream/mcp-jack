@@ -401,8 +401,12 @@ impl Verifier {
         caller: Option<&RegistryEntry>,
         mut res: VerifyResult,
     ) -> VerifyResult {
-        // GET carries no body; nothing to classify.
-        if req.method == "GET" {
+        // A body to classify exists only on `POST` (spec 02 section 2 item 2),
+        // so a non-`POST` request carries no JSON-RPC here. The HTTP adapter
+        // refuses a non-`GET`/non-`POST` method before verification in the
+        // legacy profile; the modern profile answers it with the signed 405 of
+        // spec 04 `S2` after the era decision instead.
+        if req.method != "POST" {
             res.identity = self.identity_for(caller);
             res.accepted = true;
             return res;
@@ -413,7 +417,7 @@ impl Verifier {
                 res,
                 400,
                 codes::INVALID_REQUEST,
-                "the body is not an acceptable JSON-RPC object",
+                invalid_body_message(&req.body),
             );
         };
         res.rpc_id = msg.id.clone();
@@ -963,6 +967,32 @@ fn classify_body(body: &[u8]) -> Option<RpcMessage> {
         msg.arguments = params.get("arguments").cloned();
     }
     Some(msg)
+}
+
+/// The `400 invalid_request` message for an unacceptable body: a `tools/call`
+/// object whose `params.name` is not a string carries the fixed message of
+/// spec 04 section 5 (`S6`), every other shape the generic one.
+///
+/// Only the failure path pays for the second parse, so the accepted path is
+/// unchanged, and a body that is not even a JSON object keeps the generic
+/// message.
+fn invalid_body_message(body: &[u8]) -> &'static str {
+    const GENERIC: &str = "the body is not an acceptable JSON-RPC object";
+    let Ok(serde_json::Value::Object(members)) = serde_json::from_slice::<serde_json::Value>(body)
+    else {
+        return GENERIC;
+    };
+    let is_tools_call = members.get("method").and_then(|m| m.as_str()) == Some("tools/call");
+    let name_is_string = members
+        .get("params")
+        .and_then(|p| p.as_object())
+        .and_then(|p| p.get("name"))
+        .is_some_and(serde_json::Value::is_string);
+    if is_tools_call && !name_is_string {
+        crate::modern::TOOLS_CALL_NAME_MESSAGE
+    } else {
+        GENERIC
+    }
 }
 
 #[cfg(test)]
