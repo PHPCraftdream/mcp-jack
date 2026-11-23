@@ -1,7 +1,13 @@
 //! Request verifier: authentication + authorization (Go: server/verify.go).
+//!
+//! Verification runs in two phases so an era-aware caller can insert the modern rules of spec 04
+//! `S1`-`S12` between them: [`Verifier::authenticate`] performs steps 1-8 of spec 01 section 4 and
+//! the body classification of spec 02 section 2 (no native effect, no audit event) and hands out a
+//! [`PendingRequest`]; [`Verifier::dispatch`] then runs the native tool call with its audit event,
+//! or produces the forwarded accept. [`Verifier::verify`] is the one-shot path over the same code
+//! and stays the behaviour of the legacy profile.
 
-use std::collections::HashSet;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use serde_json::value::RawValue;
@@ -20,16 +26,30 @@ use crate::server::nonce::NonceStore;
 use crate::server::state::{RegistryEntry, StateStore};
 use crate::signing::{request_signing_string, DEFAULT_WINDOW_SECONDS};
 
+mod body;
+mod pending;
+
+use body::{classify_body, raw_as_string, MessageKind, RawMembers, RpcMessage};
+pub use pending::{Authentication, PendingRequest};
+use pending::{PendingAction, PendingState};
+
+/// The `400 invalid_request` message for an unacceptable body (spec 02
+/// section 2): the single generic message, byte-identical to 0.1.x on every
+/// profile. The modern fixed `tools/call` message of spec 04 `S6` is produced
+/// only by the HTTP adapter, from the engine's
+/// [`ClassificationRefusal`](crate::server::modern::ModernOutcome::ClassificationRefusal),
+/// because this layer also answers the legacy profile.
+const INVALID_BODY_MESSAGE: &str = "the body is not an acceptable JSON-RPC object";
+
 /// Protocol-native tool: enroll a new key (spec 03 section 3.2).
 pub const TOOL_ENROLL: &str = "jack.enroll";
 /// Protocol-native tool: identify the caller (spec 03).
 pub const TOOL_WHOAMI: &str = "jack.whoami";
 /// Protocol-native tool: rotate a key (spec 03 section 3.1).
 pub const TOOL_ROTATE_KEY: &str = "jack.key.rotate";
-/// Candidate native tool: one published page of the server key ring (Go:
-/// ToolServerKey). NOT part of the closed current-v1 set (`is_native_tool`
-/// stays false); reachable only through a separately configured rotation
-/// handler (`Verifier::with_server_keys`).
+/// Candidate native tool: one published page of the server key ring (Go: ToolServerKey). NOT part
+/// of the closed current-v1 set (`is_native_tool` stays false); reachable only through a
+/// separately configured rotation handler (`Verifier::with_server_keys`).
 pub const TOOL_SERVER_KEY: &str = "jack.server.key";
 /// Protocol-native admin tool (spec 03 section 6).
 pub const TOOL_ADMIN_USER_LIST: &str = "jack.admin.user.list";
@@ -83,16 +103,13 @@ pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 pub struct NativeCall<'a> {
     /// Tool name, one of the `TOOL_*` constants.
     pub tool: &'a str,
-    /// `params.arguments` as sent; None only when the member is absent (a
-    /// null stays Some). Raw JSON text is preserved so integer arguments can
-    /// be judged on their text (spec 03 section 3: no fraction, no exponent;
-    /// -0 is 0).
+    /// `params.arguments` as sent; None only when the member is absent (a null stays Some). Raw
+    /// JSON text is preserved so integer arguments can be judged on their text (spec 03 section 3:
+    /// no fraction, no exponent; -0 is 0).
     pub arguments: Option<Box<RawValue>>,
-    /// Registry entry of the authenticated key; None when enrolling with an
-    /// unregistered kid.
+    /// Registry entry of the authenticated key; None when enrolling with an unregistered kid.
     pub caller: Option<&'a RegistryEntry>,
-    /// Kid from the Jack-Auth header (for enrollment, the hash of the
-    /// submitted key).
+    /// Kid from the Jack-Auth header (for enrollment, the hash of the submitted key).
     pub kid: &'a str,
     /// ts parameter of the Jack-Auth header (rotate proofs bind it).
     pub ts: i64,
@@ -100,11 +117,10 @@ pub struct NativeCall<'a> {
     pub now: i64,
     /// Server audience string.
     pub aud: &'a str,
-    /// Registry and invite store; handlers change it only through
-    /// `StateStore::update`.
+    /// Registry and invite store; handlers change it only through `StateStore::update`.
     pub state: Arc<dyn StateStore>,
-    /// OUTPUT: handler sets what the audit event names as target (kid,
-    /// invite id or name), even on failure.
+    /// OUTPUT: handler sets what the audit event names as target (kid, invite id or name), even on
+    /// failure.
     pub target: String,
 }
 
@@ -125,8 +141,8 @@ pub trait NativeTools: Send + Sync {
 
 /// Verifier configuration (Go: Config).
 pub struct Config {
-    /// Audience signed into every request; compared with this value, never
-    /// with the Host header (spec 01 section 3.1).
+    /// Audience signed into every request; compared with this value, never with the Host header
+    /// (spec 01 section 3.1).
     pub aud: String,
     /// Registry and invite store.
     pub state: Arc<dyn StateStore>,
@@ -136,14 +152,13 @@ pub struct Config {
     pub audit: Option<Arc<dyn AuditSink>>,
     /// Implements the jack.* tools; None denies every jack.* tool.
     pub native: Option<Arc<dyn NativeTools>>,
-    /// Timestamp window seconds; zero selects DEFAULT_WINDOW_SECONDS, and
-    /// nonzero values must be in 1..=120 (Go: Config.Window).
+    /// Timestamp window seconds; zero selects DEFAULT_WINDOW_SECONDS, and nonzero values must be in
+    /// 1..=120 (Go: Config.Window).
     pub window_seconds: i64,
-    /// Verifier clock, Unix seconds. Initial key/invite checks and freshness
-    /// use the highest sample seen so far; authorization (including native-tool
-    /// and audit time) shares it in the volatile profile. Durable post-commit
-    /// authorization keeps its store-sampled finalNow; response timestamps
-    /// use the raw sample.
+    /// Verifier clock, Unix seconds. Initial key/invite checks and freshness use the highest sample
+    /// seen so far; authorization (including native-tool and audit time) shares it in the volatile
+    /// profile. Durable post-commit authorization keeps its store-sampled finalNow; response
+    /// timestamps use the raw sample.
     pub now: Clock,
 }
 
@@ -151,22 +166,29 @@ pub struct Config {
 /// section 4).
 pub struct Verifier {
     cfg: Config,
-    /// Candidate jack.server.key handler (Go: Config.ServerKeys); None
-    /// denies the route. Deliberately NOT a Config field: adding a field
-    /// would break every existing struct literal of the static public API.
+    /// Candidate jack.server.key handler (Go: Config.ServerKeys); None denies the route.
+    /// Deliberately NOT a Config field: adding a field would break every existing struct literal
+    /// of the static public API.
     server_keys: Option<Arc<dyn NativeTools>>,
-    /// Candidate durable nonce store (Go: Config.DurableNonces); None uses
-    /// the volatile store. Builder-only for the same static-API reason.
+    /// Candidate durable nonce store (Go: Config.DurableNonces); None uses the volatile store.
+    /// Builder-only for the same static-API reason.
     #[cfg(target_os = "linux")]
     durable: Option<Arc<SharedDurableNonceStore>>,
-    /// Latched durable-profile refusal for an invalid window. Ordinary
-    /// construction validates this config first, but the infallible durable
-    /// builder rechecks it and fails every later request closed.
+    /// Latched durable-profile refusal for an invalid window. Ordinary construction validates this
+    /// config first, but the infallible durable builder rechecks it and fails every later request
+    /// closed.
     #[cfg(target_os = "linux")]
     durable_window_invalid: bool,
     /// Highest clock sample seen; request time is monotonic within a process.
     high_water: AtomicI64,
+    /// Identity of THIS verifier, stamped into every [`PendingRequest`] it issues: `dispatch`
+    /// refuses a pending request issued by another one (fail closed). Read-only after construction.
+    issuer: u64,
 }
+
+/// Process-wide source of issuer ids; 0 is never handed out, so a
+/// zero-initialised value can never match a real issuer.
+static NEXT_ISSUER: AtomicU64 = AtomicU64::new(1);
 
 impl Verifier {
     /// Validates cfg (Go: NewVerifier). In addition to aud, the window can be
@@ -195,6 +217,7 @@ impl Verifier {
             #[cfg(target_os = "linux")]
             durable_window_invalid: false,
             high_water: AtomicI64::new(i64::MIN),
+            issuer: NEXT_ISSUER.fetch_add(1, Ordering::SeqCst),
         })
     }
 
@@ -244,16 +267,36 @@ impl Verifier {
     }
 
     /// Runs the pipeline of spec 01 section 4 and spec 02 section 4 on one
-    /// request. Stops at the first failing step; a rejection never reveals
-    /// more than its code.
+    /// request as a single step: [`Verifier::authenticate`] followed by
+    /// [`Verifier::dispatch`]. The legacy profile and direct library callers
+    /// keep using this one-shot path, so its behaviour and bytes do not change;
+    /// an era-aware caller runs the two phases itself and inserts the modern
+    /// rules of spec 04 between them.
     pub fn verify(&self, req: &Request) -> VerifyResult {
+        match self.authenticate(req) {
+            Authentication::Refused(res) => res,
+            Authentication::Pending(pending) => self.dispatch(pending),
+        }
+    }
+
+    /// Phase 1: steps 1-8 of spec 01 section 4 (parse, key resolution, window,
+    /// signature, durable reservation or nonce record) plus the body
+    /// classification of spec 02 section 2. Stops at the first failing step; a
+    /// rejection never reveals more than its code.
+    ///
+    /// NO native tool runs and NO audit event is written here: a caller that
+    /// refuses the request afterwards (the modern rules `S1`-`S12` of spec 04)
+    /// has produced no side effect beyond the recorded nonce or the committed
+    /// durable reservation, which is exactly what the one-shot path consumed
+    /// before it authorized as well.
+    pub fn authenticate(&self, req: &Request) -> Authentication {
         let now = (self.cfg.now)();
         let effective = self.effective_now(now);
         let auth_values: Vec<&str> = req.auth_values.iter().map(String::as_str).collect();
 
         let auth = match parse_request_auth(&auth_values) {
             Ok(auth) => auth,
-            Err(err) => return rejection_from(&err),
+            Err(err) => return Authentication::Refused(rejection_from(&err)),
         };
 
         // Step 4-5: resolve the verify key — either the registered entry or,
@@ -262,42 +305,42 @@ impl Verifier {
         let verify_key = match caller.as_ref() {
             Some(entry) => {
                 if !entry_active(entry, effective) {
-                    return fail(
+                    return Authentication::Refused(fail(
                         VerifyResult::default(),
                         401,
                         codes::KEY_INACTIVE,
                         "key is not active",
-                    );
+                    ));
                 }
                 match decode_b64url_fixed(&entry.public_key, 32) {
                     Ok(key) => key,
                     // Registry data is operator-owned; a malformed key there
                     // is a server fault, not a client rejection.
                     Err(_) => {
-                        return fail(
+                        return Authentication::Refused(fail(
                             VerifyResult::default(),
                             500,
                             "internal_error",
                             "registry holds an invalid public key",
-                        )
+                        ))
                     }
                 }
             }
             None => match enrollment_key(req, &auth.kid, self.cfg.state.as_ref(), effective) {
                 Ok(key) => key,
-                Err(rej) => return rej,
+                Err(rej) => return Authentication::Refused(rej),
             },
         };
 
         // Step 6: window. abs_diff cannot overflow where `now - ts` would.
         let window = self.window();
         if effective.abs_diff(auth.ts) > window.unsigned_abs() {
-            return fail(
+            return Authentication::Refused(fail(
                 VerifyResult::default(),
                 401,
                 codes::TIMESTAMP_OUT_OF_WINDOW,
                 "timestamp is outside the acceptance window",
-            );
+            ));
         }
 
         // Step 7: signature. The parser already checked the sig encoding;
@@ -305,12 +348,12 @@ impl Verifier {
         let sig = match decode_b64url_fixed(&auth.sig, 64) {
             Ok(sig) => sig,
             Err(_) => {
-                return fail(
+                return Authentication::Refused(fail(
                     VerifyResult::default(),
                     401,
                     codes::BAD_SIGNATURE,
                     "malformed signature",
-                )
+                ))
             }
         };
         let signing = request_signing_string(
@@ -323,27 +366,28 @@ impl Verifier {
             &req.body,
         );
         if !crate::ed25519::verify(&verify_key, signing.as_bytes(), &sig) {
-            return fail(
+            return Authentication::Refused(fail(
                 VerifyResult::default(),
                 401,
                 codes::BAD_SIGNATURE,
                 "signature does not verify",
-            );
+            ));
         }
 
         // Candidate durable profile: reserve AFTER signature verification and
         // BEFORE any authorization/state change/dispatch (spec section 2); the
         // volatile store below is skipped. The committed lease is finished by
-        // the HTTP adapter after the response is produced.
+        // the HTTP adapter after the response is produced, or by the `Drop` of
+        // a pending request that is never dispatched.
         #[cfg(target_os = "linux")]
         if let Some(store) = self.durable.as_ref() {
             if self.durable_window_invalid {
-                return fail(
+                return Authentication::Refused(fail(
                     VerifyResult::default(),
                     500,
                     "internal_error",
                     "server: durable window must be between 1 and 120 seconds",
-                );
+                ));
             }
             let snapshot = match caller.as_ref() {
                 Some(entry) => CallerSnapshot::registered(entry.clone()),
@@ -360,10 +404,8 @@ impl Verifier {
                 &self.cfg.now,
             );
             return match outcome.final_now {
-                Some(final_now) => {
-                    self.authorize(req, &auth, final_now, caller.as_ref(), outcome.result)
-                }
-                None => outcome.result,
+                Some(final_now) => self.classify(req, &auth, final_now, caller, outcome.result),
+                None => Authentication::Refused(outcome.result),
             };
         }
 
@@ -375,12 +417,12 @@ impl Verifier {
             .nonces
             .check_and_record(&auth.kid, &auth.nonce, effective, auth.ts + window)
         {
-            return fail(
+            return Authentication::Refused(fail(
                 VerifyResult::default(),
                 401,
                 codes::REPLAYED_NONCE,
                 "nonce was already used",
-            );
+            ));
         }
 
         let res = VerifyResult {
@@ -389,130 +431,206 @@ impl Verifier {
             request_sig: auth.sig.clone(),
             ..Default::default()
         };
-        self.authorize(req, &auth, effective, caller.as_ref(), res)
+        self.classify(req, &auth, effective, caller, res)
     }
 
-    /// Step 9: body shape, protocol-native tools, forwarding (Go: authorize).
-    fn authorize(
+    /// Phase 1 tail: the body shape rules of spec 02 section 2 on top of an
+    /// authenticated result, producing either the body rejection or the
+    /// dispatch action of a [`PendingRequest`].
+    fn classify(
         &self,
         req: &Request,
         auth: &RequestAuth,
         now: i64,
-        caller: Option<&RegistryEntry>,
+        caller: Option<RegistryEntry>,
         mut res: VerifyResult,
-    ) -> VerifyResult {
-        // GET carries no body; nothing to classify.
-        if req.method == "GET" {
-            res.identity = self.identity_for(caller);
-            res.accepted = true;
-            return res;
+    ) -> Authentication {
+        // A body to classify exists only on `POST` (spec 02 section 2 item 2),
+        // so a non-`POST` request carries no JSON-RPC here. The HTTP adapter
+        // refuses a non-`GET`/non-`POST` method before verification in the
+        // legacy profile; the modern profile answers it with the signed 405 of
+        // spec 04 `S2` after the era decision instead.
+        if req.method != "POST" {
+            return self.pending(PendingAction::Forward, res, auth, now, caller);
         }
 
         let Some(msg) = classify_body(&req.body) else {
-            return fail(
+            return Authentication::Refused(fail(
                 res,
                 400,
                 codes::INVALID_REQUEST,
-                "the body is not an acceptable JSON-RPC object",
-            );
+                INVALID_BODY_MESSAGE,
+            ));
         };
-        res.rpc_id = msg.id.clone();
+        res.rpc_id = msg.id;
         if msg.kind == MessageKind::Response {
-            res.identity = self.identity_for(caller);
-            res.accepted = true;
-            return res;
+            return self.pending(PendingAction::Forward, res, auth, now, caller);
         }
-        if let Some(tool) = &msg.tool {
+        let RpcMessage {
+            tool, arguments, ..
+        } = msg;
+        if let Some(tool) = &tool {
             res.tool = tool.clone();
         }
 
-        // Owned clone: the arguments move out of msg while tool is alive.
-        let jack_tool = msg.tool.clone().filter(|t| t.starts_with("jack."));
-        if let Some(tool) = jack_tool {
-            // Set BEFORE any denial: a denied native call is still native.
-            res.native = true;
-            // The candidate route bypasses the current-v1 allowlist and goes
-            // to its own lane (Go: `if msg.tool == ToolServerKey { native =
-            // v.cfg.ServerKeys }`). Unknown jack.* tool, candidate route
-            // without a rotation profile, or missing handler: 403 with NO
-            // audit event — the call never reached a tool.
-            let handler = if tool == TOOL_SERVER_KEY {
-                self.server_keys.as_ref()
-            } else {
-                self.cfg.native.as_ref().filter(|_| is_native_tool(&tool))
-            };
-            let Some(handler) = handler else {
-                return fail(
+        // Only a jack.* tool is a candidate for the native lane; everything
+        // else is ordinary MCP traffic and gets forwarded unchanged.
+        match tool.filter(|t| t.starts_with("jack.")) {
+            Some(tool) => {
+                // Set BEFORE any denial: a denied native call is still native.
+                res.native = true;
+                self.pending(
+                    PendingAction::Native { tool, arguments },
                     res,
-                    403,
-                    codes::OPERATION_DENIED,
-                    "operation is not permitted",
-                );
-            };
-            let mut call = NativeCall {
-                tool: &tool,
-                arguments: msg.arguments,
-                caller,
-                kid: &auth.kid,
+                    auth,
+                    now,
+                    caller,
+                )
+            }
+            None => self.pending(PendingAction::Forward, res, auth, now, caller),
+        }
+    }
+
+    /// Wraps a classified request as the pending half of [`Authentication`],
+    /// stamped with this verifier's issuer id.
+    fn pending(
+        &self,
+        action: PendingAction,
+        res: VerifyResult,
+        auth: &RequestAuth,
+        now: i64,
+        caller: Option<RegistryEntry>,
+    ) -> Authentication {
+        Authentication::Pending(PendingRequest {
+            issuer: self.issuer,
+            state: Some(PendingState {
+                res,
+                kid: auth.kid.clone(),
                 ts: auth.ts,
                 now,
-                aud: &self.cfg.aud,
-                state: Arc::clone(&self.cfg.state),
-                target: String::new(),
-            };
-            let out = handler.call(&mut call);
+                aud: self.cfg.aud.clone(),
+                caller,
+                action,
+            }),
+        })
+    }
 
-            // Audit only the tools spec 03 section 8 lists; the event is
-            // returned on res even when no sink is configured, and a sink
-            // error never changes the verdict.
-            if audited_tool(call.tool) {
-                let mut event = AuditEvent {
-                    time: now,
-                    tool: call.tool.to_owned(),
-                    outcome: AUDIT_SUCCESS.to_owned(),
-                    code: String::new(),
-                    actor_kid: auth.kid.clone(),
-                    actor_name: caller.map(|c| c.name.clone()).unwrap_or_default(),
-                    target: call.target.clone(),
-                };
-                if let Err(jerr) = &out {
-                    event.outcome = AUDIT_FAILURE.to_owned();
-                    event.code = jerr.code.clone();
-                }
-                res.audit = Some(event.clone());
-                if let Some(sink) = self.cfg.audit.as_ref() {
-                    let _ = sink.record(event);
-                }
-            }
-
-            return match out {
-                Ok(native_result) => {
-                    res.accepted = true;
-                    res.structured = Some(native_result.structured);
-                    res
-                }
-                Err(jerr) => fail(res, jerr.http_status, &jerr.code, &jerr.message),
-            };
+    /// Phase 2: dispatches an authenticated request — the protocol-native tool
+    /// call with its audit event, or the forwarded accept carrying the verified
+    /// identity — and returns the same [`VerifyResult`] shape
+    /// [`Verifier::verify`] returns.
+    ///
+    /// `pending` is consumed BY VALUE, so a request can be dispatched at most
+    /// once. A pending request issued by another verifier is answered with the
+    /// signed 500 `internal_error` (fail closed): the rules that produced it
+    /// are not this verifier's, so nothing is executed.
+    pub fn dispatch(&self, mut pending: PendingRequest) -> VerifyResult {
+        let issuer = pending.issuer;
+        let Some(state) = pending.state.take() else {
+            // Unreachable: only dispatch empties a pending request, and it
+            // consumes the value.
+            return fail(
+                VerifyResult::default(),
+                500,
+                "internal_error",
+                "internal error",
+            );
+        };
+        let PendingState {
+            mut res,
+            kid,
+            ts,
+            now,
+            aud,
+            caller,
+            action,
+        } = state;
+        if issuer != self.issuer {
+            return fail(res, 500, "internal_error", "internal error");
         }
 
-        // Unreachable: only a jack.enroll request passes step 4 without a
-        // registry entry, and it was handled above (native calls, so the
-        // identity stays None).
-        let caller = match caller {
-            Some(caller) => caller,
-            None => return fail(res, 401, codes::UNKNOWN_KEY, "unknown key"),
-        };
-        // Ordinary MCP traffic is forwarded unchanged for ANY authenticated
-        // caller, whatever the method or tool name (spec 02 section 2
-        // pass-through); the verified identity snapshot rides along (spec 02
-        // section 3).
-        res.identity = Some(VerifiedIdentity::new(
-            caller.kid.clone(),
-            caller.name.clone(),
-            caller.admin,
-        ));
-        res.accepted = true;
-        res
+        match action {
+            PendingAction::Forward => {
+                // Unreachable: only a jack.enroll request passes step 4 without
+                // a registry entry, and it is native (so not forwarded); that
+                // shape is rejected earlier as unknown_key, so this arm is
+                // defensive.
+                let Some(caller) = caller else {
+                    return fail(res, 401, codes::UNKNOWN_KEY, "unknown key");
+                };
+                // Ordinary MCP traffic is forwarded unchanged for ANY
+                // authenticated caller, whatever the method or tool name (spec
+                // 02 section 2 pass-through); the verified identity snapshot
+                // rides along (spec 02 section 3).
+                res.identity = self.identity_for(Some(&caller));
+                res.accepted = true;
+                res
+            }
+            PendingAction::Native { tool, arguments } => {
+                // The candidate route bypasses the current-v1 allowlist and goes
+                // to its own lane (Go: `if msg.tool == ToolServerKey { native =
+                // v.cfg.ServerKeys }`). Unknown jack.* tool, candidate route
+                // without a rotation profile, or missing handler: 403 with NO
+                // audit event — the call never reached a tool.
+                let handler = if tool == TOOL_SERVER_KEY {
+                    self.server_keys.as_ref()
+                } else {
+                    self.cfg.native.as_ref().filter(|_| is_native_tool(&tool))
+                };
+                let Some(handler) = handler else {
+                    return fail(
+                        res,
+                        403,
+                        codes::OPERATION_DENIED,
+                        "operation is not permitted",
+                    );
+                };
+                let mut call = NativeCall {
+                    tool: &tool,
+                    arguments,
+                    caller: caller.as_ref(),
+                    kid: &kid,
+                    ts,
+                    now,
+                    aud: &aud,
+                    state: Arc::clone(&self.cfg.state),
+                    target: String::new(),
+                };
+                let out = handler.call(&mut call);
+
+                // Audit only the tools spec 03 section 8 lists; the event is
+                // returned on res even when no sink is configured, and a sink
+                // error never changes the verdict.
+                if audited_tool(call.tool) {
+                    let mut event = AuditEvent {
+                        time: now,
+                        tool: call.tool.to_owned(),
+                        outcome: AUDIT_SUCCESS.to_owned(),
+                        code: String::new(),
+                        actor_kid: kid.clone(),
+                        actor_name: caller.as_ref().map(|c| c.name.clone()).unwrap_or_default(),
+                        target: call.target.clone(),
+                    };
+                    if let Err(jerr) = &out {
+                        event.outcome = AUDIT_FAILURE.to_owned();
+                        event.code = jerr.code.clone();
+                    }
+                    res.audit = Some(event.clone());
+                    if let Some(sink) = self.cfg.audit.as_ref() {
+                        let _ = sink.record(event);
+                    }
+                }
+
+                match out {
+                    Ok(native_result) => {
+                        res.accepted = true;
+                        res.structured = Some(native_result.structured);
+                        res
+                    }
+                    Err(jerr) => fail(res, jerr.http_status, &jerr.code, &jerr.message),
+                }
+            }
+        }
     }
 
     /// Builds the identity snapshot for a forwarded accept (spec 02 section
@@ -572,6 +690,16 @@ pub struct VerifyResult {
     /// produced (Go: Result.admission + Done). Linux-gated with the store.
     #[cfg(target_os = "linux")]
     pub admission: AdmissionFinish,
+}
+
+impl VerifyResult {
+    /// Finishes the committed durable admission lease once the response has
+    /// been produced (Go: Result.Done). Without the Linux-gated store there is
+    /// no lease and this is a no-op.
+    pub fn finish_admission(&mut self) {
+        #[cfg(target_os = "linux")]
+        self.admission.finish();
+    }
 }
 
 /// Builds the rejection form of a result: only status, code and message.
@@ -695,274 +823,6 @@ fn live_invite(state: &dyn StateStore, args: &RawMembers, now: i64) -> bool {
     state
         .lookup_invite(&invite_id_of(&raw_code))
         .is_some_and(|invite| now < invite.expires_at)
-}
-
-/// Request or client answer (Go: kindRequest / kindResponse).
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum MessageKind {
-    /// A request or a notification.
-    Request,
-    /// A client answer to a server-initiated request.
-    Response,
-}
-
-/// The part of a JSON-RPC object the verifier needs (Go: rpcMessage).
-#[derive(Debug, Clone)]
-struct RpcMessage {
-    kind: MessageKind,
-    /// id member as sent (exact raw text); None when absent.
-    id: Option<String>,
-    /// method name; empty for responses.
-    method: String,
-    /// tools/call tool name; None when absent or not a string.
-    tool: Option<String>,
-    /// params.arguments as sent; None only when the member is absent.
-    arguments: Option<Box<RawValue>>,
-}
-
-/// Body members as sent: a map type only accepts a JSON object (spec 02
-/// section 4: the body "MUST be a single UTF-8 JSON-RPC 2.0 object"; arrays,
-/// including batch arrays and positional representations, and scalars are
-/// invalid). Duplicate names never reach it: `unacceptable_body` rejects them
-/// first. A derived struct would also deserialize from arrays positionally.
-type RawMembers = std::collections::HashMap<String, Box<RawValue>>;
-
-/// Returns Some only when the raw JSON text parses to a JSON string
-/// (mirrors Go jsonString: null, numbers, bools are all None).
-fn raw_as_string(value: &RawValue) -> Option<String> {
-    serde_json::from_str::<serde_json::Value>(value.get())
-        .ok()
-        .and_then(|v| v.as_str().map(|s| s.to_owned()))
-}
-
-/// The maximum nesting depth of arrays and objects the body may reach
-/// (spec 02 section 4 step 2).
-const MAX_BODY_DEPTH: usize = 128;
-
-/// Reports whether the body text is unacceptable before parsing (spec 02
-/// section 4 step 2): a \uXXXX string escape that does not form a Unicode
-/// scalar value (a lone or unpaired surrogate), or nesting deeper than
-/// MAX_BODY_DEPTH levels of arrays and objects, or an object with two members
-/// of the same name (compared after unescaping, exact). One byte pass, no
-/// recursion, memory bounded by the names of the open objects, so the verdict
-/// never depends on the JSON library's own limits (RawValue capture scanning
-/// bypasses serde_json's recursion limit and a lone surrogate would otherwise
-/// only fail where serde_json materializes a value).
-fn unacceptable_body(body: &[u8]) -> bool {
-    // One frame per open container; Some(names) for an object.
-    let mut stack: Vec<Option<HashSet<String>>> = Vec::new();
-    let mut expect_key = false;
-    let mut i = 0;
-    while i < body.len() {
-        match body[i] {
-            b'"' => {
-                let collect = expect_key && matches!(stack.last(), Some(Some(_)));
-                let Some((end, name)) = scan_string(body, i + 1, collect) else {
-                    return true;
-                };
-                i = end;
-                if collect {
-                    expect_key = false;
-                    if let Some(Some(names)) = stack.last_mut() {
-                        if !names.insert(name) {
-                            return true; // duplicate member name
-                        }
-                    }
-                }
-                continue;
-            }
-            b'{' | b'[' => {
-                if stack.len() >= MAX_BODY_DEPTH {
-                    return true;
-                }
-                let is_object = body[i] == b'{';
-                stack.push(is_object.then(HashSet::new));
-                expect_key = is_object;
-            }
-            b'}' | b']' => {
-                stack.pop();
-                expect_key = false;
-            }
-            b',' => expect_key = matches!(stack.last(), Some(Some(_))),
-            _ => {}
-        }
-        i += 1;
-    }
-    false
-}
-
-/// Scans one string body starting after its opening quote. Returns the index
-/// after the closing quote and, when `collect` is set, the unescaped text;
-/// None when a \uXXXX escape is not a Unicode scalar value (lone surrogate)
-/// or the text ends inside an escape.
-fn scan_string(body: &[u8], start: usize, collect: bool) -> Option<(usize, String)> {
-    let mut out: Vec<u8> = Vec::new();
-    let mut i = start;
-    while i < body.len() {
-        let c = body[i];
-        match c {
-            b'"' => return Some((i + 1, String::from_utf8_lossy(&out).into_owned())),
-            b'\\' => {
-                let esc = *body.get(i + 1)?;
-                if esc != b'u' {
-                    if collect {
-                        out.push(simple_escape(esc));
-                    }
-                    i += 2; // two-byte escape; an escaped backslash keeps the string going
-                    continue;
-                }
-                if i + 6 > body.len() {
-                    return None;
-                }
-                let Some(v) = hex4(&body[i + 2..i + 6]) else {
-                    i += 2; // not a \uXXXX escape: invalid JSON, the parser rejects it
-                    continue;
-                };
-                if (0xDC00..=0xDFFF).contains(&v) {
-                    return None; // lone low surrogate
-                }
-                if !(0xD800..=0xDBFF).contains(&v) {
-                    push_scalar(&mut out, collect, v);
-                    i += 6; // ordinary \uXXXX escape
-                    continue;
-                }
-                // A high surrogate must be followed immediately by \uDC00..\uDFFF.
-                let low = low_surrogate_at(body, i + 6)?;
-                push_scalar(
-                    &mut out,
-                    collect,
-                    0x10000 + ((v - 0xD800) << 10) + (low - 0xDC00),
-                );
-                i += 12;
-            }
-            _ => {
-                if collect {
-                    out.push(c);
-                }
-                i += 1;
-            }
-        }
-    }
-    None // unterminated string: invalid JSON, the parser rejects it anyway
-}
-
-/// Reads a `\uDC00..\uDFFF` escape starting exactly at `at`, or None.
-fn low_surrogate_at(body: &[u8], at: usize) -> Option<u32> {
-    let escape = body.get(at..at + 6)?;
-    if escape[0] != b'\\' || escape[1] != b'u' {
-        return None;
-    }
-    hex4(&escape[2..]).filter(|low| (0xDC00..=0xDFFF).contains(low))
-}
-
-/// Maps the character after a backslash to the byte it stands for; an
-/// invalid escape is kept as is (the parser rejects the body later).
-fn simple_escape(esc: u8) -> u8 {
-    match esc {
-        b'n' => b'\n',
-        b'r' => b'\r',
-        b't' => b'\t',
-        b'b' => 0x08,
-        b'f' => 0x0C,
-        other => other,
-    }
-}
-
-/// Appends the UTF-8 form of a scalar value when names are being collected.
-fn push_scalar(out: &mut Vec<u8>, collect: bool, scalar: u32) {
-    if !collect {
-        return;
-    }
-    if let Some(ch) = char::from_u32(scalar) {
-        let mut buf = [0u8; 4];
-        out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
-    }
-}
-
-/// Parses exactly four ASCII hex digits, or None.
-fn hex4(b: &[u8]) -> Option<u32> {
-    if b.len() != 4 {
-        return None;
-    }
-    let mut v: u32 = 0;
-    for &c in b {
-        let d = match c {
-            b'0'..=b'9' => u32::from(c - b'0'),
-            b'a'..=b'f' => u32::from(c - b'a') + 10,
-            b'A'..=b'F' => u32::from(c - b'A') + 10,
-            _ => return None,
-        };
-        v = v << 4 | d;
-    }
-    Some(v)
-}
-
-/// Implements the body rules of spec 02 section 4: the body must be a single
-/// UTF-8 JSON-RPC 2.0 OBJECT. UTF-8 is validated before any parse. Member
-/// decisions, each tied to the spec text:
-/// - `jsonrpc` absent, null, or not exactly "2.0" -> None: section 4 makes "a
-///   missing or wrong `jsonrpc` member" a 400 invalid_request; a null member
-///   is a wrong one (Go `jsonString` and the JS `msg.jsonrpc !== '2.0'` agree).
-/// - `id`, `result`, `error` are judged by PRESENCE: `"id": null` and a null
-///   result/error count as present (Go `_, has := m[k]`, JS `'k' in msg`;
-///   section 4 defines a response as "no `method`, an `id`, and exactly one of
-///   `result` or `error"").
-/// - a PRESENT `method` must be a string (section 4: "a string `method`");
-///   null is present-but-wrong and never falls back to the response shape
-///   (Go `jsonString(rawMethod)` fails before the response branch is reached).
-/// - for tools/call, `params` must be an object carrying a string `name`
-///   (section 4: "`params.name` MUST be a string, otherwise 400
-///   invalid_request"); absent, null, array and scalar params all fail.
-/// - `arguments` is carried as exact raw text when present (a null stays
-///   Some("null")), None only when absent, so native handlers can judge
-///   integer arguments on their JSON text (spec 03 section 3).
-fn classify_body(body: &[u8]) -> Option<RpcMessage> {
-    let text = std::str::from_utf8(body).ok()?;
-    if unacceptable_body(body) {
-        return None;
-    }
-    let members: RawMembers = serde_json::from_str(text).ok()?;
-    if members
-        .get("jsonrpc")
-        .and_then(|v| raw_as_string(v))
-        .as_deref()
-        != Some("2.0")
-    {
-        return None;
-    }
-
-    // id: exact raw text when present (null stays "null").
-    let id = members.get("id").map(|v| v.get().to_owned());
-
-    // Method absent -> only a response shape can match. A PRESENT-but-null
-    // method does NOT take this branch (the map keeps Some).
-    let Some(method_raw) = members.get("method") else {
-        let is_response =
-            id.is_some() && members.contains_key("result") != members.contains_key("error");
-        return is_response.then(|| RpcMessage {
-            kind: MessageKind::Response,
-            id,
-            method: String::new(),
-            tool: None,
-            arguments: None,
-        });
-    };
-    let method = raw_as_string(method_raw)?;
-
-    let mut msg = RpcMessage {
-        kind: MessageKind::Request,
-        id,
-        method: method.clone(),
-        tool: None,
-        arguments: None,
-    };
-    if method == "tools/call" {
-        let params_raw = members.get("params")?;
-        let params: RawMembers = serde_json::from_str(params_raw.get()).ok()?;
-        msg.tool = Some(params.get("name").and_then(|v| raw_as_string(v))?);
-        msg.arguments = params.get("arguments").cloned();
-    }
-    Some(msg)
 }
 
 #[cfg(test)]
