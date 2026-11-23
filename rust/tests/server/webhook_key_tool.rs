@@ -154,8 +154,9 @@ fn foreign_arguments_are_invalid_params() {
     let (_signer, caller) = caller_entry();
     let tool = webhook_tool();
 
-    // Any member, array, scalar or malformed payload is invalid_params; the
-    // class is judged on the raw JSON text.
+    // Any member, array or scalar payload is invalid_params; the class is
+    // judged on the raw JSON text (a non-JSON payload cannot reach this layer:
+    // RawValue only holds valid JSON).
     let bad = [
         r#"{"kid":"webhook-key-1"}"#,
         r#"{"arguments":null}"#,
@@ -163,7 +164,6 @@ fn foreign_arguments_are_invalid_params() {
         r#""null""#,
         "0",
         "true",
-        "not json",
     ];
     for text in bad {
         let mut req = call_req(TOOL_SERVER_WEBHOOK_KEY, Some(text), Some(&caller));
