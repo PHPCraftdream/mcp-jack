@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -535,7 +536,6 @@ func (c *Client) legacyFallback(ctx context.Context, signer Signer, version, too
 	if err := c.legacyHandshake(ctx, signer, version); err != nil {
 		return err
 	}
-	c.setEra(EraLegacy)
 	return c.callWithArgs(ctx, signer, tool, args, out)
 }
 
@@ -563,36 +563,29 @@ type jsonrpcNotification struct {
 	Method  string `json:"method"`
 }
 
-// jsonrpcLegacyInitialize is a verified legacy initialize reply: exactly one of
-// result and error is set.
-type jsonrpcLegacyInitialize struct {
-	JSONRPC string                         `json:"jsonrpc"`
-	Result  *jsonrpcLegacyInitializeResult `json:"result"`
-	Error   *struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-	} `json:"error"`
-}
-
-// jsonrpcLegacyInitializeResult is the negotiated protocol version.
-type jsonrpcLegacyInitializeResult struct {
-	ProtocolVersion string `json:"protocolVersion"`
-}
-
 // legacyHandshake runs the legacy-era lifecycle of 2025-11-25/2025-06-18:
-// initialize, then notifications/initialized. Only a verified 2xx answer is
-// accepted, and the initialize answer must be a JSON-RPC result whose
-// result.protocolVersion is a well-formed version: a JSON-RPC error or a
-// malformed or absent result fails the fallback.
+// initialize, then notifications/initialized. The initialize reply must be
+// accepted by parseLegacyInitialize; the negotiated version and the
+// Mcp-Session-Id response header, when the server assigns one, are then sent as
+// unsigned headers on notifications/initialized and on every later legacy
+// request.
 //
-// The negotiated version and the Mcp-Session-Id response header, when the
-// server assigns one, are cached and sent as unsigned headers on
-// notifications/initialized and every later legacy request. A failed handshake
-// clears them.
+// The cached session id, the negotiated version and the settled legacy era are
+// committed together, and only after notifications/initialized was accepted. Any
+// failure returns its error and invalidates the cached legacy state, so the
+// next call probes or handshakes again instead of running a legacy request that
+// no handshake backs.
 func (c *Client) legacyHandshake(ctx context.Context, signer Signer, version string) (err error) {
+	ok := false
+	defer func() {
+		if !ok {
+			c.invalidateLegacy()
+		}
+	}()
+	id := c.nextRequestID()
 	initBody, err := json.Marshal(jsonrpcInitializeRequest{
 		JSONRPC: "2.0",
-		ID:      c.nextRequestID(),
+		ID:      id,
 		Method:  "initialize",
 		Params: jsonrpcInitializeParams{
 			ProtocolVersion: version,
@@ -609,35 +602,125 @@ func (c *Client) legacyHandshake(ctx context.Context, signer Signer, version str
 	if status < 200 || status > 299 {
 		return decodeVerifiedCall(status, raw, nil)
 	}
-	var reply jsonrpcLegacyInitialize
-	if err := json.Unmarshal(raw, &reply); err != nil {
-		return fmt.Errorf("jack client: legacy initialize: %w", err)
+	negotiated, err := c.parseLegacyInitialize(raw, id)
+	if err != nil {
+		return err
 	}
-	if reply.Error != nil {
-		return fmt.Errorf("jack client: legacy initialize failed: JSON-RPC error %d: %s", reply.Error.Code, reply.Error.Message)
-	}
-	if reply.Result == nil || !modern.IsVersion(reply.Result.ProtocolVersion) {
-		return fmt.Errorf("jack client: legacy initialize failed: missing or invalid result.protocolVersion")
-	}
-	c.setLegacyState(reply.Result.ProtocolVersion, header.Get("Mcp-Session-Id"))
-	ok := false
-	defer func() {
-		if !ok {
-			c.clearLegacyState()
-		}
-	}()
-
 	initializedBody, err := json.Marshal(jsonrpcNotification{JSONRPC: "2.0", Method: "notifications/initialized"})
 	if err != nil {
 		return err
 	}
-	status, _, raw, err = c.roundTrip(ctx, signer, initializedBody, c.legacyHeaders())
+	sessionID := header.Get("Mcp-Session-Id")
+	status, _, raw, err = c.roundTrip(ctx, signer, initializedBody, legacySessionHeaders(negotiated, sessionID))
 	if err != nil {
 		return err
 	}
 	if status < 200 || status > 299 {
 		return decodeVerifiedCall(status, raw, nil)
 	}
+	c.acceptLegacyHandshake(negotiated, sessionID)
 	ok = true
 	return nil
+}
+
+// parseLegacyInitialize validates the verified initialize answer (2025-11-25
+// lifecycle): a JSON object carrying "jsonrpc":"2.0", the id of the initialize
+// request that was sent, exactly one of result and error with no error, and a
+// result object whose protocolVersion is a string that this client implements.
+// It returns the negotiated version. An unsupported but well-formed version is
+// a fallback failure like any other invalid reply.
+func (c *Client) parseLegacyInitialize(raw []byte, id int64) (string, error) {
+	fail := func(format string, args ...any) (string, error) {
+		return "", fmt.Errorf("jack client: legacy initialize failed: "+format, args...)
+	}
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &members); err != nil || members == nil {
+		return fail("the reply is not a JSON object")
+	}
+	var jsonrpc string
+	if member, ok := members["jsonrpc"]; !ok || json.Unmarshal(member, &jsonrpc) != nil || jsonrpc != "2.0" {
+		return fail(`the reply does not carry "jsonrpc":"2.0"`)
+	}
+	wantID := strconv.FormatInt(id, 10)
+	if member, ok := members["id"]; !ok || string(bytes.TrimSpace(member)) != wantID {
+		return fail("the reply id does not match the initialize request id %s", wantID)
+	}
+	result, hasResult := members["result"]
+	errorMember, hasError := members["error"]
+	if hasResult == hasError {
+		return fail("the reply must carry exactly one of result and error")
+	}
+	if hasError {
+		var rpcErr struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		}
+		_ = json.Unmarshal(errorMember, &rpcErr)
+		return fail("the reply is a JSON-RPC error %d: %s", rpcErr.Code, rpcErr.Message)
+	}
+	if isJSONNullToken(result) {
+		return fail("the reply carries no result object")
+	}
+	var resultMembers map[string]json.RawMessage
+	if err := json.Unmarshal(result, &resultMembers); err != nil || resultMembers == nil {
+		return fail("the reply result is not an object")
+	}
+	var negotiated string
+	if member, ok := resultMembers["protocolVersion"]; !ok || json.Unmarshal(member, &negotiated) != nil {
+		return fail("the reply result carries no protocolVersion string")
+	}
+	for _, implemented := range c.implementedVersions() {
+		if negotiated == implemented {
+			return negotiated, nil
+		}
+	}
+	return fail("unsupported protocol version %q", negotiated)
+}
+
+// isJSONNullToken reports whether raw is the JSON null token.
+func isJSONNullToken(raw json.RawMessage) bool {
+	return string(bytes.TrimSpace(raw)) == "null"
+}
+
+// acceptLegacyHandshake commits a fully accepted handshake: the settled era, the
+// negotiated version and the session id change together under mu, so no caller
+// observes a partly accepted session.
+func (c *Client) acceptLegacyHandshake(negotiated, sessionID string) {
+	c.mu.Lock()
+	c.settled = EraLegacy
+	c.negotiated, c.sessionID = negotiated, sessionID
+	c.mu.Unlock()
+}
+
+// invalidateLegacy forgets the negotiated version and the session id and
+// unsettles the era, so the next CallTool probes or handshakes again instead of
+// running a legacy request that no handshake backs.
+func (c *Client) invalidateLegacy() {
+	c.mu.Lock()
+	c.settled = ""
+	c.negotiated, c.sessionID = "", ""
+	c.mu.Unlock()
+}
+
+// legacySessionHeaders renders the unsigned transport headers of a legacy-era
+// request after initialize (2025-11-25 transport, Session): MCP-Protocol-Version
+// with the negotiated version and, when the server assigned one, Mcp-Session-Id.
+// They are never part of the signing string. An empty negotiated version yields
+// no header, so a client without a session sends the 0.1.x bytes.
+func legacySessionHeaders(negotiated, sessionID string) []modern.Header {
+	if negotiated == "" {
+		return nil
+	}
+	headers := []modern.Header{{Name: "MCP-Protocol-Version", Value: negotiated}}
+	if sessionID != "" {
+		headers = append(headers, modern.Header{Name: "Mcp-Session-Id", Value: sessionID})
+	}
+	return headers
+}
+
+// legacyRecoveryNeeded reports whether a 404 answer needs a fresh handshake:
+// only a request sent with the session id that is still current may end that
+// session, so a delayed 404 for an older session cannot invalidate a newer one.
+func legacyRecoveryNeeded(sentSessionID, currentSessionID string) bool {
+	return sentSessionID != "" && sentSessionID == currentSessionID
 }

@@ -222,7 +222,7 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request, eraAware bool) {
 
 // serveModern applies the era rules of spec 04 section 5 to an authenticated,
 // classified request and dispatches its outcome. The rules run before the
-// deferred Dispatch, so a request they refuse has no native effect and no
+// deferred dispatch, so a request they refuse has no native effect and no
 // audit event.
 func (h *handler) serveModern(w http.ResponseWriter, r *http.Request, target string, body []byte, res verify.Result) {
 	out := modern.Classify(h.profile, modern.Request{Method: r.Method, Target: target, Headers: headerList(r.Header), Body: body})
@@ -239,7 +239,7 @@ func (h *handler) serveModern(w http.ResponseWriter, r *http.Request, target str
 			// forwarded exactly as the legacy profile does. A method other than
 			// GET and POST never reaches this branch: serve answers it before
 			// the body is read (spec 04 section 3).
-			res = h.v.Dispatch(res)
+			res = verify.Dispatch(h.v, res)
 			if !res.Accepted {
 				h.reject(w, res)
 				return
@@ -251,7 +251,7 @@ func (h *handler) serveModern(w http.ResponseWriter, r *http.Request, target str
 			h.forward(w, r, body, res) // the original r.Header is untouched
 			return
 		}
-		res = h.v.Dispatch(res)
+		res = verify.Dispatch(h.v, res)
 		if !res.Accepted {
 			h.reject(w, res)
 			return

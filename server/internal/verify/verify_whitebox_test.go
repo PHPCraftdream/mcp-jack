@@ -5,9 +5,12 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
+	"github.com/PHPCraftdream/mcp-jack/server/internal/rpcbody"
 	"github.com/PHPCraftdream/mcp-jack/spec"
 )
 
@@ -222,7 +225,7 @@ func registeredAlice(t *testing.T, key ed25519.PrivateKey) (*MemoryState, string
 
 // TestClassifyOnlyDefersNativeDispatch pins the two-phase verification: a
 // ClassifyOnly Verify authenticates and classifies a valid signed jack.whoami
-// POST without calling the native tool, and Dispatch runs it exactly once.
+// POST without calling the native tool, and dispatch runs it exactly once.
 func TestClassifyOnlyDefersNativeDispatch(t *testing.T) {
 	key := testPrivateKey(t, "alice")
 	state, kid := registeredAlice(t, key)
@@ -253,7 +256,7 @@ func TestClassifyOnlyDefersNativeDispatch(t *testing.T) {
 		t.Fatalf("audit = %+v before dispatch, want none (whoami is not audited)", res.Audit)
 	}
 
-	out := v.Dispatch(res)
+	out := v.dispatch(res)
 	if !out.Accepted || out.Pending || native.calls != 1 || out.Structured == nil {
 		t.Fatalf("dispatched result = %+v, native calls=%d; want accepted with one call and structured content", out, native.calls)
 	}
@@ -261,15 +264,15 @@ func TestClassifyOnlyDefersNativeDispatch(t *testing.T) {
 		t.Fatalf("dispatched result = %+v, want the authenticated identity, kid and sig preserved", out)
 	}
 
-	// A second Dispatch is a no-op; the deferred step already ran.
-	again := v.Dispatch(out)
+	// A second dispatch has nothing pending; the deferred step already ran.
+	again := v.dispatch(out)
 	if !again.Accepted || native.calls != 1 {
 		t.Fatalf("second dispatch = %+v, native calls=%d; want a no-op", again, native.calls)
 	}
 }
 
 // TestClassifyOnlyAuditsAtDispatch pins that the audit event of an audited
-// native tool is written by Dispatch, not by the classifying Verify.
+// native tool is written by dispatch, not by the classifying Verify.
 func TestClassifyOnlyAuditsAtDispatch(t *testing.T) {
 	key := testPrivateKey(t, "alice")
 	state, _ := registeredAlice(t, key)
@@ -291,7 +294,7 @@ func TestClassifyOnlyAuditsAtDispatch(t *testing.T) {
 		t.Fatalf("pending result = %+v, events=%d; want pending with no audit event yet", res, len(audit.Events()))
 	}
 
-	out := v.Dispatch(res)
+	out := v.dispatch(res)
 	events := audit.Events()
 	if !out.Accepted || out.Audit == nil || len(events) != 1 || events[0].Tool != ToolAdminUserList {
 		t.Fatalf("dispatched result = %+v, events=%+v; want one %s audit event", out, events, ToolAdminUserList)
@@ -341,10 +344,10 @@ func TestPendingDispatchIsExclusive(t *testing.T) {
 		res := pending(t, v, key, 21)
 		defer res.Done()
 
-		if out := v.Dispatch(res); !out.Accepted || native.calls != 1 {
+		if out := v.dispatch(res); !out.Accepted || native.calls != 1 {
 			t.Fatalf("first dispatch = %+v, native calls=%d; want one accepted call", out, native.calls)
 		}
-		wantRefusal(t, v.Dispatch(res))
+		wantRefusal(t, v.dispatch(res))
 		if native.calls != 1 {
 			t.Fatalf("native calls after a refused second dispatch = %d, want 1", native.calls)
 		}
@@ -357,11 +360,11 @@ func TestPendingDispatchIsExclusive(t *testing.T) {
 		res := pending(t, issuer, key, 22)
 		defer res.Done()
 
-		wantRefusal(t, other.Dispatch(res))
+		wantRefusal(t, other.dispatch(res))
 		if foreign.calls != 0 || issued.calls != 0 {
 			t.Fatalf("native calls after a foreign dispatch = %d/%d, want 0/0", foreign.calls, issued.calls)
 		}
-		if out := issuer.Dispatch(res); !out.Accepted || issued.calls != 1 {
+		if out := issuer.dispatch(res); !out.Accepted || issued.calls != 1 {
 			t.Fatalf("issuer dispatch = %+v, native calls=%d; want the pending call to remain usable", out, issued.calls)
 		}
 	})
@@ -371,9 +374,83 @@ func TestPendingDispatchIsExclusive(t *testing.T) {
 		v, native := newVerifier(t, key)
 		res := pending(t, v, key, 23)
 		res.Done()
-		wantRefusal(t, v.Dispatch(res))
+		wantRefusal(t, v.dispatch(res))
 		if native.calls != 0 {
 			t.Fatalf("native calls after dispatch of a released result = %d, want 0", native.calls)
 		}
 	})
+}
+
+// blockingNative blocks in Call until release is closed and reports that it
+// started, so a test can hold a claimed dispatch in flight.
+type blockingNative struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (n *blockingNative) Call(*NativeCall) (NativeResult, *jack.Error) {
+	close(n.started)
+	<-n.release
+	return NativeResult{}, nil
+}
+
+// countingLease counts Release calls of a durable nonce lease.
+type countingLease struct{ releases atomic.Int32 }
+
+func (l *countingLease) Valid() bool { return true }
+func (l *countingLease) Release()    { l.releases.Add(1) }
+
+// TestDoneWaitsForClaimedDispatchLease pins the lease ordering: a claimed
+// dispatch keeps its request alive, so Done waits for the native call to return
+// before the durable lease is released.
+func TestDoneWaitsForClaimedDispatchLease(t *testing.T) {
+	key := testPrivateKey(t, "alice")
+	state, _ := registeredAlice(t, key)
+	native := &blockingNative{started: make(chan struct{}), release: make(chan struct{})}
+	v, err := NewVerifier(Config{
+		Aud: "svc", State: state, Nonces: NewNonceStore(), Native: native,
+		Now: func() int64 { return testNow },
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	// A hand-built pending result: this test drives the dispatch and the lease
+	// directly, without the authentication pipeline.
+	lease := &countingLease{}
+	res := Result{
+		Kid: "kid", RequestSig: "sig", NonceRecorded: true,
+		admission: &admissionLease{lease: lease},
+		pending: &pendingDispatch{
+			issuer: v,
+			now:    testNow,
+			msg:    rpcbody.RPCMessage{Kind: rpcbody.KindRequest, Method: "tools/call", Tool: ToolWhoAmI, HasTool: true},
+		},
+	}
+
+	dispatched := make(chan Result, 1)
+	go func() { dispatched <- v.dispatch(res) }()
+	<-native.started
+
+	done := make(chan struct{})
+	go func() {
+		res.Done()
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("Done released the request while the claimed native call was still running")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if got := lease.releases.Load(); got != 0 {
+		t.Fatalf("lease releases = %d while the native call runs, want 0", got)
+	}
+
+	close(native.release)
+	if out := <-dispatched; !out.Accepted {
+		t.Fatalf("dispatch result = %+v, want accepted", out)
+	}
+	<-done
+	if got := lease.releases.Load(); got != 1 {
+		t.Fatalf("lease releases = %d after Done returned, want 1", got)
+	}
 }

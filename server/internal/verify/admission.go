@@ -83,10 +83,12 @@ type admissionLease struct {
 	lease NonceLease
 }
 
-// Done releases the lease and marks a pending dispatch released; a direct
-// Verify caller must call Done after handling. NewHandler calls Done
-// automatically, including native/error paths. A pending result dispatched
-// after Done is refused (see Verifier.Dispatch).
+// Done marks a pending dispatch released and waits for a claimed dispatch to
+// return before releasing the lease, so the lease is never released while the
+// native call it admitted is still running. A direct Verify caller must call
+// Done after handling; NewHandler calls Done automatically, including
+// native/error paths. A pending result dispatched after Done is refused (see
+// Verifier.dispatch).
 func (r Result) Done() {
 	if r.pending != nil {
 		r.pending.markReleased()

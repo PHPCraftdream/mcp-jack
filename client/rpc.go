@@ -437,38 +437,6 @@ func (c *Client) legacyState() (negotiated, sessionID string) {
 	return c.negotiated, c.sessionID
 }
 
-// setLegacyState records the negotiated legacy protocol version and the session
-// id of the initialize response header.
-func (c *Client) setLegacyState(negotiated, sessionID string) {
-	c.mu.Lock()
-	c.negotiated, c.sessionID = negotiated, sessionID
-	c.mu.Unlock()
-}
-
-// clearLegacyState forgets the negotiated version and the session id.
-func (c *Client) clearLegacyState() {
-	c.mu.Lock()
-	c.negotiated, c.sessionID = "", ""
-	c.mu.Unlock()
-}
-
-// legacyHeaders are the unsigned transport headers of a legacy-era request
-// after initialize (2025-11-25 transport, Session): MCP-Protocol-Version with
-// the negotiated version and, when the server assigned one, Mcp-Session-Id.
-// They are never part of the signing string. A client without a legacy session
-// sends no extra header, so its requests stay byte-identical to 0.1.x.
-func (c *Client) legacyHeaders() []modern.Header {
-	negotiated, sessionID := c.legacyState()
-	if negotiated == "" {
-		return nil
-	}
-	headers := []modern.Header{{Name: "MCP-Protocol-Version", Value: negotiated}}
-	if sessionID != "" {
-		headers = append(headers, modern.Header{Name: "Mcp-Session-Id", Value: sessionID})
-	}
-	return headers
-}
-
 // ResetEra clears the era an EraAuto client settled on, together with the
 // negotiated legacy version and session id, so the next CallTool probes the
 // modern era again and a later fallback starts a fresh legacy session. It is
@@ -629,27 +597,31 @@ func (c *Client) call(ctx context.Context, signer Signer, tool string, arguments
 // Mcp-Session-Id headers once the legacy handshake negotiated a session.
 //
 // A 404 for a known session id means the session is gone (2025-11-25
-// transport). The handshake is re-run once so the caller's next attempt starts
-// a fresh session, and the operation itself is never replayed: the 404 is
-// returned to the caller.
+// transport). When the 404 answers the session that is still current, the
+// handshake is re-run once so the caller's next attempt starts a fresh session,
+// and the operation itself is never replayed: the 404 is returned to the
+// caller. A failed recovery handshake is returned as the call's error. A 404
+// for a session that was replaced while the request was in flight changes
+// nothing.
 func (c *Client) callWithArgs(ctx context.Context, signer Signer, tool string, args []byte, out any) error {
 	reqBody, err := buildLegacyCallBody(c.nextRequestID(), tool, args)
 	if err != nil {
 		return err
 	}
-	status, _, raw, err := c.roundTrip(ctx, signer, reqBody, c.legacyHeaders())
+	negotiated, sentSessionID := c.legacyState()
+	status, _, raw, err := c.roundTrip(ctx, signer, reqBody, legacySessionHeaders(negotiated, sentSessionID))
 	if err != nil {
 		return err
 	}
 	if status == http.StatusNotFound {
-		if negotiated, sessionID := c.legacyState(); sessionID != "" {
-			if negotiated == "" {
-				negotiated = legacyProtocolVersion
+		if _, currentSessionID := c.legacyState(); legacyRecoveryNeeded(sentSessionID, currentSessionID) {
+			version := negotiated
+			if version == "" {
+				version = legacyProtocolVersion
 			}
-			// Only the handshake is replayed; a failure of the fresh handshake
-			// is harmless here because it clears the cached session and the
-			// next call starts over.
-			_ = c.legacyHandshake(ctx, signer, negotiated)
+			if herr := c.legacyHandshake(ctx, signer, version); herr != nil {
+				return fmt.Errorf("jack client: legacy session recovery: %w", herr)
+			}
 		}
 	}
 	return decodeVerifiedCall(status, raw, out)

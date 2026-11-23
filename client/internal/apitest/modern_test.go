@@ -17,6 +17,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -58,6 +59,12 @@ type modernScriptAnswer struct {
 	// headers are extra response headers of this answer, for example the
 	// Mcp-Session-Id a legacy server assigns on initialize.
 	headers map[string]string
+}
+
+// modernInitializeAnswer builds a legacy initialize answer for the given
+// JSON-RPC id and negotiated protocol version.
+func modernInitializeAnswer(id int64, version string) string {
+	return fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"protocolVersion":%q}}`, id, version)
 }
 
 // modernRequestRecord is one request the harness saw: its JSON-RPC method and
@@ -701,7 +708,7 @@ func TestModernAutoNegotiation(t *testing.T) {
 			{status: http.StatusOK, body: modernInitializeOK, headers: map[string]string{"Mcp-Session-Id": "sess-1"}},
 			{status: http.StatusOK, body: modernInitializedOK},
 			{status: http.StatusNotFound, body: sessionGone},
-			{status: http.StatusOK, body: modernInitializeOK, headers: map[string]string{"Mcp-Session-Id": "sess-2"}},
+			{status: http.StatusOK, body: modernInitializeAnswer(4, "2025-11-25"), headers: map[string]string{"Mcp-Session-Id": "sess-2"}},
 			{status: http.StatusOK, body: modernInitializedOK},
 		})
 
@@ -719,5 +726,89 @@ func TestModernAutoNegotiation(t *testing.T) {
 		wantModernHeader(t, recs[3], "Mcp-Session-Id", "sess-1")
 		wantModernNoHeader(t, recs[4], "Mcp-Session-Id")
 		wantModernHeader(t, recs[5], "Mcp-Session-Id", "sess-2")
+	})
+
+	t.Run("initialize reply validation fails the fallback", func(t *testing.T) {
+		cases := []struct {
+			name string
+			body string
+		}{
+			{"missing jsonrpc", `{"id":2,"result":{"protocolVersion":"2025-11-25"}}`},
+			{"wrong jsonrpc", `{"jsonrpc":"1.0","id":2,"result":{"protocolVersion":"2025-11-25"}}`},
+			{"wrong id", `{"jsonrpc":"2.0","id":99,"result":{"protocolVersion":"2025-11-25"}}`},
+			{"both result and error", `{"jsonrpc":"2.0","id":2,"result":{"protocolVersion":"2025-11-25"},"error":{"code":-1,"message":"x"}}`},
+			{"no result member", `{"jsonrpc":"2.0","id":2}`},
+			{"result is not an object", `{"jsonrpc":"2.0","id":2,"result":"x"}`},
+			{"protocol version is not a string", `{"jsonrpc":"2.0","id":2,"result":{"protocolVersion":20251125}}`},
+		}
+		for _, c := range cases {
+			c := c
+			t.Run(c.name, func(t *testing.T) {
+				cl, log := newModernHarnessWithEra(t, client.EraAuto, []modernScriptAnswer{
+					{status: http.StatusBadRequest, body: modernDiscoverJackEnvelope},
+					{status: http.StatusOK, body: c.body},
+				})
+				err := cl.CallTool(context.Background(), "execute_sql", nil, nil)
+				if err == nil || !strings.Contains(err.Error(), "legacy initialize failed") {
+					t.Fatalf("CallTool error = %v, want a legacy initialize failure", err)
+				}
+				if got := log.count(); got != 2 {
+					t.Fatalf("harness saw %d requests, want 2 (no notifications/initialized, no tools/call)", got)
+				}
+			})
+		}
+	})
+
+	t.Run("unsupported negotiated version fails the fallback", func(t *testing.T) {
+		cl, log := newModernHarnessWithEra(t, client.EraAuto, []modernScriptAnswer{
+			{status: http.StatusBadRequest, body: modernDiscoverJackEnvelope},
+			{status: http.StatusOK, body: modernInitializeAnswer(2, "2027-01-01")},
+		})
+		err := cl.CallTool(context.Background(), "execute_sql", nil, nil)
+		if err == nil || !strings.Contains(err.Error(), "unsupported protocol version") {
+			t.Fatalf("CallTool error = %v, want an unsupported protocol version failure", err)
+		}
+		if got := log.count(); got != 2 {
+			t.Fatalf("harness saw %d requests, want 2 (no notifications/initialized, no tools/call)", got)
+		}
+	})
+
+	t.Run("failed recovery returns the error and the next call handshakes again", func(t *testing.T) {
+		cl, log := newModernHarnessWithEra(t, client.EraAuto, []modernScriptAnswer{
+			{status: http.StatusBadRequest, body: modernDiscoverJackEnvelope},
+			{status: http.StatusOK, body: modernInitializeAnswer(2, "2025-11-25"), headers: map[string]string{"Mcp-Session-Id": "sess-1"}},
+			{status: http.StatusOK, body: modernInitializedOK},
+			{status: http.StatusNotFound, body: `{"jsonrpc":"2.0","id":3,"error":{"code":-32601,"message":"session not found"}}`},
+			{status: http.StatusOK, body: `{"jsonrpc":"2.0","id":4,"error":{"code":-32602,"message":"bad initialize"}}`},
+			{status: http.StatusBadRequest, body: modernDiscoverJackEnvelope},
+			{status: http.StatusOK, body: modernInitializeAnswer(6, "2025-11-25"), headers: map[string]string{"Mcp-Session-Id": "sess-2"}},
+			{status: http.StatusOK, body: modernInitializedOK},
+			{status: http.StatusOK, body: modernLegacyToolOK},
+		})
+
+		err := cl.CallTool(context.Background(), "execute_sql", nil, nil)
+		if err == nil || !strings.Contains(err.Error(), "legacy initialize failed") {
+			t.Fatalf("CallTool error = %v, want the failed recovery handshake error", err)
+		}
+
+		var out struct {
+			OK bool `json:"ok"`
+		}
+		if err := cl.CallTool(context.Background(), "execute_sql", nil, &out); err != nil {
+			t.Fatalf("second CallTool: %v", err)
+		}
+		if !out.OK {
+			t.Fatalf("out = %+v, want {ok:true}", out)
+		}
+
+		recs := log.snapshot()
+		wantModernMethodOrder(t, recs,
+			"server/discover", "initialize", "notifications/initialized", "tools/call", "initialize",
+			"server/discover", "initialize", "notifications/initialized", "tools/call")
+		// The failed recovery cached nothing: the second call probes again and
+		// its fresh handshake assigns sess-2 rather than reusing sess-1.
+		wantModernNoHeader(t, recs[5], "Mcp-Session-Id")
+		wantModernHeader(t, recs[7], "Mcp-Session-Id", "sess-2")
+		wantModernHeader(t, recs[8], "Mcp-Session-Id", "sess-2")
 	})
 }

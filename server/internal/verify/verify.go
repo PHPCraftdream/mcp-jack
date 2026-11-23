@@ -225,7 +225,7 @@ type Request struct {
 	// ClassifyOnly stops after body classification and before dispatch: the
 	// request is authenticated and classified (identity, request signature,
 	// RPCID, Tool and Native are set) but no native tool runs and the wrapped
-	// handler is never reached. The caller completes the request with Dispatch.
+	// handler is never reached. The caller completes the request with dispatch.
 	// It is used for POST requests of a non-legacy deployment profile, where the
 	// spec 04 rules run before dispatch.
 	ClassifyOnly bool
@@ -268,13 +268,13 @@ type Result struct {
 	Audit *AuditEvent
 	// Pending is true when Verify ran with Request.ClassifyOnly and stopped
 	// before dispatch: authentication and body classification succeeded,
-	// Accepted is false and HTTPStatus is zero. Call Dispatch to finish it.
+	// Accepted is false and HTTPStatus is zero. Call dispatch to finish it.
 	Pending   bool
 	admission *admissionLease
 	pending   *pendingDispatch
 }
 
-// pendingDispatch carries the authenticated, classified request to Dispatch.
+// pendingDispatch carries the authenticated, classified request to dispatch.
 // It lives on the heap and every copy of a Result shares the pointer, so the
 // fields below are the single copy of the pending state.
 type pendingDispatch struct {
@@ -286,27 +286,42 @@ type pendingDispatch struct {
 	msg      rpcbody.RPCMessage
 	consumed bool
 	released bool
+	// finished is closed when a claimed dispatch returns. Done waits on it
+	// before releasing the nonce lease, so the lease outlives the native call.
+	// It is nil until a dispatch claims the state.
+	finished chan struct{}
 }
 
-// claim marks the pending dispatch consumed before the deferred step runs. It
-// fails closed when another Verifier dispatches the result, when the result was
-// already dispatched, and when Done already released the request.
-func (p *pendingDispatch) claim(v *Verifier) error {
+// claim marks the pending dispatch consumed before the deferred step runs and
+// returns the channel that is closed when that step returns. It fails closed
+// when another Verifier dispatches the result, when the result was already
+// dispatched, and when Done already released the request.
+func (p *pendingDispatch) claim(v *Verifier) (chan struct{}, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.issuer != v || p.consumed || p.released {
-		return &jack.Error{HTTPStatus: 500, Code: "internal_error", Message: "internal error"}
+		return nil, &jack.Error{HTTPStatus: 500, Code: "internal_error", Message: "internal error"}
 	}
 	p.consumed = true
-	return nil
+	p.finished = make(chan struct{})
+	return p.finished, nil
 }
 
-// markReleased records that Done released the request, so a later Dispatch is
-// refused instead of running a native tool after the nonce lease was released.
+// markReleased records that Done released the request and waits for a claimed
+// dispatch to return before returning, so the caller's lease release happens
+// after the native call. Lock ordering: p.mu is taken only here and in claim,
+// and it is not held while waiting; the dispatch closes the channel after the
+// native call returns and never takes p.mu again, so there is no cycle. A
+// request that was never dispatched, or whose dispatch already returned, waits
+// for nothing.
 func (p *pendingDispatch) markReleased() {
 	p.mu.Lock()
 	p.released = true
+	finished := p.finished
 	p.mu.Unlock()
+	if finished != nil {
+		<-finished
+	}
 }
 
 func rejection(status int, code, message string) Result {
@@ -333,7 +348,7 @@ func EntryActive(e RegistryEntry, now int64) bool {
 // Verify runs the pipeline of spec 01 section 4 and spec 02 section 4 on one
 // request. It stops at the first failing step; a rejection never reveals more
 // than its code. With Request.ClassifyOnly it runs in two phases: Verify
-// authenticates and classifies and hands back a Pending Result, and Dispatch
+// authenticates and classifies and hands back a Pending Result, and dispatch
 // runs the native tool call (or marks an ordinary request accepted) once the
 // caller has applied its own pre-dispatch rules.
 func (v *Verifier) Verify(req Request) Result {
@@ -421,7 +436,7 @@ func (v *Verifier) Verify(req Request) Result {
 // authorize is step 9: body shape, protocol-native tools, the admin gate for
 // jack.admin.*, and forwarding of everything else unchanged (spec 02 sections
 // 2-3). With req.ClassifyOnly it stops before running the native tool and
-// defers that step to Dispatch.
+// defers that step to dispatch.
 func (v *Verifier) authorize(req Request, auth jack.RequestAuth, now int64, caller *RegistryEntry, res Result) Result {
 	if caller != nil {
 		res.Identity = snapshotOf(*caller)
@@ -524,23 +539,27 @@ func (v *Verifier) runNative(res Result, auth jack.RequestAuth, now int64, calle
 	return res
 }
 
-// Dispatch runs the deferred step of a Request.ClassifyOnly verification: the
+// dispatch runs the deferred step of a Request.ClassifyOnly verification: the
 // native tool call and its audit event, or marks an ordinary request accepted
 // for forwarding. It is a no-op when the result is not Pending.
 //
 // A pending result is single-use and bound to the Verifier that issued it: a
-// second Dispatch of the same pending result, a Dispatch by another Verifier,
-// and a Dispatch after Done all fail closed with HTTP status 500, code
-// internal_error, and run no native tool. The nonce lease is released by Done
-// after the caller has answered.
-func (v *Verifier) Dispatch(res Result) Result {
+// second dispatch of the same pending result, a dispatch by another Verifier,
+// and a dispatch after Done all fail closed with HTTP status 500, code
+// internal_error, and run no native tool. The method is unexported so the
+// public server API cannot start a native call from an arbitrary Result; the
+// transport reaches it through Dispatch below. Done waits for a claimed
+// dispatch, so the nonce lease is released only after the native call returns.
+func (v *Verifier) dispatch(res Result) Result {
 	p := res.pending
 	if p == nil {
 		return res
 	}
-	if err := p.claim(v); err != nil {
+	finished, err := p.claim(v)
+	if err != nil {
 		return rejectionFrom(err)
 	}
+	defer close(finished)
 	res.pending = nil
 	res.Pending = false
 	if p.msg.HasTool && strings.HasPrefix(p.msg.Tool, "jack.") {
@@ -548,6 +567,15 @@ func (v *Verifier) Dispatch(res Result) Result {
 	}
 	res.Accepted = true
 	return res
+}
+
+// Dispatch runs the deferred step of a Request.ClassifyOnly verification for
+// the packages of this module (the HTTP wrapper in server/internal/transport).
+// The Verifier method set keeps the two-phase helper unexported, so the public
+// server API cannot start a native call from an arbitrary Result; the
+// single-use and issuer binding of (*Verifier).dispatch apply unchanged.
+func Dispatch(v *Verifier, res Result) Result {
+	return v.dispatch(res)
 }
 
 // enrollmentKey implements the one exception to "unknown key is rejected"

@@ -215,6 +215,8 @@ func Classify(profile Profile, req Request) Outcome {
 // exact value is integral, and no float64 rounding is involved. Every other
 // value, including a non-integral fraction, an out-of-range magnitude, null, a
 // boolean, an array and an object, yields nil so the refusal carries null.
+// Tokens beyond the implementation limits below (exponent text, exponent
+// magnitude, mantissa length) are treated as out of range and also yield nil.
 func refusalID(raw json.RawMessage) []byte {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
@@ -228,6 +230,17 @@ func refusalID(raw json.RawMessage) []byte {
 	}
 	return trimmed
 }
+
+// Implementation limits of the exact refusal-id check (spec 04 section 5 S10
+// states none): no int64 integer id needs more than 19 significant digits or an
+// exponent beyond a few characters, so these bounds reject only hostile tokens
+// and keep an attacker-chosen body from driving big-integer work. They are
+// implementation limits, not S10 rules.
+const (
+	maxIDExponentDigits = 20
+	maxIDExponent       = 400
+	maxIDMantissa       = 400
+)
 
 // exactInteger reports whether the JSON number token text denotes an integer
 // that fits in int64. The token must match
@@ -252,6 +265,9 @@ func exactInteger(text string) bool {
 		return false
 	}
 	if len(intPart) > 1 && intPart[0] == '0' {
+		return false
+	}
+	if len(intPart)+len(fracPart) > maxIDMantissa {
 		return false
 	}
 	if !signedDigits(exponentText) {
@@ -315,20 +331,33 @@ func signedDigits(text string) bool {
 	return decimalDigits(text)
 }
 
-// boundedExponent parses the exponent of a JSON number token. An exponent of
-// more than five digits cannot bring a non-zero mantissa into the int64 range,
-// so it is refused before any big-integer work.
+// boundedExponent parses the exponent of a JSON number token. Leading zeros are
+// part of the exponent grammar, so they are stripped before the magnitude is
+// read: 1e000002 is 1e2. The exponent text is bounded by maxIDExponentDigits and
+// the magnitude by maxIDExponent, so a hostile token cannot drive big-integer
+// work; a non-zero mantissa with an exponent beyond those bounds is out of the
+// int64 range anyway.
 func boundedExponent(text string) (int, bool) {
 	negative := strings.HasPrefix(text, "-")
 	if negative || strings.HasPrefix(text, "+") {
 		text = text[1:]
 	}
-	if !decimalDigits(text) || len(text) > 5 {
+	if !decimalDigits(text) || len(text) > maxIDExponentDigits {
+		return 0, false
+	}
+	text = strings.TrimLeft(text, "0")
+	if text == "" {
+		return 0, true
+	}
+	if len(text) > 3 {
 		return 0, false
 	}
 	n := 0
 	for i := 0; i < len(text); i++ {
 		n = n*10 + int(text[i]-'0')
+	}
+	if n > maxIDExponent {
+		return 0, false
 	}
 	if negative {
 		n = -n

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -660,6 +661,11 @@ func TestModernClassifyRefusalID(t *testing.T) {
 		{"string id is echoed", `"abc"`, []byte(`"abc"`)},
 		{"integer id is echoed", `1`, []byte(`1`)},
 		{"integral exponent id is echoed", `1e3`, []byte(`1e3`)},
+		{"long zero padded exponent id is echoed", `1e000002`, []byte(`1e000002`)},
+		{"upper case exponent id is echoed", `1E2`, []byte(`1E2`)},
+		{"zero with fraction and exponent id is echoed", `0.00e5`, []byte(`0.00e5`)},
+		{"exponent text beyond the implementation limit becomes null", `1e0000000000000000000000`, nil},
+		{"mantissa beyond the implementation limit becomes null", `1` + strings.Repeat(`0`, 400) + `e-400`, nil},
 		{"integral fraction id is echoed", `1.0`, []byte(`1.0`)},
 		{"integral fraction with exponent id is echoed", `1.5e1`, []byte(`1.5e1`)},
 		{"negative zero id is echoed", `-0`, []byte(`-0`)},
