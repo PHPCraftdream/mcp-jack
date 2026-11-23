@@ -244,6 +244,7 @@ export async function runMatrix({ senders, receivers, targets, fixtures, scenari
     let relayRecords = [];
     let shadow = null;
     let shadowConnections = 0;
+    let shadowBytes = 0;
     let expected = null;
 
     // A report snapshots both stderr tails while the children are still alive.
@@ -479,6 +480,7 @@ export async function runMatrix({ senders, receivers, targets, fixtures, scenari
         // Every connection the alias accepted is evidence: a policy refusal
         // must not have dialled anything.
         shadowConnections = shadow.connections();
+        shadowBytes = shadow.bytes();
         try { await shadow.close(); } catch { /* best effort */ }
         shadow = null;
       }
@@ -516,6 +518,7 @@ export async function runMatrix({ senders, receivers, targets, fixtures, scenari
         attempts,
         deliveries,
         shadowConnections,
+        shadowBytes,
         crossCheck: sc.cross_check !== false,
       });
       return report([...reasons, ...evaluation.reasons], evaluation.actual);
