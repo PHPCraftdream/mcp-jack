@@ -9,6 +9,8 @@ import { adminInviteCreate, adminInviteList, adminInviteRevoke, adminUserCreate,
 import type { EnrollResult, Entry, InviteCreateParams, InviteCreateResult, InviteListEntry, InviteRevokeResult, KidResult, UserCreateParams, WhoAmIResult } from "./tools.js";
 import type { Signer } from "./signing/signer.js";
 import { checkDestination } from "./transport/url-policy.js";
+import type { ClientEra } from "../modern/era.js";
+import { decodeUtf8 } from "../modern/values.js";
 
 /** Any JSON value, exactly as JSON.parse can produce. */
 export type JsonValue = string | number | boolean | null | JsonValue[] | { readonly [key: string]: JsonValue };
@@ -32,6 +34,14 @@ export interface ClientConfig {
   clock?: Clock;
   nonceSource?: NonceSource;
   windowSeconds?: number;
+  /**
+   * Era this client speaks (spec 04 section 6). "legacy" is the default and
+   * keeps the 0.1.x wire byte-identical; "modern" sends the 2026-07-28 `_meta`
+   * and mirror headers, "auto" detects the era once per client from a verified
+   * probe. Only the modern helpers (see client/modern.ts) act on it; callWith
+   * stays the byte-frozen 0.1.x tool call.
+   */
+  era?: ClientEra;
 }
 
 /** Narrow a decoded JsonValue (possibly absent under noUncheckedIndexedAccess) to a JSON object, if it is one. */
@@ -54,12 +64,24 @@ function validAudience(aud: string): boolean {
   return true;
 }
 
+/** A verified response exactly as received, before any JSON-RPC interpretation (spec 04 C9 reads non-2xx answers this way). */
+export interface SignedReply {
+  /** HTTP status of the verified response. */
+  readonly status: number;
+  /** The verified body text; "" when the body is empty. */
+  readonly bodyText: string;
+  /** The parsed JSON body; undefined when the body is empty or not JSON. */
+  readonly json: JsonValue | undefined;
+}
+
 /** Client performs signed, response-verified MCP tool calls over JSON-RPC. */
 export class Client {
   /** Audience bound into the signing string; needed by the typed-call helpers in tools.ts. */
   readonly aud: string;
   readonly signer: Signer;
   readonly clock: Clock;
+  /** Era this client speaks; "legacy" unless configured. */
+  readonly era: ClientEra;
   #base: URL;
   #fetch: SigningFetch;
   #nextID = 1;
@@ -93,6 +115,7 @@ export class Client {
     this.aud = config.aud;
     this.signer = config.signer;
     this.clock = config.clock ?? (() => Math.floor(Date.now() / 1000));
+    this.era = config.era ?? "legacy";
     // Like Go's Config.HTTP, an injected fetchImpl is wrapped by OUR signing
     // layer instead of requiring the caller to pre-wrap it, so an unsigned
     // client is never silently accepted.
@@ -193,6 +216,48 @@ export class Client {
       throw new Error("jack client: missing structuredContent");
     }
     return resultRecord?.["structuredContent"] as JsonValue;
+  }
+
+  /**
+   * signedRequest sends one signed JSON-RPC request through the existing
+   * transport and signer and returns the VERIFIED response whatever its
+   * status: a non-2xx answer is not an error here, because the modern profile
+   * reads it (spec 04 C9). A verification failure still throws. `paramsJson`
+   * is inserted verbatim (already-encoded params, so `_meta` order is the
+   * caller's) and the headers are appended in the given order after
+   * Content-Type.
+   */
+  async signedRequest(
+    method: string,
+    paramsJson: string | undefined,
+    headers: readonly (readonly [string, string])[] = [],
+    fixedNow?: number,
+  ): Promise<SignedReply> {
+    const id = this.#nextID;
+    this.#nextID++;
+    const bodyText =
+      '{"jsonrpc":"2.0","id":' + id + ',"method":' + JSON.stringify(method) + ',"params":' + (paramsJson ?? "{}") + "}";
+    const requestHeaders: [string, string][] = [["content-type", "application/json"]];
+    for (const [name, value] of headers) {
+      requestHeaders.push([name, value]);
+    }
+    const resp = await this.#fetch(this.#base, {
+      method: "POST",
+      headers: requestHeaders,
+      body: bodyText,
+      ...(fixedNow !== undefined ? { jackFixedNow: fixedNow } : {}),
+    });
+    const raw = await readBodyCapped(resp, MAX_BODY_BYTES);
+    const bodyTextOut = decodeUtf8(raw) ?? "";
+    let json: JsonValue | undefined;
+    if (bodyTextOut.trim() !== "") {
+      try {
+        json = JSON.parse(bodyTextOut) as JsonValue;
+      } catch {
+        json = undefined;
+      }
+    }
+    return { status: resp.status, bodyText: bodyTextOut, json };
   }
 
   /** Enrolls a NEW key with an invite code; the WHOLE request is signed by the new key (spec 03 section 3.2). */

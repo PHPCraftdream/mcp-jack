@@ -10,6 +10,8 @@ import { responseSigningString } from "../../core/signing.js";
 import type { Verifier, VerifyResult } from "../verify.js";
 import type { JackIdentity } from "../verify.js";
 import { markResponseFinish, takeResultFinish } from "../durable/finish.js";
+import { JACK_SERVER_INFO, SERVER_PROFILES, envelopeBodyText, isModernHeaderSignal, refusalBodyText } from "../../modern/server.js";
+import type { ServerProfile } from "../../modern/server.js";
 
 // Go NewHandler returns errors; the Fetch-standard API has no error return in
 // its factory shape, so configuration problems THROW a plain Error instead.
@@ -66,6 +68,13 @@ export interface HandlerConfig {
    * next buffers internally before returning its Response.
    */
   maxResponseBytes?: number;
+  /**
+   * Deployment profile of the modern profile (spec 04 section 3). undefined
+   * means "legacy", which is byte-identical to 0.1.x: no spec 04 rule runs.
+   * "modern" serves every request as modern-era, "both" decides the era per
+   * request after authentication (S3).
+   */
+  profile?: ServerProfile;
 }
 
 /** Go defaultMaxBodyBytes. The body must be read in full to be hashed, so the limit is a denial-of-service guard. */
@@ -88,11 +97,14 @@ const PKCS8_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
 export const RAW_TARGET_SYMBOL = Symbol("mcp-jack.raw-target");
 export const AUTH_VALUES_SYMBOL = Symbol("mcp-jack.auth-values");
 export const RAW_BODY_SYMBOL = Symbol("mcp-jack.raw-body");
+export const HEADER_VALUES_SYMBOL = Symbol("mcp-jack.header-values");
 export interface JackRequest extends Request {
   [RAW_TARGET_SYMBOL]?: string;
   [AUTH_VALUES_SYMBOL]?: readonly string[];
   /** Exact request body bytes when the Request constructor could not carry them (undici refuses a GET/HEAD body); consumed by jackFetchHandler before reading the stream. */
   [RAW_BODY_SYMBOL]?: Uint8Array;
+  /** Every received header instance in received order and casing; a Headers object merges repeats and lowercases names, so the modern-profile rules read the instances here. */
+  [HEADER_VALUES_SYMBOL]?: readonly (readonly [string, string])[];
 }
 
 /**
@@ -195,6 +207,16 @@ function targetFromUrl(requestUrl: string): string | undefined {
  * rotation_state_unavailable "response authorization unavailable" (mirrors
  * Go writeAuthorized). A verifier configured to route jack.server.key
  * without a rotation profile is a construction error.
+ *
+ * Modern profile (spec 04): config.profile selects the deployment profile.
+ * undefined or "legacy" runs no section 5 rule, so 0.1.x behaviour stays
+ * byte-identical. "modern" and "both" authenticate and classify the request,
+ * then decide the era (S3) and either refuse with a signed JSON-RPC error
+ * (S10; the 405 answer also carries Allow: POST) or forward with
+ * Mcp-Session-Id and Last-Event-ID removed (S8). A Fetch Request carries only
+ * the merged header view, so repeated header instances are observable only
+ * through the node adapter's HEADER_VALUES_SYMBOL; without it a repeated
+ * mirror arrives as one comma-joined value.
  */
 export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => Promise<Response>): (req: Request) => Promise<Response> {
   if (config.verifier === undefined) throw new Error("server: HandlerConfig.verifier must be set");
@@ -226,6 +248,10 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     kid = keyId(new Uint8Array(der.subarray(der.length - 32)));
   }
   if (next === undefined) throw new Error("server: next handler must be set");
+  const profile = config.profile ?? "legacy";
+  if (!SERVER_PROFILES.includes(profile)) {
+    throw new Error("server: HandlerConfig.profile must be one of legacy, modern or both");
+  }
   const mb = config.maxBodyBytes;
   if (mb !== undefined && (mb === Infinity || mb > Number.MAX_SAFE_INTEGER)) {
     throw new Error("server: HandlerConfig.maxBodyBytes must not be infinite or above Number.MAX_SAFE_INTEGER");
@@ -239,7 +265,7 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
 
   // Renders the rejection body of spec 01 section 4 (field order code,message like Go's structs).
   function errorBody(code: string, message: string): Uint8Array {
-    return new TextEncoder().encode(JSON.stringify({ error: { code, message } }));
+    return new TextEncoder().encode(envelopeBodyText(code, message));
   }
 
   // Writes a Response with exactly the given headers and body. The Response
@@ -333,6 +359,16 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
   function reject(res: VerifyResult): Response {
     const headers = new Headers();
     headers.set("content-type", "application/json");
+    // Spec 04 S10: a refusal of the modern profile is a signed JSON-RPC error
+    // with Content-Type application/json; the 405 form also carries Allow: POST.
+    if (res.rpcRefusal !== undefined) {
+      const refusal = res.rpcRefusal;
+      if (refusal.allowPost) {
+        headers.set("allow", "POST");
+      }
+      const body = new TextEncoder().encode(refusalBodyText(refusal.idText, refusal.code, refusal.message));
+      return writeSigned(refusal.httpStatus, headers, body, res.requestSig, res.tool);
+    }
     if (res.httpStatus === 401) {
       headers.set("www-authenticate", "Jack-Auth");
     }
@@ -358,6 +394,7 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
       headers.set("content-type", "application/json");
       return writeSigned(500, headers, errorBody("internal_error", "internal error"), res.requestSig, res.tool);
     }
+    const modern = res.era === "modern";
     const body =
       '{"jsonrpc":"2.0","id":' +
       (res.rpcId === undefined ? "null" : res.rpcId) +
@@ -365,7 +402,15 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
       JSON.stringify(text) +
       '}],"structuredContent":' +
       text +
-      ',"isError":false}}';
+      ',"isError":false' +
+      (modern
+        ? ',"resultType":"complete","_meta":{"io.modelcontextprotocol/serverInfo":{"name":' +
+          JSON.stringify(JACK_SERVER_INFO.name) +
+          ',"version":' +
+          JSON.stringify(JACK_SERVER_INFO.version) +
+          "}}"
+        : "") +
+      "}}";
     const headers = new Headers();
     headers.set("content-type", "application/json");
     return writeSigned(200, headers, new TextEncoder().encode(body), res.requestSig, res.tool);
@@ -373,13 +418,18 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
 
   // Hands an authorized request to the wrapped server and signs what it answers.
   async function forward(req: Request, body: Uint8Array, res: VerifyResult): Promise<Response> {
+    // Spec 04 S9: the modern era forwards the header list the era rules
+    // returned (S8 removals applied); the legacy era forwards the request's
+    // headers exactly as before.
+    const forwardedHeaderList = res.era === "modern" ? res.forwardHeaders : [...req.headers];
+    const forwardedHeaders = new Headers(forwardedHeaderList);
     // Restore the EXACT buffered body bytes. undici throws for a GET body,
     // so the body is only attached for methods that can carry one; a
     // conditional spread, never an explicit undefined, keeps
     // exactOptionalPropertyTypes happy.
     const restored = new Request(req.url, {
       method: req.method,
-      headers: new Headers(req.headers),
+      headers: forwardedHeaders,
       ...(req.method !== "GET" && req.method !== "HEAD" && body.length > 0 ? { body } : {}),
     });
     // Preserve the node adapter's exact authenticated target for the wrapped
@@ -494,8 +544,17 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
 
   return async (req: Request): Promise<Response> => {
     const method = req.method;
+    // The received header instances (received order and casing) for the
+    // modern-profile rules; a Fetch Request alone carries only the merged view.
+    const headerInstances: readonly (readonly [string, string])[] =
+      (req as JackRequest)[HEADER_VALUES_SYMBOL] ?? [...req.headers];
     if (method !== "GET" && method !== "POST") {
-      return writeError(405, "method_not_allowed", "only GET and POST are defined");
+      // A modern-era non-POST request is authenticated first and refused by S2
+      // with a signed 405; anything else keeps the 0.1.x unsigned answer.
+      const modernEra = profile === "modern" || (profile === "both" && isModernHeaderSignal(headerInstances));
+      if (!modernEra) {
+        return writeError(405, "method_not_allowed", "only GET and POST are defined");
+      }
     }
 
     // The body must be read IN FULL to be hashed whole. The reader lock is
@@ -573,7 +632,13 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     const authValues =
       rawAuth !== undefined ? rawAuth : combined === null ? [] : splitRepeatedAuthLines(combined);
 
-    const res = config.verifier.verify({ method, target, authValues, body });
+    const res = config.verifier.verify({
+      method,
+      target,
+      authValues,
+      body,
+      ...(profile !== "legacy" ? { profile, headers: headerInstances } : {}),
+    });
     // Durable admission finishes AFTER the response is produced (Go Result.Done
     // in the middleware): the release is idempotent and runs even when the
     // response construction fails. Without the durable option there is no
