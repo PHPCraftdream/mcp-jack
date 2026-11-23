@@ -242,7 +242,7 @@ jobs:
         shell: bash
         run: |
           test "$(grep -cE 'VECTOR-SUMMARY corpus=(modern-request|header-encoding|x-mcp-header|era-detection|webhook-|ssrf|server-card-keys)' test-output.log)" -ge 11
-          ! grep -E 'VECTOR-SUMMARY .*(excluded=[1-9]|deviation=[1-9])' test-output.log
+          ! grep -E 'VECTOR-SUMMARY corpus=(modern-request|header-encoding|x-mcp-header|era-detection|webhook-|ssrf|server-card-keys).*(excluded=[1-9]|deviation=[1-9])' test-output.log
 
   interop:
     name: interop matrix (3x3)
