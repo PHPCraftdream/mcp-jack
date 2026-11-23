@@ -37,7 +37,7 @@ async function waitFor(predicate: () => boolean): Promise<boolean> {
   return predicate();
 }
 
-test("stream server: the node adapter streams frames and cancels the handler on a client disconnect", async () => {
+test("stream server: the node adapter streams frames and cancels the handler on a client disconnect", { timeout: 30_000 }, async () => {
   const harness = newStreamServer();
   let handlerSignal: AbortSignal | undefined;
   let handlerCancelled = false;

@@ -75,7 +75,7 @@ async function post(harness: StreamHarness, jackAccept: string | undefined): Pro
   return harness.handler(signed.request);
 }
 
-test("stream server: the maximum duration closes with the final response and the end frame", async () => {
+test("stream server: the maximum duration closes with the final response and the end frame", { timeout: 30_000 }, async () => {
   const harness = newStreamServer({ streams: { maxStreamDurationMs: 40 } });
   // stayOpen: only the 3.4 timer may close this stream, never the handler body.
   harness.setNext(async () => sseResponse([messageEvent(NOTIFICATION)], { stayOpen: true }));
@@ -107,7 +107,7 @@ test("stream server: the maximum duration closes with the final response and the
   assert.deepEqual(result.terminal, { state: "ok" }, "3.4: the duration close is a complete Jack stream");
 });
 
-test("stream server: an oversize message produces the transport-signal frame then the end frame", async () => {
+test("stream server: an oversize message produces the transport-signal frame then the end frame", { timeout: 30_000 }, async () => {
   const harness = newStreamServer({ streams: { frameMaxBytes: 1024 } });
   const oversize = "x".repeat(1025); // 2.10: a legal non-JSON data value, one byte over the 3.2 cap
   let cancels = 0;
@@ -147,7 +147,7 @@ test("stream server: an oversize message produces the transport-signal frame the
   assert.equal(cancels, 1, "3.7: the oversize close cancels the handler body");
 });
 
-test("stream server: the stream closes before the key's successor activation", async () => {
+test("stream server: the stream closes before the key's successor activation", { timeout: 30_000 }, async () => {
   // The handler forwards one event and then stays quiet, so nothing but the
   // pump's own cutoff timer can close this stream. Remove the 5.1 enforcement
   // and the body never ends: the bounded wait below then fails the test.
@@ -232,7 +232,7 @@ test("stream server: the stream closes before the key's successor activation", a
   assert.deepEqual(result.terminal, { state: "ok" }, "5.1: the stream ends below the cutoff and is complete");
 });
 
-test("stream server: no s1 stream without the Jack-Accept opt-in", async () => {
+test("stream server: no s1 stream without the Jack-Accept opt-in", { timeout: 30_000 }, async () => {
   const harness = newStreamServer();
   harness.setNext(async () => sseResponse([messageEvent(NOTIFICATION)]));
 
@@ -248,7 +248,7 @@ test("stream server: no s1 stream without the Jack-Accept opt-in", async () => {
   await assertStreamingUnsupported(await post(legacy, "s1"));
 });
 
-test("stream server: a notification request never opens a stream", async () => {
+test("stream server: a notification request never opens a stream", { timeout: 30_000 }, async () => {
   const harness = newStreamServer();
   harness.setNext(async () => sseResponse([messageEvent(NOTIFICATION)]));
   // 3.8: a JSON-RPC notification has no id, so it can never become an s1

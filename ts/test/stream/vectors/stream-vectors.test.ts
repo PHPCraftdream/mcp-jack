@@ -90,7 +90,7 @@ function assertMatchesFixture(got: CaseResult, want: StreamVectorResult, id: str
   }
 }
 
-test("stream vectors: every case in three chunkings", () => {
+test("stream vectors: every case in three chunkings", { timeout: 30_000 }, () => {
   const what = "stream-vectors.json";
   const cases = decodeStreamCorpus(fixture("modern/" + what));
   assert.equal(cases.length, CASE_COUNT, what + " case count");

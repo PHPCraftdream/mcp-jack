@@ -35,7 +35,7 @@ const DURABLE_WINDOW = 30;
 /** The durable store is Linux-gated like the rotation stores (private owner marker). */
 const linux = process.platform === "linux";
 
-test("stream server: the per-identity concurrent stream limit refuses before any byte", async () => {
+test("stream server: the per-identity concurrent stream limit refuses before any byte", { timeout: 30_000 }, async () => {
   const harness = newStreamServer({ streams: { maxConcurrentStreams: 1 } });
   let calls = 0;
   harness.setNext(async () => {
@@ -88,7 +88,7 @@ test("stream server: the per-identity concurrent stream limit refuses before any
   assert.ok(textOf(openedBytes).startsWith("event: message\n"), "the body starts with a signed message frame");
 });
 
-test("stream server: heartbeats are granted, clamped and delivered as signed frames", async () => {
+test("stream server: heartbeats are granted, clamped and delivered as signed frames", { timeout: 30_000 }, async () => {
   const heartbeat = '{"jsonrpc":"2.0","method":"notifications/events/heartbeat","params":{"cursor":null}}';
   const harness = newStreamServer({ streams: { windowSeconds: 30, heartbeatMs: 60000, frameMaxBytes: 4096 } });
   let heartbeatMs: number | undefined;
@@ -116,7 +116,7 @@ test("stream server: heartbeats are granted, clamped and delivered as signed fra
   assert.deepEqual(result.terminal, { state: "ok" }, "the handler body ended with a verified end frame");
 });
 
-test("stream server: the nonce is reserved before the stream opens and the replay is refused", async () => {
+test("stream server: the nonce is reserved before the stream opens and the replay is refused", { timeout: 30_000 }, async () => {
   const harness = newStreamServer();
   harness.setNext(async (req) => {
     assert.ok(jackStream(req) !== undefined, "the first request opens a real stream");
@@ -150,7 +150,7 @@ test("stream server: the nonce is reserved before the stream opens and the repla
   assert.ok(!replayBody.includes("jack:"), "the refusal body carries no signed frame");
 });
 
-test("stream server: a durable-store replay is refused while the first handler still runs", { skip: !linux }, async () => {
+test("stream server: a durable-store replay is refused while the first handler still runs", { skip: !linux, timeout: 30_000 }, async () => {
   // A fresh private temp directory for the durable store, as in
   // ts/test/server/durable/admission.test.ts (owner marker, 0700 directory).
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "mcp-jack-stream-admission-")));
@@ -201,7 +201,13 @@ test("stream server: a durable-store replay is refused while the first handler s
       headers: first.request.headers,
       body: first.body,
     });
-    const replay = await harness.handler(replayRequest);
+    // A replay that reached the blocked handler would wait for the gate: fail instead.
+    const replay = await Promise.race([
+      harness.handler(replayRequest),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("the replay reached the handler instead of being refused")), 2000);
+      }),
+    ]);
 
     assert.equal(replay.status, 401, "the durable store refuses the replayed nonce");
     assert.equal(replay.headers.get("content-type"), "application/json", "a refusal is a v1 answer, never text/event-stream");

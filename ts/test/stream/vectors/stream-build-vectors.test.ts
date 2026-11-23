@@ -143,7 +143,7 @@ function deliveredMessages(c: StreamBuildCase): readonly string[] {
   return delivered;
 }
 
-test("stream-build vectors: every case", () => {
+test("stream-build vectors: every case", { timeout: 30_000 }, () => {
   const what = "stream-build-vectors.json";
   const cases = decodeStreamBuildCorpus(fixture("modern/" + what));
   assert.equal(cases.length, CASE_COUNT, what + " case count");

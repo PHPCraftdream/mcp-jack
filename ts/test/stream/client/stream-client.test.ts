@@ -94,7 +94,7 @@ function noBytes(): Uint8Array {
   return new Uint8Array(0);
 }
 
-test("stream client: the idle timeout runs on the injected clock", () => {
+test("stream client: the idle timeout runs on the injected clock", { timeout: 30_000 }, () => {
   const signer = streamSigner(fixtureNow);
   const message = signer.frame(MESSAGE_ONE, fixtureNow);
   const headers = openHeaders(signer);
@@ -142,7 +142,7 @@ test("stream client: the idle timeout runs on the injected clock", () => {
   assert.equal(idleError.framesVerified, 0);
 });
 
-test("stream client: a frame at or after the known successor activation is rejected", () => {
+test("stream client: a frame at or after the known successor activation is rejected", { timeout: 30_000 }, () => {
   const activation = fixtureNow + 5;
   const base = { status: 200, resolveKey: cutAt(activation), now: (): number => fixtureNow, requestSig: REQUEST_SIG };
 
@@ -181,7 +181,7 @@ test("stream client: a frame at or after the known successor activation is rejec
   assert.deepEqual(openCase.terminal, { state: "error", code: "stream_after_cutoff", framesVerified: 0 });
 });
 
-test("stream client: the caller can cancel an open stream", async () => {
+test("stream client: the caller can cancel an open stream", { timeout: 30_000 }, async () => {
   let recordedAccept: string | null = null;
   let recordedSignal: AbortSignal | null = null;
   let openedSid = "";
@@ -258,7 +258,7 @@ test("stream client: the caller can cancel an open stream", async () => {
   assert.equal(after.value, undefined);
 });
 
-test("stream client: an s1 stream is refused unless the client opted in", async () => {
+test("stream client: an s1 stream is refused unless the client opted in", { timeout: 30_000 }, async () => {
   // Without `streams` the v1 guard answers a text/event-stream with
   // StreamingUnsupportedError, discards the body and sends no opt-in header.
   let refusedAccept: string | null = null;
