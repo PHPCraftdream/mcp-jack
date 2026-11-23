@@ -1,0 +1,1661 @@
+{
+  "note": "Normative expected outcomes of the webhook delivery interop matrix (interop/README.md section 15, interop/webhook/contract.md). `sender` fixes the sender argv the driver builds (`messages`, `allowlist`, `signing_key`, `jack_key`, `subscription_id`, `resolver`, `rebind_address`, `body`, `clock_offset`; fixture names resolve against spec/fixtures/keys.json); `receiver` fixes the receiver argv (`start`, `card`, `enforce`, `require_jack`, `pending_secret`, `mcp_server_kid`, `enqueue_fail`, `clock_offset`); `relay` names the tamper preset or is null for a direct connection; `shadow` binds the loopback alias 127.0.0.2 at the receiver's port; `expected.shadow_connections` fixes how many connections the shadow listener may accept, `0` stating that the policy refusal happened before any dial; `gap` maps a sender language to the reason its cell is skipped; `cross_check: false` turns off the driver's comparison of the relay's recorded request with the receiver's delivery line, which is needed when the relay rewrites a header after signing. `expected.sender` is matched as a recursive subset against the sender's result line; every relay-bearing scenario states `expected.attempts`, matched positionally against the relay's recorded requests because the sender prints no attempt lines, and an attempt record carries the same `signatures` shape as a delivery, recomputed by the driver from the bytes the relay recorded, so `valid: true` there states that the sender signed the bytes it wrote; `expected.deliveries` positionally against the receiver's delivery lines, whose `enqueued` counts the forwarded messages of the process and whose `forwarded` names the bodies the receiver passed to its durable enqueue. Arrays match with equal length and element-wise subsets. `$sub` and `$url` are the driver's derived subscription id and the sender's callback URL, `$kid:<name>` and `$public_key:<name>` resolve to the fixture kid and public key, and `t0` is 1800000000. Every signature in `signatures` is recomputed by the driver with the pinned delivery secret and the public keys of the scenario's `receiver.card` set, so `valid: false` states that no card key of that scenario verifies the entry.",
+  "scenario_order": [
+    "deliver-v1",
+    "deliver-w1",
+    "deliver-asymmetric",
+    "refuse-unpublished-signing-key",
+    "refuse-jack-server-key",
+    "verify-challenge",
+    "verify-challenge-w1",
+    "refuse-tampered-body",
+    "refuse-tampered-header",
+    "refuse-stale-timestamp",
+    "refuse-future-timestamp",
+    "refuse-unknown-subscription",
+    "refuse-unknown-envelope-type",
+    "refuse-malformed-body",
+    "refuse-body-too-large",
+    "dedup-repeated-delivery",
+    "control-gap",
+    "control-terminated",
+    "retry-http-503",
+    "retry-enqueue-failed",
+    "ssrf-private-address",
+    "ssrf-dns-rebinding"
+  ],
+  "scenarios": {
+    "deliver-v1": {
+      "description": "One event occurrence carrying only the v1 shared-secret signature: every earlier check passes, the message is enqueued and acknowledged.",
+      "source": "spec/06-webhooks.md R1.1, R2.2, R3.1-R3.17; interop/webhook/contract.md section 6",
+      "relay": null,
+      "shadow": false,
+      "sender": {
+        "messages": [
+          "event"
+        ],
+        "allowlist": true,
+        "subscription_id": "$sub",
+        "resolver": {
+          "hooks.example.test": [
+            "127.0.0.1"
+          ]
+        },
+        "clock_offset": 0
+      },
+      "receiver": {
+        "start": true,
+        "clock_offset": 0
+      },
+      "expected": {
+        "sender": {
+          "results": [
+            {
+              "message": 0,
+              "kind": "event",
+              "attempts": 1,
+              "accepted": true,
+              "http_status": 200,
+              "last_error": null
+            }
+          ]
+        },
+        "deliveries": [
+          {
+            "seq": 0,
+            "status": 200,
+            "code": null,
+            "body_status": "accepted",
+            "kind": "event",
+            "webhook_id_prefix": "msg_",
+            "webhook_id_chars": 32,
+            "webhook_id_grammar": true,
+            "timestamp": "1800000000",
+            "timestamp_grammar": true,
+            "challenge": null,
+            "duplicate_of_previous": false,
+            "signature_header_instances": 1,
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              },
+              "v1a": {
+                "present": false,
+                "count": 0,
+                "valid": false
+              },
+              "v2a": {
+                "present": false,
+                "count": 0,
+                "valid": false
+              },
+              "w1": {
+                "present": false,
+                "count": 0,
+                "kid": null,
+                "valid": false
+              }
+            },
+            "body_equals": "event",
+            "body_json": {
+              "eventId": "evt_1",
+              "name": "incident.created",
+              "cursor": "cursor_xyz"
+            }
+          }
+        ]
+      }
+    },
+    "deliver-w1": {
+      "description": "The v1 string secret plus the Jack w1 signature over the audience, the subscription, the id, the timestamp and the exact callback URL; the receiver verifies w1 against the Server Card key.",
+      "source": "spec/06-webhooks.md R2.8, R4.1-R4.6, R7.3; interop/webhook/contract.md section 6",
+      "relay": null,
+      "shadow": false,
+      "sender": {
+        "messages": [
+          "event"
+        ],
+        "allowlist": true,
+        "subscription_id": "$sub",
+        "jack_key": "newbie",
+        "resolver": {
+          "hooks.example.test": [
+            "127.0.0.1"
+          ]
+        },
+        "clock_offset": 0
+      },
+      "receiver": {
+        "start": true,
+        "card": [
+          "newbie"
+        ],
+        "require_jack": true,
+        "clock_offset": 0
+      },
+      "expected": {
+        "sender": {
+          "results": [
+            {
+              "message": 0,
+              "kind": "event",
+              "attempts": 1,
+              "accepted": true,
+              "http_status": 200,
+              "last_error": null
+            }
+          ]
+        },
+        "deliveries": [
+          {
+            "seq": 0,
+            "status": 200,
+            "code": null,
+            "body_status": "accepted",
+            "kind": "event",
+            "webhook_id_prefix": "msg_",
+            "webhook_id_chars": 32,
+            "webhook_id_grammar": true,
+            "timestamp": "1800000000",
+            "timestamp_grammar": true,
+            "challenge": null,
+            "duplicate_of_previous": false,
+            "signature_header_instances": 1,
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              },
+              "v1a": {
+                "present": false
+              },
+              "v2a": {
+                "present": false
+              },
+              "w1": {
+                "present": true,
+                "count": 1,
+                "kid": "$kid:newbie",
+                "valid": true
+              }
+            },
+            "body_equals": "event",
+            "body_json": {
+              "eventId": "evt_1",
+              "name": "incident.created",
+              "cursor": "cursor_xyz"
+            }
+          }
+        ]
+      }
+    },
+    "deliver-asymmetric": {
+      "description": "v1, v1a and v2a in the emission order of R2.8, with server identity enforced so the asymmetric entries must verify with the card's current key.",
+      "source": "spec/06-webhooks.md R2.5-R2.8, R3.14, R7.3-R7.4; interop/webhook/contract.md section 6",
+      "relay": null,
+      "shadow": false,
+      "sender": {
+        "messages": [
+          "event"
+        ],
+        "allowlist": true,
+        "subscription_id": "$sub",
+        "signing_key": "newbie",
+        "resolver": {
+          "hooks.example.test": [
+            "127.0.0.1"
+          ]
+        },
+        "clock_offset": 0
+      },
+      "receiver": {
+        "start": true,
+        "card": [
+          "newbie"
+        ],
+        "enforce": true,
+        "clock_offset": 0
+      },
+      "expected": {
+        "sender": {
+          "results": [
+            {
+              "message": 0,
+              "kind": "event",
+              "attempts": 1,
+              "accepted": true,
+              "http_status": 200,
+              "last_error": null
+            }
+          ]
+        },
+        "deliveries": [
+          {
+            "seq": 0,
+            "status": 200,
+            "code": null,
+            "body_status": "accepted",
+            "kind": "event",
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              },
+              "v1a": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              },
+              "v2a": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              },
+              "w1": {
+                "present": false
+              }
+            },
+            "body_equals": "event",
+            "signature_schemes": [
+              "v1",
+              "v1a",
+              "v2a"
+            ]
+          }
+        ]
+      }
+    },
+    "refuse-unpublished-signing-key": {
+      "description": "The asymmetric entries are signed with a key the Server Card does not publish, so enforced identity answers 401 bad_server_signature although the v1 secret verifies.",
+      "source": "spec/06-webhooks.md R2.7, R3.14, R7.3; interop/webhook/contract.md section 6",
+      "relay": null,
+      "shadow": false,
+      "sender": {
+        "messages": [
+          "event"
+        ],
+        "allowlist": true,
+        "subscription_id": "$sub",
+        "signing_key": "mallory",
+        "resolver": {
+          "hooks.example.test": [
+            "127.0.0.1"
+          ]
+        },
+        "clock_offset": 0
+      },
+      "receiver": {
+        "start": true,
+        "card": [
+          "newbie"
+        ],
+        "enforce": true,
+        "clock_offset": 0
+      },
+      "expected": {
+        "sender": {
+          "results": [
+            {
+              "message": 0,
+              "kind": "event",
+              "attempts": 1,
+              "accepted": false,
+              "http_status": 401,
+              "last_error": "http_4xx"
+            }
+          ]
+        },
+        "deliveries": [
+          {
+            "seq": 0,
+            "status": 401,
+            "code": "bad_server_signature",
+            "body_status": null,
+            "kind": null,
+            "webhook_id_prefix": "msg_",
+            "signature_header_instances": 1,
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              },
+              "v1a": {
+                "present": true,
+                "count": 1,
+                "valid": false
+              },
+              "v2a": {
+                "present": true,
+                "count": 1,
+                "valid": false
+              },
+              "w1": {
+                "present": false
+              }
+            },
+            "body_equals": "event"
+          }
+        ]
+      }
+    },
+    "refuse-jack-server-key": {
+      "description": "w1 is signed with the configured MCP server key, which R4.5 refuses before the key lookup: 401 webhook_key_is_server_key.",
+      "source": "spec/06-webhooks.md R4.5, R3.15, R7.3; interop/webhook/contract.md section 6",
+      "relay": null,
+      "shadow": false,
+      "sender": {
+        "messages": [
+          "event"
+        ],
+        "allowlist": true,
+        "subscription_id": "$sub",
+        "jack_key": "svc",
+        "resolver": {
+          "hooks.example.test": [
+            "127.0.0.1"
+          ]
+        },
+        "clock_offset": 0
+      },
+      "receiver": {
+        "start": true,
+        "card": [
+          "newbie"
+        ],
+        "require_jack": true,
+        "mcp_server_kid": "$kid:svc",
+        "clock_offset": 0
+      },
+      "expected": {
+        "sender": {
+          "results": [
+            {
+              "message": 0,
+              "kind": "event",
+              "attempts": 1,
+              "accepted": false,
+              "http_status": 401,
+              "last_error": "http_4xx"
+            }
+          ]
+        },
+        "deliveries": [
+          {
+            "seq": 0,
+            "status": 401,
+            "code": "webhook_key_is_server_key",
+            "body_status": null,
+            "kind": null,
+            "webhook_id_prefix": "msg_",
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              },
+              "w1": {
+                "present": true,
+                "count": 1,
+                "kid": "$kid:svc",
+                "valid": false
+              }
+            },
+            "body_equals": "event"
+          }
+        ]
+      }
+    },
+    "verify-challenge": {
+      "description": "No verification route applies, so the sender runs the challenge handshake: one verification POST that the receiver echoes with the single-use nonce, then the event itself.",
+      "source": "spec/06-webhooks.md R5.1-R5.6; interop/webhook/contract.md section 6",
+      "relay": null,
+      "shadow": false,
+      "sender": {
+        "messages": [
+          "event"
+        ],
+        "subscription_id": "$sub",
+        "resolver": {
+          "hooks.example.test": [
+            "127.0.0.1"
+          ]
+        },
+        "clock_offset": 0
+      },
+      "receiver": {
+        "start": true,
+        "pending_secret": true,
+        "clock_offset": 0
+      },
+      "expected": {
+        "sender": {
+          "results": [
+            {
+              "message": 0,
+              "kind": "event",
+              "attempts": 1,
+              "accepted": true,
+              "http_status": 200,
+              "last_error": null
+            }
+          ]
+        },
+        "deliveries": [
+          {
+            "seq": 0,
+            "status": 200,
+            "code": null,
+            "body_status": "challenge",
+            "kind": "verification",
+            "webhook_id_prefix": "msg_verification_",
+            "webhook_id_chars": 32,
+            "challenge_grammar": true,
+            "challenge_matches_body": true,
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              },
+              "v1a": {
+                "present": false
+              },
+              "v2a": {
+                "present": false
+              },
+              "w1": {
+                "present": false
+              }
+            },
+            "body_json": {
+              "type": "verification"
+            },
+            "enqueued": 0,
+            "forwarded": []
+          },
+          {
+            "seq": 1,
+            "status": 200,
+            "code": null,
+            "body_status": "accepted",
+            "kind": "event",
+            "webhook_id_prefix": "msg_",
+            "webhook_id_chars": 32,
+            "webhook_id_grammar": true,
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              }
+            },
+            "body_equals": "event",
+            "enqueued": 1,
+            "forwarded": [
+              "event"
+            ]
+          }
+        ]
+      }
+    },
+    "verify-challenge-w1": {
+      "description": "The same handshake with w1 configured: the verification POST itself carries a w1 signature bound to the callback URL and is verified against the card key before the nonce is echoed.",
+      "source": "spec/06-webhooks.md R5.5, R5.6, R4.2; interop/webhook/contract.md section 6",
+      "relay": null,
+      "shadow": false,
+      "sender": {
+        "messages": [
+          "event"
+        ],
+        "subscription_id": "$sub",
+        "jack_key": "newbie",
+        "resolver": {
+          "hooks.example.test": [
+            "127.0.0.1"
+          ]
+        },
+        "clock_offset": 0
+      },
+      "receiver": {
+        "start": true,
+        "pending_secret": true,
+        "card": [
+          "newbie"
+        ],
+        "require_jack": true,
+        "clock_offset": 0
+      },
+      "expected": {
+        "sender": {
+          "results": [
+            {
+              "message": 0,
+              "kind": "event",
+              "attempts": 1,
+              "accepted": true,
+              "http_status": 200,
+              "last_error": null
+            }
+          ]
+        },
+        "deliveries": [
+          {
+            "seq": 0,
+            "status": 200,
+            "code": null,
+            "body_status": "challenge",
+            "kind": "verification",
+            "webhook_id_prefix": "msg_verification_",
+            "webhook_id_chars": 32,
+            "challenge_grammar": true,
+            "challenge_matches_body": true,
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              },
+              "v1a": {
+                "present": false
+              },
+              "v2a": {
+                "present": false
+              },
+              "w1": {
+                "present": true,
+                "count": 1,
+                "kid": "$kid:newbie",
+                "valid": true
+              }
+            },
+            "body_json": {
+              "type": "verification"
+            },
+            "enqueued": 0,
+            "forwarded": []
+          },
+          {
+            "seq": 1,
+            "status": 200,
+            "code": null,
+            "body_status": "accepted",
+            "kind": "event",
+            "webhook_id_prefix": "msg_",
+            "webhook_id_chars": 32,
+            "webhook_id_grammar": true,
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              },
+              "w1": {
+                "present": true,
+                "count": 1,
+                "kid": "$kid:newbie",
+                "valid": true
+              }
+            },
+            "body_equals": "event",
+            "enqueued": 1,
+            "forwarded": [
+              "event"
+            ]
+          }
+        ]
+      }
+    },
+    "refuse-tampered-body": {
+      "description": "The relay changes one character of the body after the sender signed it, so the v1 HMAC no longer covers the received bytes: 401 bad_signature.",
+      "source": "spec/06-webhooks.md R2.3, R3.13; interop/webhook/contract.md section 8",
+      "relay": "tamper-body",
+      "shadow": false,
+      "sender": {
+        "messages": [
+          "event"
+        ],
+        "allowlist": true,
+        "subscription_id": "$sub",
+        "resolver": {
+          "hooks.example.test": [
+            "127.0.0.1"
+          ]
+        },
+        "clock_offset": 0
+      },
+      "receiver": {
+        "start": true,
+        "clock_offset": 0
+      },
+      "expected": {
+        "sender": {
+          "results": [
+            {
+              "message": 0,
+              "kind": "event",
+              "attempts": 1,
+              "accepted": false,
+              "http_status": 401,
+              "last_error": "http_4xx"
+            }
+          ]
+        },
+        "attempts": [
+          {
+            "seq": 0,
+            "http_status": 401,
+            "signature_schemes": [
+              "v1"
+            ],
+            "webhook_id_prefix": "msg_",
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              }
+            }
+          }
+        ],
+        "deliveries": [
+          {
+            "seq": 0,
+            "status": 401,
+            "code": "bad_signature",
+            "body_status": null,
+            "kind": null,
+            "webhook_id_prefix": "msg_",
+            "webhook_id_grammar": true,
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": false
+              }
+            },
+            "body_equals": "other",
+            "body_json": {
+              "name": "incident.createX"
+            }
+          }
+        ]
+      }
+    },
+    "refuse-tampered-header": {
+      "description": "The relay changes the last character of the signed webhook-id, so the HMAC content differs while the header grammar still holds: 401 bad_signature.",
+      "source": "spec/06-webhooks.md R2.2, R2.4, R3.13; interop/webhook/contract.md section 8",
+      "relay": "tamper-header",
+      "shadow": false,
+      "cross_check": false,
+      "sender": {
+        "messages": [
+          "event"
+        ],
+        "allowlist": true,
+        "subscription_id": "$sub",
+        "resolver": {
+          "hooks.example.test": [
+            "127.0.0.1"
+          ]
+        },
+        "clock_offset": 0
+      },
+      "receiver": {
+        "start": true,
+        "clock_offset": 0
+      },
+      "expected": {
+        "sender": {
+          "results": [
+            {
+              "message": 0,
+              "kind": "event",
+              "attempts": 1,
+              "accepted": false,
+              "http_status": 401,
+              "last_error": "http_4xx"
+            }
+          ]
+        },
+        "attempts": [
+          {
+            "seq": 0,
+            "http_status": 401,
+            "signature_schemes": [
+              "v1"
+            ],
+            "webhook_id_prefix": "msg_",
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              }
+            }
+          }
+        ],
+        "deliveries": [
+          {
+            "seq": 0,
+            "status": 401,
+            "code": "bad_signature",
+            "body_status": null,
+            "kind": null,
+            "webhook_id_prefix": "msg_",
+            "webhook_id_grammar": true,
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": false
+              }
+            },
+            "body_equals": "event"
+          }
+        ]
+      }
+    },
+    "refuse-stale-timestamp": {
+      "description": "The receiver clock is 301 s ahead of the attempt timestamp, past the 300 s window, so a message whose HMAC verified answers 401 stale_timestamp.",
+      "source": "spec/06-webhooks.md R3.9, R3.13; interop/webhook/contract.md section 6",
+      "relay": null,
+      "shadow": false,
+      "sender": {
+        "messages": [
+          "event"
+        ],
+        "allowlist": true,
+        "subscription_id": "$sub",
+        "resolver": {
+          "hooks.example.test": [
+            "127.0.0.1"
+          ]
+        },
+        "clock_offset": 0
+      },
+      "receiver": {
+        "start": true,
+        "clock_offset": 301
+      },
+      "expected": {
+        "sender": {
+          "results": [
+            {
+              "message": 0,
+              "kind": "event",
+              "attempts": 1,
+              "accepted": false,
+              "http_status": 401,
+              "last_error": "http_4xx"
+            }
+          ]
+        },
+        "deliveries": [
+          {
+            "seq": 0,
+            "status": 401,
+            "code": "stale_timestamp",
+            "body_status": null,
+            "kind": null,
+            "webhook_id_prefix": "msg_",
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              }
+            },
+            "body_equals": "event"
+          }
+        ]
+      }
+    },
+    "refuse-future-timestamp": {
+      "description": "The receiver clock is 301 s behind the attempt timestamp: 401 future_timestamp after the HMAC verified.",
+      "source": "spec/06-webhooks.md R1.1, R2.2, R3.1-R3.17; interop/webhook/contract.md section 6",
+      "relay": null,
+      "shadow": false,
+      "sender": {
+        "messages": [
+          "event"
+        ],
+        "allowlist": true,
+        "subscription_id": "$sub",
+        "resolver": {
+          "hooks.example.test": [
+            "127.0.0.1"
+          ]
+        },
+        "clock_offset": 0
+      },
+      "receiver": {
+        "start": true,
+        "clock_offset": -301
+      },
+      "expected": {
+        "sender": {
+          "results": [
+            {
+              "message": 0,
+              "kind": "event",
+              "attempts": 1,
+              "accepted": false,
+              "http_status": 401,
+              "last_error": "http_4xx"
+            }
+          ]
+        },
+        "deliveries": [
+          {
+            "seq": 0,
+            "status": 401,
+            "code": "future_timestamp",
+            "body_status": null,
+            "kind": null,
+            "webhook_id_prefix": "msg_",
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              }
+            },
+            "body_equals": "event"
+          }
+        ]
+      }
+    },
+    "refuse-unknown-subscription": {
+      "description": "The delivery names a subscription id the receiver holds no secret for, although the v1 HMAC with the pinned secret would verify: 401 unknown_subscription, decided before the body is parsed.",
+      "source": "spec/06-webhooks.md R3.7, step 7; interop/webhook/contract.md section 6",
+      "relay": null,
+      "shadow": false,
+      "sender": {
+        "messages": [
+          "event"
+        ],
+        "allowlist": true,
+        "subscription_id": "sub_0000000000000001",
+        "resolver": {
+          "hooks.example.test": [
+            "127.0.0.1"
+          ]
+        },
+        "clock_offset": 0
+      },
+      "receiver": {
+        "start": true,
+        "clock_offset": 0
+      },
+      "expected": {
+        "sender": {
+          "results": [
+            {
+              "message": 0,
+              "kind": "event",
+              "attempts": 1,
+              "accepted": false,
+              "http_status": 401,
+              "last_error": "http_4xx"
+            }
+          ]
+        },
+        "deliveries": [
+          {
+            "seq": 0,
+            "status": 401,
+            "code": "unknown_subscription",
+            "body_status": null,
+            "kind": null,
+            "webhook_id_prefix": "msg_",
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              }
+            },
+            "body_equals": "event"
+          }
+        ]
+      }
+    },
+    "refuse-unknown-envelope-type": {
+      "description": "A correctly signed body whose type is not one of the three control envelopes: 400 unknown_envelope_type, decided only after authentication.",
+      "source": "spec/06-webhooks.md R1.3, R3.18; interop/webhook/contract.md section 6",
+      "relay": null,
+      "shadow": false,
+      "sender": {
+        "messages": [
+          "raw"
+        ],
+        "body": "unknown-type",
+        "allowlist": true,
+        "subscription_id": "$sub",
+        "resolver": {
+          "hooks.example.test": [
+            "127.0.0.1"
+          ]
+        },
+        "clock_offset": 0
+      },
+      "receiver": {
+        "start": true,
+        "clock_offset": 0
+      },
+      "expected": {
+        "sender": {
+          "results": [
+            {
+              "message": 0,
+              "kind": "raw",
+              "attempts": 1,
+              "accepted": false,
+              "http_status": 400,
+              "last_error": "http_4xx"
+            }
+          ]
+        },
+        "deliveries": [
+          {
+            "seq": 0,
+            "status": 400,
+            "code": "unknown_envelope_type",
+            "body_status": null,
+            "kind": null,
+            "webhook_id_prefix": "msg_",
+            "webhook_id_grammar": true,
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              }
+            },
+            "body_equals": "unknown-type",
+            "body_json": {
+              "type": "bogus"
+            }
+          }
+        ]
+      }
+    },
+    "refuse-malformed-body": {
+      "description": "A correctly signed body that is not a JSON object: 400 malformed_body.",
+      "source": "spec/06-webhooks.md R1.3, R3.18; interop/webhook/contract.md section 6",
+      "relay": null,
+      "shadow": false,
+      "sender": {
+        "messages": [
+          "raw"
+        ],
+        "body": "malformed",
+        "allowlist": true,
+        "subscription_id": "$sub",
+        "resolver": {
+          "hooks.example.test": [
+            "127.0.0.1"
+          ]
+        },
+        "clock_offset": 0
+      },
+      "receiver": {
+        "start": true,
+        "clock_offset": 0
+      },
+      "expected": {
+        "sender": {
+          "results": [
+            {
+              "message": 0,
+              "kind": "raw",
+              "attempts": 1,
+              "accepted": false,
+              "http_status": 400,
+              "last_error": "http_4xx"
+            }
+          ]
+        },
+        "deliveries": [
+          {
+            "seq": 0,
+            "status": 400,
+            "code": "malformed_body",
+            "body_status": null,
+            "kind": null,
+            "webhook_id_prefix": "msg_",
+            "webhook_id_grammar": true,
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              }
+            },
+            "body_equals": "malformed",
+            "body_json": null
+          }
+        ]
+      }
+    },
+    "refuse-body-too-large": {
+      "description": "The relay declares Content-Length 262145 while forwarding the authentic bytes, so the receiver refuses 413 body_too_large from the declaration alone and never reads the body.",
+      "source": "spec/06-webhooks.md R1.2, R3.6; interop/webhook/contract.md section 8",
+      "relay": "inflate-length",
+      "shadow": false,
+      "cross_check": false,
+      "sender": {
+        "messages": [
+          "event"
+        ],
+        "allowlist": true,
+        "subscription_id": "$sub",
+        "resolver": {
+          "hooks.example.test": [
+            "127.0.0.1"
+          ]
+        },
+        "clock_offset": 0
+      },
+      "receiver": {
+        "start": true,
+        "clock_offset": 0
+      },
+      "expected": {
+        "sender": {
+          "results": [
+            {
+              "message": 0,
+              "kind": "event",
+              "attempts": 1,
+              "accepted": false,
+              "http_status": 413,
+              "last_error": "http_4xx"
+            }
+          ]
+        },
+        "attempts": [
+          {
+            "seq": 0,
+            "http_status": 413,
+            "signature_schemes": [
+              "v1"
+            ],
+            "webhook_id_prefix": "msg_",
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              }
+            }
+          }
+        ],
+        "deliveries": [
+          {
+            "seq": 0,
+            "status": 413,
+            "code": "body_too_large",
+            "body_status": null,
+            "kind": null,
+            "body_equals": "empty",
+            "body_len": 0,
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": false
+              }
+            }
+          }
+        ]
+      }
+    },
+    "dedup-repeated-delivery": {
+      "description": "The relay replays the exact signed bytes after relaying the first answer, so the second delivery is a duplicate of an accepted id: 200 duplicate, no second enqueue.",
+      "source": "spec/06-webhooks.md R3.16; interop/webhook/contract.md section 8",
+      "relay": "repeat",
+      "shadow": false,
+      "sender": {
+        "messages": [
+          "event"
+        ],
+        "allowlist": true,
+        "subscription_id": "$sub",
+        "resolver": {
+          "hooks.example.test": [
+            "127.0.0.1"
+          ]
+        },
+        "clock_offset": 0
+      },
+      "receiver": {
+        "start": true,
+        "clock_offset": 0
+      },
+      "expected": {
+        "sender": {
+          "results": [
+            {
+              "message": 0,
+              "kind": "event",
+              "attempts": 1,
+              "accepted": true,
+              "http_status": 200,
+              "last_error": null
+            }
+          ]
+        },
+        "attempts": [
+          {
+            "seq": 0,
+            "http_status": 200,
+            "signature_schemes": [
+              "v1"
+            ],
+            "webhook_id_prefix": "msg_",
+            "same_webhook_id_as_previous": false,
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              }
+            }
+          },
+          {
+            "seq": 1,
+            "http_status": 200,
+            "signature_schemes": [
+              "v1"
+            ],
+            "webhook_id_prefix": "msg_",
+            "same_webhook_id_as_previous": true,
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              }
+            }
+          }
+        ],
+        "deliveries": [
+          {
+            "seq": 0,
+            "status": 200,
+            "code": null,
+            "body_status": "accepted",
+            "kind": "event",
+            "webhook_id_prefix": "msg_",
+            "webhook_id_grammar": true,
+            "duplicate_of_previous": false,
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              }
+            },
+            "body_equals": "event",
+            "enqueued": 1,
+            "forwarded": [
+              "event"
+            ]
+          },
+          {
+            "seq": 1,
+            "status": 200,
+            "code": null,
+            "body_status": "duplicate",
+            "kind": null,
+            "webhook_id_prefix": "msg_",
+            "webhook_id_grammar": true,
+            "duplicate_of_previous": true,
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              }
+            },
+            "body_equals": "event",
+            "enqueued": 1,
+            "forwarded": []
+          }
+        ]
+      }
+    },
+    "control-gap": {
+      "description": "A gap control envelope is forwarded and acknowledged with its own id prefix.",
+      "source": "spec/06-webhooks.md R1.3, R1.4, R8.7; interop/webhook/contract.md section 6",
+      "relay": null,
+      "shadow": false,
+      "sender": {
+        "messages": [
+          "gap"
+        ],
+        "allowlist": true,
+        "subscription_id": "$sub",
+        "resolver": {
+          "hooks.example.test": [
+            "127.0.0.1"
+          ]
+        },
+        "clock_offset": 0
+      },
+      "receiver": {
+        "start": true,
+        "clock_offset": 0
+      },
+      "expected": {
+        "sender": {
+          "results": [
+            {
+              "message": 0,
+              "kind": "gap",
+              "attempts": 1,
+              "accepted": true,
+              "http_status": 200,
+              "last_error": null
+            }
+          ]
+        },
+        "deliveries": [
+          {
+            "seq": 0,
+            "status": 200,
+            "code": null,
+            "body_status": "accepted",
+            "kind": "gap",
+            "webhook_id_prefix": "msg_gap_",
+            "webhook_id_chars": 32,
+            "webhook_id_grammar": true,
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              }
+            },
+            "body_equals": "gap",
+            "enqueued": 1,
+            "forwarded": [
+              "gap"
+            ],
+            "body_json": {
+              "type": "gap",
+              "cursor": "cursor_7f3a"
+            }
+          }
+        ]
+      }
+    },
+    "control-terminated": {
+      "description": "A terminated envelope is accepted and marks the subscription, so the event that follows is answered 410 subscription_terminated and never a 2xx.",
+      "source": "spec/06-webhooks.md R1.3, R3.17, R8.8; interop/webhook/contract.md section 6",
+      "relay": null,
+      "shadow": false,
+      "sender": {
+        "messages": [
+          "terminated",
+          "event"
+        ],
+        "allowlist": true,
+        "subscription_id": "$sub",
+        "resolver": {
+          "hooks.example.test": [
+            "127.0.0.1"
+          ]
+        },
+        "clock_offset": 0
+      },
+      "receiver": {
+        "start": true,
+        "clock_offset": 0
+      },
+      "expected": {
+        "sender": {
+          "results": [
+            {
+              "message": 0,
+              "kind": "terminated",
+              "attempts": 1,
+              "accepted": true,
+              "http_status": 200,
+              "last_error": null
+            },
+            {
+              "message": 1,
+              "kind": "event",
+              "attempts": 1,
+              "accepted": false,
+              "http_status": 410,
+              "last_error": "http_4xx"
+            }
+          ]
+        },
+        "deliveries": [
+          {
+            "seq": 0,
+            "status": 200,
+            "code": null,
+            "body_status": "accepted",
+            "kind": "terminated",
+            "webhook_id_prefix": "msg_terminated_",
+            "webhook_id_chars": 32,
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              }
+            },
+            "body_equals": "terminated",
+            "body_json": {
+              "type": "terminated",
+              "error": {
+                "code": -32024,
+                "message": "Forbidden"
+              }
+            }
+          },
+          {
+            "seq": 1,
+            "status": 410,
+            "code": "subscription_terminated",
+            "body_status": null,
+            "kind": "event",
+            "webhook_id_prefix": "msg_",
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              }
+            },
+            "body_equals": "event"
+          }
+        ]
+      }
+    },
+    "retry-http-503": {
+      "description": "The endpoint answers 503 to every attempt, so the sender walks the four scheduled attempts with one id, a fresh timestamp each time, and abandons the message with http_5xx.",
+      "source": "spec/06-webhooks.md R1.5, R1.7, R1.8, R1.9; interop/webhook/contract.md section 8",
+      "relay": "answer-503",
+      "shadow": false,
+      "sender": {
+        "messages": [
+          "event"
+        ],
+        "allowlist": true,
+        "subscription_id": "$sub",
+        "resolver": {
+          "hooks.example.test": [
+            "127.0.0.1"
+          ]
+        },
+        "clock_offset": 0
+      },
+      "receiver": {
+        "start": false
+      },
+      "expected": {
+        "sender": {
+          "results": [
+            {
+              "message": 0,
+              "kind": "event",
+              "attempts": 4,
+              "accepted": false,
+              "http_status": 503,
+              "last_error": "http_5xx"
+            }
+          ]
+        },
+        "attempts": [
+          {
+            "seq": 0,
+            "webhook_timestamp": "1800000000",
+            "http_status": 503,
+            "signature_schemes": [
+              "v1"
+            ],
+            "webhook_id_prefix": "msg_",
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              }
+            },
+            "same_webhook_id_as_previous": false
+          },
+          {
+            "seq": 1,
+            "webhook_timestamp": "1800000030",
+            "http_status": 503,
+            "signature_schemes": [
+              "v1"
+            ],
+            "webhook_id_prefix": "msg_",
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              }
+            },
+            "same_webhook_id_as_previous": true
+          },
+          {
+            "seq": 2,
+            "webhook_timestamp": "1800000270",
+            "http_status": 503,
+            "signature_schemes": [
+              "v1"
+            ],
+            "webhook_id_prefix": "msg_",
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              }
+            },
+            "same_webhook_id_as_previous": true
+          },
+          {
+            "seq": 3,
+            "webhook_timestamp": "1800000870",
+            "http_status": 503,
+            "signature_schemes": [
+              "v1"
+            ],
+            "webhook_id_prefix": "msg_",
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              }
+            },
+            "same_webhook_id_as_previous": true
+          }
+        ],
+        "deliveries": []
+      }
+    },
+    "retry-enqueue-failed": {
+      "description": "The receiver's first enqueue fails, so it answers 503 enqueue_failed and records nothing; the retry of the same id 30 s later is accepted exactly once.",
+      "source": "spec/06-webhooks.md R1.8, R1.10, R3.17; interop/webhook/contract.md section 6",
+      "relay": null,
+      "shadow": false,
+      "sender": {
+        "messages": [
+          "event"
+        ],
+        "allowlist": true,
+        "subscription_id": "$sub",
+        "resolver": {
+          "hooks.example.test": [
+            "127.0.0.1"
+          ]
+        },
+        "clock_offset": 0
+      },
+      "receiver": {
+        "start": true,
+        "enqueue_fail": 1,
+        "clock_offset": 0
+      },
+      "expected": {
+        "sender": {
+          "results": [
+            {
+              "message": 0,
+              "kind": "event",
+              "attempts": 2,
+              "accepted": true,
+              "http_status": 200,
+              "last_error": null
+            }
+          ]
+        },
+        "deliveries": [
+          {
+            "seq": 0,
+            "status": 503,
+            "code": "enqueue_failed",
+            "body_status": null,
+            "kind": "event",
+            "webhook_id_prefix": "msg_",
+            "timestamp": "1800000000",
+            "duplicate_of_previous": false,
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              }
+            },
+            "body_equals": "event",
+            "enqueued": 0,
+            "forwarded": []
+          },
+          {
+            "seq": 1,
+            "status": 200,
+            "code": null,
+            "body_status": "accepted",
+            "kind": "event",
+            "webhook_id_prefix": "msg_",
+            "timestamp": "1800000030",
+            "duplicate_of_previous": true,
+            "signatures": {
+              "v1": {
+                "present": true,
+                "count": 1,
+                "valid": true
+              }
+            },
+            "body_equals": "event",
+            "enqueued": 1,
+            "forwarded": [
+              "event"
+            ]
+          }
+        ]
+      }
+    },
+    "ssrf-private-address": {
+      "description": "The injected resolver answers a private address, so the sender refuses the attempt before any request: ssrf_blocked_address, no POST, nothing reaches the receiver.",
+      "source": "spec/06-webhooks.md R6.5, R6.8, R1.9; interop/webhook/contract.md section 6",
+      "relay": null,
+      "shadow": false,
+      "sender": {
+        "messages": [
+          "event"
+        ],
+        "allowlist": true,
+        "subscription_id": "$sub",
+        "resolver": {
+          "hooks.example.test": [
+            "10.0.0.5"
+          ]
+        },
+        "clock_offset": 0
+      },
+      "receiver": {
+        "start": true,
+        "clock_offset": 0
+      },
+      "expected": {
+        "sender": {
+          "results": [
+            {
+              "message": 0,
+              "kind": "event",
+              "attempts": 0,
+              "accepted": false,
+              "http_status": null,
+              "last_error": "ssrf_blocked_address"
+            }
+          ]
+        },
+        "attempts": [],
+        "shadow_connections": 0,
+        "deliveries": []
+      }
+    },
+    "ssrf-dns-rebinding": {
+      "description": "The answer that was validated differs from the address actually reached, so the attempt is refused with ssrf_rebinding_blocked and never retried on the new address.",
+      "source": "spec/06-webhooks.md R6.9, R1.9; interop/webhook/contract.md section 6",
+      "gap": {
+        "typescript": "the hardened transport resolves once, passes no recheck to checkDelivery and asserts the peer only inside its default dialer, so a rebinding cannot be expressed through the public options (contract section 10, gap 2)"
+      },
+      "relay": null,
+      "shadow": true,
+      "sender": {
+        "messages": [
+          "event"
+        ],
+        "allowlist": true,
+        "subscription_id": "$sub",
+        "rebind_address": "127.0.0.2",
+        "resolver": {
+          "hooks.example.test": [
+            "127.0.0.1"
+          ]
+        },
+        "clock_offset": 0
+      },
+      "receiver": {
+        "start": true,
+        "clock_offset": 0
+      },
+      "expected": {
+        "sender": {
+          "results": [
+            {
+              "message": 0,
+              "kind": "event",
+              "attempts": 0,
+              "accepted": false,
+              "http_status": null,
+              "last_error": "ssrf_rebinding_blocked"
+            }
+          ]
+        },
+        "attempts": [],
+        "shadow_connections": 0,
+        "deliveries": []
+      }
+    }
+  }
+}

@@ -349,6 +349,17 @@ jobs:
       - name: Run the modern matrix
         run: node interop/modern.mjs
 
+  webhook-interop:
+    name: webhook interop harness self-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+      - run: node interop/webhook.mjs --self-test
+
   durable-interop:
     name: durable nonce interop matrix (3x3, linux)
     runs-on: ubuntu-latest
