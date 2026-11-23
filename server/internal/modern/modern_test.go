@@ -637,9 +637,9 @@ func TestModernClassifyEdges(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestModernClassifyRefusalID drives a header_repeated refusal and checks the
-// echoed id. An id member that is a string or a number makes the body a
-// request; a boolean, an object, an array or null makes it a notification, so
-// the refusal carries a null id in that case too.
+// echoed id. S1 refuses before the request/notification split matters, so
+// every case here reaches S10; the echoed id is the string or the exact
+// integer token, and null for a null, boolean, object or array id.
 // Integrality is exact: a fraction with a non-zero part, or a magnitude outside int64, becomes null.
 func TestModernClassifyRefusalID(t *testing.T) {
 	// Two MCP-Protocol-Version headers trip S1, so every case reaches S10.
@@ -715,6 +715,52 @@ func TestModernClassifyRefusalID(t *testing.T) {
 				t.Fatalf("id %s: Wire() = %#v, want %#v", c.id, wire, wantWire)
 			}
 		})
+	}
+}
+
+// TestModernClassifyIDMemberMakesRequest pins spec 04 section 5 S11: only a
+// body WITHOUT an id member is a notification, so an id member - null
+// included - makes the body a request whose mirrors S4 to S6 require.
+func TestModernClassifyIDMemberMakesRequest(t *testing.T) {
+	// A modern tools/call with the version and method mirrors but no Mcp-Name.
+	mirrors := headers(
+		hdr("MCP-Protocol-Version", "2026-07-28"),
+		hdr("Mcp-Method", "tools/call"),
+	)
+	body := func(idMember string) []byte {
+		return []byte(`{"jsonrpc":"2.0",` + idMember + `"method":"tools/call","params":{"name":"region.echo","_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`)
+	}
+
+	for _, idle := range []string{`"id":"abc",`, `"id":7,`, `"id":null,`} {
+		got := Classify(ProfileModern, Request{Method: "POST", Target: "/mcp", Headers: mirrors, Body: body(idle)})
+		if got.Kind != KindRefuse || got.Era != eraModern {
+			t.Fatalf("%s: Kind/Era = %v/%q, want KindRefuse/modern", idle, got.Kind, got.Era)
+		}
+		wantMsg := "Header mismatch: Mcp-Name is missing"
+		if got.HTTPStatus != 400 || got.Error.Code != -32020 || got.Error.Message != wantMsg {
+			t.Fatalf("%s: refusal = %d %d %q, want 400 -32020 %q", idle, got.HTTPStatus, got.Error.Code, got.Error.Message, wantMsg)
+		}
+		switch idle {
+		case `"id":"abc",`:
+			if string(got.ID) != `"abc"` {
+				t.Fatalf("ID = %q, want %q", got.ID, `"abc"`)
+			}
+		case `"id":7,`:
+			if string(got.ID) != `7` {
+				t.Fatalf("ID = %q, want 7", got.ID)
+			}
+		default:
+			if len(got.ID) != 0 {
+				t.Fatalf("ID = %q, want nil for a null id", got.ID)
+			}
+		}
+	}
+
+	// Without an id member the same body is a notification: S11 requires no
+	// mirror header, so it is forwarded unchanged.
+	got := Classify(ProfileModern, Request{Method: "POST", Target: "/mcp", Headers: mirrors, Body: body("")})
+	if got.Kind != KindForward || got.Era != eraModern {
+		t.Fatalf("notification Kind/Era = %v/%q, want KindForward/modern", got.Kind, got.Era)
 	}
 }
 
