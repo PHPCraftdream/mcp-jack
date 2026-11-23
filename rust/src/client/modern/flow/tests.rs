@@ -426,7 +426,8 @@ fn initialize_rejections_leave_no_cached_state() {
         // No era, version or session is cached: the next call probes again.
         let _ = client.call_tool_raw("jack.whoami", None);
         let methods = methods(&stub);
-        assert_eq!(methods[methods.len() - 1], "server/discover", "{label}");
+        // The next call probes again (discover), then falls back to initialize once more.
+        assert_eq!(methods[2], "server/discover", "{label}");
     }
 }
 
@@ -545,7 +546,8 @@ fn a_failed_recovery_clears_the_state_so_the_next_call_probes() {
             "notifications/initialized",
             "tools/call",
             "initialize",
-            "server/discover"
+            "server/discover",
+            "initialize"
         ]
     );
 }
@@ -877,10 +879,16 @@ fn the_default_legacy_era_issues_exactly_one_request() {
     );
 
     let seen = stub.seen();
+    let unsigned: Vec<(String, String)> = seen[0]
+        .headers
+        .iter()
+        .filter(|(name, _)| name != "Jack-Auth")
+        .cloned()
+        .collect();
     assert_eq!(
-        seen[0].headers,
+        unsigned,
         [("Content-Type".to_owned(), "application/json".to_owned())],
-        "the 0.1.x headers: Content-Type only"
+        "the 0.1.x headers: Content-Type only (besides the signature header)"
     );
     assert_eq!(seen[0].id(), Some(1), "the id counter still starts at 1");
     assert_eq!(
