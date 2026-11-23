@@ -9,7 +9,9 @@
 //! I/O: `now` is an argument, the cache is process-local memory, and every
 //! rejection is the fixed-literal code of R7.2. The cache lock is never held
 //! across a fetch, so a slow card never blocks a delivery reading the
-//! snapshot, and a failed refresh keeps the last good key set (R7.2, R7.4).
+//! snapshot, and after the TTL the key set is no longer trusted: a failed
+//! refresh answers an empty snapshot, so a retired key stops verifying
+//! (R7.2, R7.3).
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -107,8 +109,9 @@ pub struct CardSource {
     /// The configured raw MCP server public key, rejected at the R7.3 JWK
     /// step (spec 06 R7.3, R4.5).
     mcp_server_public_key: Option<String>,
-    /// The last good key set and its freshness; a failed refresh leaves it
-    /// in place (spec 06 R7.2, R7.4).
+    /// The cached key set and the moment it stops being fresh; an entry past
+    /// `expires_at` is never trusted again unless a refresh succeeds
+    /// (spec 06 R7.2, R7.3).
     cache: Mutex<Option<CacheEntry>>,
 }
 
@@ -156,7 +159,7 @@ impl CardSource {
     /// (spec 06 R7.2-R7.4).
     ///
     /// The fetch runs outside the cache lock, so a slow card never blocks a
-    /// [`CardSource::current`] on the last good set. On success the R7.2
+    /// [`CardSource::current`] read. On success the R7.2
     /// decision accepts the card, the accepted keys and the rejected entries
     /// become the snapshot and the raw JWKs of the selected remote become its
     /// `published` members — invalid members included, so the R7.6 cross-check
@@ -197,23 +200,22 @@ impl CardSource {
     }
 
     /// Returns the cached snapshot, refreshed first when it is stale
-    /// (spec 06 R7.2, R7.4).
+    /// (spec 06 R7.2, R7.3).
     ///
-    /// An entry younger than its `expires_at` is returned without a fetch. A
-    /// stale entry is refreshed from the card; a failed refresh — a network
-    /// failure or any R7.2 rejection, including `too_large` of an overflowing
-    /// body — keeps the last good set instead of emptying it, so a card that
-    /// is briefly unreachable never turns a delivery into `no_server_keys`
-    /// (spec 06 R7.2, R7.3). A source without a good set answers
-    /// [`KeySnapshot::empty`], which the receiver reports as `no_server_keys`
-    /// (spec 06 R7.3).
+    /// An entry whose `expires_at` is still ahead of `now` is returned
+    /// without a fetch. A stale entry is refreshed from the card; a failed
+    /// refresh — a network failure or any R7.2 rejection, including
+    /// `too_large` of an overflowing body — no longer returns the stale
+    /// snapshot. It answers [`KeySnapshot::empty`]: after the TTL the set is
+    /// not trusted, so the receiver answers the fixed `no_server_keys`
+    /// refusal (spec 06 R7.3) until a refresh succeeds (spec 06 R7.2, R7.3).
     pub fn current(&self, now: i64) -> KeySnapshot {
         if let Some(snapshot) = self.fresh(now) {
             return snapshot;
         }
         match self.refresh(now) {
             Ok(snapshot) => snapshot,
-            Err(_) => self.last_good(),
+            Err(_) => KeySnapshot::empty(),
         }
     }
 
@@ -226,21 +228,12 @@ impl CardSource {
             .filter(|entry| now < entry.expires_at)
             .map(|entry| entry.snapshot.clone())
     }
-
-    /// Returns the cached snapshot whatever its age, or the empty snapshot
-    /// when nothing was ever accepted (spec 06 R7.2, R7.4).
-    fn last_good(&self) -> KeySnapshot {
-        let cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
-        cache
-            .as_ref()
-            .map(|entry| entry.snapshot.clone())
-            .unwrap_or_default()
-    }
 }
 
 impl KeySource for CardSource {
-    /// Reports the cached snapshot at `now`, refreshed first when it is stale
-    /// (spec 06 R7.2, R7.4).
+    /// Reports the cached snapshot at `now`, refreshed first when it is stale;
+    /// a stale entry whose refresh fails reports no accepted key
+    /// (spec 06 R7.2, R7.3).
     fn snapshot(&self, now: i64) -> KeySnapshot {
         self.current(now)
     }

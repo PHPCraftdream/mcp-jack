@@ -1,6 +1,20 @@
 //! Forwarding of an authorized request to the wrapped service (Go: forward):
 //! the modern-era header rebuild of spec 04 `S8`/`S9` and the signing of the
 //! buffered answer.
+//!
+//! The modern rebuild guarantees exactly this and nothing more: every
+//! `(name, value)` pair that survives the `S8` session-header filter is
+//! forwarded, every value of one name is kept, the values of one name keep
+//! their received order, and value bytes are byte-exact (obs-text `0x80..`
+//! included); `Content-Length`/`Transfer-Encoding` handling and the
+//! `Jack-Auth` replacement are unchanged. It does NOT guarantee, and never
+//! claims, the global interleaving of different names — the request headers
+//! are an [`http::HeaderMap`], which groups values by name, so the original
+//! cross-name order cannot be reconstructed from a real request — nor the
+//! original casing of a name, because [`http::HeaderName`] stores it
+//! lowercased and the field-name case is not recoverable. The legacy-era
+//! forward and the [`crate::server::modern::Profile::Legacy`] profile pass the
+//! received map through unchanged, keeping 0.1.x byte identity.
 
 use bytes::Bytes;
 use http::header::{CONTENT_LENGTH, CONTENT_TYPE};
@@ -27,16 +41,19 @@ where
     /// answers (Go: forward).
     ///
     /// With `modern` set (the modern era of spec 04), the inner request's
-    /// header list is rebuilt from the request's ORIGINAL ordered entries: the
-    /// headers for which [`crate::modern::is_session_header`] holds are removed
-    /// (`S8`) and every other `(name, value)` pair is appended in received
-    /// order, so a repeated name keeps every instance and opaque value bytes
-    /// (0x80..) reach the wrapped service untouched. The engine's
-    /// `HeaderField` list is consulted for validation only, never for
-    /// forwarding: its `String` copy is lossy UTF-8 and would rewrite exactly
-    /// those bytes. A legacy-era forward, and the [`crate::server::modern::Profile::Legacy`]
-    /// profile,
-    /// pass the received map through unchanged, keeping 0.1.x byte identity.
+    /// header map is rebuilt by keeping exactly the received `(name, value)`
+    /// pairs for which [`crate::modern::is_session_header`] does not hold
+    /// (`S8`): every value of one name survives, the values of one name keep
+    /// their received order, and opaque value bytes (0x80..) reach the wrapped
+    /// service untouched. The rebuild works on an [`http::HeaderMap`], which
+    /// groups values by name and lowercases names, so the global interleaving
+    /// of different names and the original field-name casing are NOT
+    /// guaranteed (see the module documentation). The engine's `HeaderField`
+    /// list is consulted for validation only, never for forwarding: its
+    /// `String` copy is lossy UTF-8 and would rewrite exactly those bytes. A
+    /// legacy-era forward, and the
+    /// [`crate::server::modern::Profile::Legacy`] profile, pass the received
+    /// map through unchanged, keeping 0.1.x byte identity.
     pub(super) async fn forward(
         &mut self,
         mut parts: http::request::Parts,
@@ -58,8 +75,10 @@ where
         };
         if modern {
             // `S8` removes exactly the session headers and nothing else: `S7`
-            // and `S9` add, rewrite and reorder nothing, so the surviving
-            // original pairs are appended in received order.
+            // and `S9` add, rewrite and reorder nothing. The surviving pairs
+            // are re-appended to the same `HeaderMap`, which keeps every value
+            // of a name in its received order but groups values by name, so no
+            // cross-name order exists to preserve.
             let headers: Vec<(http::HeaderName, HeaderValue)> = parts
                 .headers
                 .iter()

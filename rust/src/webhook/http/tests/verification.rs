@@ -5,20 +5,24 @@
 //! hardened path and the same fakes as the delivery tests: [`FakeResolver`]
 //! scripts the answers, [`FakeTransport`] records every request and answers
 //! with a scripted status and body, and [`FakeClock`] records every
-//! `sleep_until`. Nothing below touches a socket, a DNS server or Tokio.
+//! `sleep_until_ms`. Nothing below touches a socket, a DNS server or Tokio.
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
 use crate::webhook::delivery::LastError;
 use crate::webhook::http::document::WebhookDocumentFetcher;
-use crate::webhook::http::sender::{SendAction, Sender, SenderConfig};
-use crate::webhook::http::transport::MAX_DOCUMENT_BYTES;
+use crate::webhook::http::sender::{Clock, SendAction, Sender, SenderConfig};
+use crate::webhook::http::transport::{
+    TransportFailure, TransportRequest, TransportResponse, WebhookTransport, MAX_DOCUMENT_BYTES,
+};
 use crate::webhook::verification::document::DocumentFetcher;
+use crate::webhook::verification::gate::{EndpointGate, EndpointPair};
+use crate::webhook::verification::nonce::{MAX_ECHO_BYTES, NONCE_TTL_MS};
 
 use super::rebinding::{
     has_header, message, FakeClock, FakeResolver, FakeTransport, GateMode, Rig, ScriptedGate,
-    LOOPBACK, NAME_URL, NONCE, PUBLIC, T0,
+    LOOPBACK, NAME_URL, NONCE, PRINCIPAL, PUBLIC, T0_MS,
 };
 
 /// The well-known url of [`NAME_URL`] (spec 06 R5.9).
@@ -68,9 +72,15 @@ fn ip(address: Ipv4Addr) -> IpAddr {
 /// Builds a sender whose gate runs the challenge and whose transport answers
 /// every request with `status` and `body` (spec 06 R5.4, R5.5).
 fn challenge_rig(status: u16, body: Vec<u8>) -> Rig {
-    let transport = Arc::new(FakeTransport::new(vec![(status, None)]).with_body(body));
+    challenge_rig_with(FakeTransport::new(vec![(status, None)]).with_body(body))
+}
+
+/// Builds a sender whose gate runs the challenge over the given transport
+/// (spec 06 R5.4, R5.5).
+fn challenge_rig_with(transport: FakeTransport) -> Rig {
+    let transport = Arc::new(transport);
     let resolver = Arc::new(FakeResolver::new(vec![vec![ip(PUBLIC)]]));
-    let clock = Arc::new(FakeClock::new(T0));
+    let clock = Arc::new(FakeClock::new(T0_MS));
     let gate = Arc::new(ScriptedGate::new(GateMode::Challenge));
     let sender = Sender::new(
         transport.clone(),
@@ -223,7 +233,7 @@ fn r5_4_an_echoed_challenge_is_ok() {
     assert!(verdicts[0].ok);
     assert_eq!(verdicts[0].code, None);
     assert_eq!(verdicts[0].reason, None);
-    assert_eq!(rig.gate.verifies(), vec![T0]);
+    assert_eq!(rig.gate.verifies(), vec![T0_MS]);
     let requests = rig.transport.requests();
     assert_eq!(requests[0].method, "POST");
     assert_eq!(requests[0].url, NAME_URL);
@@ -290,4 +300,131 @@ fn r5_4_a_challenge_is_never_retried() {
     assert_eq!(verdicts[0].code, Some("challenge_failed"));
     assert_eq!(verdicts[0].reason.as_deref(), Some("status"));
     assert!(rig.clock.sleeps().is_empty());
+}
+
+/// Returns a valid echo of [`NONCE`] as the bytes the transport answers with
+/// (spec 06 R5.4).
+fn echo_body() -> Vec<u8> {
+    format!(r#"{{"challenge":"{NONCE}"}}"#).into_bytes()
+}
+
+/// Asserts that `rig` ended the message as `challenge_failed` with the fixed
+/// reason `too_large`, after the one challenge `POST` and no retry
+/// (spec 06 R5.4, R5.5).
+fn assert_too_large(rig: &Rig) {
+    let outcome = rig.sender.deliver(&message(NAME_URL));
+    assert_eq!(
+        outcome.action,
+        SendAction::Final {
+            last_error: LastError::ChallengeFailed
+        }
+    );
+    assert_eq!(rig.transport.calls(), 1, "the challenge is never retried");
+    let verdicts = rig.gate.verdicts();
+    assert_eq!(verdicts.len(), 1);
+    assert_eq!(verdicts[0].code, Some("challenge_failed"));
+    assert_eq!(verdicts[0].reason.as_deref(), Some("too_large"));
+    assert!(rig.clock.sleeps().is_empty());
+}
+
+#[test]
+fn r5_4_an_echo_above_4096_bytes_is_too_large() {
+    // A valid JSON echo padded with trailing spaces: only the size cap can
+    // refuse it (spec 06 R5.4).
+    let mut body = echo_body();
+    body.resize(MAX_ECHO_BYTES + 1, b' ');
+    assert_eq!(body.len(), MAX_ECHO_BYTES + 1);
+    let rig = challenge_rig(200, body);
+    assert_too_large(&rig);
+}
+
+#[test]
+fn r5_4_a_declared_length_above_4096_is_too_large() {
+    let rig = challenge_rig_with(
+        FakeTransport::new(vec![(200, None)])
+            .with_body(echo_body())
+            .with_declared(MAX_ECHO_BYTES as u64 + 1),
+    );
+    assert_too_large(&rig);
+}
+
+#[test]
+fn r5_4_an_overflowing_echo_with_a_valid_json_prefix_is_too_large() {
+    // The stored prefix alone is a valid echo, so only the R1.2/R5.4 overflow
+    // flag can refuse it (spec 06 R5.4).
+    let rig = challenge_rig_with(
+        FakeTransport::new(vec![(200, None)])
+            .with_body(echo_body())
+            .with_overflow(),
+    );
+    assert_too_large(&rig);
+}
+
+/// Returns the echo an endpoint answers with: an object carrying the
+/// `challenge` member of the request body (spec 06 R5.4).
+fn echo_of(request: &TransportRequest) -> Vec<u8> {
+    let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(&request.body) else {
+        return Vec::new();
+    };
+    serde_json::to_vec(&serde_json::json!({"challenge": parsed["challenge"].clone()}))
+        .unwrap_or_default()
+}
+
+/// A transport that echoes the request's `challenge` and moves the test clock
+/// forward after every send, so the sample the sender takes after the
+/// challenge response is far later than the instant the nonce was issued
+/// (spec 06 R5.3, R5.4).
+struct SlowTransport {
+    inner: Arc<FakeTransport>,
+    clock: Arc<FakeClock>,
+    step_ms: i64,
+}
+
+impl WebhookTransport for SlowTransport {
+    fn send(&self, request: &TransportRequest) -> Result<TransportResponse, TransportFailure> {
+        let mut response = self.inner.send(request)?;
+        response.body = echo_of(request);
+        self.clock.advance(self.step_ms);
+        Ok(response)
+    }
+}
+
+#[test]
+fn r5_3_a_response_that_outlived_the_nonce_is_expired() {
+    // The echo itself is correct, but it is judged 600_001 ms after the issue
+    // instant, so the nonce is spent and no delivery follows
+    // (spec 06 R5.3, R5.4).
+    let transport = Arc::new(FakeTransport::new(vec![(200, None)]));
+    let resolver = Arc::new(FakeResolver::new(vec![vec![ip(PUBLIC)]]));
+    let clock = Arc::new(FakeClock::new(T0_MS));
+    let slow = Arc::new(SlowTransport {
+        inner: transport.clone(),
+        clock: clock.clone(),
+        step_ms: NONCE_TTL_MS + 1,
+    });
+    let gate = Arc::new(EndpointGate::new(Vec::new(), None));
+    let sender = Sender::new(
+        slow,
+        resolver,
+        clock.clone(),
+        SenderConfig {
+            allowed_ranges: Vec::new(),
+            max_body_bytes: BODY_LIMIT,
+            verification_ttl_ms: None,
+        },
+        gate.clone(),
+    );
+
+    let outcome = sender.deliver(&message(NAME_URL));
+    assert_eq!(
+        outcome.action,
+        SendAction::Final {
+            last_error: LastError::ChallengeFailed
+        }
+    );
+    assert_eq!(outcome.attempts, 0);
+    assert_eq!(transport.calls(), 1, "only the challenge POST was sent");
+    assert!(clock.sleeps().is_empty());
+    let pair = EndpointPair::new(PRINCIPAL, NAME_URL).expect("the test url is a valid pair");
+    assert!(!gate.cached(&pair, clock.now_ms()));
 }

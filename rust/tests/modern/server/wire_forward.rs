@@ -1,10 +1,13 @@
 //! Spec 04 `S8`/`S9` forwarding fidelity and the era-dependent `tools/call`
 //! classification message.
 //!
-//! The modern forward path rebuilds the inner header list from the ORIGINAL
-//! ordered entries, so a header value carrying opaque bytes (`0x80..`) keeps
-//! those exact bytes, a repeated name keeps every instance, and only the
-//! session headers (`Mcp-Session-Id`, `Last-Event-ID`) disappear. The
+//! The modern forward path rebuilds the inner header list from the received
+//! entries, so a header value carrying opaque bytes (`0x80..`) keeps those
+//! exact bytes, every value of a repeated name is kept in its received order,
+//! and only the session headers (`Mcp-Session-Id`, `Last-Event-ID`) disappear.
+//! It claims no global order across different names (an `http::HeaderMap`
+//! groups values by name) and no original field-name casing (`HeaderName`
+//! lowercases every name). The
 //! `tools/call` classification message follows the era the engine decides for
 //! the request, not the deployment profile: under `Both` a legacy-era request
 //! keeps the 0.1.x bytes while a modern-era request gets the fixed message.
@@ -257,9 +260,12 @@ fn mirror_headers() -> Vec<(&'static str, HeaderValue)> {
     ]
 }
 
-/// Spec 04 `S8`/`S9`: the inner service receives the ORIGINAL header entries —
-/// opaque value bytes untouched, a repeated name repeated — minus exactly the
-/// session headers.
+/// Spec 04 `S8`/`S9`: the inner service receives the surviving header entries
+/// — opaque value bytes untouched, every value of a repeated name in its
+/// received order — minus exactly the session headers. Only the per-name
+/// guarantees are asserted here: neither the cross-name interleaving nor the
+/// field-name casing survives an `http::HeaderMap`, and the forwarding
+/// contract does not claim them.
 #[tokio::test]
 async fn forwards_original_value_bytes_and_repetitions() {
     let seen = Arc::new(Seen::default());
@@ -292,7 +298,7 @@ async fn forwards_original_value_bytes_and_repetitions() {
     assert_eq!(
         values(&forwarded, "x-repeat"),
         vec![b"one".to_vec(), b"two".to_vec()],
-        "a repeated header keeps every instance, in order"
+        "every value of a repeated name is kept, in its received order"
     );
     assert!(
         values(&forwarded, "mcp-session-id").is_empty(),
@@ -301,6 +307,68 @@ async fn forwards_original_value_bytes_and_repetitions() {
     assert!(
         values(&forwarded, "last-event-id").is_empty(),
         "S8 removes Last-Event-ID"
+    );
+}
+
+/// The forwarding guarantee is per name, not across names. `X-A: one`,
+/// `X-B: two`, `X-A: three` arrives as three values, but the rebuilt
+/// `http::HeaderMap` groups the values of one name: the forwarded list holds
+/// the two `x-a` values adjacently, so the received `x-a, x-b, x-a`
+/// interleaving is NOT reproduced — exactly the limit the module documentation
+/// of `server/http/forward.rs` declares. Header-name casing is not observable
+/// either, since `HeaderName` lowercases every name before the test sees it.
+#[tokio::test]
+async fn forwarding_preserves_values_and_per_name_order_only() {
+    let seen = Arc::new(Seen::default());
+    let svc = new_harness(Profile::Modern, Arc::clone(&seen));
+    let alice = harness::signer_by_name("alice");
+    let signed = signed_request(&alice, "POST", "/mcp", MODERN_STATUS_BODY);
+
+    let mut headers = mirror_headers();
+    headers.push(("X-A", HeaderValue::from_static("one")));
+    headers.push(("X-B", HeaderValue::from_static("two")));
+    headers.push(("X-A", HeaderValue::from_static("three")));
+
+    let got = inspect(
+        send(&svc, build_request(&signed, &headers, MODERN_STATUS_BODY))
+            .await
+            .expect("no inner error"),
+    )
+    .await;
+    assert_eq!(got.status, 200, "the modern-era request forwards");
+
+    let forwarded = seen.last_headers();
+    assert_eq!(
+        values(&forwarded, "x-a"),
+        vec![b"one".to_vec(), b"three".to_vec()],
+        "the values of one name keep their received order"
+    );
+    assert_eq!(
+        values(&forwarded, "x-b"),
+        vec![b"two".to_vec()],
+        "every other name is forwarded unchanged"
+    );
+
+    // `http::HeaderMap` groups its values by name, so the two `x-a` values are
+    // necessarily adjacent in the forwarded list. This grouping is the map
+    // invariant, not a forwarding choice, and it is precisely why the module
+    // claims no global (cross-name) order.
+    let x_a_positions: Vec<usize> = forwarded
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (name, _))| (name == "x-a").then_some(i))
+        .collect();
+    assert_eq!(x_a_positions.len(), 2, "both `x-a` values are forwarded");
+    assert_eq!(
+        x_a_positions[1],
+        x_a_positions[0] + 1,
+        "values are grouped by name, so the two `x-a` values are adjacent"
+    );
+    assert!(
+        !forwarded
+            .windows(3)
+            .any(|w| w[0].0 == "x-a" && w[1].0 == "x-b" && w[2].0 == "x-a"),
+        "the received cross-name interleaving x-a, x-b, x-a is not reproduced"
     );
 }
 

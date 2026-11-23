@@ -44,6 +44,11 @@ impl KeySnapshot {
 pub trait KeySource: Send + Sync {
     /// Returns the accepted keys and the raw published JWKs valid at `now`
     /// (R7.1-R7.4).
+    ///
+    /// A source whose fetched key set is no longer trusted at `now` — the
+    /// R7.2 cache lifetime of a [`crate::webhook::card::source::CardSource`]
+    /// passed without a successful refresh — reports no accepted key, so the
+    /// receiver answers the fixed `no_server_keys` refusal (spec 06 R7.3).
     fn snapshot(&self, now: i64) -> KeySnapshot;
 }
 

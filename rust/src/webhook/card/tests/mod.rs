@@ -120,10 +120,16 @@ pub(crate) fn cached_response(body: Vec<u8>, cache_control: &str) -> CardRespons
 ///
 /// Fetch `n` answers with response `n`, and every fetch past the end answers
 /// with the last response, so a test states the sequence it expects and the
-/// call count it asserts. No clock, no resolver and no socket are involved.
+/// call count it asserts. A transport built by [`ScriptedTransport::failing_from`]
+/// fails every fetch from a chosen index instead, so a test can prove what a
+/// stale entry answers when the refresh cannot succeed (spec 06 R7.2, R7.3).
+/// No clock, no resolver and no socket are involved.
 pub(crate) struct ScriptedTransport {
     /// The canned responses, in fetch order (spec 06 R7.2).
     responses: Vec<CardResponse>,
+    /// The fetch index from which every fetch fails, with the fetch error it
+    /// reports (spec 06 R7.2).
+    failure: Option<(usize, WebhookError)>,
     /// The number of fetches performed so far (spec 06 R7.2).
     calls: AtomicUsize,
 }
@@ -131,9 +137,22 @@ pub(crate) struct ScriptedTransport {
 impl ScriptedTransport {
     /// Builds the transport over `responses` (spec 06 R7.2).
     pub(crate) fn new(responses: Vec<CardResponse>) -> Arc<Self> {
+        Self::build(responses, None)
+    }
+
+    /// Builds the transport that serves `responses` and fails every fetch
+    /// from index `fail_from` on with the fixed `connection_refused` fetch
+    /// error (spec 06 R7.2).
+    pub(crate) fn failing_from(responses: Vec<CardResponse>, fail_from: usize) -> Arc<Self> {
+        Self::build(responses, Some((fail_from, fetch_failure())))
+    }
+
+    /// Builds the transport over `responses` and an optional failure point.
+    fn build(responses: Vec<CardResponse>, failure: Option<(usize, WebhookError)>) -> Arc<Self> {
         assert!(!responses.is_empty(), "a script needs one response");
         Arc::new(Self {
             responses,
+            failure,
             calls: AtomicUsize::new(0),
         })
     }
@@ -145,12 +164,29 @@ impl ScriptedTransport {
 }
 
 impl CardTransport for ScriptedTransport {
-    /// Replays the next canned response (spec 06 R7.2).
+    /// Replays the next canned response, or reports the scripted fetch
+    /// failure once the failure point is reached (spec 06 R7.2).
     fn fetch_card(&self, _url: &str) -> Result<CardResponse, WebhookError> {
         let index = self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some((fail_from, error)) = &self.failure {
+            if index >= *fail_from {
+                return Err(error.clone());
+            }
+        }
         let last = self.responses.len() - 1;
         Ok(self.responses[index.min(last)].clone())
     }
+}
+
+/// Builds the fixed fetch failure a [`ScriptedTransport::failing_from`]
+/// script reports: the R1.9 `connection_refused` category of an unreachable
+/// card (spec 06 R1.9, R7.2).
+fn fetch_failure() -> WebhookError {
+    WebhookError::new(
+        500,
+        "connection_refused",
+        "the card host could not be reached",
+    )
 }
 
 /// Builds one source over `transport` and the default card url of R7.2.

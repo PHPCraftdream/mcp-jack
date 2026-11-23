@@ -16,8 +16,11 @@
 //! A `2xx` is returned only after the caller's enqueue callback reported
 //! success, and only that `2xx` records the `webhook-id`: a failed enqueue
 //! answers `503 enqueue_failed` and records nothing, so the sender's retry is
-//! processed exactly once. A duplicate answer and an echoed verification
-//! envelope never call the callback at all.
+//! processed exactly once. A duplicate answer, an echoed verification
+//! envelope and a delivery a pending secret authenticated without being that
+//! envelope never call the callback at all: the last one is refused as
+//! `503 subscription_not_routed` before the enqueue, so an unrouted event is
+//! never persisted (spec 06 R3.8, R5.6).
 //!
 //! # Locking order (spec 06 R1.10, R3.16)
 //!
@@ -140,7 +143,8 @@ pub struct ReceiverSnapshot {
 /// The outcome of steps 7 to 15 for one delivery (spec 06 R3.7-R3.15).
 struct Verified {
     /// `true` when the secret was selected from the pending entries of
-    /// section 5, so step 18 re-checks routing (spec 06 R5.6).
+    /// section 5, so step 18 refuses anything but a verification envelope
+    /// before the enqueue (spec 06 R3.8, R5.6).
     deferred: bool,
     /// The index of the entry whose secret verified the `v1` HMAC
     /// (spec 06 R3.13, R5.6).
@@ -282,15 +286,17 @@ impl Receiver {
     /// signature-header grammar, scheme set, value lengths, `v1` HMAC,
     /// freshness, asymmetric verification, `w1`, the required R7.6
     /// cross-check, deduplication, parse and field validation, then
-    /// termination, enqueue and dispatch (spec 06 R3.1-R3.18).
+    /// termination, the pending-secret routing refusal and finally enqueue
+    /// and dispatch (spec 06 R3.1-R3.18).
     ///
     /// `enqueue` is the caller's durable enqueue of the parsed message
     /// objects; it is required, and it is the only way a delivery is
     /// acknowledged. `Ok(())` makes the delivery a `2xx` and records the
     /// `webhook-id`; `Err` answers `503 enqueue_failed` and records nothing, so
     /// the sender's retry is processed exactly once (spec 06 R1.10). A
-    /// duplicate answer and an echoed verification envelope never call it
-    /// (spec 06 R3.16, R5.6).
+    /// duplicate answer, an echoed verification envelope and a non-verification
+    /// body that only a pending secret authenticated never call it
+    /// (spec 06 R3.16, R3.8, R5.6).
     ///
     /// `enqueue` runs with no lock held, and the answer bodies are the section
     /// 3 table's: `{"status":"accepted"}`, `{"status":"duplicate"}`,
@@ -402,7 +408,8 @@ impl Receiver {
         if !fields_ok(kind, &message) {
             return self.leave(&mut state, webhook_id, codes::MALFORMED_BODY);
         }
-        // Step 18 (R3.17): termination, enqueue and dispatch.
+        // Step 18 (R3.17, R3.8, R5.6): termination, the pending-secret routing
+        // refusal, enqueue and dispatch.
         if state.terminated.contains(subscription_id) {
             return self.leave(&mut state, webhook_id, codes::SUBSCRIPTION_TERMINATED);
         }
@@ -418,6 +425,14 @@ impl Receiver {
             self.dispatch.record(&mut state, webhook_id, now);
             return DeliveryOutcome::ok(ACCEPTED_STATUS, json!({ "challenge": challenge }), true);
         }
+        if verified.deferred {
+            // R3.8, R5.6: a pending secret authenticated this delivery, so the
+            // only body it may carry is the verification envelope answered
+            // above. Routing is decided here, before the caller's enqueue
+            // runs, so an unrouted event never reaches the durable store; the
+            // reservation is released and nothing is recorded (R1.10).
+            return self.leave(&mut state, webhook_id, codes::SUBSCRIPTION_NOT_ROUTED);
+        }
         // R1.10: the durable enqueue runs with no state lock held.
         drop(state);
         let enqueued = enqueue(std::slice::from_ref(&message));
@@ -427,12 +442,6 @@ impl Receiver {
             // same message is processed exactly once.
             self.dispatch.abandon(&mut state, webhook_id);
             return reject(codes::ENQUEUE_FAILED);
-        }
-        if verified.deferred {
-            // R3.8, R5.6: only a verification envelope survives the deferred
-            // routing check, and this answer records nothing.
-            self.dispatch.abandon(&mut state, webhook_id);
-            return reject(codes::SUBSCRIPTION_NOT_ROUTED);
         }
         if kind == Some(MessageKind::Terminated) {
             // R3.17, R8.8: a verified terminated envelope is forwarded and
@@ -543,8 +552,10 @@ impl Receiver {
         if deferred && candidates.is_empty() {
             return Err(codes::UNKNOWN_SUBSCRIPTION);
         }
-        // Step 8 (R3.8): a routed or terminated id passes; the pending-secret
-        // path re-checks routing after verification (R5.6).
+        // Step 8 (R3.8): a routed or terminated id passes; a delivery the
+        // pending-secret path authenticates is refused in step 18, before the
+        // enqueue, because only the verification envelope can route it
+        // (R5.6).
         if !deferred
             && !state.routed.contains(ctx.subscription_id)
             && !state.terminated.contains(ctx.subscription_id)

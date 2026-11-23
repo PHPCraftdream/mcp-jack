@@ -218,7 +218,7 @@ fn filter_definitions(result: &Value, key: &str) -> (Vec<ValidDefinition>, Vec<E
 
 /// The `tools/list` result after `C5`: valid definitions only, invalid ones
 /// excluded (never an error response).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ToolCatalog {
     entries: Vec<ToolEntry>,
     excluded: Vec<ExcludedTool>,
@@ -281,7 +281,7 @@ impl ToolCatalog {
 }
 
 /// The `events/list` result after `C11`: valid event type descriptors only.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct EventCatalog {
     entries: Vec<EventTypeEntry>,
     excluded: Vec<ExcludedTool>,

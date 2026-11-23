@@ -15,8 +15,8 @@
 //! presents [`ConnectTarget::host_header`] in `Host`, verifies the
 //! certificate against [`ConnectTarget::sni`] (or against the IP literal,
 //! with no SNI extension), never follows a redirect, bounds the WHOLE attempt
-//! by [`TransportRequest::attempt_timeout`] (R1.6), reports a connected peer
-//! that differs from the validated address as its own failure (R6.9), and
+//! by the absolute [`TransportRequest::deadline`] (R1.6), reports a connected
+//! peer that differs from the validated address as its own failure (R6.9), and
 //! maps every other failure to one of the three R1.9 network categories.
 
 use std::net::{IpAddr, SocketAddr};
@@ -207,20 +207,26 @@ impl WebhookTransport for HttpsTransport {
             None => ServerName::IpAddress(address.into()),
         };
         let roots = Arc::clone(&self.roots);
-        let connect_timeout = request.connect_timeout;
-        let response_timeout = request.response_timeout;
-        let attempt_timeout = request.attempt_timeout;
         let max_body_bytes = request.max_body_bytes;
         let port = parts.port;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|_| refused())?;
-        // R1.6: the WHOLE attempt — connect, TLS, handshake, request write and
-        // response read — is bounded by the whole-attempt cap.
+        // R1.6: the ONE absolute deadline of this attempt was stamped at the
+        // caller's entry, so the DNS lookups and the request build are already
+        // charged to it. The budget is sampled here — after the request and
+        // the runtime are built — and the whole attempt, the connect phase and
+        // the response phase are each clamped to what is left.
+        let remaining = request.deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(timeout());
+        }
+        let connect_timeout = request.connect_timeout.min(remaining);
+        let response_timeout = request.response_timeout.min(remaining);
         runtime.block_on(async {
             match tokio::time::timeout(
-                attempt_timeout,
+                remaining,
                 run(
                     http_request,
                     address,
@@ -318,6 +324,14 @@ async fn read_response(
         .get(::http::header::RETRY_AFTER)
         .and_then(|value| value.to_str().ok())
         .and_then(parse_retry_after);
+    // R7.2: the raw `Cache-Control` value, `None` when the header is absent
+    // or not UTF-8, so the card cache lifetime is derived from what the
+    // receiver actually announced.
+    let cache_control = response
+        .headers()
+        .get(::http::header::CACHE_CONTROL)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
     let declared = declared_length(response.headers());
     let mut body = response.into_body();
     let mut bytes = Vec::new();
@@ -340,6 +354,7 @@ async fn read_response(
         body: bytes,
         declared_length: declared,
         overflow,
+        cache_control,
     })
 }
 
@@ -450,27 +465,26 @@ impl CardTransport for HttpCardTransport {
     /// (spec 06 R7.2).
     ///
     /// The whole fetch — DNS, connect, TLS, the request write and the
-    /// response read — is bounded by [`CARD_FETCH_SECONDS`], and the elapsed
-    /// wall clock is measured from before the first lookup so the R7.2
-    /// `timeout` verdict sees the real cost. The host is resolved twice
-    /// (validation and the R6.9 recheck), the section 6 decision of
-    /// [`prepare`] surfaces as its own error, a transport failure maps to its
-    /// R1.9 code, and the 65536-byte cap is the R1.2 read cap, so a body that
-    /// crossed it is reported through `overflow` rather than silently
-    /// truncated (spec 06 R1.2, R1.9, R6.8-R6.10, R7.2).
+    /// response read — is bounded by ONE absolute [`CARD_FETCH_SECONDS`]
+    /// deadline stamped here, and the elapsed wall clock is measured from the
+    /// same entry, so the R7.2 `timeout` verdict sees the real cost. The host
+    /// is resolved twice (validation and the R6.9 recheck), the section 6
+    /// decision of [`prepare`] surfaces as its own error, a transport failure
+    /// maps to its R1.9 code, and the 65536-byte cap is the R1.2 read cap, so
+    /// a body that crossed it is reported through `overflow` rather than
+    /// silently truncated (spec 06 R1.2, R1.6, R1.9, R6.8-R6.10, R7.2).
     ///
-    /// `TransportResponse` carries no header map, so the `Cache-Control`
-    /// value of R7.2 is not readable here and is reported as absent; the card
-    /// cache then keeps its 300 s cap (spec 06 R7.2).
+    /// The `Cache-Control` value the transport read is copied into
+    /// [`CardResponse::cache_control`], so the R7.2 cache lifetime comes from
+    /// the receiver's own header (spec 06 R7.2).
     fn fetch_card(&self, url: &str) -> Result<CardResponse, WebhookError> {
         let endpoint = match check_url(url) {
             Ok(endpoint) => endpoint,
             Err(_) => return Err(card_not_https()),
         };
-        let budget = Duration::from_secs(CARD_FETCH_SECONDS);
         let started = Instant::now();
-        let (answers, recheck) = resolve_answers(&*self.resolver, &endpoint, budget)?;
-        let remaining = budget.saturating_sub(started.elapsed());
+        let deadline = started + Duration::from_secs(CARD_FETCH_SECONDS);
+        let (answers, recheck) = resolve_answers(&self.resolver, &endpoint, deadline)?;
         let prepared = prepare(
             url,
             &answers,
@@ -480,7 +494,7 @@ impl CardTransport for HttpCardTransport {
             vec![("Accept".to_owned(), ACCEPT_CARD.to_owned())],
             Vec::new(),
             MAX_CARD_BYTES,
-            remaining,
+            deadline,
         )?;
         let response = match self.transport.send(&prepared.request) {
             Ok(response) => response,
@@ -492,7 +506,7 @@ impl CardTransport for HttpCardTransport {
             body: response.body,
             declared_length: response.declared_length,
             overflow: response.overflow,
-            cache_control: None,
+            cache_control: response.cache_control,
             elapsed_ms,
         })
     }

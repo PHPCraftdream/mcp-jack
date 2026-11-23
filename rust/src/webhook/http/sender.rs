@@ -39,9 +39,9 @@ use crate::webhook::http::transport::{
 use crate::webhook::signatures::{emission_header, EmissionKey, EmissionSecret, SignatureContent};
 use crate::webhook::ssrf::url::{check_url, UrlParts};
 use crate::webhook::verification::gate::{
-    ChallengeSender, EndpointPair, EndpointVerifier, VerificationRequest,
+    ChallengeResult, ChallengeSender, EndpointPair, EndpointVerifier, VerificationRequest,
 };
-use crate::webhook::verification::nonce::{challenge_echo, EchoVerdict};
+use crate::webhook::verification::nonce::{challenge_response, EchoVerdict};
 use crate::webhook::w1::{self, JackSigningParts};
 use crate::webhook::{codes, subscription, MessageKind, WebhookError};
 
@@ -79,6 +79,11 @@ pub struct OutgoingMessage {
     /// The `(kid, key)` pair of `Jack-Webhook-Auth`, when configured
     /// (spec 06 R4.1).
     pub jack_signing: Option<(String, SigningKey)>,
+    /// The subscription's grant expiry in Unix MILLISECONDS, `None` when the
+    /// subscription has no expiry. No verification may outlive it, so the
+    /// gate is handed the earlier of it and the sender's own TTL
+    /// (spec 06 R5.2).
+    pub expires_at_ms: Option<i64>,
 }
 
 /// What happened to one message after the R1.8 loop (spec 06 R1.7, R1.8).
@@ -121,21 +126,26 @@ pub struct SenderConfig {
     pub allowed_ranges: Vec<String>,
     /// The largest raw body a request may carry (spec 06 R1.2).
     pub max_body_bytes: usize,
-    /// The grant TTL a verification success is cached for, in the unit of
-    /// [`Clock::now`] (spec 06 R5.2). The sender does not own the gate, so
-    /// this value is carried here only to build the gate and the sender from
-    /// one configuration.
+    /// The grant TTL a verification success is cached for, in Unix
+    /// MILLISECONDS (spec 06 R5.2). The sender bounds every verification by
+    /// this TTL and by the message's grant expiry; the gate is built from the
+    /// same value, so one configuration serves both.
     pub verification_ttl_ms: Option<i64>,
 }
 
 /// The sender's clock: the R1.8 schedule origin, the per-attempt timestamp,
 /// the verification instant and the waits between attempts.
+///
+/// Both methods are in MILLISECONDS of Unix time. The R1.8 schedule itself is
+/// in whole seconds, so the sender converts at that boundary
+/// (spec 06 R1.5, R1.8, R5.2).
 pub trait Clock {
-    /// Returns the current Unix time in whole seconds (spec 06 R1.5).
-    fn now(&self) -> i64;
+    /// Returns the current Unix time in MILLISECONDS (spec 06 R1.5).
+    fn now_ms(&self) -> i64;
 
-    /// Blocks until `at` Unix seconds have passed (spec 06 R1.8).
-    fn sleep_until(&self, at: i64);
+    /// Blocks until the Unix millisecond instant `at_ms` has passed
+    /// (spec 06 R1.8).
+    fn sleep_until_ms(&self, at_ms: i64);
 }
 
 /// The sender of spec 06 section 1: one message, up to four attempts, each
@@ -176,8 +186,9 @@ impl Sender {
     /// final with the refusal's R1.9 category, and one `webhook-id` is drawn
     /// per message (R1.4). Every attempt re-reads the clock and re-checks the
     /// pair before anything touches the network; an unverified pair runs the
-    /// gate, and a refusal or a still-unverified pair ends the message as
-    /// `Final { ChallengeFailed }` without a request (R5.1, R5.2, R1.9).
+    /// gate bounded by the message's grant, and a refusal or a
+    /// still-unverified pair ends the message as `Final { ChallengeFailed }`
+    /// without a request (R5.1, R5.2, R1.9).
     ///
     /// The attempt itself regenerates the timestamp and the signatures (R1.5),
     /// resolves the host twice under the R1.6 whole-attempt budget — the
@@ -226,14 +237,14 @@ impl Sender {
                 }
             }
         };
-        let t0 = self.clock.now();
+        let t0 = self.clock.now_ms().div_euclid(1000);
         let mut attempts = 0u32;
         let mut last_status = None;
         loop {
             // R5.1, R5.2: the pair is verified before EVERY attempt, so a
             // grant that expired during a retry sleep cannot carry an event.
-            let now = self.clock.now();
-            if !self.verified(&pair, message, now) {
+            let now_ms = self.clock.now_ms();
+            if !self.verified(&pair, message, now_ms) {
                 return SendOutcome {
                     action: SendAction::Final {
                         last_error: LastError::ChallengeFailed,
@@ -260,7 +271,7 @@ impl Sender {
                         retry_after: response.retry_after,
                         attempt: attempts,
                         t0,
-                        response_time: self.clock.now(),
+                        response_time: self.clock.now_ms().div_euclid(1000),
                     });
                     if let Some(outcome) = self.settle(decision, retryable, attempts, last_status) {
                         return outcome;
@@ -273,7 +284,7 @@ impl Sender {
                         retry_after: None,
                         attempt: attempts,
                         t0,
-                        response_time: self.clock.now(),
+                        response_time: self.clock.now_ms().div_euclid(1000),
                     });
                     if let Some(outcome) = self.settle(decision, true, attempts, last_status) {
                         return outcome;
@@ -288,10 +299,12 @@ impl Sender {
     ///
     /// A gate refusal or a pair the gate did not record is `false`, so the
     /// caller ends the message as `Final { ChallengeFailed }` without any
-    /// request (R5.1, R1.9). The challenge adapter is built per delivery and
-    /// posts only to the pair's canonical url (R5.5).
-    fn verified(&self, pair: &EndpointPair, message: &OutgoingMessage, now: i64) -> bool {
-        if self.gate.is_verified(pair, now) {
+    /// request (R5.1, R1.9). The gate is handed the earliest instant the
+    /// verification may hold until, so the grant bounds every route and not
+    /// only the challenge (R5.2). The challenge adapter is built per delivery
+    /// and posts only to the pair's canonical url (R5.5).
+    fn verified(&self, pair: &EndpointPair, message: &OutgoingMessage, now_ms: i64) -> bool {
+        if self.gate.is_verified(pair, now_ms) {
             return true;
         }
         let challenge = DeliveryChallenge {
@@ -300,32 +313,51 @@ impl Sender {
         };
         if self
             .gate
-            .verify(pair, &message.subscription_id, now, &challenge)
+            .verify(
+                pair,
+                &message.subscription_id,
+                now_ms,
+                self.grant_expiry(message, now_ms),
+                &challenge,
+            )
             .is_err()
         {
             return false;
         }
-        self.gate.is_verified(pair, now)
+        self.gate.is_verified(pair, now_ms)
+    }
+
+    /// Returns the instant in Unix MILLISECONDS past which no verification of
+    /// `message` may hold: the earliest of the message's grant expiry and
+    /// `now_ms + SenderConfig::verification_ttl_ms`, and `None` only when the
+    /// subscription has neither a grant expiry nor a configured TTL
+    /// (spec 06 R5.2).
+    fn grant_expiry(&self, message: &OutgoingMessage, now_ms: i64) -> Option<i64> {
+        let configured = self
+            .config
+            .verification_ttl_ms
+            .map(|ttl| now_ms.saturating_add(ttl));
+        match (message.expires_at_ms, configured) {
+            (Some(grant), Some(configured)) => Some(grant.min(configured)),
+            (Some(grant), None) => Some(grant),
+            (None, Some(configured)) => Some(configured),
+            (None, None) => None,
+        }
     }
 
     /// Runs one attempt up to a response or an R1.9 category.
     ///
-    /// The R1.6 whole-attempt budget starts before the first lookup, so DNS,
-    /// connect, TLS, the write and the read share one cap; a spent budget is
-    /// `timeout` and any other resolution failure is `connection_refused`
-    /// (spec 06 R1.6, R1.9).
+    /// ONE absolute R1.6 deadline is stamped at the entry of the attempt, so
+    /// DNS, connect, TLS, the write and the read share one cap; a spent
+    /// deadline is `timeout` and any other resolution failure is
+    /// `connection_refused` (spec 06 R1.6, R1.9).
     fn attempt(&self, message: &OutgoingMessage, webhook_id: &str, endpoint: &UrlParts) -> Attempt {
-        let budget = Duration::from_secs(ATTEMPT_TIMEOUT_SECONDS);
-        let started = Instant::now();
-        let (answers, recheck) = match resolve_answers(&*self.resolver, endpoint, budget) {
+        let deadline = Instant::now() + Duration::from_secs(ATTEMPT_TIMEOUT_SECONDS);
+        let (answers, recheck) = match resolve_answers(&self.resolver, endpoint, deadline) {
             Ok(pair) => pair,
             Err(error) => return Attempt::Failure(resolution_failure(&error)),
         };
-        let remaining = budget.saturating_sub(started.elapsed());
-        if remaining.is_zero() {
-            return Attempt::Failure(LastError::Timeout);
-        }
-        let now = self.clock.now();
+        let now = self.clock.now_ms().div_euclid(1000);
         let timestamp = now.to_string();
         let headers = delivery_headers(message, webhook_id, &timestamp, now, JACK_WINDOW_SECONDS);
         let prepared = match prepare(
@@ -337,7 +369,7 @@ impl Sender {
             headers,
             message.body.clone(),
             self.config.max_body_bytes,
-            remaining,
+            deadline,
         ) {
             Ok(prepared) => prepared,
             Err(error) => return Attempt::Refused(refusal_of(&error)),
@@ -369,7 +401,9 @@ impl Sender {
                 last_status,
             }),
             SenderAction::Retry { next_at } => {
-                self.clock.sleep_until(next_at);
+                // The R1.8 slot is in whole seconds; the clock reads
+                // milliseconds.
+                self.clock.sleep_until_ms(next_at.saturating_mul(1000));
                 None
             }
             SenderAction::Final => {
@@ -389,25 +423,33 @@ impl Sender {
     }
 
     /// Posts one verification envelope over the hardened path, once and never
-    /// retried, and judges the echo (spec 06 R5.4, R5.5, R5.12).
+    /// retried, and judges the echo at a sample taken after the response
+    /// (spec 06 R5.4, R5.5, R5.12).
     ///
     /// The destination is [`VerificationRequest::pair`]'s canonical url, never
     /// the message url: the envelope carries `request.subscription_id` and
     /// `request.nonce`, a fresh timestamp, and the signatures of the
-    /// message's secrets and keys, with `w1` when one is configured (R5.5). A
-    /// refusal before the send or a transport failure returns `ok = false`
-    /// with `challenge_failed` and that R1.9 category as the fixed-literal
-    /// reason (R5.5).
+    /// message's secrets and keys, with `w1` when one is configured (R5.5).
+    /// The verdict is [`challenge_response`] over the raw body, so an
+    /// overflowing, over-declared or oversized echo is `too_large` before it
+    /// is ever parsed (R5.4). The reported instant is sampled after
+    /// `transport.send` returned, so a response that took longer than the
+    /// nonce life is judged `expired` by the gate (R5.3). A refusal before the
+    /// send or a transport failure returns `challenge_failed` with that R1.9
+    /// category as the fixed-literal reason (R5.5).
     fn post_challenge(
         &self,
         message: &OutgoingMessage,
         request: &VerificationRequest<'_>,
-    ) -> EchoVerdict {
+    ) -> ChallengeResult {
         let Ok(body) = serde_json::to_vec(&serde_json::json!({
             "type": "verification",
             "challenge": request.nonce,
         })) else {
-            return challenge_rejection(LastError::Http4xx.as_str());
+            return ChallengeResult::at(
+                challenge_rejection(LastError::Http4xx.as_str()),
+                self.clock.now_ms(),
+            );
         };
         let envelope = OutgoingMessage {
             principal: request.pair.principal().to_owned(),
@@ -419,24 +461,38 @@ impl Sender {
             signing_keys: message.signing_keys.clone(),
             aud: message.aud.clone(),
             jack_signing: message.jack_signing.clone(),
+            expires_at_ms: message.expires_at_ms,
         };
         let Ok(webhook_id) = subscription::random_webhook_id(MessageKind::Verification) else {
             // The closed R1.9 list has no local-error category; a failed
             // entropy source cannot be retried on the wire either.
-            return challenge_rejection(LastError::ConnectionRefused.as_str());
+            return ChallengeResult::at(
+                challenge_rejection(LastError::ConnectionRefused.as_str()),
+                self.clock.now_ms(),
+            );
         };
         let endpoint = match check_url(&envelope.url) {
             Ok(endpoint) => endpoint,
-            Err(error) => return challenge_rejection(error.reason().unwrap_or(error.code())),
+            Err(error) => {
+                return ChallengeResult::at(
+                    challenge_rejection(error.reason().unwrap_or(error.code())),
+                    self.clock.now_ms(),
+                )
+            }
         };
-        let budget = Duration::from_secs(ATTEMPT_TIMEOUT_SECONDS);
-        let started = Instant::now();
-        let (answers, recheck) = match resolve_answers(&*self.resolver, &endpoint, budget) {
+        // R1.6: one absolute deadline for the whole challenge POST, stamped
+        // before the first lookup so DNS and the request build are charged.
+        let deadline = Instant::now() + Duration::from_secs(ATTEMPT_TIMEOUT_SECONDS);
+        let (answers, recheck) = match resolve_answers(&self.resolver, &endpoint, deadline) {
             Ok(pair) => pair,
-            Err(error) => return challenge_rejection(resolution_failure(&error).as_str()),
+            Err(error) => {
+                return ChallengeResult::at(
+                    challenge_rejection(resolution_failure(&error).as_str()),
+                    self.clock.now_ms(),
+                )
+            }
         };
-        let remaining = budget.saturating_sub(started.elapsed());
-        let now = self.clock.now();
+        let now = self.clock.now_ms().div_euclid(1000);
         let timestamp = now.to_string();
         let headers =
             delivery_headers(&envelope, &webhook_id, &timestamp, now, JACK_WINDOW_SECONDS);
@@ -449,18 +505,31 @@ impl Sender {
             headers,
             envelope.body.clone(),
             self.config.max_body_bytes,
-            remaining,
+            deadline,
         ) {
             Ok(prepared) => prepared,
-            Err(error) => return challenge_rejection(error.reason().unwrap_or(error.code())),
+            Err(error) => {
+                return ChallengeResult::at(
+                    challenge_rejection(error.reason().unwrap_or(error.code())),
+                    self.clock.now_ms(),
+                )
+            }
         };
         match self.transport.send(&prepared.request) {
-            Ok(response) => challenge_echo(
-                response.status,
-                &String::from_utf8_lossy(&response.body),
-                request.nonce,
+            Ok(response) => {
+                let verdict = challenge_response(
+                    response.status,
+                    &response.body,
+                    response.declared_length,
+                    response.overflow,
+                    request.nonce,
+                );
+                ChallengeResult::at(verdict, self.clock.now_ms())
+            }
+            Err(failure) => ChallengeResult::at(
+                challenge_rejection(failure.error.as_str()),
+                self.clock.now_ms(),
             ),
-            Err(failure) => challenge_rejection(failure.error.as_str()),
         }
     }
 }
@@ -477,9 +546,9 @@ struct DeliveryChallenge<'a> {
 }
 
 impl ChallengeSender for DeliveryChallenge<'_> {
-    /// Posts the envelope to the pair's canonical url and judges the echo
-    /// (spec 06 R5.4, R5.5).
-    fn send_challenge(&self, request: &VerificationRequest<'_>) -> EchoVerdict {
+    /// Posts the envelope to the pair's canonical url and judges the echo at
+    /// the sample taken after the response (spec 06 R5.4, R5.5).
+    fn send_challenge(&self, request: &VerificationRequest<'_>) -> ChallengeResult {
         self.sender.post_challenge(self.message, request)
     }
 }

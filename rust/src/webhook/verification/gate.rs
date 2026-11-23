@@ -4,7 +4,9 @@
 //!
 //! Everything here is pure: `now` is an argument, the challenge and the
 //! well-known document arrive through injected traits, and the gate owns the
-//! only state it reads — its cache and its pending nonces. A caller's pair is
+//! only state it reads — its cache and its pending nonces. Every instant and
+//! every lifetime of this module is in MILLISECONDS of Unix time
+//! (spec 06 R5.2, R5.3, R5.5). A caller's pair is
 //! copied at entry, so later caller mutations cannot change a verdict, and
 //! the one `Mutex` is never held while a challenge or a fetch runs
 //! (spec 06 R5.2, R5.3, R5.5).
@@ -17,7 +19,7 @@ use crate::webhook::verification::allowlist::allowlist_matches;
 use crate::webhook::verification::cache::VerificationCache;
 use crate::webhook::verification::document::{document_covers, DocumentFetcher};
 use crate::webhook::verification::nonce::{
-    self, EchoAttempt, EchoVerdict, PendingNonce, NONCE_TTL_SECONDS,
+    self, EchoAttempt, EchoVerdict, PendingNonce, NONCE_TTL_MS,
 };
 use crate::webhook::verification::route::VerificationRoute;
 use crate::webhook::{codes, WebhookError};
@@ -116,9 +118,33 @@ pub struct VerificationRequest<'a> {
     pub subscription_id: &'a str,
     /// The single-use nonce to send (spec 06 R5.3, R5.4).
     pub nonce: &'a str,
-    /// The unix time of the attempt, in the unit of the other `now`
-    /// arguments (spec 06 R5.3).
+    /// The Unix time of the attempt in MILLISECONDS (spec 06 R5.3).
     pub now: i64,
+}
+
+/// The outcome of one challenge send (spec 06 R5.3, R5.4).
+///
+/// The check must be judged at an instant sampled AFTER the response arrived,
+/// not at the issue instant: a response that took longer than the nonce life
+/// is `expired` however fast the echo itself was (spec 06 R5.3, R5.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChallengeResult {
+    /// The echo verdict of R5.4.
+    pub verdict: EchoVerdict,
+    /// The Unix time in MILLISECONDS at which the verdict was judged, sampled
+    /// after the response (spec 06 R5.3).
+    pub checked_at_ms: i64,
+}
+
+impl ChallengeResult {
+    /// Pairs a verdict with the instant it was judged at (spec 06 R5.3,
+    /// R5.4).
+    pub fn at(verdict: EchoVerdict, checked_at_ms: i64) -> Self {
+        Self {
+            verdict,
+            checked_at_ms,
+        }
+    }
 }
 
 /// Posts one challenge and judges the echo (spec 06 R5.4, R5.5).
@@ -127,23 +153,30 @@ pub struct VerificationRequest<'a> {
 /// gate never calls it while holding its lock.
 pub trait ChallengeSender {
     /// Posts the signed `verification` envelope carrying `request.nonce` to
-    /// `request.pair.canonical_url()` and judges the echo by R5.4.
-    fn send_challenge(&self, request: &VerificationRequest<'_>) -> EchoVerdict;
+    /// `request.pair.canonical_url()` and judges the echo by R5.4, reporting
+    /// the verdict with the instant it was judged at (spec 06 R5.3, R5.4).
+    fn send_challenge(&self, request: &VerificationRequest<'_>) -> ChallengeResult;
 }
 
 /// Looks a pair's verification status up and runs the fixed route order
 /// (spec 06 R5.2).
 pub trait EndpointVerifier: Send + Sync {
-    /// True when the pair already has a live verification (R5.2 route 1).
-    fn is_verified(&self, pair: &EndpointPair, now: i64) -> bool;
+    /// True when the pair already has a live verification (R5.2 route 1);
+    /// `now_ms` is Unix milliseconds (spec 06 R5.2).
+    fn is_verified(&self, pair: &EndpointPair, now_ms: i64) -> bool;
 
     /// Runs the fixed R5.2 order (cache, allowlist, out-of-band hook,
     /// well-known document, challenge) and caches a success.
+    ///
+    /// `now_ms` and `expires_at_ms` are Unix milliseconds; the latter is the
+    /// subscription grant's expiry, `None` when the subscription never
+    /// expires, and no cached success outlives it (spec 06 R5.2).
     fn verify(
         &self,
         pair: &EndpointPair,
         subscription_id: &str,
-        now: i64,
+        now_ms: i64,
+        expires_at_ms: Option<i64>,
         challenge: &dyn ChallengeSender,
     ) -> Result<VerificationRoute, WebhookError>;
 }
@@ -171,8 +204,8 @@ struct GateState {
 pub struct EndpointGate {
     /// The operator allowlist entries of R5.7, in configuration order.
     allowlist: Vec<String>,
-    /// The grant TTL a success is cached for; `None` never expires
-    /// (spec 06 R5.2).
+    /// The grant TTL a success is cached for, in MILLISECONDS; `None` never
+    /// expires (spec 06 R5.2).
     verification_ttl_ms: Option<i64>,
     /// The application's out-of-band confirmation hook (spec 06 R5.8).
     hook: Option<Hook>,
@@ -187,9 +220,9 @@ impl EndpointGate {
     /// Builds a gate with an allowlist and a success TTL (spec 06 R5.2,
     /// R5.7).
     ///
-    /// `verification_ttl_ms` is the subscription grant in the unit of the
-    /// `now` arguments; `None` caches a success for the life of the process
-    /// (R5.2).
+    /// `verification_ttl_ms` is the subscription grant in MILLISECONDS of
+    /// Unix time, the unit of every `now_ms` argument; `None` caches a success
+    /// for the life of the process (R5.2).
     pub fn new(allowlist: Vec<String>, verification_ttl_ms: Option<i64>) -> Self {
         Self {
             allowlist,
@@ -220,26 +253,60 @@ impl EndpointGate {
         self
     }
 
-    /// Records a successful verification of the pair for the grant TTL
+    /// Returns the TTL a success may be cached for, in MILLISECONDS
     /// (spec 06 R5.2).
-    pub fn record_success(&self, pair: &EndpointPair, now: i64) {
-        self.lock().cache.record(
-            &pair.principal,
-            &pair.canonical_url,
-            now,
-            self.verification_ttl_ms,
-        );
+    ///
+    /// It is the smaller of the configured verification TTL and the
+    /// subscription grant's remaining life `expires_at_ms - now_ms`, and
+    /// `None` only when neither bound exists. A grant already past yields
+    /// `Some(ttl <= 0)`, so the recorded expiry is `now_ms + ttl <= now_ms` and
+    /// the entry never counts as verified: a verification never outlives its
+    /// grant (spec 06 R5.2).
+    pub fn cache_ttl(&self, now_ms: i64, expires_at_ms: Option<i64>) -> Option<i64> {
+        let grant = expires_at_ms.map(|expires_at| expires_at.saturating_sub(now_ms));
+        match (self.verification_ttl_ms, grant) {
+            (Some(configured), Some(grant)) => Some(configured.min(grant)),
+            (Some(configured), None) => Some(configured),
+            (None, Some(grant)) => Some(grant),
+            (None, None) => None,
+        }
     }
 
-    /// Returns true when the pair has a live cached verification
-    /// (spec 06 R5.2, R5.12).
+    /// Records a successful verification of the pair for
+    /// [`EndpointGate::cache_ttl`], never past the grant's expiry
+    /// (spec 06 R5.2).
+    pub fn record_success(&self, pair: &EndpointPair, now_ms: i64, expires_at_ms: Option<i64>) {
+        let ttl_ms = self.cache_ttl(now_ms, expires_at_ms);
+        self.lock()
+            .cache
+            .record(&pair.principal, &pair.canonical_url, now_ms, ttl_ms);
+    }
+
+    /// Returns true when the pair has a live cached verification at `now_ms`
+    /// in Unix milliseconds (spec 06 R5.2, R5.12).
     ///
     /// Only the TTL expires a cached verification; a delivery failure never
     /// does (R5.12).
-    pub fn cached(&self, pair: &EndpointPair, now: i64) -> bool {
+    pub fn cached(&self, pair: &EndpointPair, now_ms: i64) -> bool {
         self.lock()
             .cache
-            .is_verified(&pair.principal, &pair.canonical_url, now)
+            .is_verified(&pair.principal, &pair.canonical_url, now_ms)
+    }
+
+    /// Returns the recorded `consumed` flag of `nonce`, or `None` when this
+    /// gate never issued that nonce (spec 06 R5.3).
+    ///
+    /// This is the observability of the R5.3 single-use rule for tests and
+    /// embedders: `Some(true)` means an accepted echo already spent the nonce,
+    /// so every further echo of it is `reused`, while `Some(false)` means the
+    /// nonce is still pending. The gate owns that flag, so this is the only
+    /// sound way for a caller to read it instead of rebuilding the state.
+    #[doc(hidden)]
+    pub fn pending_consumed(&self, nonce: &str) -> Option<bool> {
+        self.lock()
+            .pending
+            .get(nonce)
+            .map(|pending| pending.consumed)
     }
 
     /// Locks the gate state, recovering a poisoned lock instead of panicking
@@ -254,8 +321,8 @@ impl EndpointGate {
 impl EndpointVerifier for EndpointGate {
     /// True when the pair already has a live verification (spec 06 R5.2
     /// route 1).
-    fn is_verified(&self, pair: &EndpointPair, now: i64) -> bool {
-        self.cached(pair, now)
+    fn is_verified(&self, pair: &EndpointPair, now_ms: i64) -> bool {
+        self.cached(pair, now_ms)
     }
 
     /// Runs the fixed R5.2 order (cache, allowlist, out-of-band hook,
@@ -266,15 +333,20 @@ impl EndpointVerifier for EndpointGate {
     /// challenge is the last route: it issues a fresh nonce bound to the
     /// recorded pair, sends it once, and accepts only through
     /// [`nonce::accept_echo`]; an accepted nonce is marked consumed and the
-    /// pair is cached for the grant TTL. A failure returns `challenge_failed`
-    /// carrying the echo verdict's fixed-literal reason and writes no cache
-    /// entry (R5.3, R5.4). The gate lock is never held across the challenge
-    /// send or the document fetch (R5.2).
+    /// pair is cached for [`EndpointGate::cache_ttl`]. A failure returns
+    /// `challenge_failed` carrying the echo verdict's fixed-literal reason and
+    /// writes no cache entry (R5.3, R5.4). The gate lock is never held across
+    /// the challenge send or the document fetch (R5.2).
+    ///
+    /// No route records a success past `expires_at_ms`, the subscription
+    /// grant's expiry in Unix milliseconds, so a verification never outlives
+    /// its grant (spec 06 R5.2).
     fn verify(
         &self,
         pair: &EndpointPair,
         subscription_id: &str,
-        now: i64,
+        now_ms: i64,
+        expires_at_ms: Option<i64>,
         challenge: &dyn ChallengeSender,
     ) -> Result<VerificationRoute, WebhookError> {
         let owned = EndpointPair {
@@ -282,22 +354,22 @@ impl EndpointVerifier for EndpointGate {
             canonical_url: pair.canonical_url.clone(),
             path: pair.path.clone(),
         };
-        if self.cached(&owned, now) {
+        if self.cached(&owned, now_ms) {
             return Ok(VerificationRoute::Cache);
         }
         if allowlist_matches(&self.allowlist, &owned.canonical_url).is_some() {
-            self.record_success(&owned, now);
+            self.record_success(&owned, now_ms, expires_at_ms);
             return Ok(VerificationRoute::Allowlist);
         }
         if self.hook.as_ref().is_some_and(|hook| hook(&owned)) {
-            self.record_success(&owned, now);
+            self.record_success(&owned, now_ms, expires_at_ms);
             return Ok(VerificationRoute::OutOfBand);
         }
         if self.document_covers_pair(&owned) {
-            self.record_success(&owned, now);
+            self.record_success(&owned, now_ms, expires_at_ms);
             return Ok(VerificationRoute::WellKnown);
         }
-        self.challenge(&owned, subscription_id, now, challenge)
+        self.challenge(&owned, subscription_id, now_ms, expires_at_ms, challenge)
     }
 }
 
@@ -319,20 +391,26 @@ impl EndpointGate {
 
     /// Runs the challenge route, the last of R5.2 (spec 06 R5.3, R5.4).
     ///
-    /// The nonce is issued and recorded before the send, the lock is
-    /// released for the send, and only an echo that passes
-    /// [`nonce::accept_echo`] consumes the nonce and caches the pair
-    /// (R5.3, R5.4).
+    /// The nonce is issued and recorded at `issued_at = now_ms` before the
+    /// send, the lock is released for the send, and the echo is judged at the
+    /// instant the sender sampled AFTER the response (`checked_at_ms`), so a
+    /// response that arrived past the nonce life is `expired` even when the
+    /// issue instant was fresh (R5.3, R5.4). Only an echo that passes both its
+    /// own verdict and [`nonce::accept_echo`] consumes the nonce and caches
+    /// the pair, for [`EndpointGate::cache_ttl`] from the same fresh sample
+    /// (R5.2, R5.3, R5.4).
     fn challenge(
         &self,
         pair: &EndpointPair,
         subscription_id: &str,
-        now: i64,
+        now_ms: i64,
+        expires_at_ms: Option<i64>,
         challenge: &dyn ChallengeSender,
     ) -> Result<VerificationRoute, WebhookError> {
+        let issued_at = now_ms;
         let nonce = nonce::random_nonce()?;
         let recorded = PendingNonce {
-            issued_at: now,
+            issued_at,
             pair: (pair.principal.clone(), pair.canonical_url.clone()),
             consumed: false,
         };
@@ -341,9 +419,10 @@ impl EndpointGate {
             pair,
             subscription_id,
             nonce: &nonce,
-            now,
+            now: issued_at,
         };
-        let echo = challenge.send_challenge(&request);
+        let result = challenge.send_challenge(&request);
+        let echo = result.verdict;
         let consumed = match self.lock().pending.get(&nonce) {
             Some(pending) => pending.consumed,
             None => true,
@@ -353,13 +432,14 @@ impl EndpointGate {
             nonce: Some(nonce.as_str()),
             expected: Some(nonce.as_str()),
             issued_at: recorded.issued_at,
-            now,
-            ttl: NONCE_TTL_SECONDS,
+            now: result.checked_at_ms,
+            ttl: NONCE_TTL_MS,
             consumed,
             pair: Some(&pair_value),
             expected_pair: Some(&pair_value),
         });
         if echo.ok && accepted.ok {
+            let ttl_ms = self.cache_ttl(result.checked_at_ms, expires_at_ms);
             let mut state = self.lock();
             if let Some(pending) = state.pending.get_mut(&nonce) {
                 pending.consumed = true;
@@ -367,8 +447,8 @@ impl EndpointGate {
             state.cache.record(
                 &pair.principal,
                 &pair.canonical_url,
-                now,
-                self.verification_ttl_ms,
+                result.checked_at_ms,
+                ttl_ms,
             );
             return Ok(VerificationRoute::Challenge);
         }

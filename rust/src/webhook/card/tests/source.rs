@@ -7,6 +7,7 @@
 
 use serde_json::json;
 
+use crate::webhook::card::discovery::MAX_CARD_TTL_SECONDS;
 use crate::webhook::card::keys::KeySnapshot;
 use crate::webhook::card::tests::{
     cached_response, card_body, card_key, jwk, response, source, ScriptedTransport, NOW,
@@ -73,6 +74,98 @@ fn the_cache_honours_the_max_age_of_the_response() {
     assert_eq!(at_lifetime, first);
 }
 
+/// A key set is served inside its TTL; once the TTL has passed and the refresh
+/// fails, the set is not trusted any more and `current` reports no accepted
+/// key (spec 06 R7.2, R7.3).
+#[test]
+fn a_key_set_is_served_inside_its_ttl_and_not_trusted_after_a_failed_refresh() {
+    let key = card_key("retired key");
+    let transport = ScriptedTransport::failing_from(vec![response(card_body(&[jwk(&key)]))], 1);
+    let source = source(&transport);
+
+    let served = source.current(NOW);
+    assert_eq!(accepted_kids(&served), vec![key.kid.as_str()]);
+    assert_eq!(transport.calls(), 1);
+
+    let inside = source.current(NOW + MAX_CARD_TTL_SECONDS - 1);
+    assert_eq!(
+        transport.calls(),
+        1,
+        "a read inside the TTL refetched the card"
+    );
+    assert_eq!(inside, served, "a read inside the TTL dropped the key set");
+
+    // The TTL is reached, the refresh runs and fails, so the retired key is
+    // no longer trusted and the receiver answers `no_server_keys` (R7.3).
+    let retired = source.current(NOW + MAX_CARD_TTL_SECONDS);
+    assert_eq!(
+        transport.calls(),
+        2,
+        "a read at the TTL reused the cached key set"
+    );
+    assert_eq!(retired, KeySnapshot::empty());
+    assert!(
+        retired.accepted.is_empty(),
+        "a retired key stayed trusted after a failed refresh"
+    );
+}
+
+/// A `max-age=60` response makes the entry stale after 60 s: the failing
+/// refresh at `now + 61` reports no accepted key, while `now + 59` still
+/// serves the cached set (spec 06 R7.2).
+#[test]
+fn a_max_age_of_sixty_seconds_makes_the_entry_stale_after_sixty_seconds() {
+    let key = card_key("max-age key");
+    let transport = ScriptedTransport::failing_from(
+        vec![cached_response(card_body(&[jwk(&key)]), "max-age=60")],
+        1,
+    );
+    let source = source(&transport);
+
+    let served = source.current(NOW);
+    assert_eq!(accepted_kids(&served), vec![key.kid.as_str()]);
+
+    let inside = source.current(NOW + 59);
+    assert_eq!(transport.calls(), 1, "a read inside the max-age refetched");
+    assert_eq!(accepted_kids(&inside), vec![key.kid.as_str()]);
+
+    let expired = source.current(NOW + 61);
+    assert_eq!(
+        transport.calls(),
+        2,
+        "a read past the max-age reused the cache"
+    );
+    assert_eq!(expired, KeySnapshot::empty());
+}
+
+/// A `max-age=1000` response is clamped to the 300 s cap of R7.2: `now + 299`
+/// still serves the set and the failing refresh at `now + 301` does not
+/// (spec 06 R7.2).
+#[test]
+fn a_max_age_above_the_cap_is_clamped_to_three_hundred_seconds() {
+    let key = card_key("clamped key");
+    let transport = ScriptedTransport::failing_from(
+        vec![cached_response(card_body(&[jwk(&key)]), "max-age=1000")],
+        1,
+    );
+    let source = source(&transport);
+
+    let served = source.current(NOW);
+    assert_eq!(accepted_kids(&served), vec![key.kid.as_str()]);
+
+    let inside = source.current(NOW + 299);
+    assert_eq!(transport.calls(), 1, "a read inside the clamp refetched");
+    assert_eq!(accepted_kids(&inside), vec![key.kid.as_str()]);
+
+    let expired = source.current(NOW + 301);
+    assert_eq!(
+        transport.calls(),
+        2,
+        "a read past the clamp reused the cache"
+    );
+    assert_eq!(expired, KeySnapshot::empty());
+}
+
 /// Rotation of R7.4: while the card publishes the old and the new key both are
 /// accepted, and once it drops the old key only the new one is
 /// (spec 06 R7.4).
@@ -110,8 +203,8 @@ fn rotation_accepts_both_keys_until_the_old_one_is_dropped() {
 }
 
 /// A response flagged as overflowing is `too_large` even when its truncated
-/// prefix parses as a card, and the previously cached set stays in place
-/// (spec 06 R7.2).
+/// prefix parses as a card, and the cached set it holds is still fresh at the
+/// next read (spec 06 R7.2).
 #[test]
 fn an_overflowing_response_is_too_large_and_keeps_the_cached_set() {
     let key = card_key("cached key");

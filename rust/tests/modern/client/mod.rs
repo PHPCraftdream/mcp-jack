@@ -4,4 +4,5 @@
 
 mod cache;
 mod flow;
+mod projection;
 mod resync;

@@ -928,3 +928,60 @@ fn the_modern_era_issues_exactly_one_request() {
     assert_eq!(seen[0].id(), Some(1), "the id counter still starts at 1");
     assert_eq!(cached_era(&client), None, "nothing was probed or cached");
 }
+
+/// `C9` + `C8`: `reset_era` drops the modern state wholesale, so a cached
+/// result and both catalogs of the old era never survive the re-probe.
+#[test]
+fn reset_era_drops_the_modern_catalogs_and_the_result_cache() {
+    let stub = StubTransport::new(Box::new(|req, _auth| {
+        let id = req.id().unwrap_or(0);
+        match req.method().as_str() {
+            "server/discover" => (200, discover_result(id), vec![]),
+            "tools/call" => (200, call_result(id), vec![]),
+            other => panic!("unexpected method {other}"),
+        }
+    }));
+    let client = mk_client(Arc::clone(&stub), ClientEra::Auto);
+    client.call_tool_raw("jack.whoami", None).expect("probe");
+
+    // Fill the state the way a resync plus an opt-in cache lookup would.
+    {
+        let mut state = lock_modern(&client);
+        state.tools = crate::client::modern::ToolCatalog::from_tools_list(&json!({"tools": [{
+            "name": "jack.whoami",
+            "inputSchema": {"properties": {"region": {"type": "string", "x-mcp-header": "Region"}}},
+        }]}));
+        state.events =
+            crate::client::modern::EventCatalog::from_events_list(&json!({"events": []}));
+        state.results.insert(
+            crate::client::modern::CacheKey::new(
+                "tools/call",
+                "{\"name\":\"jack.whoami\"}",
+                Era::Modern,
+            ),
+            json!({"ok": true}),
+            1_000,
+            FIXED_TS as u64,
+        );
+    }
+    assert_eq!(lock_modern(&client).results.len(), 1);
+    assert_eq!(lock_modern(&client).tools.entries().len(), 1);
+
+    client.reset_era();
+
+    let state = lock_modern(&client);
+    assert!(
+        state.results.is_empty(),
+        "a cached result belongs to the era that produced it"
+    );
+    assert_eq!(
+        state.tools,
+        crate::client::modern::ToolCatalog::default(),
+        "the tool catalog belongs to the era that produced it"
+    );
+    assert_eq!(
+        state.events,
+        crate::client::modern::EventCatalog::default(),
+        "the event catalog belongs to the era that produced it"
+    );
+}

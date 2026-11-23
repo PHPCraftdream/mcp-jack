@@ -28,11 +28,12 @@ pub use document::{
     DocumentResponse, ReceiverDocument, MAX_DOCUMENT_BYTES,
 };
 pub use gate::{
-    ChallengeSender, EndpointGate, EndpointPair, EndpointVerifier, VerificationRequest,
+    ChallengeResult, ChallengeSender, EndpointGate, EndpointPair, EndpointVerifier,
+    VerificationRequest,
 };
 pub use nonce::{
-    accept_echo, challenge_echo, new_nonce, nonce_ok, pair_key, random_nonce, EchoAttempt,
-    EchoVerdict, PendingNonce, NONCE_TTL_SECONDS,
+    accept_echo, challenge_echo, challenge_response, new_nonce, nonce_ok, pair_key, random_nonce,
+    EchoAttempt, EchoVerdict, PendingNonce, MAX_ECHO_BYTES, NONCE_TTL_MS,
 };
 pub use route::{
     gate, verification_route, GateAction, RouteInput, RouteVerdict, VerificationRoute,
