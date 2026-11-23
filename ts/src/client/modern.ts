@@ -391,7 +391,10 @@ export class ModernClient {
    *   no version: neither `#version` nor the cache is touched;
    * - a chosen MODERN version is adopted, the C8 cache is dropped (an entry
    *   signed under another version answers another request), probed ONCE and
-   *   carried out with no further retry allowed;
+   *   carried out with no further retry allowed; a retry whose verdict is
+   *   `none` or `modern`/`abort` restores the version CONFIRMED before the
+   *   candidate and drops the cache again, so a later `detectEra()` never
+   *   starts from a version no verified answer confirmed;
    * - a chosen LEGACY version runs the legacy handshake at that version and
    *   adopts the legacy era: a legacy endpoint has no modern probe to answer;
    * - any other `modern` verdict adopts the modern era;
@@ -410,10 +413,20 @@ export class ModernClient {
         // unconfirmed verdict must not adopt a version.
         if (chosen === undefined || !allowRetry) return noVersionOverlap(detection.supported);
         if (chosen >= MODERN_MIN) {
+          // The confirmed version survives a retry that proves nothing: only a
+          // usable second verdict may leave the candidate in place.
+          const confirmed = this.#version;
           this.#version = chosen;
           this.#cache.clear();
           const again = await this.#probe(chosen);
-          return this.#carryOut(again, false);
+          const verdict = await this.#carryOut(again, false);
+          if (verdict.era === "none" || (verdict.era === "modern" && verdict.action === "abort")) {
+            this.#version = confirmed;
+            // The cache was dropped for the candidate; the restored version
+            // must not reuse an entry keyed under the candidate either.
+            this.#cache.clear();
+          }
+          return verdict;
         }
         await this.#handshake(chosen);
         this.#era = "legacy";

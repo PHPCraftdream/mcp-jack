@@ -442,3 +442,40 @@ test("era negotiation: a second retry verdict exhausts the one-retry budget", as
   assert.equal(requestsOf(server, "server/discover").length, 2, "era: a negotiation sends at most two probes");
   assert.equal(mc.era, "auto", "era: the unconfirmed modern version never adopts the modern era");
 });
+test("era negotiation: an aborted retry restores the confirmed version", async () => {
+  const server = newModernServer();
+  server.handle = (req) => {
+    if (methodOf(req) !== "server/discover") return unexpected(req);
+    return server.sign(400, req.auth, rpcError(idOf(req), UNSUPPORTED_VERSION, "Unsupported protocol version", { supported: ["2026-07-28"] }));
+  };
+  // The client starts on the legacy version; "2026-07-28" is implemented, so it
+  // is a usable candidate, and the server refuses it too.
+  const mc = new ModernClient(newModernClient(server, "auto"), { version: NEGOTIATED_VERSION });
+  await assert.rejects(
+    () => mc.call("tools/list"),
+    (err: unknown): boolean => err instanceof EraNegotiationError && err.detection.reason === "unsupported_version_no_overlap",
+    "era: a candidate probe answered with no usable verdict fails the operation",
+  );
+  // The candidate probe and the verdict it earned, and nothing else: the
+  // operation never runs at a version no verified answer confirmed.
+  assert.equal(requestsOf(server, "server/discover").length, 2, "era: the candidate is probed exactly once");
+  assert.equal(mc.era, "auto", "era: the unconfirmed candidate never adopts an era");
+
+  // `#version` is private, so the wire is the only way to see it: the next
+  // negotiation must start from the confirmed version, not from the failed
+  // candidate. detectEra returns the abort verdict rather than throwing
+  // (modern.ts, detectEra), so the verdict is checked here.
+  const again = await mc.detectEra();
+  assert.equal(again.action, "abort", "era: a second negotiation still finds no usable version");
+  assert.equal(again.reason, "unsupported_version_no_overlap", "era: the second negotiation aborts for the same reason");
+  const third = at(requestsOf(server, "server/discover"), 2);
+  assert.equal(metaVersionOf(third), NEGOTIATED_VERSION, "era: the later negotiation starts from the confirmed version");
+  assert.notEqual(metaVersionOf(third), "2026-07-28", "era: the failed candidate is not the version the next negotiation starts from");
+  // The abort verdict is cached, so the refused operation probes again never.
+  await assert.rejects(
+    () => mc.call("tools/list"),
+    (err: unknown): boolean => err instanceof EraNegotiationError && err.detection.reason === "unsupported_version_no_overlap",
+    "era: the cached abort verdict still fails the operation",
+  );
+  assert.equal(requestsOf(server, "server/discover").length, 4, "era: only the direct negotiation probes, not the refused operation");
+});

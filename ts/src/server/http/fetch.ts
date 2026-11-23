@@ -143,6 +143,13 @@ export function jackHeaders(req: Request): readonly (readonly [string, string])[
 }
 
 /**
+ * The header-instance list a legacy-profile request hands to the non-POST
+ * pre-check: the legacy profile never reconstructs the received instances,
+ * because no section 5 rule reads them.
+ */
+const EMPTY_HEADER_INSTANCES: readonly (readonly [string, string])[] = [];
+
+/**
  * The received header instances. Without the node adapter's raw list a
  * Headers object has merged repeats with ", " and lowercased names. Header
  * values keep their bytes: a single value is NEVER trimmed. Only a
@@ -416,11 +423,12 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
   // Answers a failed request. Once authentication has succeeded the client
   // holds a request signature to bind to, so the answer is signed; an
   // authentication failure may be unsigned and carries NO Jack-Auth response
-  // header (spec 01 section 5). The request method matters only for the
-  // modern-profile refusal: a HEAD response carries no content, so signing the
-  // JSON body that is never transmitted could not be verified — the signature
-  // covers the empty bytes the client actually receives (content-length: 0,
-  // no body).
+  // header (spec 01 section 5). A HEAD response carries no content at all, so
+  // EVERY refusal of a HEAD request signs the empty bytes the client actually
+  // receives (content-length: 0, no body): that includes a non-rpcRefusal
+  // refusal of an authenticated HEAD, such as the body-classification refusal
+  // or a post-commit durable-admission refusal, where signing the JSON envelope
+  // that is never transmitted could not be verified.
   function reject(res: VerifyResult, method: string): Response {
     const headers = new Headers();
     headers.set("content-type", "application/json");
@@ -440,7 +448,9 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     if (res.httpStatus === 401) {
       headers.set("www-authenticate", "Jack-Auth");
     }
-    const body = errorBody(res.code, res.message);
+    // The refusal bytes are computed ONCE so a HEAD response never signs or
+    // transmits a body it cannot carry; every non-HEAD path keeps its bytes.
+    const body = method === "HEAD" ? new Uint8Array(0) : errorBody(res.code, res.message);
     if (res.nonceRecorded) {
       return writeSigned(res.httpStatus, headers, body, res.requestSig, res.tool);
     }
@@ -631,8 +641,11 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     // The received header instances (received order and casing) for the
     // modern-profile rules; a Fetch Request alone carries only the merged view,
     // which receivedHeaderInstances() splits back for the single-valued
-    // mirrors.
-    const headerInstances = receivedHeaderInstances(req);
+    // mirrors. The legacy profile never reconstructs them: it runs no section
+    // 5 rule, so the list has no reader and the empty list is never passed to
+    // isModernHeaderSignal (the "both" branch below short-circuits it).
+    const headerInstances =
+      profile === "legacy" ? EMPTY_HEADER_INSTANCES : receivedHeaderInstances(req);
     if (method !== "GET" && method !== "POST") {
       // A modern-era non-POST request is authenticated first and refused by S2
       // with a signed 405; anything else keeps the 0.1.x unsigned answer.

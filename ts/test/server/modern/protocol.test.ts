@@ -474,3 +474,27 @@ test("modern profile: a modern-era comma value is split but not otherwise trimme
   assert.equal(harness.seen.calls, 1);
   assert.deepEqual(forwarded(harness, "mcp-method"), ["tools/list"], "the single value is one instance");
 });
+test("modern profile: a HEAD refusal that is not a JSON-RPC refusal signs zero bytes", async () => {
+  // A HEAD response carries no content, so EVERY refusal of a HEAD request must
+  // sign and send zero bytes - not only the spec 04 JSON-RPC refusals: a
+  // signature over a JSON envelope that is never transmitted could not be
+  // verified by the client (fetch.ts, reject()).
+  const harness = newModernHarness("modern");
+  const { request } = modernRequest(seedSignerByName("alice"), {
+    method: "HEAD",
+    headers: [["MCP-Protocol-Version", MODERN]],
+  });
+  // Only the malformed value: it fails the header grammar before any key lookup
+  // or signature check, and auth-header.ts:49 answers that with 401.
+  request.headers.set("jack-auth", "v1; kid=broken");
+  const response = await harness.handle(request);
+
+  assert.equal(response.status, 401, "a malformed Jack-Auth scheme is refused with 401 (auth-header.ts:49)");
+  assert.equal(response.headers.get("www-authenticate"), "Jack-Auth", "the 401 challenge names the scheme (fetch.ts:449)");
+  // Never signed: authentication failed, so there is no request signature to
+  // bind a response to (spec 01 section 5), even though this HEAD refusal is
+  // not a spec 04 JSON-RPC refusal.
+  assert.equal(response.headers.get("jack-auth"), null, "an unauthenticated refusal carries no Jack-Auth receipt");
+  assert.equal((await response.arrayBuffer()).byteLength, 0, "a HEAD refusal transmits no body bytes to sign");
+  assert.equal(harness.seen.calls, 0, "a request that never authenticated never reaches the wrapped handler");
+});

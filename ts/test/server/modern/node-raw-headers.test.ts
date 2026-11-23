@@ -2,12 +2,15 @@
  * End-to-end over a real node:http server with the header lines put on the
  * wire exactly as listed: serveNode(jackFetchHandler(...)) must see the TRUE
  * repeated instances and their received casing (spec 04 S1/S9), which a bare
- * Fetch Request cannot carry. Modelled on ../http/node-http.test.ts.
+ * Fetch Request cannot carry. The requests themselves are written as exact
+ * bytes over TCP (node:net), because http.request only takes an object map of
+ * headers. Modelled on ../http/node-http.test.ts.
  */
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { createServer, request as httpRequest } from "node:http";
+import { createServer } from "node:http";
 import type { IncomingHttpHeaders } from "node:http";
+import { connect as netConnect } from "node:net";
 import type { AddressInfo } from "node:net";
 import { randomNonce, signRequest, verifyResponse } from "../../../src/client/signing/auth.js";
 import { parseRequestAuth } from "../../../src/core/auth-header.js";
@@ -20,8 +23,6 @@ import { jackFetchHandler, jackHeaders } from "../../../src/server/http/fetch.js
 import type { HandlerConfig } from "../../../src/server/http/fetch.js";
 import { newRegistryState, seedByName, utf8 } from "../http/fetch/support.js";
 import { fixtureAud, fixtureNow, seedSignerByName } from "../../support/client-harness.js";
-
-const noop = (): void => {};
 
 /** The modern protocol version of spec 04 (MCP 2026-07-28). */
 const MODERN = "2026-07-28";
@@ -55,46 +56,80 @@ interface RawResult {
 }
 
 /**
- * Sends one raw node:http request. `rawHeaders` is a FLAT [name, value, ...]
- * list, which node:http writes line by line: repeats and the exact casing of
- * each name go on the wire (an object form would merge names that differ only
- * in case). `method` defaults to POST; a HEAD request carries no body.
+ * Sends one raw request as exact bytes over TCP: `headerLines` is a list of
+ * [name, value] PAIRS, and one `name: value` line per pair goes on the wire in
+ * the order and with the casing given, repeats included. A raw socket is used
+ * because http.request only takes an object map of headers (OutgoingHttpHeaders)
+ * - the flat name/value array form is defined for response.writeHead alone, so
+ * passing it to http.request would put index-named headers on the wire instead
+ * of the real ones. `method` defaults to POST; a HEAD request carries no body.
  */
-function rawRequest(port: number, rawHeaders: readonly string[], body: Buffer, method = "POST"): Promise<RawResult> {
+function rawRequest(
+  port: number,
+  headerLines: readonly (readonly [string, string])[],
+  body: Buffer,
+  method = "POST",
+): Promise<RawResult> {
   return new Promise<RawResult>((resolve, reject) => {
-    let sawResponse = false;
-    const req = httpRequest({
-      host: "127.0.0.1",
-      port,
-      method,
-      path: "/mcp",
-      headers: rawHeaders,
-      // A fresh connection per request, like the adapter tests.
-      agent: false,
-      // A server that never answers must fail after 2s instead of hanging.
-      signal: AbortSignal.timeout(2000),
-    });
+    let head = method + " /mcp HTTP/1.1\r\n";
+    for (const [name, value] of headerLines) {
+      head += name + ": " + value + "\r\n";
+    }
+    head += "Host: 127.0.0.1:" + port + "\r\n";
+    head += "Content-Length: " + body.length + "\r\n";
+    head += "Connection: close\r\n\r\n";
+
+    const socket = netConnect(port, "127.0.0.1");
     const chunks: Buffer[] = [];
-    req.on("response", (res) => {
-      sawResponse = true;
-      res.on("data", (chunk: Buffer) => {
-        chunks.push(chunk);
-      });
-      const settle = (): void => {
-        // Deterministic socket release; settle is idempotent.
-        req.destroy();
-        resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks) });
-      };
-      res.on("end", settle);
-      res.on("error", settle);
-      res.on("close", settle);
+    // A server that never answers must fail after 2s instead of hanging.
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error("raw request timed out after 2000 ms with no complete response"));
+    }, 2000);
+    socket.on("error", (err: Error) => {
+      clearTimeout(timer);
+      reject(err);
     });
-    req.on("error", (err) => {
-      if (!sawResponse) reject(err);
-      else noop();
+    socket.on("data", (chunk: Buffer) => {
+      chunks.push(chunk);
     });
-    if (body.length > 0) req.write(body);
-    req.end();
+    // Connection: close means the response is complete once the socket ends.
+    socket.on("end", () => {
+      clearTimeout(timer);
+      const raw = Buffer.concat(chunks);
+      const split = raw.indexOf("\r\n\r\n");
+      if (split < 0) {
+        reject(new Error("raw response carried no complete head"));
+        return;
+      }
+      const headLines = raw.subarray(0, split).toString("utf-8").split("\r\n");
+      const statusLine = headLines[0];
+      if (statusLine === undefined || statusLine.length === 0) {
+        reject(new Error("raw response carried no status line"));
+        return;
+      }
+      const headers: IncomingHttpHeaders = {};
+      for (const line of headLines.slice(1)) {
+        const colon = line.indexOf(":");
+        if (colon <= 0) {
+          continue;
+        }
+        const name = line.slice(0, colon).trim().toLowerCase();
+        const value = line.slice(colon + 1).trim();
+        const prev = headers[name];
+        if (prev === undefined) {
+          headers[name] = value;
+        } else if (Array.isArray(prev)) {
+          prev.push(value);
+        } else {
+          headers[name] = [prev, value];
+        }
+      }
+      resolve({ status: Number(statusLine.split(" ")[1]), headers, body: raw.subarray(split + 4) });
+    });
+    socket.write(head);
+    if (body.length > 0) socket.write(body);
+    socket.end();
   });
 }
 
@@ -161,7 +196,12 @@ test("modern profile: repeated mirror instances are refused over node:http", { t
   const sig = parseRequestAuth([header]).sig;
   const res = await rawRequest(
     port,
-    ["MCP-Protocol-Version", MODERN, "MCP-Protocol-Version", MODERN, "Mcp-Method", "tools/list", "jack-auth", header],
+    [
+      ["MCP-Protocol-Version", MODERN],
+      ["MCP-Protocol-Version", MODERN],
+      ["Mcp-Method", "tools/list"],
+      ["jack-auth", header],
+    ],
     Buffer.from(body),
   );
 
@@ -190,20 +230,13 @@ test("modern profile: node:http forwards the raw header instances", { timeout: 5
   const res = await rawRequest(
     port,
     [
-      "MCP-Protocol-Version",
-      MODERN,
-      "Mcp-Method",
-      "tools/call",
-      "Mcp-Name",
-      "svc.status",
-      "Mcp-Param-Region",
-      "eu",
-      "mcp-param-region",
-      "us",
-      "Mcp-Session-Id",
-      "sess-1",
-      "jack-auth",
-      header,
+      ["MCP-Protocol-Version", MODERN],
+      ["Mcp-Method", "tools/call"],
+      ["Mcp-Name", "svc.status"],
+      ["Mcp-Param-Region", "eu"],
+      ["mcp-param-region", "us"],
+      ["Mcp-Session-Id", "sess-1"],
+      ["jack-auth", header],
     ],
     Buffer.from(body),
   );
@@ -232,7 +265,15 @@ test("modern profile: a HEAD refusal is signed over the empty body", { timeout: 
   const emptyBody = new Uint8Array(0);
   const header = signRequest(alice, fixtureAud, "HEAD", "/mcp", emptyBody, randomNonce(), fixtureNow);
   const sig = parseRequestAuth([header]).sig;
-  const res = await rawRequest(port, ["MCP-Protocol-Version", MODERN, "jack-auth", header], Buffer.alloc(0), "HEAD");
+  const res = await rawRequest(
+    port,
+    [
+      ["MCP-Protocol-Version", MODERN],
+      ["jack-auth", header],
+    ],
+    Buffer.alloc(0),
+    "HEAD",
+  );
 
   assert.equal(res.status, 405);
   assert.equal(res.headers["allow"], "POST");
