@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/hex"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
 	"github.com/PHPCraftdream/mcp-jack/server/internal/rpcbody"
@@ -382,27 +382,46 @@ func TestPendingDispatchIsExclusive(t *testing.T) {
 }
 
 // blockingNative blocks in Call until release is closed and reports that it
-// started, so a test can hold a claimed dispatch in flight.
+// started, so a test can hold a claimed dispatch in flight. finished records
+// that Call actually returned, which lets a lease observe whether it was
+// released before or after the native call ended.
 type blockingNative struct {
-	started chan struct{}
-	release chan struct{}
+	started  chan struct{}
+	release  chan struct{}
+	finished atomic.Bool
 }
 
 func (n *blockingNative) Call(*NativeCall) (NativeResult, *jack.Error) {
 	close(n.started)
 	<-n.release
+	n.finished.Store(true)
 	return NativeResult{}, nil
 }
 
-// countingLease counts Release calls of a durable nonce lease.
-type countingLease struct{ releases atomic.Int32 }
+// orderingLease records the order of the durable nonce release against the
+// native call: early stays false only when Release runs after the native call
+// reported finished, which is exactly what Done must guarantee.
+type orderingLease struct {
+	native   *atomic.Bool
+	releases atomic.Int32
+	early    atomic.Bool
+}
 
-func (l *countingLease) Valid() bool { return true }
-func (l *countingLease) Release()    { l.releases.Add(1) }
+func (l *orderingLease) Valid() bool { return true }
+
+func (l *orderingLease) Release() {
+	if !l.native.Load() {
+		l.early.Store(true)
+	}
+	l.releases.Add(1)
+}
 
 // TestDoneWaitsForClaimedDispatchLease pins the lease ordering: a claimed
 // dispatch keeps its request alive, so Done waits for the native call to return
-// before the durable lease is released.
+// before the durable lease is released. The block is proven without any timer:
+// markReleased sets pending.released under pending.mu before it blocks on the
+// dispatch channel, so observing that flag means the Done goroutine is already
+// waiting, and the lease ordering itself is checked by orderingLease.early.
 func TestDoneWaitsForClaimedDispatchLease(t *testing.T) {
 	key := testPrivateKey(t, "alice")
 	state, _ := registeredAlice(t, key)
@@ -416,7 +435,7 @@ func TestDoneWaitsForClaimedDispatchLease(t *testing.T) {
 	}
 	// A hand-built pending result: this test drives the dispatch and the lease
 	// directly, without the authentication pipeline.
-	lease := &countingLease{}
+	lease := &orderingLease{native: &native.finished}
 	res := Result{
 		Kid: "kid", RequestSig: "sig", NonceRecorded: true,
 		admission: &admissionLease{lease: lease},
@@ -430,16 +449,36 @@ func TestDoneWaitsForClaimedDispatchLease(t *testing.T) {
 	dispatched := make(chan Result, 1)
 	go func() { dispatched <- v.dispatch(res) }()
 	<-native.started
+	pending := res.pending
 
 	done := make(chan struct{})
 	go func() {
 		res.Done()
 		close(done)
 	}()
+
+	// Poll the handshake flag instead of sleeping: once markReleased has set
+	// released, the Done goroutine is blocked on the dispatch channel, so the
+	// checks below run after the wait is reached rather than merely soon after
+	// Done was started. Gosched bounds the loop in iterations, not in time.
+	reached := false
+	for i := 0; i < 10000; i++ {
+		pending.mu.Lock()
+		reached = pending.released
+		pending.mu.Unlock()
+		if reached {
+			break
+		}
+		runtime.Gosched()
+	}
+	if !reached {
+		t.Fatal("Done never marked the pending result released")
+	}
+
 	select {
 	case <-done:
 		t.Fatal("Done released the request while the claimed native call was still running")
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
 	if got := lease.releases.Load(); got != 0 {
 		t.Fatalf("lease releases = %d while the native call runs, want 0", got)
@@ -450,6 +489,9 @@ func TestDoneWaitsForClaimedDispatchLease(t *testing.T) {
 		t.Fatalf("dispatch result = %+v, want accepted", out)
 	}
 	<-done
+	if lease.early.Load() {
+		t.Fatal("Done released the lease before the native call returned")
+	}
 	if got := lease.releases.Load(); got != 1 {
 		t.Fatalf("lease releases = %d after Done returned, want 1", got)
 	}

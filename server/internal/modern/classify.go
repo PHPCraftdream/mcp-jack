@@ -215,8 +215,9 @@ func Classify(profile Profile, req Request) Outcome {
 // exact value is integral, and no float64 rounding is involved. Every other
 // value, including a non-integral fraction, an out-of-range magnitude, null, a
 // boolean, an array and an object, yields nil so the refusal carries null.
-// Tokens beyond the implementation limits below (exponent text, exponent
-// magnitude, mantissa length) are treated as out of range and also yield nil.
+// Tokens beyond the implementation limits below (exponent value after leading
+// zeros are stripped, mantissa length) are treated as out of range and also
+// yield nil.
 func refusalID(raw json.RawMessage) []byte {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
@@ -237,9 +238,8 @@ func refusalID(raw json.RawMessage) []byte {
 // and keep an attacker-chosen body from driving big-integer work. They are
 // implementation limits, not S10 rules.
 const (
-	maxIDExponentDigits = 20
-	maxIDExponent       = 400
-	maxIDMantissa       = 400
+	maxIDExponent = 400
+	maxIDMantissa = 400
 )
 
 // exactInteger reports whether the JSON number token text denotes an integer
@@ -273,14 +273,18 @@ func exactInteger(text string) bool {
 	if !signedDigits(exponentText) {
 		return false
 	}
-	digits := strings.TrimLeft(intPart+fracPart, "0")
-	if digits == "" {
-		// The exact value is zero, whatever the sign, fraction or exponent.
-		return true
-	}
+	// The exponent is parsed exactly once, before the zero shortcut, so a zero
+	// mantissa is bounded by the same limit as a non-zero one: 0e400 is echoed
+	// but 0e401 is out of range like any other over-large exponent.
 	exponent, ok := boundedExponent(exponentText)
 	if !ok {
 		return false
+	}
+	digits := strings.TrimLeft(intPart+fracPart, "0")
+	if digits == "" {
+		// The exact value is zero, whatever the sign or fraction; the exponent
+		// above is already known to be within bounds.
+		return true
 	}
 	scale := exponent - len(fracPart)
 	if scale < 0 {
@@ -332,17 +336,18 @@ func signedDigits(text string) bool {
 }
 
 // boundedExponent parses the exponent of a JSON number token. Leading zeros are
-// part of the exponent grammar, so they are stripped before the magnitude is
-// read: 1e000002 is 1e2. The exponent text is bounded by maxIDExponentDigits and
-// the magnitude by maxIDExponent, so a hostile token cannot drive big-integer
-// work; a non-zero mantissa with an exponent beyond those bounds is out of the
-// int64 range anyway.
+// part of the exponent grammar, so they are stripped before the exponent is
+// bounded by value: 1e000002 is 1e2 and any amount of zero padding still
+// denotes an in-range exponent. Bounding by value rather than by text length is
+// what keeps padding harmless while maxIDExponent still stops a hostile token
+// from driving big-integer work; a non-zero mantissa with an exponent beyond
+// that bound is out of the int64 range anyway.
 func boundedExponent(text string) (int, bool) {
 	negative := strings.HasPrefix(text, "-")
 	if negative || strings.HasPrefix(text, "+") {
 		text = text[1:]
 	}
-	if !decimalDigits(text) || len(text) > maxIDExponentDigits {
+	if !decimalDigits(text) {
 		return 0, false
 	}
 	text = strings.TrimLeft(text, "0")

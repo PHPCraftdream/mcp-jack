@@ -3,6 +3,9 @@ package webhook
 import "github.com/PHPCraftdream/mcp-jack/webhook/internal/endpoint"
 
 // GateConfig configures endpoint verification routes, caching, and challenges.
+// Client is required: build one hardened client with NewDeliveryClient, pass it
+// to NewGate, and NewSender reuses that same instance for the deliveries, so
+// the well-known fetch and the deliveries share one transport policy.
 type GateConfig = endpoint.GateConfig
 
 // Gate verifies consent to delivery and manages single-use challenges.
@@ -10,7 +13,8 @@ type GateConfig = endpoint.GateConfig
 // complete a challenge, and Fresh to check the cached verdict without I/O.
 type Gate = endpoint.Gate
 
-// NewGate constructs a gate with a hardened client and cache by default.
+// NewGate constructs a gate around the required shared hardened delivery client
+// and a private cache by default.
 func NewGate(cfg GateConfig) (*Gate, error) { return endpoint.NewGate(cfg) }
 
 // VerificationError describes a failed verification or document check.

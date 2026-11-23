@@ -127,8 +127,13 @@ func TestEndpointPureRouteAndGateOrder(t *testing.T) {
 	}
 }
 
+// newEndpointGate defaults the required client for tests that do not care
+// about the transport; the production constructor stays strict.
 func newEndpointGate(t *testing.T, cfg endpoint.GateConfig) *endpoint.Gate {
 	t.Helper()
+	if cfg.Client == nil {
+		cfg.Client = delivery.NewClient(delivery.Config{})
+	}
 	g, err := endpoint.NewGate(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -144,6 +149,13 @@ func beginEndpointNonce(t *testing.T, g *endpoint.Gate, principal, callback stri
 		t.Fatalf("invalid issued nonce %q", nonce)
 	}
 	return nonce
+}
+
+func TestEndpointGateRequiresClient(t *testing.T) {
+	g, err := endpoint.NewGate(endpoint.GateConfig{})
+	if g != nil || err == nil {
+		t.Errorf("NewGate without a client = (%v, %v), want a nil gate and an error", g, err)
+	}
 }
 
 func TestEndpointGateNonces(t *testing.T) {
@@ -397,8 +409,12 @@ func TestEndpointGateDocumentTLS(t *testing.T) {
 
 	t.Run("blocked-address", func(t *testing.T) {
 		beforeLookups, beforeDials := lookups.Load(), dials.Load()
-		cfg.AllowedRanges = nil
-		g := newEndpointGate(t, endpoint.GateConfig{Client: delivery.NewClient(cfg)})
+		// Keep the injected resolver and dialer so the lookup is observable, but
+		// drop the allowed range: the resolved address must be refused before
+		// the dialer runs.
+		blocked := cfg
+		blocked.AllowedRanges = nil
+		g := newEndpointGate(t, endpoint.GateConfig{Client: delivery.NewClient(blocked)})
 		assertEndpointError(t, g.Covers(t.Context(), "alice", callback, 0), "challenge_failed", "no_route")
 		if g.Fresh("alice", callback) || lookups.Load() != beforeLookups+1 || dials.Load() != beforeDials {
 			t.Fatal("blocked address must be refused after lookup, without dialing or verifying")

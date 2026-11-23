@@ -165,7 +165,9 @@ func queuedNonce(t *testing.T, nonces ...string) NonceSource {
 //
 // Tests set s.Handle after newTestServer returns. Requests made before the
 // assignment would race; the handler responds 500 when s.Handle is nil, so
-// the window is benign.
+// the window is benign. A test that needs the request (not just the verified
+// auth and body) sets HandleRequest instead; it runs after verification and
+// before s.Handle and must write the response itself.
 type testServer struct {
 	*httptest.Server
 	Key    ed25519.PrivateKey                                              // server signing key
@@ -175,6 +177,10 @@ type testServer struct {
 	Aud    string                                                          // audience used in request signing strings
 	Now    int64                                                           // response timestamp; tests may adjust
 	Handle func(w http.ResponseWriter, auth jack.RequestAuth, body []byte) // per-test response logic
+	// HandleRequest, when non-nil, runs after verification and before
+	// Handle, so a test can inspect the request (path, headers, method) and
+	// must write the response itself.
+	HandleRequest func(w http.ResponseWriter, auth jack.RequestAuth, r *http.Request, body []byte)
 }
 
 // newTestServer starts the server; its handler verifies each request per
@@ -208,6 +214,10 @@ func newTestServer(t *testing.T) *testServer {
 		sig, sigErr := jack.DecodeBase64URLFixed(auth.Sig, ed25519.SignatureSize)
 		if !ok || sigErr != nil || !jack.Verify(clientPub, msg, sig) {
 			s.writeUnsignedJSON(w, http.StatusUnauthorized, []byte(`{"error":{"code":"unknown_key","message":"verification failed"}}`))
+			return
+		}
+		if s.HandleRequest != nil {
+			s.HandleRequest(w, auth, r, body)
 			return
 		}
 		if s.Handle == nil {

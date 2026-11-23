@@ -121,7 +121,8 @@ func NewCardSource(cfg CardSourceConfig) (*CardSource, error) {
 	return &CardSource{inner: inner}, nil
 }
 
-// KeySet returns a copy of the current snapshot, even if stale, without network I/O.
+// KeySet returns a copy of the current snapshot while its cache lifetime lasts,
+// and the empty set once it has expired, without network I/O.
 func (s *CardSource) KeySet() KeySet { return s.inner.KeySet() }
 
 // TTL returns the remaining cache lifetime, or zero if stale or absent.

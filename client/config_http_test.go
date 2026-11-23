@@ -6,10 +6,12 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -794,6 +796,124 @@ func newPolicyProfile(t *testing.T, rawURL string) (Profile, []byte) {
 		t.Fatalf("ed25519.GenerateKey: %v", err)
 	}
 	return Profile{URL: rawURL, Aud: fixtureAud, ServerPublicKey: jack.EncodeBase64URL(pub)}, pub
+}
+
+func TestLegacySessionRecoverySingleFlight(t *testing.T) {
+	srv := newTestServer(t)
+	var mu sync.Mutex
+	notFound, initialize := 0, 0
+	both404 := make(chan struct{})
+	srv.HandleRequest = func(w http.ResponseWriter, auth jack.RequestAuth, r *http.Request, body []byte) {
+		var req struct {
+			Method string `json:"method"`
+			ID     int64  `json:"id"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			srv.writeSignedJSON(w, auth, http.StatusInternalServerError, []byte(`{"error":{"code":"bad_request"}}`))
+			return
+		}
+		switch req.Method {
+		case "initialize":
+			mu.Lock()
+			initialize++
+			mu.Unlock()
+			// Hold the first handshake open until the second 404 has been
+			// answered, so the second recovery provably starts while the
+			// first is still in flight.
+			<-both404
+			w.Header().Set("Mcp-Session-Id", "sess-B")
+			srv.writeSignedJSON(w, auth, http.StatusOK, []byte(fmt.Sprintf(
+				`{"jsonrpc":"2.0","id":%d,"result":{"protocolVersion":%q,"capabilities":{}}}`,
+				req.ID, legacyProtocolVersion)))
+		case "notifications/initialized":
+			srv.writeSignedJSON(w, auth, http.StatusOK, []byte(`{}`))
+		default:
+			mu.Lock()
+			sid := r.Header.Get("Mcp-Session-Id")
+			if sid == "sess-A" {
+				notFound++
+				if notFound == 2 {
+					close(both404)
+				}
+			}
+			mu.Unlock()
+			switch sid {
+			case "sess-A":
+				srv.writeSignedJSON(w, auth, http.StatusNotFound, []byte(`{"error":{"code":"not_found","message":"session"}}`))
+			case "sess-B":
+				srv.writeSignedJSON(w, auth, http.StatusOK, rpcResultBody(json.RawMessage(`{}`)))
+			default:
+				srv.writeSignedJSON(w, auth, http.StatusInternalServerError, []byte(`{"error":{"code":"internal"}}`))
+			}
+		}
+	}
+	c := cfgHTTPNew(t, Config{
+		BaseURL:   srv.URL + "/mcp",
+		Aud:       fixtureAud,
+		Signer:    seedSignerByName(t, "alice"),
+		ServerKey: srv.Pub,
+		Now:       fixedClock(fixtureNow),
+		Window:    30 * time.Second,
+		Era:       EraLegacy,
+	})
+	c.mu.Lock()
+	c.settled, c.negotiated, c.sessionID = EraLegacy, legacyProtocolVersion, "sess-A"
+	c.mu.Unlock()
+
+	errc := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() { errc <- c.CallTool(context.Background(), "svc.echo", nil, nil) }()
+	}
+	for i := 0; i < 2; i++ {
+		var he *HTTPError
+		if err := <-errc; !errors.As(err, &he) || he.Status != http.StatusNotFound {
+			t.Fatalf("CallTool err = %v, want a 404 *HTTPError (the operation is never replayed)", err)
+		}
+	}
+	mu.Lock()
+	gotInit := initialize
+	mu.Unlock()
+	if gotInit != 1 {
+		t.Fatalf("initialize requests = %d, want exactly 1 (single-flight recovery)", gotInit)
+	}
+	if n, sid := c.legacyState(); n != legacyProtocolVersion || sid != "sess-B" {
+		t.Fatalf("legacy state = (%q, %q), want (%q, sess-B)", n, sid, legacyProtocolVersion)
+	}
+	if err := c.CallTool(context.Background(), "svc.echo", nil, nil); err != nil {
+		t.Fatalf("CallTool after recovery: %v", err)
+	}
+}
+
+func TestInvalidateLegacyIfOwnership(t *testing.T) {
+	srv := newTestServer(t)
+	c := cfgHTTPNew(t, Config{
+		BaseURL: srv.URL + "/mcp", Aud: fixtureAud,
+		Signer: seedSignerByName(t, "alice"), ServerKey: srv.Pub,
+		Now: fixedClock(fixtureNow), Window: 30 * time.Second,
+	})
+	c.mu.Lock()
+	c.settled, c.negotiated, c.sessionID = EraLegacy, legacyProtocolVersion, "sess-B"
+	c.mu.Unlock()
+	c.invalidateLegacyIf("sess-A")
+	if n, sid := c.legacyState(); n != legacyProtocolVersion || sid != "sess-B" {
+		t.Fatalf("a stale invalidation changed the session: (%q, %q)", n, sid)
+	}
+	c.mu.Lock()
+	settled := c.settled
+	c.mu.Unlock()
+	if settled != EraLegacy {
+		t.Fatalf("a stale invalidation changed the settled era: %q", settled)
+	}
+	c.invalidateLegacyIf("sess-B")
+	if n, sid := c.legacyState(); n != "" || sid != "" {
+		t.Fatalf("an owned invalidation left state: (%q, %q)", n, sid)
+	}
+	c.mu.Lock()
+	settled = c.settled
+	c.mu.Unlock()
+	if settled != "" {
+		t.Fatalf("an owned invalidation left the settled era: %q", settled)
+	}
 }
 
 func TestNewClientURLPolicyFixture(t *testing.T) {

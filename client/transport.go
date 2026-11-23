@@ -563,6 +563,64 @@ type jsonrpcNotification struct {
 	Method  string `json:"method"`
 }
 
+// legacyRecovery is one in-flight legacy session recovery, shared by every
+// caller whose request was rejected for the same session id. err is written
+// before done is closed and read only after that.
+type legacyRecovery struct {
+	done chan struct{}
+	err  error
+}
+
+// recoverLegacySession re-runs the legacy handshake after a 404 that answered
+// sentSessionID. At most one handshake runs per rejected session id: callers
+// that arrive while one is in flight wait for it and share its result. The
+// current-session check and the flight registration happen under one lock, so
+// two 404s cannot both decide that recovery is needed. A 404 for a session
+// that is no longer current is ignored.
+func (c *Client) recoverLegacySession(ctx context.Context, signer Signer, sentSessionID, version string) error {
+	c.mu.Lock()
+	if !legacyRecoveryNeeded(sentSessionID, c.sessionID) {
+		// The 404 answered a session that was cleared or replaced; it must
+		// not start a handshake. The check and the registration are atomic,
+		// so both callers cannot observe the same stale state.
+		c.mu.Unlock()
+		return nil
+	}
+	if flight, ok := c.recoveries[sentSessionID]; ok {
+		c.mu.Unlock()
+		select {
+		case <-flight.done:
+			return flight.err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	flight := &legacyRecovery{done: make(chan struct{})}
+	if c.recoveries == nil {
+		c.recoveries = make(map[string]*legacyRecovery)
+	}
+	c.recoveries[sentSessionID] = flight
+	c.mu.Unlock()
+
+	err := c.legacyHandshake(ctx, signer, version)
+
+	c.mu.Lock()
+	flight.err = err
+	if c.recoveries[sentSessionID] == flight {
+		delete(c.recoveries, sentSessionID)
+	}
+	c.mu.Unlock()
+	close(flight.done)
+	return err
+}
+
+// cachedSessionID returns the session id the cache currently holds.
+func (c *Client) cachedSessionID() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.sessionID
+}
+
 // legacyHandshake runs the legacy-era lifecycle of 2025-11-25/2025-06-18:
 // initialize, then notifications/initialized. The initialize reply must be
 // accepted by parseLegacyInitialize; the negotiated version and the
@@ -571,15 +629,17 @@ type jsonrpcNotification struct {
 // request.
 //
 // The cached session id, the negotiated version and the settled legacy era are
-// committed together, and only after notifications/initialized was accepted. Any
-// failure returns its error and invalidates the cached legacy state, so the
-// next call probes or handshakes again instead of running a legacy request that
-// no handshake backs.
+// committed together, and only after notifications/initialized was accepted,
+// and only while the cache still holds the session id this handshake started
+// from. Any failure returns its error and clears the cached legacy state under
+// the same ownership rule, so a handshake that loses to a newer session neither
+// overwrites nor invalidates it.
 func (c *Client) legacyHandshake(ctx context.Context, signer Signer, version string) (err error) {
+	startSessionID := c.cachedSessionID()
 	ok := false
 	defer func() {
 		if !ok {
-			c.invalidateLegacy()
+			c.invalidateLegacyIf(startSessionID)
 		}
 	}()
 	id := c.nextRequestID()
@@ -618,7 +678,10 @@ func (c *Client) legacyHandshake(ctx context.Context, signer Signer, version str
 	if status < 200 || status > 299 {
 		return decodeVerifiedCall(status, raw, nil)
 	}
-	c.acceptLegacyHandshake(negotiated, sessionID)
+	c.acceptLegacyHandshake(negotiated, sessionID, startSessionID)
+	// Both outcomes are success: the handshake itself succeeded. If a newer
+	// session was installed while it ran, acceptLegacyHandshake declined to
+	// overwrite it, and the deferred invalidation must not run either.
 	ok = true
 	return nil
 }
@@ -682,24 +745,35 @@ func isJSONNullToken(raw json.RawMessage) bool {
 	return string(bytes.TrimSpace(raw)) == "null"
 }
 
-// acceptLegacyHandshake commits a fully accepted handshake: the settled era, the
-// negotiated version and the session id change together under mu, so no caller
-// observes a partly accepted session.
-func (c *Client) acceptLegacyHandshake(negotiated, sessionID string) {
+// acceptLegacyHandshake commits a fully accepted handshake: the settled era,
+// the negotiated version and the session id change together under mu, so no
+// caller observes a partly accepted session. It commits only while the cache
+// still holds expected, the session id the handshake started from; a newer
+// session installed while the handshake ran is never overwritten, and the
+// handshake reports that by returning false.
+func (c *Client) acceptLegacyHandshake(negotiated, sessionID, expected string) bool {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sessionID != expected {
+		return false
+	}
 	c.settled = EraLegacy
 	c.negotiated, c.sessionID = negotiated, sessionID
-	c.mu.Unlock()
+	return true
 }
 
-// invalidateLegacy forgets the negotiated version and the session id and
-// unsettles the era, so the next CallTool probes or handshakes again instead of
-// running a legacy request that no handshake backs.
-func (c *Client) invalidateLegacy() {
+// invalidateLegacyIf forgets the negotiated version and the session id and
+// unsettles the era, but only while the cache still holds expected, the session
+// id the operation started from. A handshake that fails after a newer session
+// was installed must not clear that newer session.
+func (c *Client) invalidateLegacyIf(expected string) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sessionID != expected {
+		return
+	}
 	c.settled = ""
 	c.negotiated, c.sessionID = "", ""
-	c.mu.Unlock()
 }
 
 // legacySessionHeaders renders the unsigned transport headers of a legacy-era
