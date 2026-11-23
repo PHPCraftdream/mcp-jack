@@ -420,3 +420,131 @@ Checks per client x server pair:
 Requests are driven raw: the client signs in sign-only mode and the harness writes the exact request bytes over TCP (section 6 raw-request mechanics); responses are not signature-verified (same as raw scenarios).
 
 Limits: real wall clock only (no injected clock in these executables; the expiry scenario uses a short 2-second window instead); no recovery-inspect/reconcile coverage; no capacity or concurrent-owner coverage; the self-test uses bundled fakes and is not SDK evidence; Linux only.
+
+## 14. Modern matrix
+
+The modern matrix runs the MCP 2026-07-28 profile of [`spec/04-modern-profile.md`](../spec/04-modern-profile.md) across every client language against every server language: the era decision, the mirror headers and their refusals, session-header stripping, GET/HEAD refusal and the C9 era detection and fallback. It adds no SDK API and no protocol change. The normative executable contract is [`modern/contract.md`](modern/contract.md); the expected outcomes are [`modern-scenarios.json`](modern-scenarios.json).
+
+Entry point (Node >= 20, no external runtime dependencies):
+
+```sh
+node interop/modern.mjs [--targets <file>] [--servers <l,l,...>] [--clients <l,l,...>]
+                        [--scenario <id>[,<id>...]] [--list] [--self-test]
+```
+
+Exit codes match section 3: `0` every selected scenario passes in every selected pair; `1` a scenario failure; `2` a usage or contract error (unknown language or scenario id, a targets entry without `modern_server`/`modern_client`, a missing target). `--list` prints the scenario ids in order; `--scenario` is repeatable and comma-separated; `--self-test` exercises the harness against the bundled fakes only and is not SDK evidence.
+
+Output conventions match the other matrices: `== pair client=<c> server=<s> ==`, one `PASS <id>` or `FAIL <id> (<reason>)` per scenario (a failure adds a block with `scenario`, `pair`, `run`, `expected`, `actual`, one `reason` line per mismatch, and the server stderr tail), `pair client=<c> server=<s>: <passed>/<total>`, the matrix table, then both summary lines:
+
+```text
+modern matrix: all pairs pass
+INTEROP-SUMMARY matrix=modern pairs=<cells> checks=<scenarios per cell> passed=<passes> failed=<failures> result=pass|fail
+```
+
+```text
+interop/modern.mjs                      entry point: CLI, matrix table, summary lines
+interop/modern-scenarios.json           the thirteen scenarios and their exact outcomes
+interop/modern/contract.md              normative contract for the executables and the fakes
+interop/modern/support.mjs              fixtures, subset matching, header predicates, child and port helpers
+interop/modern/proxy.mjs                tamper proxy: raw loopback relay that rewrites after signing
+interop/modern/matrix.mjs               the per-pair driver and its response verification
+interop/modern/selftest.mjs             proxy units, fakes, negative controls
+interop/tools/fakes/modern/jack-sign.mjs         self-test signing helpers
+interop/tools/fakes/modern/fake-modern-server.mjs self-test server fake (not an SDK)
+interop/tools/fakes/modern/fake-modern-client.mjs self-test client fake (not an SDK)
+```
+
+Every scenario runs against a dedicated `modern_server` process on a driver-chosen loopback port (two for the scenarios with two runs). Scenarios with a tamper preset additionally start the proxy inside the driver process: a loopback TCP relay that writes the request bytes itself, so repeated header instances and their order survive, and that rewrites a request AFTER the client signed it (`Mcp-Name`, a duplicated `MCP-Protocol-Version`, an added `Mcp-Session-Id` and `Last-Event-ID`, or `Mcp-Method`). The client is then given the proxy's URL. `legacy-both-parity` reuses one port for both server profiles, so even the echoed `Host` header is identical.
+
+The driver does not trust the client's claims about a body: it re-decodes every reported response, re-verifies its `Jack-Auth` against the pinned fixture `svc` key (only the spec 01 section 5 unsigned-allowed 401 family may lack one), re-parses `result`, `error` and `id`, and only then matches the expectation. Expected objects are recursive subsets (arrays: equal length, element-wise subsets); `$kid:<name>` and `$public_key:<name>` resolve from `spec/fixtures/keys.json`; `expected.steps` matches positionally, `header_echo` and `request_headers` use `contains`/`absent`/`counts` predicates (header names case-insensitive, values exact), `absent_paths` asserts absence inside the last result, `server_request_log` compares the served method sequence, and the invariants `identical_request_bytes` and `identical_response_body_across_runs` compare the reported bytes.
+
+### 14.1 Executable contract, concisely
+
+```text
+modern_server --profile <legacy|modern|both> --aud <aud> --state <file>
+              --server-seed-hex <64 hex> --clock-file <file> --port <n>
+              [--request-log <file>] [--supported-versions <csv>]
+              [--discover-version-mode <supported|refuse-first|refuse-always>]
+```
+
+stdout carries one ready line and nothing else: `{"ready":true,"port":<n>,"server_public_key":"<b64u>","server_kid":"<kid>","profile":"<profile>"}`; with `--request-log` the server appends `{"method":"<method>","http_status":<n>}` per request the wrapped handler answered (never for a wrapper refusal, a GET/HEAD 405, or a native `jack.*` call).
+
+```text
+modern_client --url <url> --aud <aud> --seed-hex <64 hex> --anchor <b64u>
+              --scenario <id> --era <legacy|modern|auto> --clock-file <file>
+              [--probe-version <v>] [--json-id <text>]
+```
+
+The client performs the scenario's fixed request sequence and prints one JSON object as its last stdout line: `{"scenario","outcome":"ok|rejected|client_error","http_status","code","data":{"era","steps":[...]}}`. Every step reports the exact request bytes and signature, the response `Jack-Auth`, the response `content-type`, `allow` and `Mcp-Session-Id` headers, and the exact response bytes. `code` is an integer JSON-RPC error code, a string Jack envelope code, or a client code such as `unsupported_version_no_overlap`; `client_error` means no answer was trusted and carries a null status.
+
+Fixed inputs for determinism: both roles read `--clock-file` for every "now" and the driver always writes `1800000000`; request `i` of scenario `<s>` uses `nonce_i = base64url(sha256("mcp-jack-interop-modern/nonce/<s>/<i>")[0..16])`; the client is fixture `alice`, the server fixture `svc`, the audience is `https://svc.example.test`, and the state file is the fixture registry. Two runs of one client language therefore send byte-identical requests, which is what the parity scenario compares.
+
+The wrapped handler is fixed by the contract: `server/discover` answers `resultType: "complete"`, `supportedVersions` from `--supported-versions`, `capabilities: {}` (the events extension is absent) and `serverInfo`; in the `legacy` profile it answers the 0.1.x `405 method_not_allowed` envelope instead, and `--discover-version-mode` makes it answer `400 -32022` with `data.supported`/`data.requested` for the retry scenario. `tools/list` serves one `region.echo` tool whose `region` property carries `x-mcp-header: "Region"`; `tools/call` `region.echo` returns a text result with one `name: value` line per header the handler received, in received order; `initialize` echoes a supported `protocolVersion` (otherwise `2025-11-25`) and assigns `Mcp-Session-Id: sess-1`; `notifications/initialized` answers `202`; anything else `-32601`. Native `jack.*` tools are answered by the SDK before the handler.
+
+### 14.2 Scenarios
+
+| Scenario | Server | Client | Expected |
+|---|---|---|---|
+| `modern-discover` | `both` | modern | `ok`, 200; `resultType: "complete"`, `supportedVersions: ["2026-07-28","2025-11-25"]`, `capabilities: {}` without `extensions`, pinned `serverInfo` |
+| `modern-call-projection` | `both` | modern | `ok`, 200; `tools/list` serves the annotated tool; the echo shows `Mcp-Protocol-Version`, `Mcp-Method`, `Mcp-Name`, `Mcp-Param-Region` once each and no session header |
+| `modern-mismatch-name` | `both`, proxy rewrites `Mcp-Name` | modern | signed 400 `-32020` `name_header_mismatch`, handler not called; the identical bytes replayed are refused `401 replayed_nonce` (the nonce was consumed) |
+| `modern-repeated-version` | `both`, proxy duplicates `MCP-Protocol-Version` | modern | signed 400 `-32020` "a request metadata header appears more than once", handler not called |
+| `modern-get-405` | `both` | modern | signed 405, `Allow: POST`, JSON-RPC `-32600` "HTTP method not allowed", handler not called |
+| `modern-head-405` | `both` | modern | signed 405 with `Allow: POST` and `Content-Type: application/json` and no body: the signature covers the empty bytes received |
+| `modern-session-stripped` | `both`, proxy adds `Mcp-Session-Id` and `Last-Event-ID` | modern | `ok`, 200; the echo shows neither header, the mirrors are still forwarded |
+| `era-auto-modern` | `both` | auto | `ok`, 200, era modern; the log is exactly `server/discover`, `tools/call` |
+| `era-auto-legacy` | `legacy` | auto | probe answered 405 (legacy signal), then `initialize` without `MCP-Protocol-Version` at `2025-11-25`, then `notifications/initialized` with `MCP-Protocol-Version: 2025-11-25` and `Mcp-Session-Id: sess-1`, then the legacy call; the log pins the four methods |
+| `era-retry-version` | two runs: `refuse-first` with `--supported-versions 2025-11-25`, and `refuse-always` with `2026-07-28` | auto, probe `2026-08-01` in the second run | run 1: `-32022` with `data.supported ["2025-11-25"]`, one retry with the older version, handshake, call, `ok`; run 2: `-32022` twice, no second retry, `rejected` 400 `unsupported_version_no_overlap` |
+| `legacy-both-parity` | `legacy` and `both`, same port | legacy | `ok`, 200 in both; response bodies and statuses byte-identical |
+| `native-era-shape` | `both`, then `legacy` | modern, then legacy | modern: `resultType: "complete"` and `result._meta["io.modelcontextprotocol/serverInfo"]`; legacy: neither. Native calls never appear in the log |
+| `refusal-id-forms` | `both` | modern | four signed 400 `-32020` `name_header_missing` refusals echoing the request id: `"abc"`, `7`, `null`, `null` |
+
+### 14.3 Targets and build commands
+
+`targets.json` gains `modern_server` and `modern_client` next to the rotation roles: Go `interop/bin/go-modern-{server,client}`, Rust `interop/rust/target/release/interop-server --mode modern-server` and `interop-client --mode modern-client`, TypeScript `node ts/dist/interop/modern-{server,client}.js`. These are build/output paths, not claims that binaries currently exist.
+
+```sh
+go build -o interop/bin/go-modern-server ./interop/go/modernserver
+go build -o interop/bin/go-modern-client ./interop/go/modernclient
+cargo build --manifest-path interop/rust/Cargo.toml --locked --release
+npm --prefix ts run build
+```
+
+Limits: no streams, events, tasks, MRTR, webhook or server-card coverage (specs 05 and 06 own those matrices); the modern server never serves a real application; the fakes are harness tooling, never SDK evidence; the matrix runs on Linux in CI. The request, rotation and transfer matrices of sections 1 to 13 are unchanged and share no state with this one.
+
+<!--
+CI NOTE for the parent PR (this file's scope stops at documentation; .github/ is not edited here).
+Add one job to .github/workflows/ci.yml, modelled on `rotation-interop` (section 282 onwards):
+
+  modern-interop:
+    name: modern profile interop matrix (3x3)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [go, rust, ts, fixtures]
+
+It needs the same setup steps as `rotation-interop` (checkout; actions/setup-go with
+go-version-file: go.mod; dtolnay/rust-toolchain stable; Swatinem/rust-cache with workspaces `rust`
+and `interop/rust`; actions/setup-node node-version 22) and these build and run steps:
+
+  - name: Build Go modern executables
+    run: |
+      go build -o interop/bin/go-modern-server ./interop/go/modernserver
+      go build -o interop/bin/go-modern-client ./interop/go/modernclient
+  - name: Build Rust executables
+    working-directory: interop/rust
+    run: cargo build --locked --release
+  - name: Build TypeScript executables
+    working-directory: ts
+    run: |
+      npm ci --no-audit --no-fund
+      npm run build
+  - run: node interop/modern.mjs --self-test
+  - name: Run the modern matrix
+    run: node interop/modern.mjs
+
+The self-test needs no SDK target and is the first gate (it would fail on a harness or contract
+defect before any language build is exercised). The matrix itself needs all three languages built,
+because interop/targets.json maps every language to its modern_server and modern_client argv. The
+job exits 1 on any scenario failure and 2 on a usage or contract error; both are CI failures without
+further configuration. No new workflow file, permission or secret is required.
+-->

@@ -1,0 +1,703 @@
+{
+  "note": "Normative expected outcomes of the modern (MCP 2026-07-28) interop matrix. Expected objects are matched recursively as subsets (arrays: same length, element-wise subsets). `$kid:<name>` resolves to the fixture kid and `$public_key:<name>` to the fixture public key from spec/fixtures/keys.json. `expected.steps` is matched positionally against the driver's view of the client's step (the driver adds its own `signed`, `result`, `error` and `id` from the exact response bytes it verified with the pinned fixture svc key). `header_echo` is evaluated over the last step's echo text, `request_headers` per step name over the headers the client sent, `absent_paths` over the last step's result, `server_request_log` against the server's --request-log file. `runs` scenarios are executed once per entry; the invariants are named checks over the whole scenario. The driver writes 1800000000 into every --clock-file and truncates the request log before each run.",
+  "scenario_order": [
+    "modern-discover",
+    "modern-call-projection",
+    "modern-mismatch-name",
+    "modern-repeated-version",
+    "modern-get-405",
+    "modern-head-405",
+    "modern-session-stripped",
+    "era-auto-modern",
+    "era-auto-legacy",
+    "era-retry-version",
+    "legacy-both-parity",
+    "native-era-shape",
+    "refusal-id-forms"
+  ],
+  "scenarios": {
+    "modern-discover": {
+      "description": "A modern-era server/discover request against profile both returns the complete discover result: supported versions, capabilities without the events extension, and serverInfo.",
+      "source": "spec/04-modern-profile.md sections 5, 6 C1-C2; interop/modern/contract.md 3.4 (a)",
+      "server": { "profile": "both" },
+      "client": { "era": "modern", "json_id": "1" },
+      "proxy": null,
+      "expected": {
+        "outcome": "ok",
+        "http_status": 200,
+        "code": null,
+        "era": "modern",
+        "steps": [
+          {
+            "name": "discover",
+            "http_method": "POST",
+            "http_target": "/mcp",
+            "jsonrpc_method": "server/discover",
+            "http_status": 200,
+            "signed": true,
+            "id": 1,
+            "error": null
+          }
+        ],
+        "result": {
+          "resultType": "complete",
+          "supportedVersions": ["2026-07-28", "2025-11-25"],
+          "capabilities": {},
+          "serverInfo": { "name": "mcp-jack-interop-modern", "version": "1.0.0" }
+        },
+        "absent_paths": ["capabilities.extensions"],
+        "server_request_log": ["server/discover"]
+      }
+    },
+    "modern-call-projection": {
+      "description": "tools/list serves the single annotated region.echo tool; the projected tools/call reaches the handler with exactly the four mirror headers, one instance each, and no session header.",
+      "source": "spec/04-modern-profile.md sections 5 S7-S9, 6 C5-C6; interop/modern/contract.md 3.4 (d) (e)",
+      "server": { "profile": "both" },
+      "client": { "era": "modern", "json_id": "1" },
+      "proxy": null,
+      "expected": {
+        "outcome": "ok",
+        "http_status": 200,
+        "code": null,
+        "era": "modern",
+        "steps": [
+          {
+            "name": "list",
+            "http_method": "POST",
+            "http_target": "/mcp",
+            "jsonrpc_method": "tools/list",
+            "http_status": 200,
+            "signed": true,
+            "id": 1,
+            "result": {
+              "tools": [
+                {
+                  "name": "region.echo",
+                  "inputSchema": {
+                    "type": "object",
+                    "properties": { "region": { "type": "string", "x-mcp-header": "Region" } }
+                  }
+                }
+              ]
+            },
+            "error": null
+          },
+          {
+            "name": "call",
+            "http_method": "POST",
+            "http_target": "/mcp",
+            "jsonrpc_method": "tools/call",
+            "http_status": 200,
+            "signed": true,
+            "id": 1,
+            "error": null
+          }
+        ],
+        "result": { "content": [{ "type": "text" }] },
+        "header_echo": {
+          "contains": [
+            "mcp-protocol-version: 2026-07-28",
+            "mcp-method: tools/call",
+            "mcp-name: region.echo",
+            "mcp-param-region: us-west1"
+          ],
+          "absent": ["mcp-session-id", "last-event-id"],
+          "counts": {
+            "mcp-protocol-version": 1,
+            "mcp-method": 1,
+            "mcp-name": 1,
+            "mcp-param-region": 1
+          }
+        },
+        "request_headers": {
+          "call": {
+            "contains": [
+              "MCP-Protocol-Version: 2026-07-28",
+              "Mcp-Method: tools/call",
+              "Mcp-Name: region.echo",
+              "Mcp-Param-Region: us-west1"
+            ],
+            "absent": ["Mcp-Session-Id", "Last-Event-ID"]
+          }
+        },
+        "server_request_log": ["tools/list", "tools/call"]
+      }
+    },
+    "modern-mismatch-name": {
+      "description": "A proxy rewrites Mcp-Name after signing: the wrapper refuses with a signed 400 -32020 name_header_mismatch and never calls the handler, but consumes the nonce, so replaying the identical signed bytes is refused 401 replayed_nonce.",
+      "source": "spec/04-modern-profile.md sections 5 S6, S10; spec/01-authentication.md sections 4-5",
+      "server": { "profile": "both" },
+      "client": { "era": "modern", "json_id": "1" },
+      "proxy": "tamper-name-once",
+      "invariants": ["identical_request_bytes"],
+      "expected": {
+        "outcome": "rejected",
+        "http_status": 401,
+        "code": "replayed_nonce",
+        "era": "modern",
+        "steps": [
+          {
+            "name": "call",
+            "http_method": "POST",
+            "jsonrpc_method": "tools/call",
+            "http_status": 400,
+            "signed": true,
+            "error": {
+              "code": -32020,
+              "message": "Header mismatch: Mcp-Name does not match the body value"
+            }
+          },
+          {
+            "name": "replay",
+            "http_method": "POST",
+            "jsonrpc_method": "tools/call",
+            "http_status": 401,
+            "signed": false,
+            "error": { "code": "replayed_nonce" }
+          }
+        ],
+        "server_request_log": []
+      }
+    },
+    "modern-repeated-version": {
+      "description": "A proxy duplicates the MCP-Protocol-Version header after signing: S1 refuses the repeated mirror with a signed 400 -32020 and the handler is never called.",
+      "source": "spec/04-modern-profile.md section 5 S1 (header_repeated)",
+      "server": { "profile": "both" },
+      "client": { "era": "modern", "json_id": "1" },
+      "proxy": "duplicate-version",
+      "expected": {
+        "outcome": "rejected",
+        "http_status": 400,
+        "code": -32020,
+        "era": "modern",
+        "steps": [
+          {
+            "name": "call",
+            "http_method": "POST",
+            "jsonrpc_method": "tools/call",
+            "http_status": 400,
+            "signed": true,
+            "id": 1,
+            "error": {
+              "code": -32020,
+              "message": "Header mismatch: a request metadata header appears more than once"
+            }
+          }
+        ],
+        "server_request_log": []
+      }
+    },
+    "modern-get-405": {
+      "description": "GET is not defined in the modern era: the request is authenticated and refused with a signed 405 JSON-RPC -32600 method_not_allowed carrying Allow: POST.",
+      "source": "spec/04-modern-profile.md sections 5 S2, S10",
+      "server": { "profile": "both" },
+      "client": { "era": "modern", "json_id": "1" },
+      "proxy": null,
+      "expected": {
+        "outcome": "rejected",
+        "http_status": 405,
+        "code": -32600,
+        "era": "modern",
+        "steps": [
+          {
+            "name": "get",
+            "http_method": "GET",
+            "http_target": "/mcp",
+            "jsonrpc_method": null,
+            "http_status": 405,
+            "signed": true,
+            "id": null,
+            "response_allow": "POST",
+            "response_content_type": "application/json",
+            "result": null,
+            "error": { "code": -32600, "message": "HTTP method not allowed" }
+          }
+        ],
+        "server_request_log": []
+      }
+    },
+    "modern-head-405": {
+      "description": "HEAD in the modern era is a signed 405 whose signature covers the empty bytes the client actually receives: no body, Allow: POST, Content-Type application/json.",
+      "source": "spec/04-modern-profile.md sections 5 S2, S10; interop/modern/contract.md section 6 row 6",
+      "server": { "profile": "both" },
+      "client": { "era": "modern", "json_id": "1" },
+      "proxy": null,
+      "expected": {
+        "outcome": "rejected",
+        "http_status": 405,
+        "code": null,
+        "era": "modern",
+        "steps": [
+          {
+            "name": "head",
+            "http_method": "HEAD",
+            "http_target": "/mcp",
+            "jsonrpc_method": null,
+            "http_status": 405,
+            "signed": true,
+            "id": null,
+            "response_allow": "POST",
+            "response_content_type": "application/json",
+            "response_body_b64u": "",
+            "result": null,
+            "error": null
+          }
+        ],
+        "server_request_log": []
+      }
+    },
+    "modern-session-stripped": {
+      "description": "A proxy adds Mcp-Session-Id and Last-Event-ID after signing: S8 removes both before the handler, while the recognised mirrors are still forwarded unchanged.",
+      "source": "spec/04-modern-profile.md sections 5 S8, S9",
+      "server": { "profile": "both" },
+      "client": { "era": "modern", "json_id": "1" },
+      "proxy": "add-session",
+      "expected": {
+        "outcome": "ok",
+        "http_status": 200,
+        "code": null,
+        "era": "modern",
+        "steps": [
+          {
+            "name": "call",
+            "http_method": "POST",
+            "jsonrpc_method": "tools/call",
+            "http_status": 200,
+            "signed": true,
+            "id": 1,
+            "error": null
+          }
+        ],
+        "result": { "content": [{ "type": "text" }] },
+        "header_echo": {
+          "contains": ["mcp-name: region.echo", "mcp-param-region: us-west1"],
+          "absent": ["mcp-session-id", "last-event-id"]
+        },
+        "server_request_log": ["tools/call"]
+      }
+    },
+    "era-auto-modern": {
+      "description": "An era-auto client probes server/discover against profile both, stays modern on the verified 200 and then runs the operation: exactly one probe and one tools/call, no legacy handshake.",
+      "source": "spec/04-modern-profile.md section 6 C9; interop/modern/contract.md 4.3",
+      "server": { "profile": "both" },
+      "client": { "era": "auto", "json_id": "1" },
+      "proxy": null,
+      "expected": {
+        "outcome": "ok",
+        "http_status": 200,
+        "code": null,
+        "era": "modern",
+        "steps": [
+          {
+            "name": "probe",
+            "http_method": "POST",
+            "jsonrpc_method": "server/discover",
+            "http_status": 200,
+            "signed": true,
+            "error": null
+          },
+          {
+            "name": "call",
+            "http_method": "POST",
+            "jsonrpc_method": "tools/call",
+            "http_status": 200,
+            "signed": true,
+            "error": null
+          }
+        ],
+        "result": { "content": [{ "type": "text" }] },
+        "header_echo": {
+          "contains": ["mcp-name: region.echo", "mcp-param-region: us-west1"],
+          "counts": { "mcp-name": 1, "mcp-param-region": 1 }
+        },
+        "request_headers": {
+          "probe": {
+            "contains": ["MCP-Protocol-Version: 2026-07-28", "Mcp-Method: server/discover"],
+            "absent": ["Mcp-Name"]
+          }
+        },
+        "server_request_log": ["server/discover", "tools/call"]
+      }
+    },
+    "era-auto-legacy": {
+      "description": "Against profile legacy the probe is answered 405, which is a legacy signal: the client falls back to initialize without any mirror header, then notifications/initialized with the negotiated version and the assigned session, then the legacy operation. The request log pins the exact order.",
+      "source": "spec/04-modern-profile.md sections 3 S3, 6 C9; interop/modern/contract.md 3.4 (b), 4.3",
+      "server": { "profile": "legacy" },
+      "client": { "era": "auto", "json_id": "1" },
+      "proxy": null,
+      "expected": {
+        "outcome": "ok",
+        "http_status": 200,
+        "code": null,
+        "era": "legacy",
+        "steps": [
+          {
+            "name": "probe",
+            "http_method": "POST",
+            "jsonrpc_method": "server/discover",
+            "http_status": 405,
+            "signed": true,
+            "error": { "code": "method_not_allowed" }
+          },
+          {
+            "name": "initialize",
+            "http_method": "POST",
+            "jsonrpc_method": "initialize",
+            "http_status": 200,
+            "signed": true,
+            "id": 1,
+            "response_session_id": "sess-1",
+            "result": {
+              "protocolVersion": "2025-11-25",
+              "capabilities": {},
+              "serverInfo": { "name": "mcp-jack-interop-modern", "version": "1.0.0" }
+            },
+            "error": null
+          },
+          {
+            "name": "initialized",
+            "http_method": "POST",
+            "jsonrpc_method": "notifications/initialized",
+            "http_status": 202,
+            "signed": true,
+            "response_body_b64u": "",
+            "error": null
+          },
+          {
+            "name": "call",
+            "http_method": "POST",
+            "jsonrpc_method": "tools/call",
+            "http_status": 200,
+            "signed": true,
+            "error": null
+          }
+        ],
+        "result": { "content": [{ "type": "text" }] },
+        "header_echo": {
+          "contains": ["mcp-session-id: sess-1", "mcp-protocol-version: 2025-11-25"],
+          "absent": ["mcp-name", "mcp-method", "mcp-param-region"],
+          "counts": { "mcp-session-id": 1 }
+        },
+        "request_headers": {
+          "probe": {
+            "contains": ["MCP-Protocol-Version: 2026-07-28", "Mcp-Method: server/discover"],
+            "absent": ["Mcp-Name"]
+          },
+          "initialize": {
+            "absent": ["MCP-Protocol-Version", "Mcp-Method", "Mcp-Name", "Mcp-Session-Id"]
+          },
+          "initialized": {
+            "contains": ["MCP-Protocol-Version: 2025-11-25", "Mcp-Session-Id: sess-1"],
+            "absent": ["Mcp-Method", "Mcp-Name"]
+          },
+          "call": {
+            "contains": ["MCP-Protocol-Version: 2025-11-25", "Mcp-Session-Id: sess-1"],
+            "absent": ["Mcp-Method", "Mcp-Name", "Mcp-Param-Region"]
+          }
+        },
+        "server_request_log": ["server/discover", "initialize", "notifications/initialized", "tools/call"]
+      }
+    },
+    "era-retry-version": {
+      "description": "Run 1: the probe is refused -32022 with data.supported [2025-11-25], so the client retries exactly once with the older version, runs the legacy handshake at it and then the operation. Run 2: the client probes an unimplemented version, is told -32022 with a mutually implemented version, retries once and is refused -32022 again; it must stop with the defined error and never fall back.",
+      "source": "spec/04-modern-profile.md section 6 C9 (-32022 row, retry_with_supported, unsupported_version_no_overlap)",
+      "runs": [
+        {
+          "server": {
+            "profile": "both",
+            "supported_versions": ["2025-11-25"],
+            "discover_version_mode": "refuse-first"
+          },
+          "client": { "era": "auto", "json_id": "1" },
+          "proxy": null,
+          "expected": {
+            "outcome": "ok",
+            "http_status": 200,
+            "code": null,
+            "era": "legacy",
+            "steps": [
+              {
+                "name": "probe",
+                "http_method": "POST",
+                "jsonrpc_method": "server/discover",
+                "http_status": 400,
+                "signed": true,
+                "error": {
+                  "code": -32022,
+                  "message": "Unsupported protocol version",
+                  "data": { "supported": ["2025-11-25"], "requested": "2026-07-28" }
+                }
+              },
+              {
+                "name": "initialize",
+                "http_method": "POST",
+                "jsonrpc_method": "initialize",
+                "http_status": 200,
+                "signed": true,
+                "result": { "protocolVersion": "2025-11-25" },
+                "error": null
+              },
+              {
+                "name": "initialized",
+                "http_method": "POST",
+                "jsonrpc_method": "notifications/initialized",
+                "http_status": 202,
+                "signed": true,
+                "error": null
+              },
+              {
+                "name": "call",
+                "http_method": "POST",
+                "jsonrpc_method": "tools/call",
+                "http_status": 200,
+                "signed": true,
+                "error": null
+              }
+            ],
+            "result": { "content": [{ "type": "text" }] },
+            "request_headers": {
+              "initialize": { "contains": [], "absent": ["MCP-Protocol-Version", "Mcp-Method"] }
+            },
+            "server_request_log": ["server/discover", "initialize", "notifications/initialized", "tools/call"]
+          }
+        },
+        {
+          "server": {
+            "profile": "both",
+            "supported_versions": ["2026-07-28"],
+            "discover_version_mode": "refuse-always"
+          },
+          "client": { "era": "auto", "json_id": "1", "probe_version": "2026-08-01" },
+          "proxy": null,
+          "expected": {
+            "outcome": "rejected",
+            "http_status": 400,
+            "code": "unsupported_version_no_overlap",
+            "era": "modern",
+            "steps": [
+              {
+                "name": "probe",
+                "http_method": "POST",
+                "jsonrpc_method": "server/discover",
+                "http_status": 400,
+                "signed": true,
+                "error": {
+                  "code": -32022,
+                  "data": { "supported": ["2026-07-28"], "requested": "2026-08-01" }
+                }
+              },
+              {
+                "name": "probe-retry",
+                "http_method": "POST",
+                "jsonrpc_method": "server/discover",
+                "http_status": 400,
+                "signed": true,
+                "error": {
+                  "code": -32022,
+                  "data": { "supported": ["2026-07-28"], "requested": "2026-07-28" }
+                }
+              }
+            ],
+            "server_request_log": ["server/discover", "server/discover"]
+          }
+        }
+      ]
+    },
+    "legacy-both-parity": {
+      "description": "The same legacy-era tools/call sent to profile legacy and to profile both produces byte-identical response bodies and the same status. Both servers run on the same port with the same clock, nonce and id, so even the Host header the handler echoes is equal.",
+      "source": "spec/04-modern-profile.md section 3 (legacy era is byte-identical to 0.1.x)",
+      "invariants": ["identical_response_body_across_runs"],
+      "runs": [
+        {
+          "server": { "profile": "legacy" },
+          "client": { "era": "legacy", "json_id": "1" },
+          "proxy": null,
+          "expected": {
+            "outcome": "ok",
+            "http_status": 200,
+            "code": null,
+            "era": "legacy",
+            "steps": [
+              {
+                "name": "call",
+                "http_method": "POST",
+                "jsonrpc_method": "tools/call",
+                "http_status": 200,
+                "signed": true,
+                "id": 1,
+                "error": null
+              }
+            ],
+            "result": { "content": [{ "type": "text" }] },
+            "header_echo": {
+              "contains": [],
+              "absent": ["mcp-name", "mcp-method", "mcp-protocol-version", "mcp-session-id"],
+              "counts": { "jack-auth": 1 }
+            },
+            "request_headers": {
+              "call": { "absent": ["MCP-Protocol-Version", "Mcp-Method", "Mcp-Name", "Mcp-Session-Id"] }
+            },
+            "server_request_log": ["tools/call"]
+          }
+        },
+        {
+          "server": { "profile": "both" },
+          "client": { "era": "legacy", "json_id": "1" },
+          "proxy": null,
+          "expected": {
+            "outcome": "ok",
+            "http_status": 200,
+            "code": null,
+            "era": "legacy",
+            "steps": [
+              {
+                "name": "call",
+                "http_method": "POST",
+                "jsonrpc_method": "tools/call",
+                "http_status": 200,
+                "signed": true,
+                "id": 1,
+                "error": null
+              }
+            ],
+            "result": { "content": [{ "type": "text" }] },
+            "header_echo": {
+              "contains": [],
+              "absent": ["mcp-name", "mcp-method", "mcp-protocol-version", "mcp-session-id"],
+              "counts": { "jack-auth": 1 }
+            },
+            "request_headers": {
+              "call": { "absent": ["MCP-Protocol-Version", "Mcp-Method", "Mcp-Name", "Mcp-Session-Id"] }
+            },
+            "server_request_log": ["tools/call"]
+          }
+        }
+      ]
+    },
+    "native-era-shape": {
+      "description": "A native jack.whoami call carries resultType complete and Jack serverInfo in _meta in the modern era, and neither in the legacy era, where the result is byte-identical to 0.1.x. Native calls never reach the wrapped handler.",
+      "source": "spec/04-modern-profile.md section 6 C7; server/internal/transport native result shape",
+      "runs": [
+        {
+          "server": { "profile": "both" },
+          "client": { "era": "modern", "json_id": "1" },
+          "proxy": null,
+          "expected": {
+            "outcome": "ok",
+            "http_status": 200,
+            "code": null,
+            "era": "modern",
+            "steps": [
+              {
+                "name": "whoami",
+                "http_method": "POST",
+                "jsonrpc_method": "tools/call",
+                "http_status": 200,
+                "signed": true,
+                "id": 1,
+                "error": null
+              }
+            ],
+            "result": {
+              "resultType": "complete",
+              "_meta": { "io.modelcontextprotocol/serverInfo": { "name": "mcp-jack" } },
+              "structuredContent": {
+                "kid": "$kid:alice",
+                "name": "alice",
+                "admin": false,
+                "not_before": null,
+                "not_after": null
+              }
+            },
+            "server_request_log": []
+          }
+        },
+        {
+          "server": { "profile": "legacy" },
+          "client": { "era": "legacy", "json_id": "1" },
+          "proxy": null,
+          "expected": {
+            "outcome": "ok",
+            "http_status": 200,
+            "code": null,
+            "era": "legacy",
+            "steps": [
+              {
+                "name": "whoami",
+                "http_method": "POST",
+                "jsonrpc_method": "tools/call",
+                "http_status": 200,
+                "signed": true,
+                "id": 1,
+                "error": null
+              }
+            ],
+            "result": {
+              "structuredContent": {
+                "kid": "$kid:alice",
+                "name": "alice",
+                "admin": false,
+                "not_before": null,
+                "not_after": null
+              }
+            },
+            "absent_paths": ["resultType", "_meta"],
+            "server_request_log": []
+          }
+        }
+      ]
+    },
+    "refusal-id-forms": {
+      "description": "A modern refusal echoes the request id when it is a string or an integer and uses null for a null or fractional id. Each request is a valid modern tools/call that omits Mcp-Name, so S6 refuses with a signed 400 -32020 name_header_missing.",
+      "source": "spec/04-modern-profile.md sections 5 S6, S10",
+      "server": { "profile": "both" },
+      "client": { "era": "modern", "json_id": "1" },
+      "proxy": null,
+      "expected": {
+        "outcome": "rejected",
+        "http_status": 400,
+        "code": -32020,
+        "era": "modern",
+        "steps": [
+          {
+            "name": "id-string",
+            "http_method": "POST",
+            "jsonrpc_method": "tools/call",
+            "http_status": 400,
+            "signed": true,
+            "id": "abc",
+            "error": { "code": -32020, "message": "Header mismatch: Mcp-Name is missing" }
+          },
+          {
+            "name": "id-integer",
+            "http_method": "POST",
+            "jsonrpc_method": "tools/call",
+            "http_status": 400,
+            "signed": true,
+            "id": 7,
+            "error": { "code": -32020, "message": "Header mismatch: Mcp-Name is missing" }
+          },
+          {
+            "name": "id-null",
+            "http_method": "POST",
+            "jsonrpc_method": "tools/call",
+            "http_status": 400,
+            "signed": true,
+            "id": null,
+            "error": { "code": -32020, "message": "Header mismatch: Mcp-Name is missing" }
+          },
+          {
+            "name": "id-fractional",
+            "http_method": "POST",
+            "jsonrpc_method": "tools/call",
+            "http_status": 400,
+            "signed": true,
+            "id": null,
+            "error": { "code": -32020, "message": "Header mismatch: Mcp-Name is missing" }
+          }
+        ],
+        "server_request_log": []
+      }
+    }
+  }
+}
