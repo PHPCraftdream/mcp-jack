@@ -10,7 +10,8 @@ import { test } from "node:test";
 import { ModernClient, PrivateResultCache, resultCacheKey } from "../../../src/client/modern.js";
 import { Code, JackError } from "../../../src/core/errors.js";
 import type { RequestAuth } from "../../../src/core/auth-header.js";
-import type { JsonValue } from "../../../src/client/rpc.js";
+import type { JsonValue, SignedReply } from "../../../src/client/rpc.js";
+import { replyHeaders } from "../../../src/client/rpc.js";
 import { bodyOf, newModernClient, newModernServer, rpcResult } from "./support.js";
 import type { ModernServer, RecordedRequest } from "./support.js";
 
@@ -152,4 +153,35 @@ test("client_cache_private_only", async () => {
   const served = versions.get(key) as { area: number };
   served.area = 43;
   assert.deepEqual(versions.get(key), { area: 1 }, "cache: each load returns its own copy");
+});
+
+test("client_result_cache_key_without_version", () => {
+  // An existing 3-argument caller must keep compiling and keep a stable key:
+  // the omitted version is the empty one, so that call keeps the
+  // version-agnostic key of its era, method and params.
+  const key = resultCacheKey("tools/call", '{"name":"svc.status"}', "modern");
+  assert.equal(
+    key,
+    "modern" + "\u0000" + "tools/call" + "\u0000" + "" + "\u0000" + '{"name":"svc.status"}',
+    "cache: a 3-argument key uses the empty version",
+  );
+  assert.notEqual(
+    resultCacheKey("tools/call", '{"name":"svc.status"}', "modern", "2026-07-28"),
+    key,
+    "cache: a negotiated version keys a different entry than the version-agnostic one",
+  );
+});
+
+test("client_reply_headers_absent", () => {
+  // A caller-built reply must not need a header list: an absent one reads as
+  // no headers, so a test double compiles without inventing header pairs.
+  const withoutHeaders: SignedReply = { status: 200, bodyText: "{}", json: {} };
+  assert.deepEqual(replyHeaders(withoutHeaders), [], "reply: an absent header list reads as no headers");
+
+  const pairs = [
+    ["content-type", "application/json"],
+    ["mcp-session-id", "session-1"],
+  ] as const;
+  const withHeaders: SignedReply = { status: 200, bodyText: "{}", json: {}, headers: pairs };
+  assert.deepEqual(replyHeaders(withHeaders), pairs, "reply: the present header pairs are returned as given");
 });

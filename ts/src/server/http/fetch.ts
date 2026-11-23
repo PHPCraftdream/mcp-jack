@@ -144,12 +144,15 @@ export function jackHeaders(req: Request): readonly (readonly [string, string])[
 
 /**
  * The received header instances. Without the node adapter's raw list a
- * Headers object has merged repeats with ", " and lowercased names; for the
- * single-valued mirrors MCP-Protocol-Version and Mcp-Method a valid value
- * never contains a comma, so each comma-separated piece is treated as one
- * instance (S1 header_repeated); Mcp-Name may legitimately contain a comma,
- * so its merged value stays one instance (a genuine repeat then refuses as
- * name_header_mismatch).
+ * Headers object has merged repeats with ", " and lowercased names. Header
+ * values keep their bytes: a single value is NEVER trimmed. Only a
+ * comma-joined value is split — and only for the two single-valued mirrors
+ * MCP-Protocol-Version and Mcp-Method, whose valid values never contain a
+ * comma — because a Headers object joined the repeats with ", "; the split
+ * removes just the one SP/HTAB that separator inserted, so each piece is the
+ * received value (S1 header_repeated). Mcp-Name may legitimately contain a
+ * comma, so its merged value stays one instance (a genuine repeat then
+ * refuses as name_header_mismatch).
  */
 function receivedHeaderInstances(req: Request): readonly (readonly [string, string])[] {
   const raw = (req as JackRequest)[HEADER_VALUES_SYMBOL];
@@ -158,16 +161,20 @@ function receivedHeaderInstances(req: Request): readonly (readonly [string, stri
   for (const [name, value] of req.headers) {
     // The names of a Headers object are lowercased; only these two are
     // single-valued mirrors whose merged form can be split again.
-    if (name === "mcp-protocol-version" || name === "mcp-method") {
-      if (value === "") {
-        // The empty merged value is the empty value itself, not zero pieces.
-        out.push([name, value]);
-        continue;
-      }
-      for (const piece of value.split(",")) out.push([name, piece.trim()]);
+    const lower = name.toLowerCase();
+    if (lower !== "mcp-protocol-version" && lower !== "mcp-method") {
+      out.push([name, value]);
       continue;
     }
-    out.push([name, value]);
+    const pieces = value.split(",");
+    if (pieces.length === 1) {
+      // No comma: the merged value IS the received value; never trim it.
+      out.push([name, value]);
+      continue;
+    }
+    // A Headers object joined repeats with ", ": remove only the single SP/HTAB
+    // that separator inserted, never any other byte of a piece.
+    pieces.forEach((piece, index) => out.push([name, index === 0 ? piece : piece.replace(/^[ \t]/, "")]));
   }
   return out;
 }
@@ -257,15 +264,20 @@ function targetFromUrl(requestUrl: string): string | undefined {
  * byte-identical. "modern" and "both" authenticate and classify the request,
  * then decide the era (S3) and either refuse with a signed JSON-RPC error
  * (S10; the 405 answer also carries Allow: POST) or forward with
- * Mcp-Session-Id and Last-Event-ID removed (S8). Repeated header instances:
- * the node adapter supplies the true received instances; without it a Fetch
+ * Mcp-Session-Id and Last-Event-ID removed (S8). The legacy era forwards the
+ * original Headers view unchanged, byte-identical to 0.1.x, and only the
+ * modern era sets the jackHeaders() entry. Repeated header instances: the
+ * node adapter supplies the true received instances; without it a Fetch
  * Request carries only the merged header view, where a Headers object joined
  * repeats with ", " and lowercased the names — for the single-valued mirrors
- * MCP-Protocol-Version and Mcp-Method a valid value never contains a comma,
- * so each comma-separated piece counts as one instance, while Mcp-Name may
- * legitimately contain a comma and its merged value stays one instance. The
- * wrapped handler reads the exact forwarded list, in received order and
- * casing, with jackHeaders(req).
+ * MCP-Protocol-Version and Mcp-Method a comma-joined value is split into one
+ * instance per piece (only the separator's single SP/HTAB removed, and a
+ * single value never trimmed), while Mcp-Name may legitimately contain a
+ * comma and its merged value stays one instance. The wrapped handler reads
+ * the exact forwarded list, in received order and casing, with
+ * jackHeaders(req). A HEAD refusal is signed over the empty body, because a
+ * HEAD response carries no content and the signature therefore covers the
+ * (zero) bytes the client receives.
  */
 export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => Promise<Response>): (req: Request) => Promise<Response> {
   if (config.verifier === undefined) throw new Error("server: HandlerConfig.verifier must be set");
@@ -404,8 +416,12 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
   // Answers a failed request. Once authentication has succeeded the client
   // holds a request signature to bind to, so the answer is signed; an
   // authentication failure may be unsigned and carries NO Jack-Auth response
-  // header (spec 01 section 5).
-  function reject(res: VerifyResult): Response {
+  // header (spec 01 section 5). The request method matters only for the
+  // modern-profile refusal: a HEAD response carries no content, so signing the
+  // JSON body that is never transmitted could not be verified — the signature
+  // covers the empty bytes the client actually receives (content-length: 0,
+  // no body).
+  function reject(res: VerifyResult, method: string): Response {
     const headers = new Headers();
     headers.set("content-type", "application/json");
     // Spec 04 S10: a refusal of the modern profile is a signed JSON-RPC error
@@ -414,6 +430,9 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
       const refusal = res.rpcRefusal;
       if (refusal.allowPost) {
         headers.set("allow", "POST");
+      }
+      if (method === "HEAD") {
+        return writeSigned(refusal.httpStatus, headers, new Uint8Array(0), res.requestSig, res.tool);
       }
       const body = new TextEncoder().encode(refusalBodyText(refusal.idText, refusal.code, refusal.message));
       return writeSigned(refusal.httpStatus, headers, body, res.requestSig, res.tool);
@@ -470,14 +489,15 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     req: Request,
     body: Uint8Array,
     res: VerifyResult,
-    headerInstances: readonly (readonly [string, string])[],
   ): Promise<Response> {
     // Spec 04 S9: the modern era forwards the header instances the era rules
-    // returned (S8 removals applied); the legacy era forwards the request's
-    // headers exactly as before (`[...req.headers]`, the merged view that
-    // `new Headers(req.headers)` would have produced anyway).
-    const forwardedList: readonly (readonly [string, string])[] = res.era === "modern" ? res.forwardHeaders ?? [] : headerInstances;
-    const forwardedHeaders = new Headers(forwardedList);
+    // returned (S8 removals applied). The legacy era forwards the ORIGINAL
+    // Fetch header view — `new Headers(req.headers)` — exactly as 0.1.x does,
+    // byte-identical: no split, no trim, no reconstruction from the instance
+    // list (`undefined` marks the legacy era here).
+    const forwardedList: readonly (readonly [string, string])[] | undefined =
+      res.era === "modern" ? res.forwardHeaders ?? [] : undefined;
+    const forwardedHeaders = forwardedList !== undefined ? new Headers(forwardedList) : new Headers(req.headers);
     // Restore the EXACT buffered body bytes. undici throws for a GET body,
     // so the body is only attached for methods that can carry one; a
     // conditional spread, never an explicit undefined, keeps
@@ -502,8 +522,13 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     }
     // Hand the wrapped handler the exact forwarded instances (received order
     // and casing, S8 removals applied) through the jackHeaders() accessor:
-    // a Headers object can neither keep repeats nor the received casing.
-    forwardedHeaderLists.set(restored, forwardedList);
+    // a Headers object can neither keep repeats nor the received casing. The
+    // accessor is documented as the modern forwarded list, so only the modern
+    // era sets it; in the legacy era it stays unset and handler code falls
+    // back to req.headers exactly as before.
+    if (forwardedList !== undefined) {
+      forwardedHeaderLists.set(restored, forwardedList);
+    }
 
     let resp: Response;
     try {
@@ -707,7 +732,7 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     const finish = takeResultFinish(res);
     let out!: Response;
     try {
-      out = !res.accepted ? reject(res) : res.native ? native(res) : await forward(req, body, res, headerInstances);
+      out = !res.accepted ? reject(res, method) : res.native ? native(res) : await forward(req, body, res);
     } catch (error) {
       // Release even on response failure; idempotent with the node adapter.
       finish?.();

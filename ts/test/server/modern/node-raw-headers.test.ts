@@ -58,15 +58,15 @@ interface RawResult {
  * Sends one raw node:http request. `rawHeaders` is a FLAT [name, value, ...]
  * list, which node:http writes line by line: repeats and the exact casing of
  * each name go on the wire (an object form would merge names that differ only
- * in case).
+ * in case). `method` defaults to POST; a HEAD request carries no body.
  */
-function rawRequest(port: number, rawHeaders: readonly string[], body: Buffer): Promise<RawResult> {
+function rawRequest(port: number, rawHeaders: readonly string[], body: Buffer, method = "POST"): Promise<RawResult> {
   return new Promise<RawResult>((resolve, reject) => {
     let sawResponse = false;
     const req = httpRequest({
       host: "127.0.0.1",
       port,
-      method: "POST",
+      method,
       path: "/mcp",
       headers: rawHeaders,
       // A fresh connection per request, like the adapter tests.
@@ -221,4 +221,23 @@ test("modern profile: node:http forwards the raw header instances", { timeout: 5
     [],
     "S8 removes Mcp-Session-Id",
   );
+});
+
+test("modern profile: a HEAD refusal is signed over the empty body", { timeout: 5000 }, async () => {
+  // A HEAD response carries no content, so the refusal's JSON body is never
+  // transmitted; the signature therefore covers the empty bytes the client
+  // actually receives, and verifyResponse must accept exactly those.
+  seenRaw = null;
+  const alice = seedSignerByName("alice");
+  const emptyBody = new Uint8Array(0);
+  const header = signRequest(alice, fixtureAud, "HEAD", "/mcp", emptyBody, randomNonce(), fixtureNow);
+  const sig = parseRequestAuth([header]).sig;
+  const res = await rawRequest(port, ["MCP-Protocol-Version", MODERN, "jack-auth", header], Buffer.alloc(0), "HEAD");
+
+  assert.equal(res.status, 405);
+  assert.equal(res.headers["allow"], "POST");
+  assert.equal(res.headers["content-length"], "0", "content-length: 0 goes with no body");
+  assert.equal(res.body.length, 0, "a HEAD response carries no body");
+  verifyResponse(serverPub, 405, jackAuthValues(res.headers), sig, new Uint8Array(0), fixtureNow, 30);
+  assert.equal(seenRaw, null, "a refused request never reaches the wrapped handler");
 });

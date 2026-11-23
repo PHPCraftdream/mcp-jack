@@ -277,3 +277,168 @@ test("era negotiation: a legacy request answered with a modern error re-probes",
   assert.deepEqual(headerValues(retried, "mcp-protocol-version"), ["2026-07-28"], "era: the retry speaks the modern version");
   assert.notEqual(metaOf(retried), undefined, "era: the retry carries _meta");
 });
+test("era negotiation: initialize advertises the newest legacy version and carries no version header", async () => {
+  const server = newModernServer();
+  server.handle = legacyHandler(server, (req) => {
+    if (methodOf(req) === "tools/list") return server.sign(200, req.auth, rpcResult(idOf(req), { tools: [] }));
+    return unexpected(req);
+  });
+  const mc = new ModernClient(newModernClient(server, "auto"));
+  assert.deepEqual(await mc.call("tools/list"), { tools: [] }, "era: the fallback operation answers its result");
+
+  const probe = at(requestsOf(server, "server/discover"), 0);
+  assert.deepEqual(headerValues(probe, "mcp-protocol-version"), ["2026-07-28"], "era: the probe is a modern request");
+
+  const initialize = at(requestsOf(server, "initialize"), 0);
+  // A both-profile server reads the era from this header: sending the modern
+  // version here made the initialize look modern and get refused instead of
+  // being served as legacy.
+  assert.deepEqual(headerValues(initialize, "mcp-protocol-version"), [], "era: initialize carries no version header");
+  assert.equal(paramsOf(initialize)?.["protocolVersion"], NEGOTIATED_VERSION, "era: initialize advertises the newest legacy version");
+
+  const initialized = at(requestsOf(server, "notifications/initialized"), 0);
+  assert.deepEqual(headerValues(initialized, "mcp-protocol-version"), [NEGOTIATED_VERSION], "era: the notification carries the negotiated version");
+  assert.deepEqual(headerValues(initialized, "mcp-session-id"), [SESSION_ID], "era: the notification carries the assigned session id");
+
+  const list = at(requestsOf(server, "tools/list"), 0);
+  assert.deepEqual(headerValues(list, "mcp-protocol-version"), [NEGOTIATED_VERSION], "era: the operation carries the negotiated version");
+  assert.deepEqual(headerValues(list, "mcp-session-id"), [SESSION_ID], "era: the operation carries the assigned session id");
+});
+
+test("era negotiation: a rejected notifications/initialized leaves no handshake credit", async () => {
+  const server = newModernServer();
+  let initialized = 0;
+  server.handle = (req) => {
+    const method = methodOf(req);
+    if (method === "server/discover") return server.sign(400, req.auth, LEGACY_ENVELOPE);
+    if (method === "initialize") return initializeReply(server, req);
+    if (method === "notifications/initialized") {
+      initialized++;
+      // The first handshake is refused: the session must not be adopted.
+      if (initialized === 1) return server.sign(400, req.auth, rpcError(idOf(req), INVALID_PARAMS, "invalid params"));
+      return server.sign(202, req.auth, "");
+    }
+    if (method === "tools/list") return server.sign(200, req.auth, rpcResult(idOf(req), { tools: [] }));
+    return unexpected(req);
+  };
+  const mc = new ModernClient(newModernClient(server, "auto"));
+  await assert.rejects(
+    () => mc.call("tools/list"),
+    (err: unknown): boolean =>
+      err instanceof Error && err.message === "modern profile: notifications/initialized answered HTTP 400",
+    "era: a refused notification fails the operation",
+  );
+  assert.equal(server.requests.length, 3, "era: a refused handshake sends no operation");
+
+  assert.deepEqual(await mc.call("tools/list"), { tools: [] }, "era: the retried handshake runs the operation");
+  // Without the cleared credit the second call would have sent tools/list with
+  // no initialize; a server that refused the notification would then see a
+  // legacy request its session never accepted.
+  assert.deepEqual(
+    methodsOf(server),
+    ["server/discover", "initialize", "notifications/initialized", "server/discover", "initialize", "notifications/initialized", "tools/list"],
+    "era: the next call handshakes again instead of sending a legacy request without one",
+  );
+});
+
+test("era negotiation: an initialize negotiating a modern version is refused", async () => {
+  const server = newModernServer();
+  server.handle = (req) => {
+    const method = methodOf(req);
+    if (method === "server/discover") return server.sign(400, req.auth, LEGACY_ENVELOPE);
+    if (method === "initialize") {
+      return server.sign(200, req.auth, rpcResult(idOf(req), { protocolVersion: "2026-07-28" }));
+    }
+    return unexpected(req);
+  };
+  const mc = new ModernClient(newModernClient(server, "auto"));
+  await assert.rejects(
+    () => mc.call("tools/list"),
+    (err: unknown): boolean =>
+      err instanceof Error && err.message.includes("2026-07-28") && err.message.includes("not a legacy version"),
+    "era: a modern version in a legacy initialize reply fails the operation",
+  );
+  // Adopting a modern version from the legacy handshake would leave the client
+  // mixing eras, so nothing after the refused initialize may be sent.
+  assert.equal(requestsOf(server, "notifications/initialized").length, 0, "era: a refused initialize sends no notification");
+  assert.deepEqual(methodsOf(server), ["server/discover", "initialize"], "era: the refused initialize ends the fallback");
+});
+
+test("era negotiation: a legacy supported entry is retried by handshake, not by a modern probe", async () => {
+  const server = newModernServer();
+  let discovers = 0;
+  server.handle = (req) => {
+    const method = methodOf(req);
+    if (method === "server/discover") {
+      discovers++;
+      // The first entry is the version just attempted, so retrying it cannot
+      // succeed; the later legacy entry is the only usable overlap.
+      return server.sign(
+        400,
+        req.auth,
+        rpcError(idOf(req), UNSUPPORTED_VERSION, "Unsupported protocol version", { supported: ["2026-07-28", "2025-11-25"] }),
+      );
+    }
+    if (method === "initialize") return initializeReply(server, req);
+    if (method === "notifications/initialized") return server.sign(202, req.auth, "");
+    if (method === "tools/list") return server.sign(200, req.auth, rpcResult(idOf(req), { tools: [] }));
+    return unexpected(req);
+  };
+  const mc = new ModernClient(newModernClient(server, "auto"));
+  assert.deepEqual(await mc.call("tools/list"), { tools: [] }, "era: the legacy retry runs the operation");
+  assert.equal(mc.era, "legacy", "era: the legacy retry adopts the legacy era");
+
+  // A legacy endpoint has no modern probe to answer: a second server/discover
+  // would be sent at a version the server has just refused.
+  assert.equal(discovers, 1, "era: the legacy retry sends no modern probe");
+  const initialize = at(requestsOf(server, "initialize"), 0);
+  assert.deepEqual(headerValues(initialize, "mcp-protocol-version"), [], "era: the retried handshake still carries no version header");
+  assert.equal(paramsOf(initialize)?.["protocolVersion"], NEGOTIATED_VERSION, "era: the handshake runs at the chosen legacy version");
+});
+
+test("era negotiation: a supported list holding only the attempted version aborts without a second probe", async () => {
+  const server = newModernServer();
+  server.handle = (req) => {
+    if (methodOf(req) !== "server/discover") return unexpected(req);
+    return server.sign(
+      400,
+      req.auth,
+      rpcError(idOf(req), UNSUPPORTED_VERSION, "Unsupported protocol version", { supported: ["2026-07-28"] }),
+    );
+  };
+  const mc = new ModernClient(newModernClient(server, "auto"));
+  await assert.rejects(
+    () => mc.call("tools/list"),
+    (err: unknown): boolean => err instanceof EraNegotiationError && err.detection.reason === "unsupported_version_no_overlap",
+    "era: a supported list with no other implemented version aborts",
+  );
+  assert.equal(server.requests.length, 1, "era: retrying the attempted version is refused instead of probing again");
+  assert.equal(mc.era, "auto", "era: an unconfirmed version never adopts an era");
+});
+
+test("era negotiation: a second retry verdict exhausts the one-retry budget", async () => {
+  const server = newModernServer();
+  let discovers = 0;
+  server.handle = (req) => {
+    if (methodOf(req) !== "server/discover") return unexpected(req);
+    discovers++;
+    // The first verdict selects the modern version; the second arrives after
+    // the one allowed re-probe and must not adopt anything.
+    const supported = discovers === 1 ? ["2026-07-28"] : ["2026-07-28", "2025-11-25"];
+    return server.sign(
+      400,
+      req.auth,
+      rpcError(idOf(req), UNSUPPORTED_VERSION, "Unsupported protocol version", { supported }),
+    );
+  };
+  const mc = new ModernClient(newModernClient(server, "auto"), { version: NEGOTIATED_VERSION });
+  await assert.rejects(
+    () => mc.call("tools/list"),
+    (err: unknown): boolean => err instanceof EraNegotiationError && err.detection.reason === "unsupported_version_no_overlap",
+    "era: a retry verdict after the one allowed re-probe aborts",
+  );
+  // The budget is two probes in total: a third would advertise a version no
+  // verified answer has confirmed.
+  assert.equal(requestsOf(server, "server/discover").length, 2, "era: a negotiation sends at most two probes");
+  assert.equal(mc.era, "auto", "era: the unconfirmed modern version never adopts the modern era");
+});

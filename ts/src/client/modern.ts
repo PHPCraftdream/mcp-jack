@@ -24,6 +24,7 @@
 import { JackError } from "../core/errors.js";
 import { HTTPError, RPCError } from "./errors.js";
 import type { Client, JsonValue, SignedReply } from "./rpc.js";
+import { replyHeaders } from "./rpc.js";
 import { UnauthenticatedResponseError } from "./transport/transport.js";
 import { MODERN_ERA_ERROR_CODES, detectEra } from "../modern/era.js";
 import type { ClientEra, EraDetection, EraProbe } from "../modern/era.js";
@@ -43,6 +44,12 @@ export const JACK_CLIENT_INFO: ClientInfo = { name: "mcp-jack", version: "0.2.0"
 
 /** Protocol versions this client implements, modern first: the modern minimum and the 2025-11-25 legacy fallback a `-32022` retry may pick from. */
 export const CLIENT_PROTOCOL_VERSIONS: readonly string[] = [MODERN_MIN, "2025-11-25"];
+
+/** The newest legacy-era protocol version: the head of `LEGACY_PROTOCOL_VERSIONS` and the one `initialize` advertises. */
+const NEWEST_LEGACY_VERSION = "2025-11-25";
+
+/** The legacy-era protocol versions this client implements; the first entry is the newest and the one `initialize` advertises (spec 04 section 6). */
+export const LEGACY_PROTOCOL_VERSIONS: readonly string[] = [NEWEST_LEGACY_VERSION];
 
 /**
  * The client-side refusal of C6 and C11: an argument value does not match its
@@ -90,8 +97,13 @@ export class EraNegotiationError extends Error {
  * `paramsText` is the exact params text placed on the wire, after `_meta`
  * insertion for a modern request: that is the text the signature covers, so
  * it is the only text that identifies the request C8 requires.
+ *
+ * `version` is the negotiated version and defaults to "": a caller that has
+ * none yet keys the version-agnostic entry of its era, method and params,
+ * which is exactly what a pre-negotiation caller of the older 3-argument
+ * form gets.
  */
-export function resultCacheKey(method: string, paramsText: string, era: "legacy" | "modern", version: string): string {
+export function resultCacheKey(method: string, paramsText: string, era: "legacy" | "modern", version = ""): string {
   return era + "\u0000" + method + "\u0000" + version + "\u0000" + paramsText;
 }
 
@@ -137,6 +149,11 @@ export class PrivateResultCache {
     if (this.#now() < entry.expiresAt) return structuredClone(entry.value);
     this.#entries.delete(key);
     return undefined;
+  }
+
+  /** Drops one entry, so a C10/C12 resync can re-read a catalog under the very key its stale answer was stored under. */
+  delete(key: string): void {
+    this.#entries.delete(key);
   }
 
   /** Drops every cached result; the map is private to this client and is never shared. */
@@ -192,12 +209,16 @@ const EVENTS_METHODS: ReadonlySet<string> = new Set([
  *
  * - a modern verdict (2xx, or a `400`/`404` carrying a recognised modern
  *   JSON-RPC error) adopts the modern era;
- * - a `-32022` with a version this client implements re-probes once with that
- *   version before adopting;
+ * - a `-32022` re-probes ONCE with the first version this client implements
+ *   that is not the one just attempted; a chosen modern version is probed,
+ *   while a chosen legacy version is served by the legacy handshake at that
+ *   version, because a legacy endpoint has no modern probe to answer;
  * - a legacy verdict (`400` with a non-modern body, `404` without `-32601`,
  *   `405`) adopts the legacy era and runs the `initialize` ->
- *   `notifications/initialized` handshake, after which every legacy request
- *   carries `MCP-Protocol-Version` and, once assigned, `Mcp-Session-Id`;
+ *   `notifications/initialized` handshake at the newest legacy version.
+ *   `initialize` carries no `MCP-Protocol-Version` header (the header starts
+ *   after negotiation); every request after it carries the negotiated version
+ *   and, once assigned, `Mcp-Session-Id`;
  * - no verdict at all (unverified, no signal, or no mutually implemented
  *   version) throws `EraNegotiationError`; the operation is never guessed.
  *
@@ -274,7 +295,9 @@ export class ModernClient {
    * operation re-probes: an `"auto"` client is back to its configured era and
    * version, with no session, no handshake credit and no cached results. The
    * era/version reset also invalidates the C8 cache, because an entry signed
-   * under another era or version answers a different request.
+   * under another era or version answers a different request, and it drops the
+   * memoised `tools/list` and `events/list` catalogs, which were read under the
+   * wire shape of the era and version this reset moves away from.
    */
   resetEra(): void {
     this.#detection = undefined;
@@ -283,6 +306,8 @@ export class ModernClient {
     this.#legacyReady = false;
     this.#sessionId = undefined;
     this.#cache.clear();
+    this.#tools = undefined;
+    this.#events = undefined;
   }
 
   /**
@@ -297,8 +322,16 @@ export class ModernClient {
     return (await this.#request(method, params, { resync: true })).result;
   }
 
-  /** The `tools/list` catalog with every C5-invalid definition excluded, fetched once and cached until a resync drops it. */
+  /**
+   * The `tools/list` catalog with every C5-invalid definition excluded, fetched
+   * once and cached until a resync drops it. The era is resolved FIRST, before
+   * the memoised catalog is read: an `"auto"` client whose era was reset or
+   * renegotiated has to negotiate again - and may fail with
+   * `EraNegotiationError` - instead of handing back the catalog of the era it
+   * no longer speaks.
+   */
   async listTools(): Promise<JsonValue[]> {
+    await this.#eraOf();
     const cached = this.#tools;
     if (cached !== undefined) return cached;
     const result = await this.call("tools/list");
@@ -309,8 +342,16 @@ export class ModernClient {
     return tools;
   }
 
-  /** The `events/list` catalog with every C11-invalid event type excluded, fetched once and cached until a resync drops it. */
+  /**
+   * The `events/list` catalog with every C11-invalid event type excluded, fetched
+   * once and cached until a resync drops it. The era is resolved FIRST, before
+   * the memoised catalog is read: an `"auto"` client whose era was reset or
+   * renegotiated has to negotiate again - and may fail with
+   * `EraNegotiationError` - instead of handing back the catalog of the era it
+   * no longer speaks.
+   */
   async listEvents(): Promise<JsonValue[]> {
+    await this.#eraOf();
     const cached = this.#events;
     if (cached !== undefined) return cached;
     const result = await this.call("events/list");
@@ -341,13 +382,18 @@ export class ModernClient {
    * C9: carries out one detection and returns the FINAL verdict. The probe is
    * never adopted on a guess:
    *
-   * - `none` and `modern`/`abort` (`unsupported_version_no_overlap`) adopt
-   *   nothing and are returned as they are, for the caller to refuse;
-   * - `modern`/`retry_with_supported` re-probes ONCE with the first mutually
-   *   implemented version when that version differs from the current one,
-   *   invalidating the C8 cache on the version change; `allowRetry` bounds the
-   *   negotiation to two probes in total, so a third attempt returns the
-   *   detection as it stands;
+   * - `none` and `modern`/`abort` adopt nothing and are returned as they are,
+   *   for the caller to refuse;
+   * - `modern`/`retry_with_supported` scans the WHOLE supported list for the
+   *   first version this client implements that is not the one just attempted;
+   *   with no such overlap, or with the ONE-retry budget already spent, it
+   *   returns `modern`/`abort` with `unsupported_version_no_overlap` and adopts
+   *   no version: neither `#version` nor the cache is touched;
+   * - a chosen MODERN version is adopted, the C8 cache is dropped (an entry
+   *   signed under another version answers another request), probed ONCE and
+   *   carried out with no further retry allowed;
+   * - a chosen LEGACY version runs the legacy handshake at that version and
+   *   adopts the legacy era: a legacy endpoint has no modern probe to answer;
    * - any other `modern` verdict adopts the modern era;
    * - a `legacy` verdict runs the `initialize` -> `notifications/initialized`
    *   handshake and adopts the legacy era.
@@ -357,15 +403,21 @@ export class ModernClient {
     if (detection.era === "modern") {
       if (detection.action === "abort") return detection;
       if (detection.action === "retry_with_supported") {
-        const next = detection.supported?.[0];
-        if (next !== undefined && next !== this.#version) {
-          // An entry signed under another version answers another request.
-          this.#version = next;
+        const chosen = detection.supported?.find(
+          (version) => CLIENT_PROTOCOL_VERSIONS.includes(version) && version !== this.#version,
+        );
+        // No overlap, or the one allowed re-probe already happened: an
+        // unconfirmed verdict must not adopt a version.
+        if (chosen === undefined || !allowRetry) return noVersionOverlap(detection.supported);
+        if (chosen >= MODERN_MIN) {
+          this.#version = chosen;
           this.#cache.clear();
-          if (!allowRetry) return detection;
-          const again = await this.#probe(next);
+          const again = await this.#probe(chosen);
           return this.#carryOut(again, false);
         }
+        await this.#handshake(chosen);
+        this.#era = "legacy";
+        return { era: "legacy", action: "fallback_initialize", reason: detection.reason };
       }
       this.#era = "modern";
       return detection;
@@ -409,59 +461,102 @@ export class ModernClient {
 
   /**
    * C9 legacy fallback: the `initialize` -> `notifications/initialized`
-   * handshake of a 2025-11-25 session. The negotiated version is kept (and
-   * invalidates the C8 cache when it moves), `Mcp-Session-Id` is recorded from
-   * the verified reply when the server assigns one, and every later legacy
-   * request carries both headers.
+   * handshake of a legacy session, at `legacyVersion` (the newest legacy
+   * version by default). `initialize` carries NO `MCP-Protocol-Version` header
+   * and advertises `params.protocolVersion` as that legacy version: the
+   * version header starts only after negotiation, so a `both`-profile server
+   * serves the request as legacy instead of reading a modern version from it.
+   *
+   * The negotiated version must be one of `LEGACY_PROTOCOL_VERSIONS`; it is
+   * kept (and invalidates the C8 cache when it moves), `Mcp-Session-Id` is
+   * recorded from the verified reply when the server assigns one, and every
+   * later legacy request carries both headers. The version, the session id and
+   * `#legacyReady` are committed together only after
+   * `notifications/initialized` was accepted; a failure commits nothing and
+   * clears the handshake credit, so the next call handshakes again instead of
+   * running a legacy request that no handshake backs.
    *
    * This handshake is performed by this modern client layer and only here; a
    * `Client.callWith` stays the byte-frozen 0.1.x call and never initializes.
    * A reply that is not a usable `initialize` result is an error, never a
    * guessed version or session.
    */
-  async #handshake(): Promise<void> {
-    const paramsText = jsonText({
-      protocolVersion: this.#version,
-      capabilities: {},
-      clientInfo: { name: this.#clientInfo.name, version: this.#clientInfo.version },
-    });
-    const reply = await this.#client.signedRequest("initialize", paramsText, [["MCP-Protocol-Version", this.#version]]);
-    if (reply.status < 200 || reply.status > 299) {
-      throw new Error("modern profile: initialize answered HTTP " + String(reply.status));
+  async #handshake(legacyVersion: string = NEWEST_LEGACY_VERSION): Promise<void> {
+    let committed = false;
+    try {
+      const paramsText = jsonText({
+        protocolVersion: legacyVersion,
+        capabilities: {},
+        clientInfo: { name: this.#clientInfo.name, version: this.#clientInfo.version },
+      });
+      // No MCP-Protocol-Version header: the header starts after negotiation.
+      const reply = await this.#client.signedRequest("initialize", paramsText);
+      if (reply.status < 200 || reply.status > 299) {
+        throw new Error("modern profile: initialize answered HTTP " + String(reply.status));
+      }
+      const json = isJsonObject(reply.json) ? reply.json : undefined;
+      if (json === undefined) throw new Error("modern profile: initialize reply has no protocolVersion");
+      const error = json["error"];
+      if (error !== undefined && error !== null) throw rpcErrorOf(error);
+      const result = isJsonObject(json["result"]) ? json["result"] : undefined;
+      const negotiated = result !== undefined ? result["protocolVersion"] : undefined;
+      if (typeof negotiated !== "string" || negotiated === "") {
+        throw new Error("modern profile: initialize reply has no protocolVersion");
+      }
+      if (!LEGACY_PROTOCOL_VERSIONS.includes(negotiated)) {
+        throw new Error(
+          "modern profile: initialize negotiated protocol version " +
+            JSON.stringify(negotiated) +
+            ", which is not a legacy version this client implements",
+        );
+      }
+      // Fetch lowercases header names; an empty id is no session at all.
+      let sessionId: string | undefined;
+      for (const [name, value] of replyHeaders(reply)) {
+        if (name.toLowerCase() === "mcp-session-id" && value !== "") sessionId = value;
+      }
+      // The notification carries the negotiated version and the assigned
+      // session, which are not committed until it has been accepted.
+      const initialized = await this.#client.signedNotify(
+        "notifications/initialized",
+        "{}",
+        this.#legacyHeaders({ version: negotiated, sessionId }),
+      );
+      if (initialized.status < 200 || initialized.status > 299) {
+        throw new Error("modern profile: notifications/initialized answered HTTP " + String(initialized.status));
+      }
+      if (negotiated !== this.#version) {
+        this.#version = negotiated;
+        this.#cache.clear();
+      }
+      this.#sessionId = sessionId;
+      this.#legacyReady = true;
+      committed = true;
+    } finally {
+      if (!committed) {
+        this.#sessionId = undefined;
+        this.#legacyReady = false;
+      }
     }
-    const json = isJsonObject(reply.json) ? reply.json : undefined;
-    if (json === undefined) throw new Error("modern profile: initialize reply has no protocolVersion");
-    const error = json["error"];
-    if (error !== undefined && error !== null) throw rpcErrorOf(error);
-    const result = isJsonObject(json["result"]) ? json["result"] : undefined;
-    const negotiated = result !== undefined ? result["protocolVersion"] : undefined;
-    if (typeof negotiated !== "string" || negotiated === "") {
-      throw new Error("modern profile: initialize reply has no protocolVersion");
-    }
-    if (negotiated !== this.#version) {
-      this.#version = negotiated;
-      this.#cache.clear();
-    }
-    // Fetch lowercases header names; an empty id is no session at all.
-    let sessionId: string | undefined;
-    for (const [name, value] of reply.headers) {
-      if (name.toLowerCase() === "mcp-session-id" && value !== "") sessionId = value;
-    }
-    this.#sessionId = sessionId;
-    await this.#client.signedNotify("notifications/initialized", "{}", this.#legacyHeaders());
-    this.#legacyReady = true;
   }
 
   /**
    * The legacy-era request headers: the negotiated `MCP-Protocol-Version` and,
-   * while the server keeps the session, `Mcp-Session-Id`. Neither header is
-   * signed (spec 01 signs method, target, aud, kid, timestamp, nonce and the
-   * exact body), so the signing string of a legacy request is unchanged by
-   * them and a mismatch can be validated but never trusted.
+   * while the server keeps the session, `Mcp-Session-Id`. Without `state` the
+   * committed state is read; the handshake supplies its own not-yet-committed
+   * negotiation for `notifications/initialized`, whose explicit `sessionId`
+   * distinguishes "no session assigned" from the committed one. Neither header
+   * is signed (spec 01 signs method, target, aud, kid, timestamp, nonce and the
+   * exact body), so the signing string of a legacy request is unchanged by them
+   * and a mismatch can be validated but never trusted.
    */
-  #legacyHeaders(): readonly (readonly [string, string])[] {
-    const headers: (readonly [string, string])[] = [["MCP-Protocol-Version", this.#version]];
-    if (this.#sessionId !== undefined) headers.push(["Mcp-Session-Id", this.#sessionId]);
+  #legacyHeaders(
+    state?: { readonly version: string; readonly sessionId: string | undefined },
+  ): readonly (readonly [string, string])[] {
+    const version = state !== undefined ? state.version : this.#version;
+    const sessionId = state !== undefined ? state.sessionId : this.#sessionId;
+    const headers: (readonly [string, string])[] = [["MCP-Protocol-Version", version]];
+    if (sessionId !== undefined) headers.push(["Mcp-Session-Id", sessionId]);
     return headers;
   }
 
@@ -503,7 +598,8 @@ export class ModernClient {
    * `Session`), because the first attempt may already have run.
    *
    * `resync` allows the single C10/C12 retry after a `-32020` refusal: the
-   * catalog is dropped and re-read, so the retry projects the current
+   * catalog is dropped, together with the cached `tools/list`/`events/list`
+   * result it was read from, and re-read, so the retry projects the current
    * `inputSchema`. A second refusal is thrown, never retried again. The wire
    * params and the version do not change across that retry, so the cache key
    * computed before the first send stays valid for the stored answer.
@@ -544,8 +640,7 @@ export class ModernClient {
     if (options.resync && isResyncTarget(method) && isVersionRefusal(reply)) {
       // Rebuild so the retry projects the refreshed catalog. The wire params
       // text is unchanged (same params, same `_meta`), so the key still holds.
-      this.#tools = undefined;
-      this.#events = undefined;
+      await this.#resyncCatalogs(method, era);
       reply = await this.#sendModern(method, params);
     }
     if (isLegacySignal(reply)) return misreadAttempt(reply);
@@ -600,6 +695,31 @@ export class ModernClient {
   #store(key: string, outcome: RequestOutcome): void {
     if (!this.#cacheResults) return;
     this.#cache.put(key, outcome.result, outcome.ttlMs);
+  }
+
+  /**
+   * C10/C12: drops both memoised catalogs and the cached `tools/list` result -
+   * plus the cached `events/list` result when `method` projects from it - so the
+   * single retry re-reads the catalog from the wire. Clearing the in-memory
+   * catalogs alone is not enough: `listTools()` re-reads through `call`, and the
+   * C8 cache would answer with the entry stored before the catalog moved, so
+   * the retry would project the very stale `inputSchema` the resync exists to
+   * drop. `era` is the era the attempt is in, so each key is built exactly as
+   * `#attempt` builds the key of that same request; no other entry is touched.
+   */
+  async #resyncCatalogs(method: string, era: "legacy" | "modern"): Promise<void> {
+    this.#tools = undefined;
+    this.#events = undefined;
+    this.#cache.delete(await this.#catalogCacheKey("tools/list", era));
+    if (EVENTS_METHODS.has(method)) this.#cache.delete(await this.#catalogCacheKey("events/list", era));
+  }
+
+  /** The C8 key a catalog read stores under in `era` at the current version: the key `#attempt` builds for that very request. */
+  async #catalogCacheKey(catalog: "tools/list" | "events/list", era: "legacy" | "modern"): Promise<string> {
+    if (era === "legacy") return resultCacheKey(catalog, paramText(undefined), "legacy", this.#version);
+    // `tools/list` has no `Mcp-Name` source, so building its wire params reads no catalog and cannot recurse.
+    const paramsText = jsonText((await this.#buildModern(catalog, undefined)).wireParams);
+    return resultCacheKey(catalog, paramsText, "modern", this.#version);
   }
 
   /** Reads one verified answer and applies the C5/C11 catalog filter to its result before it is cached or returned. */
@@ -693,6 +813,20 @@ function settleAttempt(attempt: EraAttempt): RequestOutcome {
 function eraVerdict(detection: EraDetection): "legacy" | "modern" {
   if (detection.era === "none" || detection.action === "abort") throw new EraNegotiationError(detection);
   return detection.era;
+}
+
+/**
+ * C9: the abort verdict of a `-32022` whose supported list offers no version
+ * this client can retry at, or of a retry verdict that arrives after the one
+ * allowed re-probe. `supported` is preserved when the detection carried one.
+ */
+function noVersionOverlap(supported: readonly string[] | undefined): EraDetection {
+  return {
+    era: "modern",
+    action: "abort",
+    reason: "unsupported_version_no_overlap",
+    ...(supported !== undefined ? { supported } : {}),
+  };
 }
 
 /**

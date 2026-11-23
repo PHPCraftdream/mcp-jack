@@ -395,3 +395,82 @@ test("modern profile: GET with a body is a signed 405", async () => {
   });
   assert.equal(harness.seen.calls, 0);
 });
+
+test("modern profile: a legacy-era comma value is forwarded byte-identical", async () => {
+  // Outside the modern era nothing rewrites a header value: no split and no
+  // trim, i.e. exactly the Headers view `new Headers(req.headers)` gives 0.1.x.
+  // A Headers object itself strips the OWS around a field value, so " a "
+  // arrives as "a" by the parser, not by our code; Mcp-Method keeps its comma
+  // and gains no space after it.
+  for (const profile of ["both", "legacy"] as const) {
+    const harness = newModernHarness(profile);
+    const { request, sig } = modernRequest(seedSignerByName("alice"), {
+      body: utf8('{"jsonrpc":"2.0","id":1,"method":"tools/list"}'),
+      headers: [
+        ["Mcp-Method", "a,b"],
+        ["X-Note", " a "],
+      ],
+    });
+    const response = await harness.handle(request);
+
+    assert.equal(response.status, 200, `${profile}: a legacy-era request is forwarded`);
+    await assertSigned(response, harness.serverPub, sig);
+    assert.equal(harness.seen.calls, 1);
+    const seen = harness.seen.headers ?? [];
+    assert.ok(
+      seen.some(([n, v]) => n === "mcp-method" && v === "a,b"),
+      `${profile}: mcp-method keeps its comma and gains no space: ${JSON.stringify(seen)}`,
+    );
+    assert.ok(
+      seen.some(([n, v]) => n === "x-note" && v === "a"),
+      `${profile}: x-note is exactly what a Headers object yields: ${JSON.stringify(seen)}`,
+    );
+  }
+});
+
+test("modern profile: a modern-era comma value is split but not otherwise trimmed", async () => {
+  // No space after the comma: the split is on "," itself, so the merged value
+  // becomes two instances and S1 refuses the repetition before S5 compares
+  // anything with the body.
+  const listBody = (): Uint8Array =>
+    utf8(
+      '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{' +
+        '"io.modelcontextprotocol/protocolVersion":"' +
+        MODERN +
+        '","io.modelcontextprotocol/clientCapabilities":{}}}}',
+    );
+  const refused = newModernHarness("modern");
+  const repeated = modernRequest(seedSignerByName("alice"), {
+    body: listBody(),
+    headers: [
+      ["MCP-Protocol-Version", MODERN],
+      ["Mcp-Method", "tools/list,tools/call"],
+    ],
+  });
+  const refusedResponse = await refused.handle(repeated.request);
+
+  assert.equal(refusedResponse.status, 400);
+  const out = await assertSigned(refusedResponse, refused.serverPub, repeated.sig);
+  assert.deepEqual(JSON.parse(Buffer.from(out).toString("utf-8")), {
+    jsonrpc: "2.0",
+    id: 1,
+    error: { code: -32020, message: "Header mismatch: a request metadata header appears more than once" },
+  });
+  assert.equal(refused.seen.calls, 0);
+
+  // A single value has no comma: it stays one instance and is forwarded.
+  const harness = newModernHarness("modern");
+  const single = modernRequest(seedSignerByName("alice"), {
+    body: listBody(),
+    headers: [
+      ["MCP-Protocol-Version", MODERN],
+      ["Mcp-Method", "tools/list"],
+    ],
+  });
+  const response = await harness.handle(single.request);
+
+  assert.equal(response.status, 200);
+  await assertSigned(response, harness.serverPub, single.sig);
+  assert.equal(harness.seen.calls, 1);
+  assert.deepEqual(forwarded(harness, "mcp-method"), ["tools/list"], "the single value is one instance");
+});

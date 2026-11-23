@@ -76,9 +76,16 @@ export interface SignedReply {
    * Every response header pair, in the order the Fetch `Headers` iterator
    * yields them; Fetch lowercases header names, so a caller reads
    * `mcp-session-id` for `Mcp-Session-Id` (spec 04 C9's legacy handshake needs
-   * it). Order and spelling are the transport's, not the SDK's.
+   * it). Order and spelling are the transport's, not the SDK's. Absent when a
+   * caller builds a reply without header access, so readers go through
+   * `replyHeaders` instead of branching.
    */
-  readonly headers: readonly (readonly [string, string])[];
+  readonly headers?: readonly (readonly [string, string])[];
+}
+
+/** The header pairs of a verified reply: an absent header list is no headers, so callers never branch on it. */
+export function replyHeaders(reply: SignedReply): readonly (readonly [string, string])[] {
+  return reply.headers ?? [];
 }
 
 /** Client performs signed, response-verified MCP tool calls over JSON-RPC. */
