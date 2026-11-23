@@ -508,6 +508,11 @@ pub fn mode_from_args() -> Option<String> {
     }
     selected
 }
-pub fn run_mode() {
-    run()
+pub fn run_mode() -> ! {
+    run();
+    {
+        use std::io::Write as _;
+        let _ = std::io::stdout().flush();
+    }
+    std::process::exit(0)
 }
