@@ -20,7 +20,7 @@ Nothing here adds SDK API. The executables configure the SDK with the deployment
 - **Deterministic nonces.** For the 0-based index `i` of each distinct signed request the client sends in a scenario, the nonce is the first 16 bytes of `sha256(utf8("mcp-jack-interop-modern/nonce/" + <scenario id> + "/" + <i>))`, sent as canonical unpadded base64url (22 characters). The index increments once per new request. A replayed request is not a new request: it reuses the source request's exact bytes, signature and nonce. Nonces are never random.
 - **Values supplied by the driver.** The audience `https://svc.example.test`; the client seed (fixture `alice`, 64 hex characters); the pinned server public key (fixture `svc`, base64url); the server seed (fixture `svc`); and a state file that is the fixture registry document `{"version":1,"keys":[...],"invites":[]}` (the same strict `FileState` document `interop-server` reads, i.e. `spec/fixtures/registry.json` without the top-level `aud` member). The executables never read `spec/fixtures/` themselves.
 - **Response trust.** The client verifies every response against `--anchor` only: no TOFU, no learned key, no trusted body. The spec 01 section 5 unsigned-allowed 401 family is the only response that may lack `Jack-Auth`.
-- **Headers.** Header names are case-insensitive, values case-sensitive (RFC 9110). The client must put the mirror headers on the wire as separate header lines, in the order below; no HTTP library may fold or reorder them.
+- **Headers.** Header names are case-insensitive, values case-sensitive (RFC 9110). The client must put each mirror header on the wire as its own header line; no HTTP library may fold or merge them, and instances of one name keep their relative order. The order of lines with different names is not pinned (Go `net/http` writes headers sorted by name, Fetch `Headers` iterates sorted): the signature covers the values, and the matrix compares header lists as multisets with case-insensitive names. The order in the reference below is the natural one an executable may use.
 
 ## 3. Server executable (`modern_server`)
 
@@ -168,7 +168,7 @@ Each `step`:
  "response_body_b64u":"<exact response body bytes>"}
 ```
 
-Every member is present, `null` where not applicable, and byte fields are unpadded base64url of the exact bytes. `request_headers` lists the headers the executable itself put on the wire (application, mirror and `Jack-Auth` headers) in send order with the casing it used; framing headers owned by the HTTP library may be omitted. A step exists for every request actually sent, in order, including refused ones, and a replay is a separate step with byte-identical `request_body_b64u` and `request_sig`. `response_body_b64u` is the empty string when no body arrived.
+Every member is present, `null` where not applicable, and byte fields are unpadded base64url of the exact bytes. `request_headers` lists the headers the executable itself put on the wire (application, mirror and `Jack-Auth` headers) in the order it handed them to its HTTP library (a library may reorder different names on the wire, see section 2) with the casing it used; framing headers owned by the HTTP library may be omitted. A step exists for every request actually sent, in order, including refused ones, and a replay is a separate step with byte-identical `request_body_b64u` and `request_sig`. `response_body_b64u` is the empty string when no body arrived.
 
 The top-level `http_status` is the last step's status. `outcome` and `code` describe the last response:
 
@@ -243,13 +243,13 @@ Step names, in order, are part of the contract because the driver matches steps 
 
 Two runs of one client language against one endpoint produce byte-identical requests: the clock is fixed, nonces are derived from the scenario and the request index, and the JSON-RPC id comes from `--json-id`. That is what `legacy-both-parity` compares: the driver starts both servers on the same port, so even the `Host` header is equal, and it compares the response body bytes and statuses of the two runs.
 
-Reference bodies (member order inside a body is free; the header order is not):
+Reference bodies (member order inside a body is free, and so is the order of header lines with different names):
 
 ```json
 {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"region.echo","arguments":{"region":"us-west1"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/clientInfo":{"name":"mcp-jack-interop-modern-client","version":"1.0.0"}}}}
 ```
 
-with the request headers, in this order after `Jack-Auth`: `MCP-Protocol-Version: 2026-07-28`, `Mcp-Method: tools/call`, `Mcp-Name: region.echo`, `Mcp-Param-Region: us-west1`.
+with the request headers (natural order, not pinned): `Jack-Auth`, then `MCP-Protocol-Version: 2026-07-28`, `Mcp-Method: tools/call`, `Mcp-Name: region.echo`, `Mcp-Param-Region: us-west1`.
 
 - `server/discover`: `{"jsonrpc":"2.0","id":<id>,"method":"server/discover","params":{"_meta":{...protocolVersion, clientCapabilities, clientInfo...}}}`, mirrors `MCP-Protocol-Version: <probe version>` then `Mcp-Method: server/discover`, and no `Mcp-Name` (the method has no source field).
 - Legacy `tools/call`: `{"jsonrpc":"2.0","id":<id>,"method":"tools/call","params":{"name":"region.echo","arguments":{"region":"us-west1"}}}`, no `_meta`, no mirror headers, plus `MCP-Protocol-Version` and `Mcp-Session-Id` only after a handshake.
