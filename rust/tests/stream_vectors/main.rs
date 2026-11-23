@@ -283,6 +283,29 @@ fn run_variant(
                     .collect()
             }
         };
+        // A chunk never straddles two arrival times: split it at the span edges.
+        let chunks: Vec<(usize, usize)> = if arrival.is_some() {
+            let mut cuts = Vec::new();
+            let mut edge = 0usize;
+            for length in spans {
+                edge += length;
+                cuts.push(edge);
+            }
+            let mut split = Vec::new();
+            for (start, end) in chunks {
+                let mut from = start;
+                for cut in &cuts {
+                    if *cut > from && *cut < end {
+                        split.push((from, *cut));
+                        from = *cut;
+                    }
+                }
+                split.push((from, end));
+            }
+            split
+        } else {
+            chunks
+        };
         for (start, end) in chunks {
             let time = time_for(end - 1);
             let step = verifier.push(&body[start..end], time);
