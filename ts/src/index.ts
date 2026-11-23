@@ -21,6 +21,7 @@ export * from "./server/registry/nonce.js";
 export * from "./server/registry/state-file.js";
 export * from "./server/registry/state.js";
 export * from "./server/verify.js";
+export * from "./modern/index.js";
 // Namespaced: the client re-declares JsonValue and the TOOL_* names of the server modules.
 export * as client from "./client/index.js";
 export * as rotation from "./rotation/index.js";

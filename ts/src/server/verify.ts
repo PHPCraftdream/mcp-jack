@@ -33,242 +33,14 @@ import { parseJsonRaw } from "../core/json-raw.js";
 import type { JsonValue, RawJsonNode } from "../core/json-raw.js";
 export { parseJsonRaw } from "../core/json-raw.js";
 export type { JsonValue, RawJsonNode } from "../core/json-raw.js";
-
-// One shared strict UTF-8 decoder: a decode failure is exactly "not valid
-// UTF-8" (overlong, lone surrogates, truncated sequences all fail) and it
-// happens BEFORE any JSON parsing, per spec 02 section 4. ignoreBOM keeps a
-// leading BOM in the decoded text (RFC 8259 forbids one before JSON text);
-// the tokenizer's whitespace set does not include U+FEFF, so a BOM-prefixed
-// body fails parsing and is invalid_request. The reference verifier strips
-// the BOM — spec-wins divergence, no fixture covers it.
-const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+import { bodyText, classifyBody } from "./internal/body.js";
+import { classifyModernRequest, INVALID_TOOL_NAME_MESSAGE, toolsCallNameInvalid } from "../modern/server.js";
+import type { ServerProfile } from "../modern/server.js";
+export { classifyBody } from "./internal/body.js";
+export type { RpcKind, RpcMessage } from "./internal/body.js";
 
 // The signing string is signed over its UTF-8 encoding (Go: []byte(signing)).
 const ENCODER = new TextEncoder();
-
-// ---------------------------------------------------------------------------
-// Body classification (spec 02 section 4; Go classifyBody).
-// ---------------------------------------------------------------------------
-
-export type RpcKind = "request" | "response";
-
-/** The part of a JSON-RPC object the verifier needs. */
-export interface RpcMessage {
-  readonly kind: RpcKind;
-  /** Raw JSON text of the id member as sent; undefined when absent. */
-  readonly id: string | undefined;
-  /** Request/notification method; "" for a response. */
-  readonly method: string;
-  /** True for a tools/call whose params.name is a string. */
-  readonly hasTool: boolean;
-  /** params.name when hasTool; "" otherwise. */
-  readonly tool: string;
-  /** Raw JSON text of params.arguments as sent; undefined when absent; tools/call only. */
-  readonly arguments: string | undefined;
-}
-
-/** True when v is a plain JSON object (not null, not an array). */
-function isPlainObject(v: JsonValue): boolean {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-
-// The maximum nesting depth of arrays and objects the body may reach
-// (spec 02 section 4 step 2).
-const MAX_BODY_DEPTH = 128;
-
-/** Member names of one open object; expectKey is true while the next string is a name. */
-interface ObjectScope {
-  readonly names: Set<string>;
-  expectKey: boolean;
-}
-
-/** One-character escapes of JSON strings; anything else maps to itself (the parser rejects it later). */
-const SIMPLE_ESCAPES: ReadonlyMap<number, number> = new Map([
-  [0x62, 0x08],
-  [0x66, 0x0c],
-  [0x6e, 0x0a],
-  [0x72, 0x0d],
-  [0x74, 0x09],
-]);
-
-/** UTF-8 bytes of a scalar value as a Latin-1 string, so escaped and raw spellings of a name compare equal. */
-function utf8Latin1(cp: number): string {
-  if (cp < 0x80) return String.fromCharCode(cp);
-  if (cp < 0x800) return String.fromCharCode(0xc0 | (cp >> 6), 0x80 | (cp & 0x3f));
-  if (cp < 0x10000) {
-    return String.fromCharCode(0xe0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
-  }
-  return String.fromCharCode(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
-}
-
-/**
- * The body-text rules of spec 02 section 4 step 2, checked on the raw bytes
- * before decoding: a \uXXXX string escape that does not form a Unicode scalar
- * value (a lone or unpaired surrogate), nesting deeper than MAX_BODY_DEPTH
- * levels of arrays and objects, or an object with two members of the same
- * name (compared after unescaping, exact). One byte pass, no recursion, extra
- * space bounded by the depth and the member names of the open objects:
- * JSON.parse-family parsing would keep a lone surrogate and silently keep the
- * last duplicate, and the recursive tokenizer dies on the stack long after
- * the limit.
- */
-function unacceptableBody(body: Uint8Array): boolean {
-  let inString = false;
-  // Set only while inside a member NAME; undefined for every other string.
-  let name: string | undefined;
-  const scopes: (ObjectScope | null)[] = [];
-  let i = 0;
-  while (i < body.length) {
-    const c = body[i] as number;
-    const top = scopes[scopes.length - 1];
-    if (!inString) {
-      if (c === 0x22) {
-        inString = true;
-        name = top?.expectKey === true ? "" : undefined;
-      } else if (c === 0x7b || c === 0x5b) {
-        scopes.push(c === 0x7b ? { names: new Set<string>(), expectKey: true } : null);
-        if (scopes.length > MAX_BODY_DEPTH) return true;
-      } else if (c === 0x7d || c === 0x5d) {
-        scopes.pop();
-      } else if (c === 0x3a && top) {
-        top.expectKey = false;
-      } else if (c === 0x2c && top) {
-        top.expectKey = true;
-      }
-      i += 1;
-      continue;
-    }
-    if (c === 0x22) {
-      inString = false;
-      if (name !== undefined && top) {
-        if (top.names.has(name)) return true;
-        top.names.add(name);
-      }
-      name = undefined;
-      i += 1;
-      continue;
-    }
-    if (c !== 0x5c) {
-      if (name !== undefined) name += String.fromCharCode(c);
-      i += 1;
-      continue;
-    }
-    // Escape handling mirrors the Go/Rust helpers byte for byte.
-    if (i + 1 >= body.length) return true;
-    if (body[i + 1] !== 0x75) {
-      const e = body[i + 1] as number;
-      if (name !== undefined) name += String.fromCharCode(SIMPLE_ESCAPES.get(e) ?? e);
-      i += 2; // two-byte escape; an escaped backslash keeps the string going
-      continue;
-    }
-    if (i + 6 > body.length) return true;
-    const v = hex4(body, i + 2);
-    if (v < 0) {
-      i += 2; // not a \uXXXX escape: invalid JSON, the parser rejects it
-      continue;
-    }
-    if (v >= 0xdc00 && v <= 0xdfff) return true; // lone low surrogate
-    if (v < 0xd800 || v > 0xdbff) {
-      if (name !== undefined) name += utf8Latin1(v);
-      i += 6; // ordinary \uXXXX escape
-      continue;
-    }
-    // A high surrogate must be followed immediately by \uDC00..\uDFFF.
-    const low =
-      i + 12 <= body.length && body[i + 6] === 0x5c && body[i + 7] === 0x75
-        ? hex4(body, i + 8)
-        : -1;
-    if (low >= 0xdc00 && low <= 0xdfff) {
-      if (name !== undefined) name += utf8Latin1(0x10000 + ((v - 0xd800) << 10) + (low - 0xdc00));
-      i += 12; // consume both escapes
-      continue;
-    }
-    return true; // unpaired high surrogate
-  }
-  return false;
-}
-
-/** Parses the four ASCII hex digits at body[at], or -1. */
-function hex4(body: Uint8Array, at: number): number {
-  let v = 0;
-  for (let k = 0; k < 4; k++) {
-    const c = body[at + k] as number | undefined;
-    if (c === undefined) return -1;
-    let d: number;
-    if (c >= 0x30 && c <= 0x39) d = c - 0x30;
-    else if (c >= 0x61 && c <= 0x66) d = c - 0x61 + 10;
-    else if (c >= 0x41 && c <= 0x46) d = c - 0x41 + 10;
-    else return -1;
-    v = (v << 4) | d;
-  }
-  return v;
-}
-
-/**
- * The body rules of spec 02 section 4. Order matters: strict UTF-8 validation
- * of the EXACT bytes happens BEFORE any JSON parse (JSON.parse would silently
- * replace invalid bytes). All member lookups go through the members MAP, never
- * `value.__proto__`-style access, so a tool literally named "__proto__"
- * (fixture authz-proto-tool-name) flows through classification like any other name and
- * a "__proto__" member cannot alias another member's path. Returns undefined
- * when the body is not an acceptable JSON-RPC object. An empty POST has no
- * jsonrpc member and is rejected here.
- */
-export function classifyBody(body: Uint8Array): RpcMessage | undefined {
-  if (unacceptableBody(body)) return undefined;
-  let text: string;
-  let parsed: { value: JsonValue; source: RawJsonNode };
-  try {
-    text = UTF8.decode(body);
-    parsed = parseJsonRaw(text);
-  } catch {
-    return undefined; // invalid UTF-8 or invalid JSON
-  }
-  // (3) root must be a plain JSON object.
-  if (!isPlainObject(parsed.value)) return undefined;
-  const members = parsed.source.members;
-  if (members === undefined) return undefined;
-
-  // (4) jsonrpc must exist and be exactly the string "2.0".
-  const version = members.get("jsonrpc");
-  if (version === undefined || version.value !== "2.0") return undefined;
-
-  const id = members.get("id")?.text;
-  if (!members.has("method")) {
-    // (6) A response exists iff id is present AND exactly one of
-    // result/error is present (presence via the members map, values
-    // irrelevant — an `error: null` still counts, Go parity).
-    const hasResult = members.has("result");
-    const hasError = members.has("error");
-    if (members.has("id") && hasResult !== hasError) {
-      return { kind: "response", id, method: "", hasTool: false, tool: "", arguments: undefined };
-    }
-    return undefined;
-  }
-
-  // (5) A request/notification: method must be a string.
-  const methodNode = members.get("method");
-  if (methodNode === undefined || typeof methodNode.value !== "string") return undefined;
-  const method = methodNode.value;
-
-  if (method === "tools/call") {
-    // params must exist and be a plain object; name must exist and be a string.
-    const params = members.get("params");
-    if (params === undefined || !isPlainObject(params.value) || params.members === undefined) return undefined;
-    const name = params.members.get("name");
-    if (name === undefined || typeof name.value !== "string") return undefined;
-    const args = params.members.get("arguments");
-    return {
-      kind: "request",
-      id,
-      method,
-      hasTool: true,
-      tool: name.value,
-      arguments: args === undefined ? undefined : args.text,
-    };
-  }
-  return { kind: "request", id, method, hasTool: false, tool: "", arguments: undefined };
-}
 
 // ---------------------------------------------------------------------------
 // Protocol-native extension point (Go NativeCall/NativeResult/NativeTools);
@@ -397,6 +169,28 @@ export interface VerifyRequest {
   readonly authValues: readonly string[];
   /** Exact body bytes. */
   readonly body: Uint8Array;
+  /** Received header instances in received order and casing (spec 04 S9); absent means none. */
+  readonly headers?: readonly (readonly [string, string])[];
+  /**
+   * Deployment profile of spec 04 section 3. undefined or "legacy" runs no
+   * section 5 rule, keeping 0.1.x behaviour byte-identical; "modern" and
+   * "both" decide the era and refuse or forward before dispatch.
+   */
+  readonly profile?: ServerProfile;
+}
+
+/** A spec 04 section 5 refusal: the signed JSON-RPC error a client verifies like any other response (S10). */
+export interface RpcRefusal {
+  /** HTTP status of the refusal (400, or 405 for S2). */
+  readonly httpStatus: number;
+  /** JSON-RPC error code of the section 5.1 table. */
+  readonly code: number;
+  /** Fixed message of the section 5.1 table; it never echoes a header or body value. */
+  readonly message: string;
+  /** Raw JSON text of the request id, "null" when the request carries no acceptable id. */
+  readonly idText: string;
+  /** True only for the 405 refusal, which also carries `Allow: POST`. */
+  readonly allowPost: boolean;
 }
 
 /** Mirrors Go Result; zero-value style ("" / 0 / undefined) instead of optionals. */
@@ -427,6 +221,16 @@ export interface VerifyResult {
    */
   readonly identity: JackIdentity | undefined;
   readonly audit: AuditEvent | undefined;
+  /**
+   * The era the modern profile decided for this request; absent when no
+   * profile decided one and "" is never assigned (additive optional member:
+   * an existing caller that builds a VerifyResult still compiles).
+   */
+  readonly era?: "legacy" | "modern" | "";
+  /** The header list the wrapped handler sees in the modern era (S8 removals applied); absent otherwise, and never empty when set. */
+  readonly forwardHeaders?: readonly (readonly [string, string])[];
+  /** Set when a spec 04 rule refused the request after authentication. */
+  readonly rpcRefusal?: RpcRefusal | undefined;
 }
 
 /** Verifier configuration. */
@@ -480,6 +284,14 @@ interface ResultBuilder {
   structured: unknown;
   identity: JackIdentity | undefined;
   audit: AuditEvent | undefined;
+  era: "legacy" | "modern" | "";
+  forwardHeaders: readonly (readonly [string, string])[];
+  rpcRefusal: RpcRefusal | undefined;
+}
+
+/** True when v is a plain JSON object (not null, not an array). */
+function isPlainObject(v: JsonValue): boolean {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 /** Whether now is inside the entry's validity interval (spec 02 section 1: not_before <= now < not_after). */
@@ -690,6 +502,9 @@ export class Verifier {
         structured: undefined,
         identity: undefined,
         audit: undefined,
+        era: "",
+        forwardHeaders: [],
+        rpcRefusal: undefined,
       };
       const done = this.authorize(req, auth, outcome.finalNow, caller, b);
       const res: VerifyResult = {
@@ -706,6 +521,9 @@ export class Verifier {
         structured: done.structured,
         identity: done.identity,
         audit: done.audit,
+        ...(done.era !== undefined && done.era !== "" ? { era: done.era } : {}),
+        ...(done.forwardHeaders !== undefined && done.forwardHeaders.length > 0 ? { forwardHeaders: done.forwardHeaders } : {}),
+        ...(done.rpcRefusal !== undefined ? { rpcRefusal: done.rpcRefusal } : {}),
       };
       rememberResultFinish(res, outcome.finish);
       return res;
@@ -734,6 +552,9 @@ export class Verifier {
       structured: undefined,
       identity: undefined,
       audit: undefined,
+      era: "",
+      forwardHeaders: [],
+      rpcRefusal: undefined,
     };
     const done = this.authorize(req, auth, effective, caller, b);
     return {
@@ -750,6 +571,9 @@ export class Verifier {
       structured: done.structured,
       identity: done.identity,
       audit: done.audit,
+      ...(done.era !== undefined && done.era !== "" ? { era: done.era } : {}),
+      ...(done.forwardHeaders !== undefined && done.forwardHeaders.length > 0 ? { forwardHeaders: done.forwardHeaders } : {}),
+      ...(done.rpcRefusal !== undefined ? { rpcRefusal: done.rpcRefusal } : {}),
     };
   }
 
@@ -773,11 +597,59 @@ export class Verifier {
       return b;
     };
 
-    // GET is authorized by authentication alone; no JSON-RPC is involved.
-    // Any non-GET method is processed like POST here — the 405 for other
-    // verbs is the HTTP adapter's job (later task).
-    if (req.method === "GET") {
+    // Spec 04: a configured non-legacy profile runs the era decision and the
+    // mirror rules here — after authentication and classification, before any
+    // dispatch — so a refused request never reaches a native tool.
+    const modernProfile = req.profile !== undefined && req.profile !== "legacy" ? req.profile : undefined;
+    const decideEra = (): boolean => {
+      if (modernProfile === undefined) return true;
+      // Spec 04 section 3: a non-POST request has no body, so the modern rules
+      // must never read or parse one (only `H` counts for the era decision).
+      const text = req.method === "POST" ? bodyText(req.body) : undefined;
+      const decision = classifyModernRequest({
+        profile: modernProfile,
+        method: req.method,
+        target: req.target,
+        headers: req.headers ?? [],
+        ...(text !== undefined && text !== "" ? { bodyText: text } : {}),
+      });
+      if (decision.outcome === "refuse") {
+        b.accepted = false;
+        b.httpStatus = decision.httpStatus;
+        b.code = "";
+        b.message = decision.message;
+        b.rpcRefusal = {
+          httpStatus: decision.httpStatus,
+          code: decision.code,
+          message: decision.message,
+          idText: decision.idText,
+          allowPost: decision.allowPost,
+        };
+        return false;
+      }
+      if (decision.outcome === "refuse_invalid_request") {
+        b.accepted = false;
+        b.httpStatus = decision.httpStatus;
+        b.code = decision.code;
+        b.message = decision.message;
+        return false;
+      }
+      b.era = decision.era;
+      if (decision.era === "modern") {
+        b.forwardHeaders = decision.forward.headers;
+      }
+      return true;
+    };
+
+    // GET is authorized by authentication alone; no JSON-RPC is involved. In
+    // the modern profile every other non-POST method is treated the same way,
+    // because spec 04 S2 refuses it before the mirror checks: the era decision
+    // below turns it into a signed 405, or leaves a legacy-era request as
+    // 0.1.x does. Outside a modern profile non-POST methods keep the old
+    // POST-like handling; their 405 is the HTTP adapter's job.
+    if (req.method === "GET" || (modernProfile !== undefined && req.method !== "POST")) {
       b.accepted = true;
+      if (!decideEra()) return b;
       // GET is enrollment-exempt (POST-only), so caller is defined in practice;
       // kept defensive: identity only when a registry entry authenticated.
       if (caller !== undefined) {
@@ -788,10 +660,19 @@ export class Verifier {
 
     const msg = classifyBody(req.body);
     if (msg === undefined) {
-      // The nonce stays consumed: authentication already succeeded.
-      return fail(400, Code.INVALID_REQUEST, "the body is not an acceptable JSON-RPC object");
+      // The nonce stays consumed: authentication already succeeded. In the
+      // modern profile the era-neutral refusal of spec 02 section 2 item 4
+      // carries the message the vectors fix for byte-identity.
+      const text = modernProfile !== undefined ? bodyText(req.body) : undefined;
+      const message =
+        text !== undefined && toolsCallNameInvalid(text)
+          ? INVALID_TOOL_NAME_MESSAGE
+          : "the body is not an acceptable JSON-RPC object";
+      return fail(400, Code.INVALID_REQUEST, message);
     }
     b.rpcId = msg.id;
+    // The era decision and the section 5 rules run before native dispatch.
+    if (!decideEra()) return b;
     if (msg.kind === "response") {
       // A client answering a server-initiated request: authorized by
       // authentication alone.

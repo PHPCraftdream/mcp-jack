@@ -1,6 +1,6 @@
 /** node:http adapter serving a Fetch-standard handler. */
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { AUTH_VALUES_SYMBOL, RAW_BODY_SYMBOL, RAW_TARGET_SYMBOL, dropFragment, isOriginFormTarget } from "./fetch.js";
+import { AUTH_VALUES_SYMBOL, HEADER_VALUES_SYMBOL, RAW_BODY_SYMBOL, RAW_TARGET_SYMBOL, dropFragment, isOriginFormTarget } from "./fetch.js";
 import type { JackRequest } from "./fetch.js";
 import { finishResponseAdmission } from "../durable/finish.js";
 
@@ -150,11 +150,13 @@ export function serveNode(
     // forbidden header) — exactly right, since nothing may trust the Host.
     const headers = new Headers();
     const jackAuthValues: string[] = [];
+    const headerInstances: [string, string][] = [];
     for (let i = 0; i + 1 < req.rawHeaders.length; i += 2) {
       const name = req.rawHeaders[i];
       const value = req.rawHeaders[i + 1];
       if (name === undefined || value === undefined) continue;
       headers.append(name, value);
+      headerInstances.push([name, value]);
       if (name.toLowerCase() === "jack-auth") {
         // Exact order; a repeated Jack-Auth header must reach the verifier,
         // which rejects it as malformed_auth.
@@ -172,6 +174,10 @@ export function serveNode(
     });
     (fetchReq as JackRequest)[RAW_TARGET_SYMBOL] = rawTarget;
     (fetchReq as JackRequest)[AUTH_VALUES_SYMBOL] = jackAuthValues;
+    // Repeated header instances with their received casing, for the
+    // modern-profile rules (spec 04 S1/S9); the Headers object above has
+    // already merged repeats and lowercased names.
+    (fetchReq as JackRequest)[HEADER_VALUES_SYMBOL] = headerInstances;
     // undici refuses a GET/HEAD body, but the signature covers the bytes
     // exactly as sent (spec 01 section 3.1): the raw bytes travel to the
     // handler on the symbol, like the raw target and the Jack-Auth values.

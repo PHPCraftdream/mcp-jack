@@ -10,6 +10,8 @@ import { responseSigningString } from "../../core/signing.js";
 import type { Verifier, VerifyResult } from "../verify.js";
 import type { JackIdentity } from "../verify.js";
 import { markResponseFinish, takeResultFinish } from "../durable/finish.js";
+import { JACK_SERVER_INFO, SERVER_PROFILES, envelopeBodyText, isModernHeaderSignal, refusalBodyText } from "../../modern/server.js";
+import type { ServerProfile } from "../../modern/server.js";
 
 // Go NewHandler returns errors; the Fetch-standard API has no error return in
 // its factory shape, so configuration problems THROW a plain Error instead.
@@ -66,6 +68,13 @@ export interface HandlerConfig {
    * next buffers internally before returning its Response.
    */
   maxResponseBytes?: number;
+  /**
+   * Deployment profile of the modern profile (spec 04 section 3). undefined
+   * means "legacy", which is byte-identical to 0.1.x: no spec 04 rule runs.
+   * "modern" serves every request as modern-era, "both" decides the era per
+   * request after authentication (S3).
+   */
+  profile?: ServerProfile;
 }
 
 /** Go defaultMaxBodyBytes. The body must be read in full to be hashed, so the limit is a denial-of-service guard. */
@@ -88,11 +97,14 @@ const PKCS8_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
 export const RAW_TARGET_SYMBOL = Symbol("mcp-jack.raw-target");
 export const AUTH_VALUES_SYMBOL = Symbol("mcp-jack.auth-values");
 export const RAW_BODY_SYMBOL = Symbol("mcp-jack.raw-body");
+export const HEADER_VALUES_SYMBOL = Symbol("mcp-jack.header-values");
 export interface JackRequest extends Request {
   [RAW_TARGET_SYMBOL]?: string;
   [AUTH_VALUES_SYMBOL]?: readonly string[];
   /** Exact request body bytes when the Request constructor could not carry them (undici refuses a GET/HEAD body); consumed by jackFetchHandler before reading the stream. */
   [RAW_BODY_SYMBOL]?: Uint8Array;
+  /** Every received header instance in received order and casing; a Headers object merges repeats and lowercases names, so the modern-profile rules read the instances here. */
+  [HEADER_VALUES_SYMBOL]?: readonly (readonly [string, string])[];
 }
 
 /**
@@ -114,6 +126,64 @@ const identities = new WeakMap<object, JackIdentity>();
  */
 export function jackIdentity(req: Request): JackIdentity | undefined {
   return identities.get(req);
+}
+
+/**
+ * SDK-PRIVATE header-instance storage, keyed like `identities` by the request
+ * object the adapter hands to the wrapped handler: the same association
+ * boundary, so a copied Request carries no entry and the list cannot be
+ * replaced from handler code. The list is the exact forwarded list (modern
+ * era: S8 removals applied, received order and casing kept).
+ */
+const forwardedHeaderLists = new WeakMap<object, readonly (readonly [string, string])[]>();
+
+/** The received header instances of a request the wrapped handler sees, in original order and casing (S9); undefined for any other request. */
+export function jackHeaders(req: Request): readonly (readonly [string, string])[] | undefined {
+  return forwardedHeaderLists.get(req);
+}
+
+/**
+ * The header-instance list a legacy-profile request hands to the non-POST
+ * pre-check: the legacy profile never reconstructs the received instances,
+ * because no section 5 rule reads them.
+ */
+const EMPTY_HEADER_INSTANCES: readonly (readonly [string, string])[] = [];
+
+/**
+ * The received header instances. Without the node adapter's raw list a
+ * Headers object has merged repeats with ", " and lowercased names. Header
+ * values keep their bytes: a single value is NEVER trimmed. Only a
+ * comma-joined value is split — and only for the two single-valued mirrors
+ * MCP-Protocol-Version and Mcp-Method, whose valid values never contain a
+ * comma — because a Headers object joined the repeats with ", "; the split
+ * removes just the one SP/HTAB that separator inserted, so each piece is the
+ * received value (S1 header_repeated). Mcp-Name may legitimately contain a
+ * comma, so its merged value stays one instance (a genuine repeat then
+ * refuses as name_header_mismatch).
+ */
+function receivedHeaderInstances(req: Request): readonly (readonly [string, string])[] {
+  const raw = (req as JackRequest)[HEADER_VALUES_SYMBOL];
+  if (raw !== undefined) return raw;
+  const out: [string, string][] = [];
+  for (const [name, value] of req.headers) {
+    // The names of a Headers object are lowercased; only these two are
+    // single-valued mirrors whose merged form can be split again.
+    const lower = name.toLowerCase();
+    if (lower !== "mcp-protocol-version" && lower !== "mcp-method") {
+      out.push([name, value]);
+      continue;
+    }
+    const pieces = value.split(",");
+    if (pieces.length === 1) {
+      // No comma: the merged value IS the received value; never trim it.
+      out.push([name, value]);
+      continue;
+    }
+    // A Headers object joined repeats with ", ": remove only the single SP/HTAB
+    // that separator inserted, never any other byte of a piece.
+    pieces.forEach((piece, index) => out.push([name, index === 0 ? piece : piece.replace(/^[ \t]/, "")]));
+  }
+  return out;
 }
 
 /**
@@ -195,6 +265,26 @@ function targetFromUrl(requestUrl: string): string | undefined {
  * rotation_state_unavailable "response authorization unavailable" (mirrors
  * Go writeAuthorized). A verifier configured to route jack.server.key
  * without a rotation profile is a construction error.
+ *
+ * Modern profile (spec 04): config.profile selects the deployment profile.
+ * undefined or "legacy" runs no section 5 rule, so 0.1.x behaviour stays
+ * byte-identical. "modern" and "both" authenticate and classify the request,
+ * then decide the era (S3) and either refuse with a signed JSON-RPC error
+ * (S10; the 405 answer also carries Allow: POST) or forward with
+ * Mcp-Session-Id and Last-Event-ID removed (S8). The legacy era forwards the
+ * original Headers view unchanged, byte-identical to 0.1.x, and only the
+ * modern era sets the jackHeaders() entry. Repeated header instances: the
+ * node adapter supplies the true received instances; without it a Fetch
+ * Request carries only the merged header view, where a Headers object joined
+ * repeats with ", " and lowercased the names — for the single-valued mirrors
+ * MCP-Protocol-Version and Mcp-Method a comma-joined value is split into one
+ * instance per piece (only the separator's single SP/HTAB removed, and a
+ * single value never trimmed), while Mcp-Name may legitimately contain a
+ * comma and its merged value stays one instance. The wrapped handler reads
+ * the exact forwarded list, in received order and casing, with
+ * jackHeaders(req). A HEAD refusal is signed over the empty body, because a
+ * HEAD response carries no content and the signature therefore covers the
+ * (zero) bytes the client receives.
  */
 export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => Promise<Response>): (req: Request) => Promise<Response> {
   if (config.verifier === undefined) throw new Error("server: HandlerConfig.verifier must be set");
@@ -226,6 +316,10 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     kid = keyId(new Uint8Array(der.subarray(der.length - 32)));
   }
   if (next === undefined) throw new Error("server: next handler must be set");
+  const profile = config.profile ?? "legacy";
+  if (!SERVER_PROFILES.includes(profile)) {
+    throw new Error("server: HandlerConfig.profile must be one of legacy, modern or both");
+  }
   const mb = config.maxBodyBytes;
   if (mb !== undefined && (mb === Infinity || mb > Number.MAX_SAFE_INTEGER)) {
     throw new Error("server: HandlerConfig.maxBodyBytes must not be infinite or above Number.MAX_SAFE_INTEGER");
@@ -239,7 +333,7 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
 
   // Renders the rejection body of spec 01 section 4 (field order code,message like Go's structs).
   function errorBody(code: string, message: string): Uint8Array {
-    return new TextEncoder().encode(JSON.stringify({ error: { code, message } }));
+    return new TextEncoder().encode(envelopeBodyText(code, message));
   }
 
   // Writes a Response with exactly the given headers and body. The Response
@@ -329,14 +423,34 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
   // Answers a failed request. Once authentication has succeeded the client
   // holds a request signature to bind to, so the answer is signed; an
   // authentication failure may be unsigned and carries NO Jack-Auth response
-  // header (spec 01 section 5).
-  function reject(res: VerifyResult): Response {
+  // header (spec 01 section 5). A HEAD response carries no content at all, so
+  // EVERY refusal of a HEAD request signs the empty bytes the client actually
+  // receives (content-length: 0, no body): that includes a non-rpcRefusal
+  // refusal of an authenticated HEAD, such as the body-classification refusal
+  // or a post-commit durable-admission refusal, where signing the JSON envelope
+  // that is never transmitted could not be verified.
+  function reject(res: VerifyResult, method: string): Response {
     const headers = new Headers();
     headers.set("content-type", "application/json");
+    // Spec 04 S10: a refusal of the modern profile is a signed JSON-RPC error
+    // with Content-Type application/json; the 405 form also carries Allow: POST.
+    if (res.rpcRefusal !== undefined) {
+      const refusal = res.rpcRefusal;
+      if (refusal.allowPost) {
+        headers.set("allow", "POST");
+      }
+      if (method === "HEAD") {
+        return writeSigned(refusal.httpStatus, headers, new Uint8Array(0), res.requestSig, res.tool);
+      }
+      const body = new TextEncoder().encode(refusalBodyText(refusal.idText, refusal.code, refusal.message));
+      return writeSigned(refusal.httpStatus, headers, body, res.requestSig, res.tool);
+    }
     if (res.httpStatus === 401) {
       headers.set("www-authenticate", "Jack-Auth");
     }
-    const body = errorBody(res.code, res.message);
+    // The refusal bytes are computed ONCE so a HEAD response never signs or
+    // transmits a body it cannot carry; every non-HEAD path keeps its bytes.
+    const body = method === "HEAD" ? new Uint8Array(0) : errorBody(res.code, res.message);
     if (res.nonceRecorded) {
       return writeSigned(res.httpStatus, headers, body, res.requestSig, res.tool);
     }
@@ -358,6 +472,7 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
       headers.set("content-type", "application/json");
       return writeSigned(500, headers, errorBody("internal_error", "internal error"), res.requestSig, res.tool);
     }
+    const modern = res.era === "modern";
     const body =
       '{"jsonrpc":"2.0","id":' +
       (res.rpcId === undefined ? "null" : res.rpcId) +
@@ -365,21 +480,41 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
       JSON.stringify(text) +
       '}],"structuredContent":' +
       text +
-      ',"isError":false}}';
+      ',"isError":false' +
+      (modern
+        ? ',"resultType":"complete","_meta":{"io.modelcontextprotocol/serverInfo":{"name":' +
+          JSON.stringify(JACK_SERVER_INFO.name) +
+          ',"version":' +
+          JSON.stringify(JACK_SERVER_INFO.version) +
+          "}}"
+        : "") +
+      "}}";
     const headers = new Headers();
     headers.set("content-type", "application/json");
     return writeSigned(200, headers, new TextEncoder().encode(body), res.requestSig, res.tool);
   }
 
   // Hands an authorized request to the wrapped server and signs what it answers.
-  async function forward(req: Request, body: Uint8Array, res: VerifyResult): Promise<Response> {
+  async function forward(
+    req: Request,
+    body: Uint8Array,
+    res: VerifyResult,
+  ): Promise<Response> {
+    // Spec 04 S9: the modern era forwards the header instances the era rules
+    // returned (S8 removals applied). The legacy era forwards the ORIGINAL
+    // Fetch header view — `new Headers(req.headers)` — exactly as 0.1.x does,
+    // byte-identical: no split, no trim, no reconstruction from the instance
+    // list (`undefined` marks the legacy era here).
+    const forwardedList: readonly (readonly [string, string])[] | undefined =
+      res.era === "modern" ? res.forwardHeaders ?? [] : undefined;
+    const forwardedHeaders = forwardedList !== undefined ? new Headers(forwardedList.map(([name, value]): [string, string] => [name, value])) : new Headers(req.headers);
     // Restore the EXACT buffered body bytes. undici throws for a GET body,
     // so the body is only attached for methods that can carry one; a
     // conditional spread, never an explicit undefined, keeps
     // exactOptionalPropertyTypes happy.
     const restored = new Request(req.url, {
       method: req.method,
-      headers: new Headers(req.headers),
+      headers: forwardedHeaders,
       ...(req.method !== "GET" && req.method !== "HEAD" && body.length > 0 ? { body } : {}),
     });
     // Preserve the node adapter's exact authenticated target for the wrapped
@@ -394,6 +529,15 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     // association.
     if (res.identity !== undefined) {
       identities.set(restored, res.identity);
+    }
+    // Hand the wrapped handler the exact forwarded instances (received order
+    // and casing, S8 removals applied) through the jackHeaders() accessor:
+    // a Headers object can neither keep repeats nor the received casing. The
+    // accessor is documented as the modern forwarded list, so only the modern
+    // era sets it; in the legacy era it stays unset and handler code falls
+    // back to req.headers exactly as before.
+    if (forwardedList !== undefined) {
+      forwardedHeaderLists.set(restored, forwardedList);
     }
 
     let resp: Response;
@@ -494,8 +638,21 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
 
   return async (req: Request): Promise<Response> => {
     const method = req.method;
+    // The received header instances (received order and casing) for the
+    // modern-profile rules; a Fetch Request alone carries only the merged view,
+    // which receivedHeaderInstances() splits back for the single-valued
+    // mirrors. The legacy profile never reconstructs them: it runs no section
+    // 5 rule, so the list has no reader and the empty list is never passed to
+    // isModernHeaderSignal (the "both" branch below short-circuits it).
+    const headerInstances =
+      profile === "legacy" ? EMPTY_HEADER_INSTANCES : receivedHeaderInstances(req);
     if (method !== "GET" && method !== "POST") {
-      return writeError(405, "method_not_allowed", "only GET and POST are defined");
+      // A modern-era non-POST request is authenticated first and refused by S2
+      // with a signed 405; anything else keeps the 0.1.x unsigned answer.
+      const modernEra = profile === "modern" || (profile === "both" && isModernHeaderSignal(headerInstances));
+      if (!modernEra) {
+        return writeError(405, "method_not_allowed", "only GET and POST are defined");
+      }
     }
 
     // The body must be read IN FULL to be hashed whole. The reader lock is
@@ -573,7 +730,13 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     const authValues =
       rawAuth !== undefined ? rawAuth : combined === null ? [] : splitRepeatedAuthLines(combined);
 
-    const res = config.verifier.verify({ method, target, authValues, body });
+    const res = config.verifier.verify({
+      method,
+      target,
+      authValues,
+      body,
+      ...(profile !== "legacy" ? { profile, headers: headerInstances } : {}),
+    });
     // Durable admission finishes AFTER the response is produced (Go Result.Done
     // in the middleware): the release is idempotent and runs even when the
     // response construction fails. Without the durable option there is no
@@ -582,7 +745,7 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     const finish = takeResultFinish(res);
     let out!: Response;
     try {
-      out = !res.accepted ? reject(res) : res.native ? native(res) : await forward(req, body, res);
+      out = !res.accepted ? reject(res, method) : res.native ? native(res) : await forward(req, body, res);
     } catch (error) {
       // Release even on response failure; idempotent with the node adapter.
       finish?.();

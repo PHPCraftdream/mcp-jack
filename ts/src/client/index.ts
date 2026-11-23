@@ -8,3 +8,4 @@ export * from "./rpc.js";
 export * from "./tools.js";
 export * from "./profile.js";
 export * from "./transport/url-policy.js";
+export * from "./modern.js";
