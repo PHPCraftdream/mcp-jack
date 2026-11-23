@@ -16,7 +16,9 @@ import (
 
 	jack "github.com/PHPCraftdream/mcp-jack"
 	"github.com/PHPCraftdream/mcp-jack/client/internal/modern"
+	streamimpl "github.com/PHPCraftdream/mcp-jack/client/internal/stream"
 	"github.com/PHPCraftdream/mcp-jack/client/internal/urlpolicy"
+	clientstream "github.com/PHPCraftdream/mcp-jack/client/stream"
 	"github.com/PHPCraftdream/mcp-jack/rotation"
 )
 
@@ -120,6 +122,10 @@ type Transport struct {
 	Nonce NonceSource
 	// Window is the response timestamp tolerance; <= 0 means DefaultWindow.
 	Window time.Duration
+	// Stream configures the signed-stream (s1) opt-in used by OpenStream: the
+	// idle timeout, the frame cap and the rotation-known server keys. A nil
+	// value uses the defaults of spec 05.
+	Stream *clientstream.ClientConfig
 }
 
 // NewTransport builds a Transport with explicit defaults for the audit fields.
@@ -263,6 +269,90 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp.Body = io.NopCloser(bytes.NewReader(respBody))
 	resp.ContentLength = int64(len(respBody))
 	return resp, nil
+}
+
+// OpenStream signs req, sends it with the unsigned `Jack-Accept: s1` request
+// header and verifies the answer. A text/event-stream answer becomes a Stream
+// whose Next method yields the verified message data values in order and whose
+// Close closes the connection, which cancels the request on the server (3.7).
+//
+// Every other answer is verified as a v1 response by the same rules RoundTrip
+// applies (spec 05 sections 1.4 and 4.1) and returned as a *VerifiedResponse;
+// an unsigned or badly signed answer is the matching verification error, so a
+// refusal is never reported as a bare status. A per-request signer override
+// (WithRequestSigner) applies as it does in RoundTrip.
+func (t *Transport) OpenStream(req *http.Request) (*clientstream.Stream, *clientstream.VerifiedResponse, error) {
+	if req == nil {
+		return nil, nil, urlpolicy.ErrMalformedDestination
+	}
+	signer := signerFrom(req.Context())
+	if signer == nil {
+		signer = t.Signer
+	}
+	if signer == nil {
+		return nil, nil, fmt.Errorf("jack client: no signer configured for request")
+	}
+	nonce := t.Nonce
+	if nonce == nil {
+		nonce = RandomNonce
+	}
+	s, resp, requestSig, err := streamimpl.Open(req, streamimpl.OpenConfig{
+		Base:      t.Base,
+		Aud:       t.Aud,
+		Signer:    signer,
+		ServerKey: t.ServerKey,
+		Now:       t.Now,
+		Nonce:     nonce,
+		Window:    t.Window,
+		Config:    t.Stream,
+	})
+	// 1.4: a non-stream answer is verified through the v1 response path, on
+	// the very answer this request got; no second request is sent.
+	if errors.Is(err, streamimpl.ErrNotStream) {
+		verified, vErr := t.verifyReply(resp, requestSig)
+		return nil, verified, vErr
+	}
+	return s, nil, err
+}
+
+// verifyReply verifies a non-stream answer of an opted-in request exactly as
+// RoundTrip verifies a normal response (spec 05 sections 1.4 and 4.1).
+func (t *Transport) verifyReply(resp *http.Response, requestSig string) (*clientstream.VerifiedResponse, error) {
+	if resp == nil {
+		return nil, fmt.Errorf("jack client: no response to verify")
+	}
+	// Redirect statuses are refused before anything else, as in RoundTrip.
+	if isRedirectStatus(resp.StatusCode) {
+		_ = resp.Body.Close()
+		return nil, &RedirectRefusedError{Status: resp.StatusCode}
+	}
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
+	_ = resp.Body.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("jack client: reading response body: %w", readErr)
+	}
+	if len(body) > maxBodyBytes {
+		return nil, fmt.Errorf("jack client: response body exceeds %d bytes", maxBodyBytes)
+	}
+	now := t.Now
+	if now == nil {
+		now = time.Now
+	}
+	window := t.Window
+	if vErr := VerifyResponse(t.ServerKey, resp.StatusCode, resp.Header.Values("Jack-Auth"), requestSig, body, now(), window); vErr != nil {
+		var jErr *jack.Error
+		if errors.As(vErr, &jErr) && jErr.Code == jack.CodeMissingAuth && resp.StatusCode == http.StatusUnauthorized {
+			// Spec 01 section 5: an unsigned answer is acted on only up to
+			// its status — the body is never parsed or trusted.
+			return nil, &UnauthenticatedResponseError{Status: resp.StatusCode}
+		}
+		return nil, vErr
+	}
+	return &clientstream.VerifiedResponse{
+		Status: resp.StatusCode,
+		Header: resp.Header.Clone(),
+		Body:   body,
+	}, nil
 }
 
 // isEventStreamHeader reports whether the Content-Type field lines declare a

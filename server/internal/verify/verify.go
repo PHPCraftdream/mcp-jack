@@ -164,6 +164,10 @@ type Verifier struct {
 // raw sample; request decisions use the effective time instead.
 func RawNow(v *Verifier) int64 { return v.cfg.Now() }
 
+// Window returns the verifier's configured response-verification window W in
+// whole seconds (spec 01 section 4), after defaults are applied.
+func Window(v *Verifier) int64 { return v.cfg.Window }
+
 // HasServerKeys reports whether the verifier serves the candidate
 // jack.server.key tool through its separate ServerKeys profile.
 func HasServerKeys(v *Verifier) bool { return v.cfg.ServerKeys != nil }
