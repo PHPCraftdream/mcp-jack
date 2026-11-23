@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { HardenedTransport } from "../../../src/webhook/ssrf/client.js";
 import type { HardenedDialTarget, HardenedRequest, HardenedResponse } from "../../../src/webhook/ssrf/client.js";
 import { EndpointVerifier, VerificationCache, VerificationConfigurationError } from "../../../src/webhook/verification/routes.js";
-import type { VerificationTransport } from "../../../src/webhook/verification/routes.js";
+import type { ChallengeDestination, VerificationTransport, VerifiedPair } from "../../../src/webhook/verification/routes.js";
 import { utf8 } from "../support/vectors.js";
 
 const NOW = 1767225600;
@@ -85,6 +85,83 @@ test("malformed challenge signer results fail closed without a POST", async () =
     const result = await verifier.verify(PAIR, NOW + 300, { challenge: () => signed as never });
     assert.deepEqual(result, { verified: false, route: null, reason: "challenge_failed" }, label);
     assert.deepEqual(seen.filter(({ request }) => request.method === "POST"), [], label);
+  }
+});
+
+test("a signer cannot redirect, rebind or re-key the pair it was given", async () => {
+  const { transport, seen } = recordingTransport((request) => request.method === "POST" && request.path === "/hooks/alice"
+    ? response(200, JSON.stringify({ challenge: NONCE }))
+    : response(404));
+  const cache = new VerificationCache({ now });
+  const verifier = new EndpointVerifier({ transport, cache, now, nonceSource: () => NONCE });
+  const original = { principal: "alice", canonicalUrl: "https://hooks.example.test/hooks/alice" };
+  const recorded: {
+    readonly pair: VerifiedPair;
+    readonly destination: ChallengeDestination;
+    readonly nonce: string;
+    readonly frozen: boolean;
+  }[] = [];
+  const result = await verifier.verify(original, NOW + 300, {
+    challenge: (input) => {
+      recorded.push({
+        pair: { ...input.pair },
+        destination: { ...input.destination },
+        nonce: input.nonce,
+        frozen: Object.isFrozen(input.pair),
+      });
+      original.principal = "mallory";
+      original.canonicalUrl = "https://evil.example.test/hooks/mallory";
+      return { headers: {} };
+    },
+  });
+  assert.deepEqual(result, { verified: true, route: "challenge", reason: null });
+  assert.deepEqual(recorded, [{
+    pair: { principal: "alice", canonicalUrl: "https://hooks.example.test/hooks/alice" },
+    destination: { url: "https://hooks.example.test/hooks/alice", path: "/hooks/alice" },
+    nonce: NONCE,
+    frozen: true,
+  }]);
+  assert.deepEqual(
+    await verifier.verify({ principal: "alice", canonicalUrl: "https://hooks.example.test/hooks/alice" }, NOW + 300),
+    { verified: true, route: "cache", reason: null },
+  );
+  assert.deepEqual(
+    await verifier.verify({ principal: "mallory", canonicalUrl: "https://evil.example.test/hooks/mallory" }, NOW + 300),
+    { verified: false, route: null, reason: "no_route" },
+  );
+  const posts = seen.filter(({ request }) => request.method === "POST");
+  assert.equal(posts.length, 1);
+  assert.deepEqual(posts.map(({ target }) => target.hostHeader), ["hooks.example.test"]);
+});
+
+test("malformed injected transport results fail closed", async () => {
+  const malformed: readonly unknown[] = [
+    { ok: true },
+    { ok: true, response: {} },
+    { ok: true, response: { status: 200, headers: {}, body: "text" } },
+    { ok: true, response: { status: "200", headers: {}, body: new Uint8Array(0) } },
+    { ok: true, response: { status: 200, headers: { a: 1 }, body: new Uint8Array(0) } },
+    { ok: false },
+    null,
+    undefined,
+  ];
+  for (const value of malformed) {
+    const transport: VerificationTransport = {
+      async request() { return value as never; },
+    };
+    const verifier = new EndpointVerifier({ transport, now, nonceSource: () => NONCE });
+    const label = JSON.stringify(value) ?? String(value);
+    assert.deepEqual(
+      await verifier.verify(PAIR, NOW + 300, { challenge: () => ({ headers: {} }) }),
+      { verified: false, route: null, reason: "challenge_failed" },
+      label,
+    );
+    assert.deepEqual(
+      await verifier.fetchDocument(PAIR.canonicalUrl),
+      { ok: false, code: "document_fetch_failed", reason: "transport_response" },
+      label,
+    );
+    assert.deepEqual(await verifier.verify(PAIR, NOW + 300), { verified: false, route: null, reason: "no_route" }, label);
   }
 });
 

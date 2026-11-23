@@ -52,6 +52,12 @@ function bodyTooLarge(): NodeWebhookResponse {
   return response(413, { error: { code: "body_too_large", message: "body or declared length above the limit" } });
 }
 
+const BODY_LIMIT_ERROR = "maxBodyBytes must be an integer from 0 through 262144";
+
+function checkBodyLimit(maxBodyBytes: number): void {
+  if (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 0) throw new Error(BODY_LIMIT_ERROR);
+}
+
 /**
  * Bounds the raw body and serializes the receiver's response. The adapter never discards
  * forwarded messages and only answers 2xx for them after the application's enqueue resolves.
@@ -62,6 +68,7 @@ export async function adaptNodeRequest(receiver: WebhookReceiver, request: NodeW
   readonly maxBodyBytes?: number;
 }): Promise<NodeWebhookResponse> {
   const { now, maxBodyBytes = MAX_BODY_BYTES } = request;
+  checkBodyLimit(maxBodyBytes);
   const limit = Math.min(maxBodyBytes, MAX_BODY_BYTES);
   const entries = Object.entries(request.headers);
   for (const [name, value] of entries) {
@@ -94,8 +101,9 @@ export function createNodeHandler(receiver: WebhookReceiver, options?: {
   readonly maxBodyBytes?: number;
 }): ReceiverNodeHandler {
   const { now: clock, maxBodyBytes } = options ?? {};
-  if (maxBodyBytes !== undefined && (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 0 || maxBodyBytes > MAX_BODY_BYTES)) {
-    throw new Error("maxBodyBytes must be an integer from 0 through 262144");
+  if (maxBodyBytes !== undefined) {
+    checkBodyLimit(maxBodyBytes);
+    if (maxBodyBytes > MAX_BODY_BYTES) throw new Error(BODY_LIMIT_ERROR);
   }
   return (request, now = Date.now() / 1000) => adaptNodeRequest(receiver, {
     ...request,
