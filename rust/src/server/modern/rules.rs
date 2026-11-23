@@ -30,9 +30,10 @@ const PARAM_PREFIX: &str = "mcp-param-";
 /// hold. A body exists only for a `POST` whose bytes decode to a JSON object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BodyKind {
-    /// A JSON-RPC request: a string `method` and a string or integer `id`.
+    /// A JSON-RPC request: a string `method` and an `id` member, whatever its
+    /// type.
     Request,
-    /// A JSON-RPC notification: a string `method` and no acceptable `id`.
+    /// A JSON-RPC notification: a string `method` and no `id` member at all.
     Notification,
     /// A client-sent response object: no string `method` member.
     Response,
@@ -48,12 +49,13 @@ struct Body<'v> {
 
 impl<'v> Body<'v> {
     /// Classifies a parsed JSON object once (spec 02 section 2): no string
-    /// `method` makes it a response object, a string or integer `id` makes it
-    /// a request, anything else a notification.
+    /// `method` makes it a response object, a string `method` plus an `id`
+    /// member makes it a request, and a string `method` without one makes it a
+    /// notification.
     fn new(root: &'v Map<String, Value>) -> Self {
         let kind = match root.get("method").and_then(Value::as_str) {
             None => BodyKind::Response,
-            Some(_) if request_id(root).is_some() => BodyKind::Request,
+            Some(_) if has_id_member(root) => BodyKind::Request,
             Some(_) => BodyKind::Notification,
         };
         Self { root, kind }
@@ -94,8 +96,16 @@ impl<'v> Body<'v> {
     }
 }
 
+/// Whether the body carries an `id` member at all, which is what makes it a
+/// request rather than a notification (spec 04 `S11`: "body with `method`,
+/// no `id`"). A `null` or fractional `id` is still a member; `S10` only
+/// stops echoing it.
+fn has_id_member(root: &Map<String, Value>) -> bool {
+    root.contains_key("id")
+}
+
 /// The raw JSON text of an acceptable JSON-RPC request `id`: a string or an
-/// integer, otherwise `None` (the body is then not a request).
+/// integer, otherwise `None` (`S10` echoes `null` for every other id).
 fn request_id(root: &Map<String, Value>) -> Option<String> {
     let id = root.get("id")?;
     let acceptable = id.is_string() || id.as_i64().is_some() || id.as_u64().is_some();
