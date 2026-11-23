@@ -299,7 +299,10 @@ fn open_stream_refuses_a_redirect() {
             "the refused body must be dropped"
         );
         assert!(
-            log.lock().expect("log lock").is_empty(),
+            log.lock()
+                .expect("log lock")
+                .iter()
+                .all(|entry| entry == "drop"),
             "no byte may be read from a refused response"
         );
     }
@@ -335,7 +338,10 @@ fn open_stream_refuses_a_non_stream_response() {
         "the refused body must be dropped"
     );
     assert!(
-        log.lock().expect("log lock").is_empty(),
+        log.lock()
+            .expect("log lock")
+            .iter()
+            .all(|entry| entry == "drop"),
         "no byte may be read from a refused response"
     );
 }

@@ -623,7 +623,7 @@ fn idle_rules() {
     // A gap of exactly streamIdleMs between verified frames stays alive.
     let w = wires(&[(OPEN_TS, MSG_A), (OPEN_TS + 90, MSG_B), (OPEN_TS + 180, "")]);
     let arrivals = [0i64, 90_000, 180_000];
-    let samples = [OPEN_TS, OPEN_TS + 90, OPEN_TS + 180];
+    let samples = [OPEN_TS, OPEN_TS, OPEN_TS + 90, OPEN_TS + 180];
     let (body, chunks) = chunked(&w, &arrivals);
     let out = run(&chunks, &body, config(&samples), None);
     assert_eq!(
@@ -655,7 +655,7 @@ fn idle_rules() {
         (OPEN_TS + 160, ""),
     ]);
     let arrivals = [0i64, 80_000, 160_000, 160_000];
-    let samples = [OPEN_TS, OPEN_TS + 80, OPEN_TS + 160, OPEN_TS + 160];
+    let samples = [OPEN_TS, OPEN_TS, OPEN_TS + 80, OPEN_TS + 160, OPEN_TS + 160];
     let (body, chunks) = chunked(&w, &arrivals);
     let out = run(&chunks, &body, config(&samples), None);
     assert_eq!(

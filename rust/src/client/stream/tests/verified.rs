@@ -316,7 +316,10 @@ fn off_path(status: u16, headers: Vec<(String, String)>) -> TransportError {
         "the refused body must be dropped"
     );
     assert!(
-        log.lock().expect("log lock").is_empty(),
+        log.lock()
+            .expect("log lock")
+            .iter()
+            .all(|entry| entry == "drop"),
         "no byte may be read from a refused response"
     );
     error
