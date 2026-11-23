@@ -20,6 +20,8 @@ func collect(t *testing.T, p *sseParser, chunks [][]byte) []event {
 			t.Fatalf("feed of chunk %d: %v", i, err)
 		}
 	}
+	// End of input: a pending lone CR terminates its line and event (2.14).
+	p.reset()
 	return events
 }
 

@@ -231,7 +231,7 @@ test("stream client: the caller can cancel an open stream", async () => {
   assert.deepEqual(first, { value: MESSAGE_ONE, done: false });
 
   await session.cancel();
-  const signal = recordedSignal;
+  const signal = recordedSignal as AbortSignal | null;
   assert.ok(signal !== null, "the fake fetch recorded the request signal");
   assert.equal(signal.aborted, true, "cancel aborts the connection");
   assert.equal(bodyCancelled, true, "cancel closes the response body");
