@@ -18,6 +18,7 @@ use crate::server::identity::VerifiedIdentity;
 use crate::server::native::invite_id_of;
 use crate::server::nonce::NonceStore;
 use crate::server::state::{RegistryEntry, StateStore};
+use crate::server::webhook_key::TOOL_SERVER_WEBHOOK_KEY;
 use crate::signing::{request_signing_string, DEFAULT_WINDOW_SECONDS};
 
 /// Protocol-native tool: enroll a new key (spec 03 section 3.2).
@@ -155,6 +156,9 @@ pub struct Verifier {
     /// denies the route. Deliberately NOT a Config field: adding a field
     /// would break every existing struct literal of the static public API.
     server_keys: Option<Arc<dyn NativeTools>>,
+    /// Candidate jack.server.webhook_key handler (spec 06 rule R7.6); None
+    /// denies the route. Builder-only for the same static-API reason.
+    webhook_keys: Option<Arc<dyn NativeTools>>,
     /// Candidate durable nonce store (Go: Config.DurableNonces); None uses
     /// the volatile store. Builder-only for the same static-API reason.
     #[cfg(target_os = "linux")]
@@ -190,6 +194,7 @@ impl Verifier {
         Ok(Self {
             cfg,
             server_keys: None,
+            webhook_keys: None,
             #[cfg(target_os = "linux")]
             durable: None,
             #[cfg(target_os = "linux")]
@@ -204,6 +209,14 @@ impl Verifier {
     /// infallible static constructor.
     pub fn with_server_keys(mut self, server_keys: Arc<dyn NativeTools>) -> Self {
         self.server_keys = Some(server_keys);
+        self
+    }
+
+    /// Routes `jack.server.webhook_key` to this handler (spec 06 rule R7.6).
+    /// The tool is read-only, so no rotating response profile is needed; None
+    /// keeps the route answering 403 operation_denied.
+    pub fn with_webhook_keys(mut self, webhook_keys: Arc<dyn NativeTools>) -> Self {
+        self.webhook_keys = Some(webhook_keys);
         self
     }
 
@@ -438,6 +451,8 @@ impl Verifier {
             // audit event — the call never reached a tool.
             let handler = if tool == TOOL_SERVER_KEY {
                 self.server_keys.as_ref()
+            } else if tool == TOOL_SERVER_WEBHOOK_KEY {
+                self.webhook_keys.as_ref()
             } else {
                 self.cfg.native.as_ref().filter(|_| is_native_tool(&tool))
             };
