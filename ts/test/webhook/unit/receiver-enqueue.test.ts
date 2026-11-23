@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { v1Sign } from "../../../src/webhook/crypto/signatures.js";
-import { adaptNodeRequest } from "../../../src/webhook/receiver/adapter.js";
+import { adaptNodeRequest, createNodeHandler } from "../../../src/webhook/receiver/adapter.js";
 import { WebhookReceiver } from "../../../src/webhook/receiver/core.js";
 import type { EnqueueDelivered, ReceiverRequest, WebhookReceiverConfig } from "../../../src/webhook/receiver/core.js";
 import { utf8 } from "../support/vectors.js";
@@ -89,6 +89,47 @@ test("the receiver waits for durable enqueue and never enqueues an acknowledged 
   assert.equal(calls, 1);
 });
 
+test("concurrent copies of a signed delivery enqueue once and acknowledge one duplicate", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let calls = 0;
+  const receiver = receiverWith(async () => {
+    calls += 1;
+    await gate;
+  });
+  const request = signedRequest(GAP);
+  const first = receiver.handle(request);
+  const second = receiver.handle(request);
+  release();
+  const [firstResult, secondResult] = await Promise.all([first, second]);
+  const [accepted, duplicate] = firstResult.recorded ? [firstResult, secondResult] : [secondResult, firstResult];
+  assert.equal(calls, 1);
+  assert.equal(accepted.status, 200);
+  assert.deepEqual(accepted.body, { status: "accepted" });
+  assert.equal(accepted.recorded, true);
+  assert.equal(duplicate.status, 200);
+  assert.deepEqual(duplicate.body, { status: "duplicate" });
+  assert.equal(duplicate.recorded, false);
+});
+
+test("a waiting concurrent delivery retries a failed enqueue and records the id once", async () => {
+  let calls = 0;
+  const receiver = receiverWith(async () => {
+    calls += 1;
+    if (calls === 1) throw new Error("durable enqueue failed");
+  });
+  const request = signedRequest(GAP);
+  const [rejected, accepted] = await Promise.all([receiver.handle(request), receiver.handle(request)]);
+  assert.equal(calls, 2);
+  assert.equal(rejected.status, 503);
+  assert.equal(rejected.code, "enqueue_failed");
+  assert.equal(rejected.recorded, false);
+  assert.equal(accepted.status, 200);
+  assert.deepEqual(accepted.body, { status: "accepted" });
+  assert.equal(accepted.recorded, true);
+  assert.deepEqual(receiver.snapshot().accepted, [WEBHOOK_ID]);
+});
+
 test("verification echoes the challenge without enqueueing it", async () => {
   let calls = 0;
   const receiver = receiverWith(async () => { calls++; });
@@ -121,6 +162,29 @@ test("the Node adapter rejects a stream over 262144 bytes without enqueueing", a
   const receiver = receiverWith(async () => { calls++; });
   const chunks = [new Uint8Array(262144), new Uint8Array(1)];
   const result = await adaptNodeRequest(receiver, { headers: {}, body: streamOf(chunks), now: NOW });
+  const body = JSON.parse(result.body) as { error: { code: string } };
+  assert.equal(result.status, 413);
+  assert.equal(body.error.code, "body_too_large");
+  assert.equal(calls, 0);
+});
+
+test("Node handler construction rejects a body limit above the protocol ceiling", () => {
+  const receiver = receiverWith(async () => {});
+  assert.throws(
+    () => createNodeHandler(receiver, { maxBodyBytes: 262145 }),
+    /maxBodyBytes must be an integer from 0 through 262144/,
+  );
+});
+
+test("the Node adapter clamps an oversized body limit override to the protocol ceiling", async () => {
+  let calls = 0;
+  const receiver = receiverWith(async () => { calls += 1; });
+  const result = await adaptNodeRequest(receiver, {
+    headers: {},
+    body: streamOf([new Uint8Array(262144), new Uint8Array(1)]),
+    now: NOW,
+    maxBodyBytes: 300000,
+  });
   const body = JSON.parse(result.body) as { error: { code: string } };
   assert.equal(result.status, 413);
   assert.equal(body.error.code, "body_too_large");

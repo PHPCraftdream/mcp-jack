@@ -1,8 +1,6 @@
 import { lookup } from "node:dns/promises";
 import type { IncomingMessage } from "node:http";
 import { request as httpsRequest } from "node:https";
-import { performance } from "node:perf_hooks";
-import { clearTimeout, setTimeout } from "node:timers";
 import { checkServerIdentity } from "node:tls";
 import type { PeerCertificate, TLSSocket } from "node:tls";
 import { classifyAddress } from "./address.js";
@@ -71,10 +69,14 @@ export interface HardenedTransportOptions {
   readonly maxResponseBytes?: number;
 }
 
-/** A response or a refusal code with no raw network error details. */
+/** A response or a refusal code and optional reason, without raw network error details. */
 export type HardenedOutcome =
   | { readonly ok: true; readonly response: HardenedResponse }
-  | { readonly ok: false; readonly code: DeliveryFailureCode | "connection_refused" | "tls_error" | "timeout" };
+  | {
+      readonly ok: false;
+      readonly code: DeliveryFailureCode | "connection_refused" | "tls_error" | "timeout";
+      readonly reason?: string;
+    };
 
 type FailureCode = Extract<HardenedOutcome, { readonly ok: false }>["code"];
 
@@ -111,7 +113,11 @@ export class HardenedTransport {
     }
     if (signal?.aborted) return { ok: false, code: "timeout" };
     const decision = checkDelivery({ url, answers, allowedRanges: this.#options.allowedRanges ?? [] });
-    if (decision.decision !== "allow") return { ok: false, code: decision.code };
+    if (decision.decision !== "allow") {
+      return decision.reason === undefined
+        ? { ok: false, code: decision.code }
+        : { ok: false, code: decision.code, reason: decision.reason };
+    }
 
     const { address } = decision.connect;
     const target = { ...decision.connect, port: checked.port, ipv6: address.includes(":") };

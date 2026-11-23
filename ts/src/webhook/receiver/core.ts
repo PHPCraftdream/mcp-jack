@@ -230,6 +230,7 @@ export class WebhookReceiver {
   private readonly enqueue: EnqueueDelivered;
   private readonly terminated = new Set<string>();
   private readonly accepted = new Map<string, number>();
+  private readonly inFlight = new Map<string, Promise<void>>();
 
   /** Builds a receiver with its original callback URLs and initial routing. */
   constructor(config: WebhookReceiverConfig) {
@@ -260,6 +261,7 @@ export class WebhookReceiver {
    * Verifies one delivery, stopping at the first refusal in the reference order.
    * For a forwarded message, returns 2xx only after the application's enqueue resolves;
    * a failed enqueue records nothing. Verification challenges are echoed in place.
+   * A second delivery of an id being enqueued waits for the outcome: success makes it a duplicate, failure makes it a fresh delivery.
    */
   async handle({ now, headers, body }: ReceiverRequest): Promise<ReceiverStepResult> {
     const raw = bodyBytes(body);
@@ -335,16 +337,31 @@ export class WebhookReceiver {
 
     const seenAt = this.accepted.get(webhookId);
     if (seenAt !== undefined && now - seenAt <= this.retention) return done(200, { status: "duplicate" }, false);
+    let pending = this.inFlight.get(webhookId);
+    while (pending !== undefined) {
+      try {
+        await pending;
+      } catch {
+        // The pending enqueue failed; another waiter may already be retrying it.
+      }
+      const settled = this.accepted.get(webhookId);
+      if (settled !== undefined && now - settled <= this.retention) return done(200, { status: "duplicate" }, false);
+      pending = this.inFlight.get(webhookId);
+    }
     const parsed = parseWebhookBody(raw);
     if (!parsed.ok) return reject(parsed.code);
     const { type, message } = parsed.envelope;
     if (this.terminated.has(subscriptionId)) return reject("subscription_terminated");
     if (deferred && type !== "verification") return reject("subscription_not_routed");
     if (type !== "verification") {
+      const delivery = (async () => { await this.enqueue([message]); })();
+      this.inFlight.set(webhookId, delivery);
       try {
-        await this.enqueue([message]);
+        await delivery;
       } catch {
         return reject("enqueue_failed");
+      } finally {
+        if (this.inFlight.get(webhookId) === delivery) this.inFlight.delete(webhookId);
       }
     }
     this.accepted.set(webhookId, now);

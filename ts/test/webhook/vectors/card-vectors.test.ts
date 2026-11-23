@@ -93,7 +93,7 @@ function run(c: VectorCase): unknown {
         response: responseOf(input.response as WireResponse),
       });
       if (!verdict.ok) return refusal(verdict.code);
-      const checked = crossCheckWebhookKey({ keys: verdict.keys, toolResult: input.toolResult, require: true });
+      const checked = crossCheckWebhookKey({ keys: verdict.cardKeys, toolResult: input.toolResult, require: true });
       return checked.ok ? { result: "accept" } : refusal(checked.code);
     }
     default:

@@ -127,21 +127,37 @@ function nowSeconds(): number {
   return Date.now() / 1000;
 }
 
-/** The signed verification POST supplied by the sender. */
-export interface ChallengeRequest {
-  readonly url: string;
-  readonly method: "POST";
-  readonly path: string;
-  readonly headers: Readonly<Record<string, string>>;
-  readonly body: Uint8Array;
+/** An invalid endpoint verifier dependency. */
+export class VerificationConfigurationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "VerificationConfigurationError";
+  }
 }
 
-/** Signs a fresh verification envelope for the given pair. */
+/** The canonical URL and request path for a verification challenge. */
+export interface ChallengeDestination {
+  readonly url: string;
+  readonly path: string;
+}
+
+/** The headers for a signed verification POST. */
+export interface ChallengeRequest {
+  readonly headers: Readonly<Record<string, string>>;
+}
+
+/** Signs a fresh verification envelope for the given pair and destination. */
 export type ChallengeSigner = (input: {
   readonly pair: VerifiedPair;
   readonly nonce: string;
   readonly body: Uint8Array;
+  readonly destination: ChallengeDestination;
 }) => ChallengeRequest;
+
+/** The receiver paths from a successful document fetch, or the failure code and reason. */
+export type DocumentFetchOutcome =
+  | { readonly ok: true; readonly receivers: readonly string[] }
+  | { readonly ok: false; readonly code: string; readonly reason: string };
 
 /** The hardened HTTPS path shared by well-known fetches and challenge POSTs. */
 export interface VerificationTransport {
@@ -204,8 +220,27 @@ export class EndpointVerifier {
   readonly #challenges: ChallengeStore;
   readonly #documents: DocumentCache;
 
-  /** Uses the supplied stores or creates in-memory defaults. */
+  /** Validates dependencies and uses the supplied stores or creates in-memory defaults. */
   constructor(deps: EndpointVerificationDeps) {
+    if (!isObject(deps)) throw new VerificationConfigurationError("deps must be an object");
+    if (!hasMethods(deps.transport, "request")) {
+      throw new VerificationConfigurationError("deps.transport must be an object with a request function");
+    }
+    if (deps.allowlist !== undefined && !isStringArray(deps.allowlist)) {
+      throw new VerificationConfigurationError("deps.allowlist must be an array of strings");
+    }
+    for (const member of ["hook", "nonceSource", "now"] as const) {
+      if (deps[member] !== undefined && typeof deps[member] !== "function") {
+        throw new VerificationConfigurationError(`deps.${member} must be a function`);
+      }
+    }
+    for (const [member, first, second] of [
+      ["cache", "has", "set"], ["challenges", "issue", "accept"], ["documents", "get", "set"],
+    ] as const) {
+      if (deps[member] !== undefined && !hasMethods(deps[member], first, second)) {
+        throw new VerificationConfigurationError(`deps.${member} must be an object with ${first} and ${second} functions`);
+      }
+    }
     this.#deps = deps;
     const clock = { now: deps.now ?? nowSeconds };
     this.#cache = deps.cache ?? new VerificationCache(clock);
@@ -236,48 +271,67 @@ export class EndpointVerifier {
     return reason === null ? hit("challenge") : { verified: false, route: null, reason };
   }
 
+  /** Fetches and caches the origin's well-known receiver document over hardened HTTPS (R5.9). */
+  async fetchDocument(canonicalUrl: string): Promise<DocumentFetchOutcome> {
+    const checked = checkCallbackUrl(canonicalUrl);
+    if (!checked.ok) return { ok: false, code: checked.code, reason: checked.reason ?? checked.code };
+    const url = wellKnownUrl(checked.canonical);
+    if (url === null) return { ok: false, code: "invalid_callback_url", reason: "well_known_url" };
+    const origin = url.slice(0, -WELL_KNOWN_PATH.length);
+    const receivers = this.#documents.get(origin);
+    if (receivers !== undefined) return { ok: true, receivers };
+    try {
+      const outcome = await this.#deps.transport.request(url, {
+        method: "GET",
+        path: WELL_KNOWN_PATH,
+        headers: { accept: "application/json" },
+      });
+      if (!outcome.ok) return { ok: false, code: outcome.code, reason: outcome.reason ?? outcome.code };
+      if (outcome.response.tooLarge === true) return { ok: false, code: "document_fetch_failed", reason: "too_large" };
+      const { status, body, headers } = outcome.response;
+      const verdict = checkReceiverDocFetch({ status, bodyText: Buffer.from(body).toString("utf8") });
+      if (verdict.ok) this.#documents.set(origin, verdict.receivers, docCacheTtl(cacheMaxAge(headers)));
+      return verdict;
+    } catch {
+      return { ok: false, code: "document_fetch_failed", reason: "document_fetch_failed" };
+    }
+  }
+
   async #wellKnown(canonicalUrl: string): Promise<boolean> {
+    const doc = await this.fetchDocument(canonicalUrl);
+    if (!doc.ok) return false;
     const checked = checkCallbackUrl(canonicalUrl);
     if (!checked.ok) return false;
-    const url = wellKnownUrl(checked.canonical);
-    if (url === null) return false;
-    const origin = url.slice(0, -WELL_KNOWN_PATH.length);
-    let receivers = this.#documents.get(origin);
-    if (receivers === undefined) {
-      try {
-        const answer = await this.#deps.transport.request(url, {
-          method: "GET",
-          path: WELL_KNOWN_PATH,
-          headers: { accept: "application/json" },
-        });
-        if (!answer.ok || answer.response.tooLarge === true) return false;
-        const { status, body, headers } = answer.response;
-        const doc = checkReceiverDocFetch({ status, bodyText: Buffer.from(body).toString("utf8") });
-        if (!doc.ok) return false;
-        receivers = doc.receivers;
-        this.#documents.set(origin, receivers, docCacheTtl(cacheMaxAge(headers)));
-      } catch {
-        return false;
-      }
-    }
-    return receiverDocCovers(receivers, checked.path).covered;
+    return receiverDocCovers(doc.receivers, checked.path).covered;
   }
 
   async #challenge(pair: VerifiedPair, signer: ChallengeSigner): Promise<string | null> {
+    const checked = checkCallbackUrl(pair.canonicalUrl);
+    if (!checked.ok) return checked.reason ?? checked.code;
+    const destination = { url: checked.canonical, path: checked.path + (checked.query === "" ? "" : `?${checked.query}`) };
     let nonce: string;
-    let signed: ChallengeRequest;
+    let body: Uint8Array;
+    let headers: Readonly<Record<string, string>>;
     try {
       nonce = this.#deps.nonceSource?.() ?? randomNonce();
-      const body = Buffer.from(JSON.stringify({ type: "verification", challenge: nonce }), "utf8");
-      signed = signer({ pair, nonce, body });
+      body = Buffer.from(JSON.stringify({ type: "verification", challenge: nonce }), "utf8");
+      const signingPair = { principal: pair.principal, canonicalUrl: pair.canonicalUrl };
+      const signed: unknown = signer({ pair: signingPair, nonce, body, destination: { ...destination } });
+      if (!isObject(signed)) return "challenge_failed";
+      const candidate = signed.headers;
+      if (!isObject(candidate)) return "challenge_failed";
+      const entries: [string, unknown][] = Object.entries(candidate);
+      if (!entries.every((entry): entry is [string, string] => typeof entry[1] === "string")) {
+        return "challenge_failed";
+      }
+      headers = Object.fromEntries(entries);
       this.#challenges.issue(pair, nonce);
     } catch {
       return "challenge_failed";
     }
-    const { url, ...request } = signed;
     let answer: HardenedOutcome;
     try {
-      answer = await this.#deps.transport.request(url, request);
+      answer = await this.#deps.transport.request(destination.url, { method: "POST", path: destination.path, headers, body });
     } catch {
       return "connection_refused";
     }
@@ -285,8 +339,8 @@ export class EndpointVerifier {
       return answer.code === "timeout" || answer.code === "tls_error" ? answer.code : "connection_refused";
     }
     if (answer.response.tooLarge === true) return "too_large";
-    const { status, body } = answer.response;
-    const echo = challengeEcho({ status, bodyText: Buffer.from(body).toString("utf8"), nonce });
+    const { status, body: responseBody } = answer.response;
+    const echo = challengeEcho({ status, bodyText: Buffer.from(responseBody).toString("utf8"), nonce });
     if (!echo.ok) return echo.reason;
     try {
       const consumed = this.#challenges.accept({ pair, nonce });
@@ -295,6 +349,23 @@ export class EndpointVerifier {
       return "challenge_failed";
     }
   }
+}
+
+function isObject(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null;
+}
+
+function hasMethods(value: unknown, ...methods: readonly string[]): boolean {
+  return isObject(value) && methods.every((method) => typeof value[method] === "function");
+}
+
+function isStringArray(value: unknown): boolean {
+  if (!Array.isArray(value)) return false;
+  const entries: readonly unknown[] = value;
+  for (let i = 0; i < entries.length; i += 1) {
+    if (typeof entries[i] !== "string") return false;
+  }
+  return true;
 }
 
 function cacheMaxAge(headers: Readonly<Record<string, string>>): number | undefined {

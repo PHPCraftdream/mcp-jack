@@ -12,11 +12,9 @@ import { checkCallbackUrl } from "../../../src/webhook/ssrf/url.js";
 import { allowlistMatches, parseAllowlistEntry } from "../../../src/webhook/verification/allowlist.js";
 import type { AllowlistEntry } from "../../../src/webhook/verification/allowlist.js";
 import {
-  checkReceiverDocFetch,
   docCacheTtl,
   parseReceiverDoc,
   receiverDocCovers,
-  receiverDocRequest,
   wellKnownUrl,
 } from "../../../src/webhook/verification/document.js";
 import { acceptEcho, challengeEcho, nonceOk } from "../../../src/webhook/verification/nonce.js";
@@ -93,10 +91,6 @@ function postFields(input: DeliveryCheckInput): DeliveryCheckInput {
   };
 }
 
-function docRequest(input: DeliveryCheckInput & WireFetch) {
-  return receiverDocRequest({ ...postFields(input), ...fetchFields(input) });
-}
-
 function challengeResult(verdict: ChallengeEcho): unknown {
   return verdict.ok ? { result: "accept" } : refusal(verdict.code, verdict.reason);
 }
@@ -159,7 +153,7 @@ async function run(c: VectorCase): Promise<unknown> {
       const verdict = challenge === null
         ? await verifier.verify(PAIR, NOW + 3600)
         : await verifier.verify(PAIR, NOW + 3600, {
-          challenge: ({ body }) => ({ url: HOOK, method: "POST", path: "/hooks/alice", headers: {}, body }),
+          challenge: () => ({ headers: {} }),
         });
       if (c.expect.route === "cache" || c.expect.route === "allowlist" || c.expect.route === "out_of_band") {
         assert.equal(seen.length, 0, `${c.id}: early verification route must not dial`);
@@ -215,11 +209,16 @@ async function run(c: VectorCase): Promise<unknown> {
       return checked.decision === "allow" ? { result: "accept", address: checked.connect.address } : refusal(checked.code, checked.reason);
     }
     case "doc-fetch": {
-      const wire = input as typeof input & WireFetch;
-      const verdict = input.url === undefined
-        ? checkReceiverDocFetch({ ...fetchFields(wire), ...fetchLimits(wire) })
-        : docRequest(input as typeof input & DeliveryCheckInput & WireFetch);
-      return verdict.ok ? { result: "accept", receivers: verdict.receivers } : refusal(verdict.code, verdict.reason);
+      const wire = input as unknown as { status?: number; bodyText?: string; answers?: readonly string[] };
+      const { transport } = recordingTransport(
+        () => ({ status: wire.status ?? 500, body: utf8(wire.bodyText ?? "") }),
+        wire.answers,
+      );
+      const verifier = new EndpointVerifier({ transport, now: () => NOW });
+      const outcome = await verifier.fetchDocument(PAIR.canonicalUrl);
+      return outcome.ok
+        ? { result: "accept", receivers: outcome.receivers }
+        : { result: "reject", code: outcome.code, reason: outcome.reason };
     }
     default:
       throw new Error(`${c.id}: unknown kind ${c.kind}`);

@@ -1,4 +1,3 @@
-import { clearTimeout, setTimeout } from "node:timers";
 import { encodeBase64URL } from "../../core/encoding.js";
 import type { AcceptedWebhookKey } from "../crypto/signatures.js";
 import type { HardenedOutcome, HardenedRequest } from "../ssrf/client.js";

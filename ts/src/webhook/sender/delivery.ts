@@ -1,4 +1,3 @@
-import { setTimeout } from "node:timers";
 import { emissionHeader, w1Sign } from "../crypto/signatures.js";
 import type { ActiveSecret, VersionedSigningKey, WebhookSigningKey } from "../crypto/signatures.js";
 import { senderDecision } from "../receiver/core.js";
@@ -8,6 +7,9 @@ import type { CallbackUrlCheck, CallbackUrlCode } from "../ssrf/url.js";
 import type { ChallengeSigner, EndpointVerification, EndpointVerifier } from "../verification/routes.js";
 import { newWebhookId } from "./message.js";
 import type { OutboundMessage } from "./message.js";
+
+const PROTOCOL_MAX_BODY_BYTES = 262144;
+const RETRY_WINDOW_SECONDS = 900;
 
 /** The subscription, verified Jack identity name and active credentials for one callback. */
 export interface WebhookDeliveryTarget {
@@ -113,7 +115,11 @@ export class WebhookSender {
   constructor(private readonly options: WebhookSenderOptions) {
     if (options?.verifier == null) throw new Error("WebhookSender requires an EndpointVerifier");
     if (options.transport == null) throw new Error("WebhookSender requires a transport");
-    this.#maxBodyBytes = options.maxBodyBytes ?? 262144;
+    const limit = options.maxBodyBytes ?? PROTOCOL_MAX_BODY_BYTES;
+    if (!Number.isSafeInteger(limit) || limit < 0 || limit > PROTOCOL_MAX_BODY_BYTES) {
+      throw new Error("WebhookSender maxBodyBytes must be an integer from 0 through 262144");
+    }
+    this.#maxBodyBytes = limit;
     this.#verificationTtlSeconds = options.verificationTtlSeconds ?? 300;
   }
 
@@ -135,21 +141,22 @@ export class WebhookSender {
     const challengeTarget = { ...target };
     const checked = checkTargetUrl(challengeTarget);
     if (!checked.ok) return { verified: false, route: null, reason: callbackUrlError(checked.code) };
-    const { principal, callbackUrl, canonicalUrl = checked.canonical } = challengeTarget;
+    const { principal, canonicalUrl = checked.canonical } = challengeTarget;
     if (typeof principal !== "string" || principal.length === 0) {
       return { verified: false, route: null, reason: "no_route" };
     }
-    const path = requestPath(checked);
-    const signer: ChallengeSigner = ({ body }) => {
+    const signer: ChallengeSigner = ({ body, destination }) => {
       const webhookId = newWebhookId("verification", this.options.randomBytes);
       const timestamp = String(Math.floor(this.options.now()));
-      const headers = this.#headers(challengeTarget, webhookId, timestamp, body);
-      return { url: callbackUrl, method: "POST", path, headers, body };
+      return { headers: this.#headers(challengeTarget, webhookId, timestamp, body) };
     };
     return this.options.verifier.verify({ principal, canonicalUrl }, this.#expiresAt(challengeTarget), { challenge: signer });
   }
 
-  /** Delivers a verified message, preserving its id and signing again on each retry. */
+  /**
+   * Delivers a verified message, preserving its id and signing again on each retry.
+   * An attempt starting after the R1.8 window is abandoned with `timeout`, using the injected clock, never wall time.
+   */
   async deliver(target: WebhookDeliveryTarget, message: OutboundMessage): Promise<DeliveryOutcome> {
     const { webhookId, body } = message;
     const notSent = { webhookId, attempts: 0, accepted: false, status: null };
@@ -173,7 +180,11 @@ export class WebhookSender {
     const t0 = now();
     // senderDecision ends the loop no later than attempt four.
     for (let attempt = 1; ; attempt += 1) {
-      const timestamp = String(Math.floor(attempt === 1 ? t0 : now()));
+      const startedAt = attempt === 1 ? t0 : now();
+      if (startedAt > t0 + RETRY_WINDOW_SECONDS) {
+        return { webhookId, attempts: attempt - 1, accepted: false, lastError: "timeout", status: null, gate: "deliver" };
+      }
+      const timestamp = String(Math.floor(startedAt));
       const headers = this.#headers(deliveryTarget, webhookId, timestamp, body);
       const result = await transport.request(callbackUrl, { method: "POST", path, headers, body });
       const responseTime = now();
