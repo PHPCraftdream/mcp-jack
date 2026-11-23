@@ -497,7 +497,7 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     // list (`undefined` marks the legacy era here).
     const forwardedList: readonly (readonly [string, string])[] | undefined =
       res.era === "modern" ? res.forwardHeaders ?? [] : undefined;
-    const forwardedHeaders = forwardedList !== undefined ? new Headers(forwardedList) : new Headers(req.headers);
+    const forwardedHeaders = forwardedList !== undefined ? new Headers(forwardedList.map(([name, value]): [string, string] => [name, value])) : new Headers(req.headers);
     // Restore the EXACT buffered body bytes. undici throws for a GET body,
     // so the body is only attached for methods that can carry one; a
     // conditional spread, never an explicit undefined, keeps
