@@ -26,9 +26,10 @@ use std::sync::MutexGuard;
 use serde_json::{json, Map, Value};
 
 use super::era::{detect_era, EraAction, EraDetection, EraReason, VerifiedResponse};
-use super::{add_client_info, build_mirrors, ClientEra};
+use super::resync::{ExchangeResponse, ModernExchange, Resync};
+use super::{add_client_info, build_mirrors, ClientEra, PrivateResultCache, ProjectionError};
 use crate::client::error::{parse_error_body, ClientError, HttpError, ReplyError, RpcError};
-use crate::client::rpc::Client;
+use crate::client::rpc::{Client, ModernState};
 use crate::client::signer::Signer;
 use crate::client::transport::{HttpRequest, HttpResponse};
 use crate::modern::{Era, IMPLEMENTATION_NAME, IMPLEMENTATION_VERSION, MODERN_MIN};
@@ -44,6 +45,9 @@ const IMPLEMENTED_VERSIONS: [&str; 1] = [LEGACY_VERSION];
 
 /// The JSON-RPC code of a version mismatch (spec 04 section 5.2).
 const VERSION_MISMATCH: i64 = -32022;
+
+/// The JSON-RPC code of a header-mismatch refusal (spec 04 `C10`).
+const HEADER_MISMATCH: i64 = -32020;
 
 /// The era flow state of one client (spec 04 `C9`).
 ///
@@ -135,9 +139,12 @@ fn direct_legacy_call(
     send_body(client, signer, pinned_ts, body, &[])
 }
 
-/// Forgets the resolved era, the negotiated version and the session.
+/// Forgets the resolved era, the negotiated version and the session, and drops
+/// the modern state (spec 04 `C9` + `C8`): both catalogs and the private result
+/// cache belong to the era that produced them, so a re-probe starts clean.
 pub(crate) fn reset_era(client: &Client) {
     clear(client);
+    *lock_modern(client) = ModernState::default();
 }
 
 /// The era the next request of an `Auto` client is built in: the cached
@@ -201,7 +208,8 @@ fn probe(
     }
 }
 
-/// One `tools/call` in the modern era, with the one `-32022` retry.
+/// One `tools/call` in the modern era, with the projected `Mcp-Param-*`
+/// headers of `C6`, the `C10` header resync and the one `-32022` retry.
 fn modern_tool_call(
     client: &Client,
     signer: Option<&dyn Signer>,
@@ -209,13 +217,51 @@ fn modern_tool_call(
     tool: &str,
     args_json: Option<&str>,
 ) -> Result<HttpResponse, ClientError> {
-    let params = call_params(tool, args_json);
+    let arguments = call_arguments(args_json);
+    let params = call_params(tool, &arguments);
+    let projected = project_call(client, tool, &arguments)?;
+    // `C10` needs a catalog to re-project: with an empty one nothing was
+    // projected and the request stays exactly what it was before.
+    let resync = has_tool_catalog(client);
     let mut version = current_modern_version(client);
-    let resp = send_modern(client, signer, pinned_ts, "tools/call", &params, &version)?;
+    let resp = send_modern_with(
+        client,
+        signer,
+        pinned_ts,
+        "tools/call",
+        &params,
+        &version,
+        &projected,
+    )?;
+    if resync && is_header_mismatch(&resp) {
+        // `C10`: the server's `inputSchema` may have changed. Refresh the tool
+        // catalog once, project again and resend once. This budget is per call
+        // and separate from the `-32022` version retry below.
+        let headers = refresh_projection(client, tool, &arguments)?;
+        let retried = send_modern_with(
+            client,
+            signer,
+            pinned_ts,
+            "tools/call",
+            &params,
+            &version,
+            &headers,
+        )?;
+        check_era(client, &retried, Era::Modern);
+        return Ok(retried);
+    }
     let resp = match adopt_retry(client, &resp, &version)? {
         Some(next) => {
             version = next;
-            let retried = send_modern(client, signer, pinned_ts, "tools/call", &params, &version)?;
+            let retried = send_modern_with(
+                client,
+                signer,
+                pinned_ts,
+                "tools/call",
+                &params,
+                &version,
+                &projected,
+            )?;
             // A second retry verdict aborts (`adopt_retry` spends the budget
             // once); anything else is the reply.
             match adopt_retry(client, &retried, &version) {
@@ -503,7 +549,8 @@ fn send_body(
         .round_trip_as(signer.unwrap_or(client.signer.as_ref()), pinned_ts, req)?)
 }
 
-/// Sends one modern request for any method: `_meta` plus the mirror headers.
+/// Sends one modern request for any method: `_meta` plus the mirror headers
+/// and no projected header.
 fn send_modern(
     client: &Client,
     signer: Option<&dyn Signer>,
@@ -512,7 +559,23 @@ fn send_modern(
     params: &Value,
     version: &str,
 ) -> Result<HttpResponse, ClientError> {
-    let (params_text, headers) = build_modern_parts(method, params, version)?;
+    send_modern_with(client, signer, pinned_ts, method, params, version, &[])
+}
+
+/// Sends one modern request: the `C2` mirror headers, then `extra_headers` —
+/// the projected `Mcp-Param-*` headers of `C6` — after them.
+#[allow(clippy::too_many_arguments)]
+fn send_modern_with(
+    client: &Client,
+    signer: Option<&dyn Signer>,
+    pinned_ts: Option<i64>,
+    method: &str,
+    params: &Value,
+    version: &str,
+    extra_headers: &[(String, String)],
+) -> Result<HttpResponse, ClientError> {
+    let (params_text, mut headers) = build_modern_parts(method, params, version)?;
+    headers.extend(extra_headers.iter().cloned());
     let id = next_id(client);
     send_rpc(
         client,
@@ -525,14 +588,136 @@ fn send_modern(
     )
 }
 
+/// The `params.arguments` of one call as a JSON value; an absent or unparsable
+/// argument text is the empty object.
+fn call_arguments(args_json: Option<&str>) -> Value {
+    serde_json::from_str(args_json.unwrap_or("{}")).unwrap_or_else(|_| Value::Object(Map::new()))
+}
+
 /// The `params` of a `tools/call`: the target name and its arguments.
-fn call_params(tool: &str, args_json: Option<&str>) -> Value {
-    let args: Value = serde_json::from_str(args_json.unwrap_or("{}"))
-        .unwrap_or_else(|_| Value::Object(Map::new()));
+fn call_params(tool: &str, arguments: &Value) -> Value {
     let mut params = Map::new();
     params.insert("name".to_owned(), Value::String(tool.to_owned()));
-    params.insert("arguments".to_owned(), args);
+    params.insert("arguments".to_owned(), arguments.clone());
     Value::Object(params)
+}
+
+/// The real [`ModernExchange`] of one client (`C10`/`C12`): every request is
+/// built like a modern call — `_meta` plus the `C2` mirror headers, then the
+/// projected `Mcp-Param-*` headers of `C6` — sent, signed and verified through
+/// the client's own transport, and its verified body parsed.
+struct TransportExchange<'a> {
+    /// The client whose transport, signer, version and id counter are used.
+    client: &'a Client,
+}
+
+impl ModernExchange for TransportExchange<'_> {
+    fn exchange(
+        &self,
+        method: &str,
+        params: &Value,
+        extra_headers: &[(String, String)],
+    ) -> Result<ExchangeResponse, ClientError> {
+        let client = self.client;
+        let version = current_modern_version(client);
+        let (params_text, mut headers) = build_modern_parts(method, params, &version)?;
+        headers.extend(extra_headers.iter().cloned());
+        let resp = send_rpc(
+            client,
+            None,
+            None,
+            Some(next_id(client)),
+            method,
+            &params_text,
+            &headers,
+        )?;
+        let json = serde_json::from_slice(&resp.body).map_err(|e| {
+            ClientError::Client(format!("jack client: decoding json-rpc response: {e}"))
+        })?;
+        Ok(ExchangeResponse {
+            status: resp.status,
+            json,
+        })
+    }
+}
+
+/// Rebuilds the client's tool catalog from `tools/list` (`C5`) over the real
+/// exchange (`C10` resync) and clears the private result cache (`C8`): a
+/// cached result was projected from the catalog it replaces.
+pub(crate) fn refresh_tool_catalog(client: &Client) -> Result<(), ClientError> {
+    let exchange = TransportExchange { client };
+    let mut resync = Resync::new(&exchange);
+    resync.refresh_tools()?;
+    let tools = resync.tools().clone();
+    let mut state = lock_modern(client);
+    state.tools = tools;
+    state.results = PrivateResultCache::new();
+    Ok(())
+}
+
+/// Rebuilds the client's event-type catalog from `events/list` (`C11`) over the
+/// real exchange (`C12` resync) and clears the private result cache (`C8`).
+pub(crate) fn refresh_event_catalog(client: &Client) -> Result<(), ClientError> {
+    let exchange = TransportExchange { client };
+    let mut resync = Resync::new(&exchange);
+    resync.refresh_events()?;
+    let events = resync.events().clone();
+    let mut state = lock_modern(client);
+    state.events = events;
+    state.results = PrivateResultCache::new();
+    Ok(())
+}
+
+/// The `Mcp-Param-*` headers of one call, projected from the cached tool
+/// catalog (spec 04 `C6`). A tool the catalog does not know projects nothing.
+fn project_call(
+    client: &Client,
+    tool: &str,
+    arguments: &Value,
+) -> Result<Vec<(String, String)>, ClientError> {
+    lock_modern(client)
+        .tools
+        .project(tool, arguments)
+        .map_err(projection_error)
+}
+
+/// A refused projection (spec 04 `C6`) as a client-side error.
+fn projection_error(error: ProjectionError) -> ClientError {
+    ClientError::Client(format!("jack client: {error}"))
+}
+
+/// Whether the client holds a tool catalog at all: only then is there anything
+/// a `-32020` refresh could re-project (`C10`).
+fn has_tool_catalog(client: &Client) -> bool {
+    !lock_modern(client).tools.entries().is_empty()
+}
+
+/// The `C10` resync of one call: refresh the tool catalog once over the real
+/// exchange, then project the call again from the fresh catalog.
+fn refresh_projection(
+    client: &Client,
+    tool: &str,
+    arguments: &Value,
+) -> Result<Vec<(String, String)>, ClientError> {
+    refresh_tool_catalog(client)?;
+    project_call(client, tool, arguments)
+}
+
+/// Whether a verified reply is a `-32020` header-mismatch refusal (spec 04
+/// `C10`): a `400` carrying a recognised JSON-RPC error with that code.
+fn is_header_mismatch(resp: &HttpResponse) -> bool {
+    resp.status == 400
+        && ReplyError::parse(resp.status, &resp.body)
+            .is_some_and(|reply| reply.code == HEADER_MISMATCH)
+}
+
+/// The modern-state lock, recovering from a poisoned mutex: the state is
+/// replaced wholesale and holds only independently valid values.
+fn lock_modern(client: &Client) -> MutexGuard<'_, ModernState> {
+    client
+        .modern
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Maps a verified reply: a non-2xx JSON-RPC error object with a numeric code

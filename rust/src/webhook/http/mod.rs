@@ -2,8 +2,8 @@
 //! attempt loop (R1.6-R1.10), the fail-closed per-pair verification of
 //! section 5 (R5.1, R5.2, R5.9, R5.12), the hardened delivery decision and
 //! connect target of section 6 (R6.8-R6.10), the R1.1 header set, and the
-//! adapters between `http` requests/responses and the framework-neutral
-//! receiver.
+//! adapters and the bounded entry point between `http` requests/responses and
+//! the framework-neutral receiver (R1.2, R3.6).
 //!
 //! The folder is split by dependency need, and the features follow exactly
 //! that split:
@@ -12,8 +12,9 @@
 //!   [`transport`] holds the traits, [`prepare`] and the request/response
 //!   types, [`sender`] holds the R1.8 loop and the R5.1 gate, [`document`]
 //!   holds the R5.9 fetcher over an injected transport, and [`transport`]
-//!   also holds the receiver adapters. These files use only the `http` and
-//!   `bytes` crates and spawn nothing.
+//!   also holds the receiver adapters. [`entry`] adds the bounded receiver
+//!   entry point of R1.2 and R3.6 over those adapters. These files use only
+//!   the `http`, `bytes` and `http-body-util` crates and spawn nothing.
 //! * The concrete dialer — [`https::SystemResolver`] and
 //!   [`https::HttpsTransport`] — needs `hyper`, `tokio`, `tokio-rustls` and
 //!   `hickory-resolver`, which this crate enables only through its
@@ -29,6 +30,7 @@
 //! schedule and the R5.1 gate can be exercised without a socket.
 
 pub mod document;
+pub mod entry;
 pub mod sender;
 pub mod transport;
 
@@ -39,6 +41,7 @@ pub mod https;
 mod tests;
 
 pub use document::WebhookDocumentFetcher;
+pub use entry::{accept, RECEIVER_BODY_CAP};
 #[cfg(feature = "client-http")]
 pub use https::{HttpsTransport, SystemResolver};
 pub use sender::{

@@ -16,6 +16,8 @@
 //! R5.9).
 
 use std::net::IpAddr;
+use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::webhook::receiver::DeliveryOutcome;
@@ -61,12 +63,17 @@ pub trait HostResolver: Send + Sync {
     /// `connection_refused` (spec 06 R1.9).
     fn resolve(&self, host: &str, port: u16) -> Result<Vec<IpAddr>, WebhookError>;
 
-    /// Returns every answer for `host` within the whole-attempt budget
-    /// (spec 06 R6.8).
+    /// Returns every answer for `host` within the remaining whole-attempt
+    /// budget (spec 06 R6.8).
     ///
     /// The default ignores the budget and delegates to [`HostResolver::resolve`],
     /// so a scripted resolver needs only that method; a resolver that can
     /// bound its own lookup overrides this one (spec 06 R1.6, R6.8).
+    ///
+    /// A caller MUST NOT rely on the implementation honouring `_budget`: the
+    /// caller of [`resolve_answers`] runs the lookup on its own thread and
+    /// abandons it at the deadline, so even a blocking implementation is
+    /// bounded by the caller (spec 06 R1.6, R6.8).
     fn resolve_within(
         &self,
         host: &str,
@@ -95,9 +102,12 @@ pub struct TransportRequest {
     pub connect_timeout: Duration,
     /// The response-phase cap of one attempt: 10 s (R1.6).
     pub response_timeout: Duration,
-    /// The cap on this whole attempt, from DNS to the last response byte
-    /// (R1.6); the transport bounds connect, TLS, write and read by it.
-    pub attempt_timeout: Duration,
+    /// The ONE absolute R1.6 deadline of this attempt, covering DNS, the
+    /// connect, TLS, the handshake, the request write and the response read
+    /// (R1.6). It is an instant, not a duration, so time spent before the
+    /// transport runs — the lookups and the request build — is charged to the
+    /// same budget.
+    pub deadline: Instant,
     /// The largest response body the transport may buffer (R1.2).
     pub max_body_bytes: usize,
 }
@@ -118,6 +128,11 @@ pub struct TransportResponse {
     /// declared more than it; `body` is then truncated to the cap
     /// (spec 06 R1.2, R5.9).
     pub overflow: bool,
+    /// The raw `Cache-Control` header value, when the transport could read
+    /// one; a header that is absent or not UTF-8 is reported as `None`. The
+    /// R7.2 cache lifetime is derived from it by
+    /// [`crate::webhook::card::discovery::card_cache_ttl`] (spec 06 R7.2).
+    pub cache_control: Option<String>,
 }
 
 /// Why one attempt failed (spec 06 R1.9, R6.9).
@@ -200,9 +215,10 @@ pub struct PreparedRequest {
 /// A body above `max_body_bytes` is refused with the receiver's fixed
 /// `413 body_too_large` answer before any request is built (spec 06 R1.2).
 ///
-/// `attempt_timeout` is the R1.6 whole-attempt cap — DNS, connect, TLS, the
-/// request write and the response read — carried into the request so the
-/// transport can bound everything it does (spec 06 R1.6).
+/// `deadline` is the ONE absolute R1.6 deadline of the attempt — DNS,
+/// connect, TLS, the request write and the response read — stamped at the
+/// entry of the caller and carried into the request so the transport can
+/// bound everything it does (spec 06 R1.6).
 #[allow(clippy::too_many_arguments)]
 pub fn prepare(
     url: &str,
@@ -213,7 +229,7 @@ pub fn prepare(
     headers: Vec<(String, String)>,
     body: Vec<u8>,
     max_body_bytes: usize,
-    attempt_timeout: Duration,
+    deadline: Instant,
 ) -> Result<PreparedRequest, WebhookError> {
     if body.len() > max_body_bytes {
         return Err(crate::webhook::receiver::errors::rejection(
@@ -239,7 +255,7 @@ pub fn prepare(
                 connect,
                 connect_timeout: Duration::from_secs(CONNECT_TIMEOUT_SECONDS),
                 response_timeout: Duration::from_secs(RESPONSE_TIMEOUT_SECONDS),
-                attempt_timeout,
+                deadline,
                 max_body_bytes,
             },
             reason,
@@ -254,38 +270,68 @@ pub fn prepare(
 }
 
 /// Resolves the endpoint twice — the validation answers and the R6.9
-/// recheck — with both lookups bounded by what is left of `budget`.
+/// recheck — with both lookups bounded by the ONE absolute `deadline`.
 ///
 /// A literal host is its own answer and is never passed to the resolver
-/// (spec 06 R6.8), so both lists are empty in that case. An empty answer set
-/// is the fixed `connection_refused` failure and a resolver error keeps its
-/// own R1.9 category (spec 06 R1.9, R6.8, R6.9).
+/// (spec 06 R6.8), so both lists are empty in that case. Each lookup is run
+/// on its own OS thread and awaited for whatever is left of `deadline`, so a
+/// blocking [`HostResolver::resolve_within`] that ignores its budget is still
+/// bounded by the caller: the thread is abandoned at the deadline and its
+/// result, when it eventually arrives, is dropped (spec 06 R1.6, R6.8). A
+/// spent deadline is the fixed `timeout` failure and nothing is looked up.
+///
+/// An empty answer set is the fixed `connection_refused` failure and a
+/// resolver error keeps its own R1.9 category (spec 06 R1.9, R6.8, R6.9).
 pub(crate) fn resolve_answers(
-    resolver: &dyn HostResolver,
+    resolver: &Arc<dyn HostResolver>,
     endpoint: &UrlParts,
-    budget: Duration,
+    deadline: Instant,
 ) -> Result<(Vec<IpAddr>, Vec<IpAddr>), WebhookError> {
     if endpoint.host_kind != HostKind::Name {
         return Ok((Vec::new(), Vec::new()));
     }
-    let started = Instant::now();
-    let answers = resolver.resolve_within(
-        &endpoint.host_value,
-        endpoint.port,
-        budget.saturating_sub(started.elapsed()),
-    )?;
+    let answers = resolve_one(resolver, endpoint, deadline)?;
     if answers.is_empty() {
         return Err(no_answer());
     }
-    let recheck = resolver.resolve_within(
-        &endpoint.host_value,
-        endpoint.port,
-        budget.saturating_sub(started.elapsed()),
-    )?;
+    let recheck = resolve_one(resolver, endpoint, deadline)?;
     if recheck.is_empty() {
         return Err(no_answer());
     }
     Ok((answers, recheck))
+}
+
+/// Runs one of the two lookups of [`resolve_answers`] within `deadline`
+/// (spec 06 R1.6, R6.8).
+///
+/// The lookup runs on a spawned OS thread — `mcp-jack-webhook-dns` — and its
+/// result is awaited with [`mpsc::Receiver::recv_timeout`], so even a
+/// resolver that blocks past the budget cannot hold the caller: the deadline
+/// is the fixed `timeout` failure and the abandoned thread finishes on its
+/// own with its result dropped (spec 06 R1.6).
+fn resolve_one(
+    resolver: &Arc<dyn HostResolver>,
+    endpoint: &UrlParts,
+    deadline: Instant,
+) -> Result<Vec<IpAddr>, WebhookError> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(dns_timeout());
+    }
+    let resolver = Arc::clone(resolver);
+    let host = endpoint.host_value.clone();
+    let port = endpoint.port;
+    let (tx, rx) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("mcp-jack-webhook-dns".to_owned())
+        .spawn(move || {
+            let _ = tx.send(resolver.resolve_within(&host, port, remaining));
+        })
+        .map_err(|_| no_answer())?;
+    match rx.recv_timeout(remaining) {
+        Ok(result) => result,
+        Err(_) => Err(dns_timeout()),
+    }
 }
 
 /// Builds the fixed empty-answer failure, whose code is the R1.9 category a
@@ -296,6 +342,12 @@ fn no_answer() -> WebhookError {
         "connection_refused",
         "the webhook host has no usable answer",
     )
+}
+
+/// Builds the fixed lookup-budget failure; its `timeout` code is the R1.9
+/// category a spent R1.6 deadline maps to (spec 06 R1.6, R1.9).
+fn dns_timeout() -> WebhookError {
+    WebhookError::new(500, "timeout", "the webhook host lookup ran out of time")
 }
 
 /// Adapts one `http` request to the receiver's header list and declared

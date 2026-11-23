@@ -25,8 +25,10 @@ mod dispatch;
 pub mod errors;
 pub mod state;
 
+// Visible crate-wide so the HTTP entry-point tests drive the same signed
+// fixtures as the receiver's own tests (spec 06 R1.1, R2.2).
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub use body::BodyCollector;
 pub use config::{JackConfig, ReceiverConfig, ReceiverSecret};

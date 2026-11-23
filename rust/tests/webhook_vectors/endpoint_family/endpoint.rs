@@ -22,7 +22,7 @@ use mcp_jack::webhook::verification::{
     accept_echo, allowlist_matches, challenge_echo, check_document_fetch, covers_path,
     document_cache_ttl, document_covers, document_request, gate, nonce_ok, parse_allowlist_entry,
     parse_receiver_doc, verification_route, well_known_url, DocumentRequestInput, EchoAttempt,
-    EchoVerdict, RouteInput, VerificationRoute, NONCE_TTL_SECONDS,
+    EchoVerdict, RouteInput, VerificationRoute, NONCE_TTL_MS,
 };
 use mcp_jack::webhook::{MessageKind, WebhookError};
 use serde_json::{json, Value};
@@ -157,7 +157,9 @@ fn accept_echo_case(case: &Value) -> Value {
         now: integer_of(&input["now"]),
         ttl: match input.get("ttl") {
             Some(value) => integer_of(value),
-            None => NONCE_TTL_SECONDS,
+            // The corpus writes `issuedAt` and `now` in whole seconds, so the
+            // millisecond nonce lifetime is converted at this boundary.
+            None => NONCE_TTL_MS / 1000,
         },
         consumed: input
             .get("consumed")

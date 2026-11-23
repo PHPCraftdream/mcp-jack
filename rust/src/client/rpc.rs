@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::client::error::{ClientError, RpcError, ToolError};
 use crate::client::modern::flow::FlowState;
-use crate::client::modern::ClientEra;
+use crate::client::modern::{ClientEra, EventCatalog, PrivateResultCache, ToolCatalog};
 use crate::client::signer::Signer;
 use crate::client::transport::{Clock, NonceSource, SigningTransport, Transport};
 
@@ -35,6 +35,25 @@ pub struct Config {
     pub window_seconds: i64,
 }
 
+/// The modern state of one client (spec 04 section 6): the `C5` tool catalog,
+/// the `C11` event-type catalog and the `C8` private result cache of the era
+/// that produced them.
+///
+/// Default empty, so a modern `tools/call` projects no `Mcp-Param-*` header and
+/// caches nothing until [`Client::refresh_tool_catalog`] /
+/// [`Client::refresh_event_catalog`] fill a catalog. The catalogs and the cache
+/// live under one lock because a catalog replacement invalidates every result
+/// projected from it.
+#[derive(Debug, Default)]
+pub(crate) struct ModernState {
+    /// The `tools/list` catalog of `C5` (`Mcp-Param-*` projection data).
+    pub(crate) tools: ToolCatalog,
+    /// The `events/list` catalog of `C11`.
+    pub(crate) events: EventCatalog,
+    /// The private result cache of `C8`; caching itself stays opt-in.
+    pub(crate) results: PrivateResultCache,
+}
+
 /// Performs signed, response-verified MCP tool calls over JSON-RPC (Go:
 /// client.Client). Send + Sync; the id counter is atomic.
 pub struct Client {
@@ -60,6 +79,10 @@ pub struct Client {
     /// Single-flight guard around the handshake and the auto probe, so
     /// concurrent callers never run two of them at once.
     pub(crate) era_lock: Mutex<()>,
+    /// The modern catalogs and the private result cache of this client (spec 04
+    /// `C5`, `C8`, `C11`), default empty. One lock covers both, because
+    /// replacing a catalog invalidates what it projected.
+    pub(crate) modern: Mutex<ModernState>,
 }
 
 // Manual impl: Debug must never expose signer or key material (spec 01
@@ -217,6 +240,7 @@ impl Client {
             era: ClientEra::default(),
             flow: Mutex::new(FlowState::default()),
             era_lock: Mutex::new(()),
+            modern: Mutex::new(ModernState::default()),
         })
     }
 
@@ -238,10 +262,32 @@ impl Client {
     }
 
     /// Forgets the resolved era, the negotiated legacy version and the legacy
-    /// session, so the next call of an [`ClientEra::Auto`] client probes again
-    /// (spec 04 `C9`).
+    /// session, and drops the modern state — both catalogs and the private
+    /// result cache (spec 04 `C9` + `C8`): a cached result or a projection
+    /// belongs to the era that produced it, so the next call of an
+    /// [`ClientEra::Auto`] client re-probes with a clean state.
     pub fn reset_era(&self) {
         crate::client::modern::flow::reset_era(self);
+    }
+
+    /// Rebuilds the tool catalog from `tools/list` (`C5`) and clears the
+    /// private result cache (`C8`) — the `C10` resync, for embedders.
+    ///
+    /// Once the catalog is present, a modern `tools/call` projects the
+    /// `Mcp-Param-*` headers of the arguments its `inputSchema` annotates
+    /// (`C6`), and a `-32020` header-mismatch reply makes the client refresh
+    /// the catalog and retry once (`C10`). `C8` caching itself stays opt-in:
+    /// this call only wires the catalog, never a cache lookup.
+    pub fn refresh_tool_catalog(&self) -> Result<(), ClientError> {
+        crate::client::modern::flow::refresh_tool_catalog(self)
+    }
+
+    /// Rebuilds the event-type catalog from `events/list` (`C11`) and clears
+    /// the private result cache (`C8`) — the `C12` resync, for embedders.
+    ///
+    /// Like [`Client::refresh_tool_catalog`], `C8` caching itself stays opt-in.
+    pub fn refresh_event_catalog(&self) -> Result<(), ClientError> {
+        crate::client::modern::flow::refresh_event_catalog(self)
     }
 
     /// Builds the legacy JSON-RPC `tools/call` body: fields in wire order and

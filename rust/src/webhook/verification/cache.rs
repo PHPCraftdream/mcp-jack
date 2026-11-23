@@ -4,6 +4,9 @@
 //! The cache is in-memory soft state: it is never keyed by subscription,
 //! name or arguments, one principal's verification never waives another's,
 //! and a restart simply redoes the verification (spec 06 R5.2).
+//!
+//! Every instant and lifetime here is in MILLISECONDS of Unix time
+//! (spec 06 R5.2).
 
 use std::collections::HashMap;
 
@@ -15,9 +18,9 @@ use std::collections::HashMap;
 /// no-expiry subscriptions must persist that status itself (spec 06 R5.2).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct VerificationCache {
-    /// The expiry of every recorded pair, in the unit of the `now` argument
-    /// of [`VerificationCache::record`]; `None` never expires
-    /// (spec 06 R5.2).
+    /// The expiry of every recorded pair, in Unix MILLISECONDS, the unit of
+    /// the `now_ms` argument of [`VerificationCache::record`]; `None` never
+    /// expires (spec 06 R5.2).
     entries: HashMap<(String, String), Option<i64>>,
 }
 
@@ -28,12 +31,13 @@ impl VerificationCache {
     }
 
     /// Returns true when the pair was recorded and its grant has not
-    /// expired at `now`, in the unit the record's TTL was given in
-    /// (spec 06 R5.2).
+    /// expired at `now_ms`, in Unix MILLISECONDS (spec 06 R5.2).
     ///
-    /// A cached verification does not expire because of delivery failures;
-    /// only its TTL expires it (spec 06 R5.2, R5.12).
-    pub fn is_verified(&self, principal: &str, canonical_url: &str, now: i64) -> bool {
+    /// An entry expires when `now_ms >= expires_at`, so a zero or negative
+    /// TTL leaves it already expired. A cached verification does not expire
+    /// because of delivery failures; only its TTL expires it
+    /// (spec 06 R5.2, R5.12).
+    pub fn is_verified(&self, principal: &str, canonical_url: &str, now_ms: i64) -> bool {
         let Some(expiry) = self
             .entries
             .get(&(principal.to_string(), canonical_url.to_string()))
@@ -41,7 +45,7 @@ impl VerificationCache {
             return false;
         };
         match expiry {
-            Some(expires_at) => now < *expires_at,
+            Some(expires_at) => now_ms < *expires_at,
             None => true,
         }
     }
@@ -49,10 +53,16 @@ impl VerificationCache {
     /// Records a successful verification of the pair for the grant TTL
     /// (spec 06 R5.2).
     ///
-    /// `ttl_ms` is the grant TTL in the same unit as `now`; `None` records a
-    /// verification that never expires (spec 06 R5.2).
-    pub fn record(&mut self, principal: &str, canonical_url: &str, now: i64, ttl_ms: Option<i64>) {
-        let expires_at = ttl_ms.map(|ttl| now.saturating_add(ttl));
+    /// `now_ms` is Unix milliseconds and `ttl_ms` is the grant TTL in the same
+    /// unit; `None` records a verification that never expires (spec 06 R5.2).
+    pub fn record(
+        &mut self,
+        principal: &str,
+        canonical_url: &str,
+        now_ms: i64,
+        ttl_ms: Option<i64>,
+    ) {
+        let expires_at = ttl_ms.map(|ttl| now_ms.saturating_add(ttl));
         self.entries.insert(
             (principal.to_string(), canonical_url.to_string()),
             expires_at,

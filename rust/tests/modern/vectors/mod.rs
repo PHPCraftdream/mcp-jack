@@ -5,3 +5,5 @@ mod encoding;
 mod era;
 mod fixtures;
 mod request;
+#[cfg(feature = "http")]
+mod wire_request;

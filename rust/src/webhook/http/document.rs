@@ -78,11 +78,12 @@ impl WebhookDocumentFetcher {
     ///
     /// The url is [`well_known_url`] of the canonical url; a canonical url
     /// that does not parse is `invalid_callback_url` (R5.9). The whole
-    /// attempt — DNS, connect, TLS, write and read — is bounded by a 10 s
-    /// budget, the host is resolved twice (validation and the R6.9 recheck),
-    /// and the section 6 decision of [`prepare`] surfaces as its own
-    /// [`WebhookError`], so a blocked, rebinding or redirect refusal keeps
-    /// the decision's code (R6.8-R6.10). The request is a `GET` with
+    /// attempt — DNS, connect, TLS, write and read — is bounded by ONE
+    /// absolute 10 s deadline stamped at entry (R1.6), the host is resolved
+    /// twice (validation and the R6.9 recheck), and the section 6 decision
+    /// of [`prepare`] surfaces as its own [`WebhookError`], so a blocked,
+    /// rebinding or redirect refusal keeps the decision's code
+    /// (R6.8-R6.10). The request is a `GET` with
     /// `Accept: application/json`, one send is made and never retried, a
     /// transport failure maps to its R1.9 code, a `3xx` is `redirect_refused`
     /// and the body is judged by [`document_verdict`] (R5.9).
@@ -97,10 +98,8 @@ impl WebhookDocumentFetcher {
             Ok(endpoint) => endpoint,
             Err(_) => return Err(invalid_canonical_url()),
         };
-        let budget = Duration::from_secs(DOCUMENT_TIMEOUT_SECONDS);
-        let started = Instant::now();
-        let (answers, recheck) = resolve_answers(&*self.resolver, &endpoint, budget)?;
-        let remaining = budget.saturating_sub(started.elapsed());
+        let deadline = Instant::now() + Duration::from_secs(DOCUMENT_TIMEOUT_SECONDS);
+        let (answers, recheck) = resolve_answers(&self.resolver, &endpoint, deadline)?;
         let prepared = prepare(
             &url,
             &answers,
@@ -110,7 +109,7 @@ impl WebhookDocumentFetcher {
             vec![("Accept".to_owned(), ACCEPT_JSON.to_owned())],
             Vec::new(),
             MAX_DOCUMENT_BYTES,
-            remaining,
+            deadline,
         )?;
         let response = match self.transport.send(&prepared.request) {
             Ok(response) => response,
