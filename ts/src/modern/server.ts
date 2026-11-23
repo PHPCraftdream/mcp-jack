@@ -218,9 +218,11 @@ function paramsOf(obj: JsonObjectView): JsonObjectView | undefined {
 
 /**
  * Step 1 and step 2: parse the body text into a {@link BodyView}. No body is
- * kind `none`; a missing string `method` is a response; a string or number
- * `id` makes it a request, anything else a notification. The request id text
- * is the raw source text of the top-level `id` member, `"null"` otherwise.
+ * kind `none`; a missing string `method` is a response; a present `id` member
+ * makes it a request (JSON-RPC 2.0: a notification has no `id` member at all),
+ * anything else a notification. S10: the request id text is the raw source text
+ * of the top-level `id` member when that id is a string or an integer, and
+ * `"null"` for any other id, a fractional number included.
  */
 function readBody(bodyText: string | undefined): BodyView {
   if (bodyText === undefined || bodyText === "") {
@@ -238,11 +240,17 @@ function readBody(bodyText: string | undefined): BodyView {
   if (typeof method !== "string") {
     return { kind: "response", method: undefined, idText: "null", obj: root };
   }
-  const id = ownMember(root, "id");
-  if (typeof id === "string" || typeof id === "number") {
-    return { kind: "request", method, idText: source.members?.get("id")?.text ?? "null", obj: root };
+  // JSON-RPC 2.0: a notification is a request object WITHOUT an `id` member, so
+  // any present `id` (the JSON null included) makes the body a request.
+  const idNode = source.members?.get("id");
+  if (idNode === undefined) {
+    return { kind: "notification", method, idText: "null", obj: root };
   }
-  return { kind: "notification", method, idText: "null", obj: root };
+  // S10: a refusal echoes a string or integer id and answers null for any
+  // other id, so a fractional or non-scalar id never leaks into the body.
+  const scalar = typeof idNode.value === "string"
+    || (typeof idNode.value === "number" && Number.isInteger(idNode.value));
+  return { kind: "request", method, idText: scalar ? idNode.text : "null", obj: root };
 }
 
 /**

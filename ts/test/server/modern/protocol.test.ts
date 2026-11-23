@@ -97,6 +97,39 @@ test("modern profile: S5 refusal is a signed JSON-RPC error", async () => {
   assert.equal(harness.seen.calls, 0);
 });
 
+test("modern profile: S10 echoes a string or integer id and null for any other id", async () => {
+  // A modern tools/call that omits Mcp-Name is refused by S6, and the refusal
+  // echoes the id only when it is a string or an integer: a null, fractional or
+  // otherwise non-scalar id is echoed as null (spec 04 S10).
+  const rows: readonly (readonly [string, unknown])[] = [
+    ['"abc"', "abc"],
+    ["7", 7],
+    ["null", null],
+    ["1.5", null],
+  ];
+  for (const [idText, expected] of rows) {
+    const harness = newModernHarness("modern");
+    const body = modernToolCallBody(idText, "svc.status");
+    const { request, sig } = modernRequest(seedSignerByName("alice"), {
+      body,
+      headers: [
+        ["MCP-Protocol-Version", MODERN],
+        ["Mcp-Method", "tools/call"],
+      ],
+    });
+    const response = await harness.handle(request);
+
+    assert.equal(response.status, 400, idText + ": S6 must refuse the missing Mcp-Name");
+    const out = await assertSigned(response, harness.serverPub, sig);
+    assert.deepEqual(
+      JSON.parse(Buffer.from(out).toString("utf-8")),
+      { jsonrpc: "2.0", id: expected, error: { code: -32020, message: "Header mismatch: Mcp-Name is missing" } },
+      idText + ": the refusal must echo the S10 id",
+    );
+    assert.equal(harness.seen.calls, 0, idText + ": the wrapped handler must not be called");
+  }
+});
+
 test("modern profile: S2 refuses a both-profile GET with a signed 405", async () => {
   const harness = newModernHarness("both");
   const { request, sig } = modernRequest(seedSignerByName("alice"), {

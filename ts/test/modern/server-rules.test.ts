@@ -33,6 +33,9 @@ const LIST_META_OLD = '{"jsonrpc":"2.0","id":1,"method":"tools/list",' + META_OL
 /** A `tools/call` request with a valid name and a modern `_meta` version. */
 const CALL_META =
   '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"demo","_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}';
+/** The `params` fragment of a `tools/call` with a string name and a modern `_meta` version. */
+const CALL_PARAMS_MODERN =
+  '"params":{"name":"demo","_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}';
 
 /** A POST of `bodyText` under `profile`. */
 function post(profile: "legacy" | "modern" | "both", headers: readonly HeaderPair[], bodyText: string): ModernRequestDecision {
@@ -329,6 +332,24 @@ test("server rules: S4/S5/S6 rows and ids", () => {
 
   const stringId = refuseOf(post("modern", [], '{"jsonrpc":"2.0","id":"abc","method":"tools/list"}'));
   assert.equal(stringId.idText, '"abc"', "A string id must be echoed as raw source text.");
+
+  // S10: the refusal echo is a string or integer id, and null for any other id.
+  // Both bodies carry a string `params.name`, so S6 gets past
+  // `name_source_missing` and the missing `Mcp-Name` mirror is the refusal.
+  const fractionalId = refuseOf(
+    post("modern", callHeaders, '{"jsonrpc":"2.0","id":1.5,"method":"tools/call",' + CALL_PARAMS_MODERN + "}"),
+  );
+  assert.equal(
+    fractionalId.message,
+    MODERN_REFUSALS.name_header_missing.message,
+    "A fractional id request must still be refused by S6.",
+  );
+  assert.equal(fractionalId.idText, "null", "S10 echoes null for a fractional id.");
+
+  const integerId = refuseOf(
+    post("modern", callHeaders, '{"jsonrpc":"2.0","id":7,"method":"tools/call",' + CALL_PARAMS_MODERN + "}"),
+  );
+  assert.equal(integerId.idText, "7", "S10 echoes the raw source text of an integer id.");
 
   const notification = forwardOf(post("modern", [], '{"jsonrpc":"2.0","method":"tools/list"}'));
   assert.equal(notification.era, "modern", "A notification without mirrors must be forwarded.");

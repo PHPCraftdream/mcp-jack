@@ -19,8 +19,8 @@ import type { FileState } from "../server/registry/state-file.js";
 import { parseJsonRaw, Verifier } from "../server/verify.js";
 import type { RawJsonNode } from "../server/verify.js";
 import { serveNode } from "../server/http/node.js";
-import { durableInit, durableOpen, durableSettings } from "./durable.js";
-import type { DurableHandle, DurableSettings } from "./durable.js";
+import { durableInit, durableOpen, durableSettings } from "./durable/index.js";
+import type { DurableHandle, DurableSettings } from "./durable/index.js";
 
 function fail(msg: string): never {
   process.stderr.write(`interop-server: ${msg}\n`);
