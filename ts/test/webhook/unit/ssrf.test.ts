@@ -143,7 +143,7 @@ test("HardenedTransport never dials a blocked resolver answer", async () => {
       return { status: 200, headers: {}, body: new Uint8Array() };
     },
   });
-  assert.deepEqual(await transport.request(CALLBACK, REQUEST), { ok: false, code: "blocked_address" });
+  assert.deepEqual(await transport.request(CALLBACK, REQUEST), { ok: false, code: "blocked_address", reason: "private_use" });
   assert.equal(dials, 0);
 });
 
