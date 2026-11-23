@@ -3,11 +3,13 @@ package transport
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 
 	auditimpl "github.com/PHPCraftdream/mcp-jack/server/internal/audit"
 	"github.com/PHPCraftdream/mcp-jack/server/internal/modern"
@@ -381,6 +383,84 @@ func TestModernMiddlewareEraDispatch(t *testing.T) {
 		}
 		if events := h.audit.Events(); len(events) != 0 {
 			t.Fatalf("a refused request wrote audit events: %+v", events)
+		}
+	})
+
+	t.Run("both profile legacy DELETE never reads the body", func(t *testing.T) {
+		h := newProfileHarness(t, modern.ProfileBoth)
+		req := httptest.NewRequest("DELETE", "/mcp", iotest.ErrReader(errors.New("the body must not be read")))
+		rec := httptest.NewRecorder()
+		h.handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("status = %d, body %s; want the legacy 405 before the body is read", rec.Code, rec.Body.String())
+		}
+		if got, want := rec.Body.String(), `{"error":{"code":"method_not_allowed","message":"only GET and POST are defined"}}`; got != want {
+			t.Fatalf("body = %s, want %s", got, want)
+		}
+		if got := rec.Header().Get("Jack-Auth"); got != "" {
+			t.Fatalf("the legacy path answered signed: Jack-Auth = %q", got)
+		}
+		if h.next.Load() != 0 || h.native.calls.Load() != 0 {
+			t.Fatalf("the wrapped handler saw %d calls and the native tool %d, want 0/0", h.next.Load(), h.native.calls.Load())
+		}
+	})
+
+	t.Run("both profile legacy DELETE is byte-identical to the legacy profile", func(t *testing.T) {
+		legacy := newProfileHarness(t, "")
+		both := newProfileHarness(t, modern.ProfileBoth)
+		run := func(h *harness) *httptest.ResponseRecorder {
+			req := httptest.NewRequest("DELETE", "/mcp", nil)
+			// An invalid field value: no rule of section 5, S1 included, runs
+			// on a legacy-era request.
+			req.Header.Set("Mcp-Name", "not valid\n")
+			rec := httptest.NewRecorder()
+			h.handler.ServeHTTP(rec, req)
+			return rec
+		}
+		got, want := run(both), run(legacy)
+		if got.Code != want.Code || got.Body.String() != want.Body.String() {
+			t.Fatalf("both = %d %s, legacy = %d %s; want identical answers", got.Code, got.Body.String(), want.Code, want.Body.String())
+		}
+		if got.Code != http.StatusMethodNotAllowed || got.Header().Get("Jack-Auth") != "" {
+			t.Fatalf("answer = %d, Jack-Auth = %q; want the unsigned legacy 405", got.Code, got.Header().Get("Jack-Auth"))
+		}
+	})
+
+	t.Run("both profile modern DELETE without auth is an auth rejection", func(t *testing.T) {
+		h := newProfileHarness(t, modern.ProfileBoth)
+		req := httptest.NewRequest("DELETE", "/mcp", nil)
+		req.Header.Set("MCP-Protocol-Version", "2026-07-28")
+		rec := httptest.NewRecorder()
+		h.handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, body %s; want 401: S2 authenticates before it refuses", rec.Code, rec.Body.String())
+		}
+		if h.next.Load() != 0 || h.native.calls.Load() != 0 {
+			t.Fatalf("the wrapped handler saw %d calls and the native tool %d, want 0/0", h.next.Load(), h.native.calls.Load())
+		}
+	})
+
+	t.Run("both profile modern DELETE with auth is a signed 405", func(t *testing.T) {
+		h := newProfileHarness(t, modern.ProfileBoth)
+		req, sig := signedRequest(t, testPrivateKey(t, "alice"), "DELETE", "/mcp", nil)
+		req.Header.Set("MCP-Protocol-Version", "2026-07-28")
+		rec := httptest.NewRecorder()
+		h.handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+		}
+		if got := rec.Header().Get("Allow"); got != "POST" {
+			t.Fatalf("Allow = %q, want POST", got)
+		}
+		if got, want := rec.Body.String(), `{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"HTTP method not allowed"}}`; got != want {
+			t.Fatalf("body = %s, want %s", got, want)
+		}
+		assertSigned(t, rec, h.server, sig)
+		if h.next.Load() != 0 || h.native.calls.Load() != 0 {
+			t.Fatalf("the wrapped handler saw %d calls and the native tool %d, want 0/0", h.next.Load(), h.native.calls.Load())
 		}
 	})
 

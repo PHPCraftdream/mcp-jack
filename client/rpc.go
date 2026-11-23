@@ -174,6 +174,13 @@ type Client struct {
 	// when the era is not settled yet. The era is cached per client (one
 	// origin), and only a verified response may set it.
 	settled Era
+	// negotiated is the legacy protocol version the initialize handshake
+	// negotiated and sessionID the Mcp-Session-Id the server assigned. They
+	// are cached with the era state and cleared by ResetEra; both are empty
+	// for an explicit legacy client that never ran the handshake, so its
+	// requests stay the 0.1.x bytes. mu guards both.
+	negotiated string
+	sessionID  string
 }
 
 // audHasControl reports whether aud contains a byte below 0x20 or the byte
@@ -422,13 +429,56 @@ func (c *Client) setEra(era Era) {
 	c.mu.Unlock()
 }
 
-// ResetEra clears the era an EraAuto client settled on, so the next CallTool
-// probes the modern era again. It is the explicit re-probe path of spec 04
-// section 6 C9; an explicit EraLegacy or EraModern configuration keeps that
-// configured era.
+// legacyState returns the negotiated legacy protocol version and the session id
+// the server assigned; either may be empty.
+func (c *Client) legacyState() (negotiated, sessionID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.negotiated, c.sessionID
+}
+
+// setLegacyState records the negotiated legacy protocol version and the session
+// id of the initialize response header.
+func (c *Client) setLegacyState(negotiated, sessionID string) {
+	c.mu.Lock()
+	c.negotiated, c.sessionID = negotiated, sessionID
+	c.mu.Unlock()
+}
+
+// clearLegacyState forgets the negotiated version and the session id.
+func (c *Client) clearLegacyState() {
+	c.mu.Lock()
+	c.negotiated, c.sessionID = "", ""
+	c.mu.Unlock()
+}
+
+// legacyHeaders are the unsigned transport headers of a legacy-era request
+// after initialize (2025-11-25 transport, Session): MCP-Protocol-Version with
+// the negotiated version and, when the server assigned one, Mcp-Session-Id.
+// They are never part of the signing string. A client without a legacy session
+// sends no extra header, so its requests stay byte-identical to 0.1.x.
+func (c *Client) legacyHeaders() []modern.Header {
+	negotiated, sessionID := c.legacyState()
+	if negotiated == "" {
+		return nil
+	}
+	headers := []modern.Header{{Name: "MCP-Protocol-Version", Value: negotiated}}
+	if sessionID != "" {
+		headers = append(headers, modern.Header{Name: "Mcp-Session-Id", Value: sessionID})
+	}
+	return headers
+}
+
+// ResetEra clears the era an EraAuto client settled on, together with the
+// negotiated legacy version and session id, so the next CallTool probes the
+// modern era again and a later fallback starts a fresh legacy session. It is
+// the explicit re-probe path of spec 04 section 6 C9; an explicit EraLegacy or
+// EraModern configuration keeps that configured era.
 func (c *Client) ResetEra() {
 	c.mu.Lock()
 	c.settled = ""
+	c.negotiated = ""
+	c.sessionID = ""
 	c.mu.Unlock()
 }
 
@@ -479,15 +529,17 @@ func buildModernCallBody(id int64, tool string, args []byte, version string) ([]
 }
 
 // roundTrip performs one signed POST of body: it sets Content-Type and then
-// adds each extra header, and returns the verified status and body. HTTP
-// header order is not preserved: net/http stores them in a map, so wire
-// header order and canonical spelling are not guaranteed; the C2 order is the
-// order of the modern.Header slice. Transport and verification errors,
-// redirects included, are returned unchanged.
-func (c *Client) roundTrip(ctx context.Context, signer Signer, body []byte, headers []modern.Header) (int, []byte, error) {
+// adds each extra header, and returns the verified status, the response header
+// and the verified body. The legacy handshake reads the Mcp-Session-Id the
+// server assigns from the response header. HTTP header order is not preserved:
+// net/http stores them in a map, so wire header order and canonical spelling
+// are not guaranteed; the C2 order is the order of the modern.Header slice.
+// Transport and verification errors, redirects included, are returned
+// unchanged.
+func (c *Client) roundTrip(ctx context.Context, signer Signer, body []byte, headers []modern.Header) (int, http.Header, []byte, error) {
 	httpReq, err := http.NewRequestWithContext(WithRequestSigner(ctx, signer), http.MethodPost, c.base.String(), bytes.NewReader(body))
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	for _, h := range headers {
@@ -498,19 +550,19 @@ func (c *Client) roundTrip(ctx context.Context, signer Signer, body []byte, head
 	if err != nil {
 		// Transport errors (refused streams, unauthenticated 401s, failed
 		// verification) pass through unchanged for errors.Is / errors.As.
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if isRedirectStatus(resp.StatusCode) {
-		return 0, nil, &RedirectRefusedError{Status: resp.StatusCode}
+		return 0, nil, nil, &RedirectRefusedError{Status: resp.StatusCode}
 	}
 
 	raw, err := readCapped(resp.Body, maxBodyBytes)
 	if err != nil {
-		return 0, nil, fmt.Errorf("jack client: reading response body: %w", err)
+		return 0, nil, nil, fmt.Errorf("jack client: reading response body: %w", err)
 	}
-	return resp.StatusCode, raw, nil
+	return resp.StatusCode, resp.Header, raw, nil
 }
 
 // decodeVerifiedCall turns one verified answer into out: a non-2xx status is
@@ -573,15 +625,32 @@ func (c *Client) call(ctx context.Context, signer Signer, tool string, arguments
 // callWithArgs performs one signed, verified legacy-era tool call whose
 // params.arguments are already marshalled, and decodes structuredContent into
 // out. It is the shared tail of call and of the C9 legacy fallback: the same
-// 0.1.x bytes, headers and error behaviour.
+// request bytes and error behaviour, plus the unsigned MCP-Protocol-Version and
+// Mcp-Session-Id headers once the legacy handshake negotiated a session.
+//
+// A 404 for a known session id means the session is gone (2025-11-25
+// transport). The handshake is re-run once so the caller's next attempt starts
+// a fresh session, and the operation itself is never replayed: the 404 is
+// returned to the caller.
 func (c *Client) callWithArgs(ctx context.Context, signer Signer, tool string, args []byte, out any) error {
 	reqBody, err := buildLegacyCallBody(c.nextRequestID(), tool, args)
 	if err != nil {
 		return err
 	}
-	status, raw, err := c.roundTrip(ctx, signer, reqBody, nil)
+	status, _, raw, err := c.roundTrip(ctx, signer, reqBody, c.legacyHeaders())
 	if err != nil {
 		return err
+	}
+	if status == http.StatusNotFound {
+		if negotiated, sessionID := c.legacyState(); sessionID != "" {
+			if negotiated == "" {
+				negotiated = legacyProtocolVersion
+			}
+			// Only the handshake is replayed; a failure of the fresh handshake
+			// is harmless here because it clears the cached session and the
+			// next call starts over.
+			_ = c.legacyHandshake(ctx, signer, negotiated)
+		}
 	}
 	return decodeVerifiedCall(status, raw, out)
 }
@@ -599,7 +668,8 @@ func (c *Client) probeEra(ctx context.Context, signer Signer, version string) (i
 	if err != nil {
 		return 0, nil, err
 	}
-	return c.roundTrip(ctx, signer, body, rm.Headers)
+	status, _, raw, err := c.roundTrip(ctx, signer, body, rm.Headers)
+	return status, raw, err
 }
 
 // callAuto implements EraAuto: the first modern request is the deterministic
@@ -672,75 +742,6 @@ func (c *Client) runModernOperation(ctx context.Context, signer Signer, version,
 		return err
 	}
 	return decodeVerifiedCall(status, raw, out)
-}
-
-// legacyFallback performs the legacy handshake and then the operation.
-func (c *Client) legacyFallback(ctx context.Context, signer Signer, version, tool string, args []byte, out any) error {
-	if err := c.legacyHandshake(ctx, signer, version); err != nil {
-		return err
-	}
-	c.setEra(EraLegacy)
-	return c.callWithArgs(ctx, signer, tool, args, out)
-}
-
-// jsonrpcInitializeRequest is the legacy-era initialize request: params holds
-// protocolVersion, an empty capabilities object and clientInfo.
-type jsonrpcInitializeRequest struct {
-	JSONRPC string                  `json:"jsonrpc"`
-	ID      int64                   `json:"id"`
-	Method  string                  `json:"method"`
-	Params  jsonrpcInitializeParams `json:"params"`
-}
-
-// jsonrpcInitializeParams is protocolVersion, capabilities and clientInfo in
-// the legacy era.
-type jsonrpcInitializeParams struct {
-	ProtocolVersion string         `json:"protocolVersion"`
-	Capabilities    struct{}       `json:"capabilities"`
-	ClientInfo      map[string]any `json:"clientInfo"`
-}
-
-// jsonrpcNotification is a legacy-era JSON-RPC notification: no id and no
-// params.
-type jsonrpcNotification struct {
-	JSONRPC string `json:"jsonrpc"`
-	Method  string `json:"method"`
-}
-
-// legacyHandshake sends initialize then notifications/initialized (legacy-era
-// rules of 2025-11-25/2025-06-18). Only a verified 2xx answer is accepted.
-func (c *Client) legacyHandshake(ctx context.Context, signer Signer, version string) error {
-	initBody, err := json.Marshal(jsonrpcInitializeRequest{
-		JSONRPC: "2.0",
-		ID:      c.nextRequestID(),
-		Method:  "initialize",
-		Params: jsonrpcInitializeParams{
-			ProtocolVersion: version,
-			ClientInfo:      modernClientInfo(),
-		},
-	})
-	if err != nil {
-		return err
-	}
-	status, raw, err := c.roundTrip(ctx, signer, initBody, nil)
-	if err != nil {
-		return err
-	}
-	if status < 200 || status > 299 {
-		return decodeVerifiedCall(status, raw, nil)
-	}
-	initializedBody, err := json.Marshal(jsonrpcNotification{JSONRPC: "2.0", Method: "notifications/initialized"})
-	if err != nil {
-		return err
-	}
-	status, raw, err = c.roundTrip(ctx, signer, initializedBody, nil)
-	if err != nil {
-		return err
-	}
-	if status < 200 || status > 299 {
-		return decodeVerifiedCall(status, raw, nil)
-	}
-	return nil
 }
 
 // CallTool performs one signed, response-verified `tools/call` for the named

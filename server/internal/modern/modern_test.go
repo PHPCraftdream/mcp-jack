@@ -639,6 +639,7 @@ func TestModernClassifyEdges(t *testing.T) {
 // echoed id. An id member that is a string or a number makes the body a
 // request; a boolean, an object, an array or null makes it a notification, so
 // the refusal carries a null id in that case too.
+// Integrality is exact: a fraction with a non-zero part, or a magnitude outside int64, becomes null.
 func TestModernClassifyRefusalID(t *testing.T) {
 	// Two MCP-Protocol-Version headers trip S1, so every case reaches S10.
 	repeated := headers(
@@ -659,8 +660,17 @@ func TestModernClassifyRefusalID(t *testing.T) {
 		{"string id is echoed", `"abc"`, []byte(`"abc"`)},
 		{"integer id is echoed", `1`, []byte(`1`)},
 		{"integral exponent id is echoed", `1e3`, []byte(`1e3`)},
+		{"integral fraction id is echoed", `1.0`, []byte(`1.0`)},
+		{"integral fraction with exponent id is echoed", `1.5e1`, []byte(`1.5e1`)},
+		{"negative zero id is echoed", `-0`, []byte(`-0`)},
+		{"max int64 id is echoed", `9223372036854775807`, []byte(`9223372036854775807`)},
+		{"rounded fraction id becomes null", `9007199254740992.5`, nil},
+		{"out of int64 range id becomes null", `9223372036854775808`, nil},
+		{"twenty digit id becomes null", `12345678901234567890`, nil},
+		{"huge exponent id becomes null", `1e400`, nil},
 		{"fractional id becomes null", `1.5`, nil},
 		{"non-integral exponent id becomes null", `1.5e0`, nil},
+		{"non-integral scaled fraction id becomes null", `1.25e1`, nil},
 		{"boolean id becomes null", `true`, nil},
 		{"object id becomes null", `{"a":1}`, nil},
 		{"array id becomes null", `[1]`, nil},
@@ -693,6 +703,36 @@ func TestModernClassifyRefusalID(t *testing.T) {
 			}
 			if wire := got.Wire(); !reflect.DeepEqual(wire, wantWire) {
 				t.Fatalf("id %s: Wire() = %#v, want %#v", c.id, wire, wantWire)
+			}
+		})
+	}
+}
+
+// TestModernEraFromHeaders pins the header-only era decision used for non-POST
+// requests (spec 04 section 3): profile modern is always modern, profile both
+// counts only well-formed modern version header instances, and any other
+// profile is always legacy.
+func TestModernEraFromHeaders(t *testing.T) {
+	cases := []struct {
+		name    string
+		profile Profile
+		headers []Header
+		want    string
+	}{
+		{"modern profile without headers", ProfileModern, nil, eraModern},
+		{"legacy profile with a modern header", ProfileLegacy, headers(hdr("MCP-Protocol-Version", "2026-07-28")), eraLegacy},
+		{"both without headers", ProfileBoth, nil, eraLegacy},
+		{"both with a legacy version", ProfileBoth, headers(hdr("MCP-Protocol-Version", "2025-11-25")), eraLegacy},
+		{"both with a modern version", ProfileBoth, headers(hdr("MCP-Protocol-Version", "2026-07-28")), eraModern},
+		{"both matches the name case-insensitively", ProfileBoth, headers(hdr("mcp-protocol-version", "2026-07-28")), eraModern},
+		{"both ignores a malformed version", ProfileBoth, headers(hdr("MCP-Protocol-Version", "2026-7-28")), eraLegacy},
+		{"both counts a repeated header when any value is modern", ProfileBoth, headers(hdr("MCP-Protocol-Version", "2025-11-25"), hdr("Mcp-Protocol-Version", "2026-07-28")), eraModern},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			if got := EraFromHeaders(c.profile, c.headers); got != c.want {
+				t.Fatalf("EraFromHeaders(%q) = %q, want %q", c.profile, got, c.want)
 			}
 		})
 	}

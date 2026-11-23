@@ -165,9 +165,16 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // it is true otherwise, so the spec 04 era decision runs after authentication
 // and before any era-neutral method refusal.
 func (h *handler) serve(w http.ResponseWriter, r *http.Request, eraAware bool) {
-	if !eraAware && r.Method != http.MethodGet && r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "only GET and POST are defined")
-		return
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		// Spec 04 section 3: a non-POST request carries no body, so the era of
+		// a method other than GET and POST is decided from the version header
+		// instances alone, before the body is read and before authentication.
+		// A legacy-era request gets the 0.1.x refusal byte-identically to the
+		// legacy profile: no body read, no nonce, no authentication.
+		if !eraAware || modern.EraFromHeaders(h.profile, headerList(r.Header)) == "legacy" {
+			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "only GET and POST are defined")
+			return
+		}
 	}
 	target := r.RequestURI
 	if target == "" {
@@ -228,13 +235,10 @@ func (h *handler) serveModern(w http.ResponseWriter, r *http.Request, target str
 		h.writeSigned(w, http.StatusBadRequest, header, errorBody(out.ErrorCode, out.Error.Message), res.RequestSig, res.Tool)
 	case modern.KindForward:
 		if out.Era == "legacy" {
-			// 02 section 2 item 1: GET is accepted; methods other than GET and
-			// POST are not defined; POST is dispatched and forwarded exactly as
-			// the legacy profile does.
-			if r.Method != http.MethodGet && r.Method != http.MethodPost {
-				writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "only GET and POST are defined")
-				return
-			}
+			// 02 section 2 item 1: GET is accepted and POST is dispatched and
+			// forwarded exactly as the legacy profile does. A method other than
+			// GET and POST never reaches this branch: serve answers it before
+			// the body is read (spec 04 section 3).
 			res = h.v.Dispatch(res)
 			if !res.Accepted {
 				h.reject(w, res)

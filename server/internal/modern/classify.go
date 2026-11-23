@@ -3,8 +3,7 @@ package modern
 import (
 	"bytes"
 	"encoding/json"
-	"math"
-	"strconv"
+	"math/big"
 	"strings"
 )
 
@@ -208,10 +207,14 @@ func Classify(profile Profile, req Request) Outcome {
 }
 
 // refusalID returns the raw JSON id to echo in a specification 04 S10 refusal:
-// a JSON string or a JSON number that is an integer (an exponent form is
-// accepted when its value is integral). Every other value, including a
-// fractional number, a non-integral exponent, null, a boolean, an array and an
-// object, yields nil so the refusal carries null.
+// a JSON string, or a JSON number whose exact value is an integer within the
+// int64 range. Specification 04 section 5 S10 says "string or integer" and
+// states no magnitude limit, so the int64 range of a JSON-RPC integer id
+// applies. Integrality is decided from the token text with exact arithmetic: an
+// exponent is accepted when it denotes an integer, a fraction only when its
+// exact value is integral, and no float64 rounding is involved. Every other
+// value, including a non-integral fraction, an out-of-range magnitude, null, a
+// boolean, an array and an object, yields nil so the refusal carries null.
 func refusalID(raw json.RawMessage) []byte {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
@@ -220,17 +223,117 @@ func refusalID(raw json.RawMessage) []byte {
 	if trimmed[0] == '"' {
 		return trimmed
 	}
-	if trimmed[0] != '-' && (trimmed[0] < '0' || trimmed[0] > '9') {
-		return nil
-	}
-	value, err := strconv.ParseFloat(string(trimmed), 64)
-	if err != nil || math.IsInf(value, 0) || math.IsNaN(value) {
-		return nil
-	}
-	if value != math.Trunc(value) {
+	if !exactInteger(string(trimmed)) {
 		return nil
 	}
 	return trimmed
+}
+
+// exactInteger reports whether the JSON number token text denotes an integer
+// that fits in int64. The token must match
+// -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?; the mantissa digits are
+// scaled by the exponent exactly, so 9007199254740992.5 is not an integer and
+// 1e400 is out of range.
+func exactInteger(text string) bool {
+	negative := strings.HasPrefix(text, "-")
+	if negative {
+		text = text[1:]
+	}
+	mantissa, exponentText := text, "0"
+	if i := strings.IndexAny(text, "eE"); i >= 0 {
+		mantissa, exponentText = text[:i], text[i+1:]
+	}
+	intPart, fracPart := mantissa, ""
+	hasFraction := false
+	if i := strings.IndexByte(mantissa, '.'); i >= 0 {
+		intPart, fracPart, hasFraction = mantissa[:i], mantissa[i+1:], true
+	}
+	if !decimalDigits(intPart) || (hasFraction && !decimalDigits(fracPart)) {
+		return false
+	}
+	if len(intPart) > 1 && intPart[0] == '0' {
+		return false
+	}
+	if !signedDigits(exponentText) {
+		return false
+	}
+	digits := strings.TrimLeft(intPart+fracPart, "0")
+	if digits == "" {
+		// The exact value is zero, whatever the sign, fraction or exponent.
+		return true
+	}
+	exponent, ok := boundedExponent(exponentText)
+	if !ok {
+		return false
+	}
+	scale := exponent - len(fracPart)
+	if scale < 0 {
+		trim := -scale
+		if trim >= len(digits) || strings.Trim(digits[len(digits)-trim:], "0") != "" {
+			// A non-zero digit sits below the decimal point.
+			return false
+		}
+		digits = digits[:len(digits)-trim]
+		scale = 0
+	}
+	if len(digits)+scale > 19 {
+		// A 19-digit magnitude may still exceed max int64; IsInt64 decides.
+		return false
+	}
+	value, ok := new(big.Int).SetString(digits, 10)
+	if !ok {
+		return false
+	}
+	if scale > 0 {
+		value.Mul(value, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale)), nil))
+	}
+	if negative {
+		value.Neg(value)
+	}
+	return value.IsInt64()
+}
+
+// decimalDigits reports whether text is one or more ASCII digits.
+func decimalDigits(text string) bool {
+	if text == "" {
+		return false
+	}
+	for i := 0; i < len(text); i++ {
+		if text[i] < '0' || text[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// signedDigits reports whether text is an optional sign followed by one or more
+// ASCII digits: the JSON number exponent grammar.
+func signedDigits(text string) bool {
+	if text != "" && (text[0] == '+' || text[0] == '-') {
+		text = text[1:]
+	}
+	return decimalDigits(text)
+}
+
+// boundedExponent parses the exponent of a JSON number token. An exponent of
+// more than five digits cannot bring a non-zero mantissa into the int64 range,
+// so it is refused before any big-integer work.
+func boundedExponent(text string) (int, bool) {
+	negative := strings.HasPrefix(text, "-")
+	if negative || strings.HasPrefix(text, "+") {
+		text = text[1:]
+	}
+	if !decimalDigits(text) || len(text) > 5 {
+		return 0, false
+	}
+	n := 0
+	for i := 0; i < len(text); i++ {
+		n = n*10 + int(text[i]-'0')
+	}
+	if negative {
+		n = -n
+	}
+	return n, true
 }
 
 // parseBody decodes an acceptable JSON-RPC object body. It reports false when
@@ -290,12 +393,36 @@ func (b bodyFields) sourceValue(key string) (string, bool) {
 // modernSignal reports whether a header instance or the signed _meta version is
 // a well-formed modern version.
 func modernSignal(headers []Header, body bodyFields) bool {
+	return headerModernSignal(headers) || (body.hasMeta && isModernVersion(body.meta))
+}
+
+// headerModernSignal reports whether any MCP-Protocol-Version instance (name
+// compared case-insensitively) is a well-formed modern version.
+func headerModernSignal(headers []Header) bool {
 	for _, h := range headers {
 		if strings.ToLower(h.Name) == headerVersion && isModernVersion(h.Value) {
 			return true
 		}
 	}
-	return body.hasMeta && isModernVersion(body.meta)
+	return false
+}
+
+// EraFromHeaders implements the header-only part of S3 for a caller that must
+// decide the era of a request before reading a body or authenticating: spec 04
+// section 3, "Non-POST under both: there is no body, so only H counts". It
+// returns "legacy" or "modern" (the Outcome.Era values). ProfileModern is always
+// modern; any profile other than ProfileModern and ProfileBoth is always legacy.
+func EraFromHeaders(profile Profile, headers []Header) string {
+	if profile == ProfileModern {
+		return eraModern
+	}
+	if profile != ProfileBoth {
+		return eraLegacy
+	}
+	if headerModernSignal(headers) {
+		return eraModern
+	}
+	return eraLegacy
 }
 
 // isMirrorName reports whether an already lowercased name is one of the three

@@ -275,11 +275,38 @@ type Result struct {
 }
 
 // pendingDispatch carries the authenticated, classified request to Dispatch.
+// It lives on the heap and every copy of a Result shares the pointer, so the
+// fields below are the single copy of the pending state.
 type pendingDispatch struct {
-	auth   jack.RequestAuth
-	now    int64
-	caller *RegistryEntry
-	msg    rpcbody.RPCMessage
+	mu       sync.Mutex
+	issuer   *Verifier
+	auth     jack.RequestAuth
+	now      int64
+	caller   *RegistryEntry
+	msg      rpcbody.RPCMessage
+	consumed bool
+	released bool
+}
+
+// claim marks the pending dispatch consumed before the deferred step runs. It
+// fails closed when another Verifier dispatches the result, when the result was
+// already dispatched, and when Done already released the request.
+func (p *pendingDispatch) claim(v *Verifier) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.issuer != v || p.consumed || p.released {
+		return &jack.Error{HTTPStatus: 500, Code: "internal_error", Message: "internal error"}
+	}
+	p.consumed = true
+	return nil
+}
+
+// markReleased records that Done released the request, so a later Dispatch is
+// refused instead of running a native tool after the nonce lease was released.
+func (p *pendingDispatch) markReleased() {
+	p.mu.Lock()
+	p.released = true
+	p.mu.Unlock()
 }
 
 func rejection(status int, code, message string) Result {
@@ -439,7 +466,7 @@ func (v *Verifier) authorize(req Request, auth jack.RequestAuth, now int64, call
 		}
 		if req.ClassifyOnly {
 			res.Pending = true
-			res.pending = &pendingDispatch{auth: auth, now: now, caller: caller, msg: msg}
+			res.pending = &pendingDispatch{issuer: v, auth: auth, now: now, caller: caller, msg: msg}
 			return res
 		}
 		return v.runNative(res, auth, now, caller, msg)
@@ -452,7 +479,7 @@ func (v *Verifier) authorize(req Request, auth jack.RequestAuth, now int64, call
 	}
 	if req.ClassifyOnly {
 		res.Pending = true
-		res.pending = &pendingDispatch{auth: auth, now: now, caller: caller, msg: msg}
+		res.pending = &pendingDispatch{issuer: v, auth: auth, now: now, caller: caller, msg: msg}
 		return res
 	}
 	res.Accepted = true
@@ -499,13 +526,20 @@ func (v *Verifier) runNative(res Result, auth jack.RequestAuth, now int64, calle
 
 // Dispatch runs the deferred step of a Request.ClassifyOnly verification: the
 // native tool call and its audit event, or marks an ordinary request accepted
-// for forwarding. It is a no-op when the result is not Pending. The nonce
-// lease is still held by the Result and is released by Done after the caller
-// has answered.
+// for forwarding. It is a no-op when the result is not Pending.
+//
+// A pending result is single-use and bound to the Verifier that issued it: a
+// second Dispatch of the same pending result, a Dispatch by another Verifier,
+// and a Dispatch after Done all fail closed with HTTP status 500, code
+// internal_error, and run no native tool. The nonce lease is released by Done
+// after the caller has answered.
 func (v *Verifier) Dispatch(res Result) Result {
 	p := res.pending
 	if p == nil {
 		return res
+	}
+	if err := p.claim(v); err != nil {
+		return rejectionFrom(err)
 	}
 	res.pending = nil
 	res.Pending = false

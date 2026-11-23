@@ -435,7 +435,7 @@ func (c *Client) modernFetchDefinitions(ctx context.Context, signer Signer, vers
 	if err != nil {
 		return nil, err
 	}
-	status, raw, err := c.roundTrip(ctx, signer, body, rm.Headers)
+	status, _, raw, err := c.roundTrip(ctx, signer, body, rm.Headers)
 	if err != nil {
 		return nil, err
 	}
@@ -506,7 +506,8 @@ func (c *Client) modernSendProjectedCall(ctx context.Context, signer Signer, ver
 	if err != nil {
 		return 0, nil, err
 	}
-	return c.roundTrip(ctx, signer, body, headers)
+	status, _, raw, err := c.roundTrip(ctx, signer, body, headers)
+	return status, raw, err
 }
 
 // modernCallPlan names the definition list a projected call is validated
@@ -533,7 +534,8 @@ func (c *Client) callProjected(ctx context.Context, signer Signer, plan modernCa
 		if err != nil {
 			return 0, nil, err
 		}
-		return c.roundTrip(ctx, signer, body, headers)
+		status, _, raw, err := c.roundTrip(ctx, signer, body, headers)
+		return status, raw, err
 	}
 	defs, err := c.modernFetchDefinitions(ctx, signer, version, plan.listMethod)
 	if err != nil {

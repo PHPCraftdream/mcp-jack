@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
+	"github.com/PHPCraftdream/mcp-jack/client/internal/modern"
 	"github.com/PHPCraftdream/mcp-jack/client/internal/urlpolicy"
 	"github.com/PHPCraftdream/mcp-jack/rotation"
 )
@@ -523,4 +525,119 @@ func VerifyRotationCarrier(known map[string]RotationResponseKey, status int, hea
 		return refuse("rotation_key_interval")
 	}
 	return RotationCarrier{KID: auth.Kid, Timestamp: auth.TS}, nil
+}
+
+// The legacy-era lifecycle below moved here from rpc.go to keep both files
+// under the layout limit; the code is unchanged.
+
+// legacyFallback performs the legacy handshake and then the operation.
+func (c *Client) legacyFallback(ctx context.Context, signer Signer, version, tool string, args []byte, out any) error {
+	if err := c.legacyHandshake(ctx, signer, version); err != nil {
+		return err
+	}
+	c.setEra(EraLegacy)
+	return c.callWithArgs(ctx, signer, tool, args, out)
+}
+
+// jsonrpcInitializeRequest is the legacy-era initialize request: params holds
+// protocolVersion, an empty capabilities object and clientInfo.
+type jsonrpcInitializeRequest struct {
+	JSONRPC string                  `json:"jsonrpc"`
+	ID      int64                   `json:"id"`
+	Method  string                  `json:"method"`
+	Params  jsonrpcInitializeParams `json:"params"`
+}
+
+// jsonrpcInitializeParams is protocolVersion, capabilities and clientInfo in
+// the legacy era.
+type jsonrpcInitializeParams struct {
+	ProtocolVersion string         `json:"protocolVersion"`
+	Capabilities    struct{}       `json:"capabilities"`
+	ClientInfo      map[string]any `json:"clientInfo"`
+}
+
+// jsonrpcNotification is a legacy-era JSON-RPC notification: no id and no
+// params.
+type jsonrpcNotification struct {
+	JSONRPC string `json:"jsonrpc"`
+	Method  string `json:"method"`
+}
+
+// jsonrpcLegacyInitialize is a verified legacy initialize reply: exactly one of
+// result and error is set.
+type jsonrpcLegacyInitialize struct {
+	JSONRPC string                         `json:"jsonrpc"`
+	Result  *jsonrpcLegacyInitializeResult `json:"result"`
+	Error   *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+// jsonrpcLegacyInitializeResult is the negotiated protocol version.
+type jsonrpcLegacyInitializeResult struct {
+	ProtocolVersion string `json:"protocolVersion"`
+}
+
+// legacyHandshake runs the legacy-era lifecycle of 2025-11-25/2025-06-18:
+// initialize, then notifications/initialized. Only a verified 2xx answer is
+// accepted, and the initialize answer must be a JSON-RPC result whose
+// result.protocolVersion is a well-formed version: a JSON-RPC error or a
+// malformed or absent result fails the fallback.
+//
+// The negotiated version and the Mcp-Session-Id response header, when the
+// server assigns one, are cached and sent as unsigned headers on
+// notifications/initialized and every later legacy request. A failed handshake
+// clears them.
+func (c *Client) legacyHandshake(ctx context.Context, signer Signer, version string) (err error) {
+	initBody, err := json.Marshal(jsonrpcInitializeRequest{
+		JSONRPC: "2.0",
+		ID:      c.nextRequestID(),
+		Method:  "initialize",
+		Params: jsonrpcInitializeParams{
+			ProtocolVersion: version,
+			ClientInfo:      modernClientInfo(),
+		},
+	})
+	if err != nil {
+		return err
+	}
+	status, header, raw, err := c.roundTrip(ctx, signer, initBody, nil)
+	if err != nil {
+		return err
+	}
+	if status < 200 || status > 299 {
+		return decodeVerifiedCall(status, raw, nil)
+	}
+	var reply jsonrpcLegacyInitialize
+	if err := json.Unmarshal(raw, &reply); err != nil {
+		return fmt.Errorf("jack client: legacy initialize: %w", err)
+	}
+	if reply.Error != nil {
+		return fmt.Errorf("jack client: legacy initialize failed: JSON-RPC error %d: %s", reply.Error.Code, reply.Error.Message)
+	}
+	if reply.Result == nil || !modern.IsVersion(reply.Result.ProtocolVersion) {
+		return fmt.Errorf("jack client: legacy initialize failed: missing or invalid result.protocolVersion")
+	}
+	c.setLegacyState(reply.Result.ProtocolVersion, header.Get("Mcp-Session-Id"))
+	ok := false
+	defer func() {
+		if !ok {
+			c.clearLegacyState()
+		}
+	}()
+
+	initializedBody, err := json.Marshal(jsonrpcNotification{JSONRPC: "2.0", Method: "notifications/initialized"})
+	if err != nil {
+		return err
+	}
+	status, _, raw, err = c.roundTrip(ctx, signer, initializedBody, c.legacyHeaders())
+	if err != nil {
+		return err
+	}
+	if status < 200 || status > 299 {
+		return decodeVerifiedCall(status, raw, nil)
+	}
+	ok = true
+	return nil
 }

@@ -300,3 +300,80 @@ func TestClassifyOnlyAuditsAtDispatch(t *testing.T) {
 		t.Fatalf("audit outcome = %q, want %q", events[0].Outcome, AuditSuccess)
 	}
 }
+
+// TestPendingDispatchIsExclusive pins the binding of a Pending Result: it is
+// single-use, only its issuing Verifier may dispatch it, and it is unusable
+// after Done released the request. A refused dispatch runs no native tool.
+func TestPendingDispatchIsExclusive(t *testing.T) {
+	newVerifier := func(t *testing.T, key ed25519.PrivateKey) (*Verifier, *countingNative) {
+		t.Helper()
+		state, _ := registeredAlice(t, key)
+		native := &countingNative{}
+		v, err := NewVerifier(Config{
+			Aud: "svc", State: state, Nonces: NewNonceStore(), Native: native,
+			Now: func() int64 { return testNow },
+		})
+		if err != nil {
+			t.Fatalf("NewVerifier: %v", err)
+		}
+		return v, native
+	}
+	pending := func(t *testing.T, v *Verifier, key ed25519.PrivateKey, nonce byte) Result {
+		t.Helper()
+		req := signedVerifierRequest(t, key, "svc", "POST", "/mcp", testNow, nonce, toolCallBody(ToolWhoAmI))
+		req.ClassifyOnly = true
+		res := v.Verify(req)
+		if !res.Pending || res.Accepted {
+			t.Fatalf("pending result = %+v, want a Pending result", res)
+		}
+		return res
+	}
+	wantRefusal := func(t *testing.T, out Result) {
+		t.Helper()
+		if out.HTTPStatus != 500 || out.Code != "internal_error" || out.Accepted || out.Pending {
+			t.Fatalf("refused dispatch = %+v, want 500 internal_error", out)
+		}
+	}
+
+	t.Run("a second dispatch of the same result fails", func(t *testing.T) {
+		key := testPrivateKey(t, "alice")
+		v, native := newVerifier(t, key)
+		res := pending(t, v, key, 21)
+		defer res.Done()
+
+		if out := v.Dispatch(res); !out.Accepted || native.calls != 1 {
+			t.Fatalf("first dispatch = %+v, native calls=%d; want one accepted call", out, native.calls)
+		}
+		wantRefusal(t, v.Dispatch(res))
+		if native.calls != 1 {
+			t.Fatalf("native calls after a refused second dispatch = %d, want 1", native.calls)
+		}
+	})
+
+	t.Run("another verifier cannot dispatch the result", func(t *testing.T) {
+		key := testPrivateKey(t, "alice")
+		issuer, issued := newVerifier(t, key)
+		other, foreign := newVerifier(t, key)
+		res := pending(t, issuer, key, 22)
+		defer res.Done()
+
+		wantRefusal(t, other.Dispatch(res))
+		if foreign.calls != 0 || issued.calls != 0 {
+			t.Fatalf("native calls after a foreign dispatch = %d/%d, want 0/0", foreign.calls, issued.calls)
+		}
+		if out := issuer.Dispatch(res); !out.Accepted || issued.calls != 1 {
+			t.Fatalf("issuer dispatch = %+v, native calls=%d; want the pending call to remain usable", out, issued.calls)
+		}
+	})
+
+	t.Run("dispatch after Done fails", func(t *testing.T) {
+		key := testPrivateKey(t, "alice")
+		v, native := newVerifier(t, key)
+		res := pending(t, v, key, 23)
+		res.Done()
+		wantRefusal(t, v.Dispatch(res))
+		if native.calls != 0 {
+			t.Fatalf("native calls after dispatch of a released result = %d, want 0", native.calls)
+		}
+	})
+}
