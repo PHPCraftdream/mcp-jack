@@ -3,9 +3,13 @@ package delivery_test
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/PHPCraftdream/mcp-jack/webhook/internal/delivery"
 )
@@ -114,3 +118,85 @@ type deliveryTestPeerConn struct {
 }
 
 func (c deliveryTestPeerConn) RemoteAddr() net.Addr { return c.peer }
+
+func TestDeliveryBodyDeadline(t *testing.T) {
+	const limit = 4
+	for _, tt := range []struct{ name, prefix string }{
+		{name: "during body", prefix: "a"},
+		{name: "during size probe", prefix: "abcd"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				var headersAt time.Time
+				client := delivery.NewClientWithTestTransport(func(req *http.Request) (*http.Response, error) {
+					time.Sleep(3 * time.Second) // Simulate earlier request phases without using the body budget.
+					headersAt = time.Now()
+					body := io.MultiReader(strings.NewReader(tt.prefix), waitForCancellation{req.Context()})
+					return testHTTPResponse(body), nil
+				})
+				res, refusal := client.Do(bodyTestRequest(t), limit)
+				assertBodyTestHeaders(t, res)
+				if refusal == nil || refusal.Code != "timeout" || res.Body != nil {
+					t.Fatalf("Do() = %+v, %v; want timeout without a body", res, refusal)
+				}
+				if elapsed := time.Since(headersAt); elapsed != 10*time.Second {
+					t.Errorf("body deadline elapsed after %v from header receipt, want 10s", elapsed)
+				}
+			})
+		})
+	}
+}
+
+func TestDeliveryBodyLimit(t *testing.T) {
+	const limit = 4
+	for _, tt := range []struct{ name, body, code string }{
+		{name: "one byte over", body: "abcde", code: "too_large"},
+		{name: "exactly at cap", body: "abcd"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			client := delivery.NewClientWithTestTransport(func(*http.Request) (*http.Response, error) {
+				return testHTTPResponse(strings.NewReader(tt.body)), nil
+			})
+			res, refusal := client.Do(bodyTestRequest(t), limit)
+			assertBodyTestHeaders(t, res)
+			if tt.code != "" {
+				if refusal == nil || refusal.Code != tt.code || res.Body != nil {
+					t.Fatalf("Do() = %+v, %v; want %s without a body", res, refusal, tt.code)
+				}
+			} else if refusal != nil || string(res.Body) != tt.body {
+				t.Fatalf("Do() = %+v, %v; want body %q without error", res, refusal, tt.body)
+			}
+		})
+	}
+}
+
+type waitForCancellation struct{ ctx context.Context }
+
+func (r waitForCancellation) Read([]byte) (int, error) {
+	<-r.ctx.Done()
+	return 0, r.ctx.Err()
+}
+
+func testHTTPResponse(body io.Reader) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Header:     http.Header{"Retry-After": {"120"}},
+		Body:       io.NopCloser(body),
+	}
+}
+
+func bodyTestRequest(t *testing.T) *http.Request {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, "https://example.com/hook", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return req
+}
+
+func assertBodyTestHeaders(t *testing.T, res *delivery.Response) {
+	t.Helper()
+	if res == nil || res.Status != http.StatusTooManyRequests || res.Header.Get("Retry-After") != "120" {
+		t.Fatalf("response = %+v; want status 429 and Retry-After: 120", res)
+	}
+}

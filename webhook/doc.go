@@ -1,6 +1,13 @@
 // Package webhook implements spec/06-webhooks.md for the mcp-jack 0.2.0
 // release line. It provides webhook delivery, reception, endpoint verification,
 // Server Card key discovery, and subscription helpers.
+//
+// The wrapped MCP server owns subscriptions, events, and cursors.
+// This package supplies building blocks: the canonical subscription key and
+// deterministic ID, TTL grant, active-secret selection with grace, gap and
+// terminated envelopes, sender, receiver, endpoint verification, an
+// SSRF-hardened delivery path, and Server Card discovery, but deliberately
+// provides no subscription store or authenticated subscribe/unsubscribe endpoint.
 package webhook
 
 import (

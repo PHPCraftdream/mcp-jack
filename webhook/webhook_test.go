@@ -3,8 +3,10 @@ package webhook_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -15,11 +17,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
+	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	jack "github.com/PHPCraftdream/mcp-jack"
 	"github.com/PHPCraftdream/mcp-jack/webhook"
 )
 
@@ -30,7 +36,7 @@ const (
 	testNow  = int64(1795338000)
 )
 
-func newTestReceiver(t *testing.T) (*webhook.Receiver, []byte, string) {
+func newTestReceiver(t *testing.T, enqueue webhook.EnqueueFunc) (*webhook.Receiver, []byte, string) {
 	t.Helper()
 	raw := []byte("0123456789ABCDEF0123456789ABCDEF")
 	encoded := "whsec_" + base64.StdEncoding.EncodeToString(raw)
@@ -41,6 +47,7 @@ func newTestReceiver(t *testing.T) (*webhook.Receiver, []byte, string) {
 	r, err := webhook.NewReceiver(webhook.ReceiverConfig{
 		Secrets: []webhook.Secret{{SubscriptionID: testSub, Key: key}},
 		Routed:  []string{testSub},
+		Enqueue: enqueue,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -64,8 +71,31 @@ func signDelivery(key []byte, id, sub string, now, signedAt int64, body string) 
 	}
 }
 
+func discardMessage(webhook.ReceivedMessage) error { return nil }
+
+func TestNewReceiverRequiresEnqueue(t *testing.T) {
+	r, err := webhook.NewReceiver(webhook.ReceiverConfig{})
+	if r != nil || err == nil || err.Error() != "receiver: Config.Enqueue is required" {
+		t.Fatalf("NewReceiver with nil Enqueue = %v, %v; want the receiver's required Enqueue error", r, err)
+	}
+}
+
+type observedResponse struct {
+	*httptest.ResponseRecorder
+	beforeHeader func(int)
+}
+
+func (w observedResponse) WriteHeader(status int) {
+	w.beforeHeader(status)
+	w.ResponseRecorder.WriteHeader(status)
+}
+
 func TestWebhookReceiverAdapter(t *testing.T) {
-	r, key, encoded := newTestReceiver(t)
+	var queued []webhook.ReceivedMessage
+	r, key, encoded := newTestReceiver(t, func(msg webhook.ReceivedMessage) error {
+		queued = append(queued, msg)
+		return nil
+	})
 	h := webhook.NewHTTPHandler(r)
 	now := time.Now().Unix()
 	d := signDelivery(key, testID, testSub, now, now, testBody)
@@ -80,7 +110,11 @@ func TestWebhookReceiverAdapter(t *testing.T) {
 	serve := func(req *http.Request, status int) *httptest.ResponseRecorder {
 		t.Helper()
 		w := httptest.NewRecorder()
-		h.ServeHTTP(w, req)
+		h.ServeHTTP(observedResponse{w, func(status int) {
+			if status == http.StatusOK && (len(queued) != 1 || string(queued[0].Raw) != testBody) {
+				t.Fatalf("before HTTP 200, want exactly one enqueue of the raw body; got %+v", queued)
+			}
+		}}, req)
 		if w.Code != status || w.Header().Get("Content-Type") != "application/json" {
 			t.Fatalf("got status %d/content type %q, want %d/application/json", w.Code, w.Header().Get("Content-Type"), status)
 		}
@@ -124,6 +158,9 @@ func TestWebhookReceiverAdapter(t *testing.T) {
 	if body.read != webhook.MaxBodyBytes+1 {
 		t.Fatalf("oversized stream: read %d bytes, want %d", body.read, webhook.MaxBodyBytes+1)
 	}
+	if len(queued) != 1 {
+		t.Fatalf("enqueued %d messages across all requests, want 1", len(queued))
+	}
 }
 
 type countingBody struct {
@@ -135,6 +172,168 @@ func (b *countingBody) Read(p []byte) (int, error) {
 	n, err := b.r.Read(p)
 	b.read += n
 	return n, err
+}
+
+func TestCardSourceReceiverRotation(t *testing.T) {
+	// Isolate the test root so hostname and TLS verification stay enabled and
+	// no other test sees a changed trust store.
+	const child = "MCP_JACK_WEBHOOK_CARD_TLS_TEST_CHILD"
+	if os.Getenv(child) != "1" {
+		cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestCardSourceReceiverRotation$")
+		cmd.Env = append(os.Environ(), child+"=1", "GODEBUG=x509usefallbackroots=1")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("TLS test subprocess: %v\n%s", err, output)
+		}
+		return
+	}
+
+	var cardBody atomic.Value // []byte, replaced between refreshes
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodGet || req.URL.Path != "/mcp/server-card" {
+			t.Errorf("unexpected Server Card request: %s %s", req.Method, req.URL)
+		}
+		w.Header().Set("Content-Type", "application/mcp-server-card+json")
+		_, _ = w.Write(cardBody.Load().([]byte))
+	}))
+	t.Cleanup(srv.Close)
+	roots := x509.NewCertPool()
+	roots.AddCert(srv.Certificate())
+	x509.SetFallbackRoots(roots)
+
+	address := srv.Listener.Addr().String()
+	_, port, err := net.SplitHostPort(address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mcpURL := "https://" + net.JoinHostPort("example.com", port) + "/mcp"
+	client := webhook.NewDeliveryClient(webhook.DeliveryConfig{
+		AllowedRanges: []string{"127.0.0.1/32"},
+		Resolver: webhook.ResolverFunc(func(_ context.Context, host string) ([]string, error) {
+			if host != "example.com" {
+				return nil, fmt.Errorf("unexpected host %q", host)
+			}
+			return []string{"127.0.0.1"}, nil
+		}),
+		Dialer: webhook.DialerFunc(func(ctx context.Context, network, target string) (net.Conn, error) {
+			if target != net.JoinHostPort("127.0.0.1", port) {
+				return nil, fmt.Errorf("unexpected dial target %q", target)
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, address)
+		}),
+	})
+	source, err := webhook.NewCardSource(webhook.CardSourceConfig{Client: client, MCPURL: mcpURL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := []byte("0123456789ABCDEF0123456789ABCDEF")
+	var enqueued int
+	r, err := webhook.NewReceiver(webhook.ReceiverConfig{
+		Keys:                  source,
+		EnforceServerIdentity: true,
+		Secrets:               []webhook.Secret{{SubscriptionID: testSub, Key: secret}},
+		Routed:                []string{testSub},
+		Enqueue:               func(webhook.ReceivedMessage) error { enqueued++; return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	key := func(seed byte) (ed25519.PrivateKey, webhook.JWK) {
+		priv := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{seed}, ed25519.SeedSize))
+		pub := priv.Public().(ed25519.PublicKey)
+		return priv, webhook.JWK{Kty: "OKP", Crv: "Ed25519", Kid: jack.KeyID(pub), X: base64.RawURLEncoding.EncodeToString(pub)}
+	}
+	oldPriv, oldJWK := key(20)
+	newPriv, newJWK := key(21)
+	publishAndRefresh := func(keys ...webhook.JWK) {
+		t.Helper()
+		card := map[string]any{"remotes": []any{map[string]any{
+			"url": mcpURL,
+			"extensionsInfo": map[string]any{"io.modelcontextprotocol/events": map[string]any{
+				"webhooks": map[string]any{"signingKeys": map[string]any{"keys": keys}},
+			}},
+		}}}
+		body, err := json.Marshal(card)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cardBody.Store(body)
+		if refusal := source.Refresh(t.Context()); refusal != nil {
+			t.Fatal(refusal)
+		}
+	}
+	check := func(id string, priv ed25519.PrivateKey, jwk webhook.JWK, status int, code string) {
+		t.Helper()
+		d := signDelivery(secret, id, testSub, testNow, testNow, testBody)
+		signature, err := webhook.EmissionHeader(webhook.Emission{
+			WebhookID: id, Timestamp: strconv.FormatInt(testNow, 10), EndpointID: testSub, Body: d.Body,
+			Secrets: []webhook.EmissionSecret{{Secret: secret, Current: true}},
+			Keys:    []webhook.EmissionKey{{Key: priv, KID: jwk.Kid, Current: true}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.Headers[2][1] = signature
+		if got := r.Handle(d); got.Status != status || got.Code != code {
+			t.Fatalf("%s: got %d/%s, want %d/%s", id, got.Status, got.Code, status, code)
+		}
+	}
+	publishAndRefresh(oldJWK)
+	check("msg_old_only", oldPriv, oldJWK, 200, "")
+	check("msg_new_unpublished", newPriv, newJWK, 401, "bad_server_signature")
+	publishAndRefresh(oldJWK, newJWK)
+	check("msg_old_overlap", oldPriv, oldJWK, 200, "")
+	check("msg_new_overlap", newPriv, newJWK, 200, "")
+	publishAndRefresh(newJWK)
+	check("msg_old_removed", oldPriv, oldJWK, 401, "bad_server_signature")
+	check("msg_new_only", newPriv, newJWK, 200, "")
+	if enqueued != 4 {
+		t.Fatalf("enqueued %d messages, want 4", enqueued)
+	}
+}
+
+func TestGateChallenge(t *testing.T) {
+	const principal, callback, ttl = "subscriber", "https://hooks.example.test/x", time.Minute
+	client := webhook.NewDeliveryClient(webhook.DeliveryConfig{
+		Resolver: webhook.ResolverFunc(func(context.Context, string) ([]string, error) {
+			return nil, errors.New("no well-known document available")
+		}),
+	})
+	gate, err := webhook.NewGate(webhook.GateConfig{Client: client, Now: func() int64 { return testNow }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refusal := gate.Covers(t.Context(), principal, callback, ttl); refusal == nil || refusal.Reason != "no_route" {
+		t.Fatalf("Covers before challenge = %v, want no_route", refusal)
+	}
+	if gate.Fresh(principal, callback) {
+		t.Fatal("fresh verdict before challenge")
+	}
+	nonce, refusal := gate.Begin(principal, callback)
+	if refusal != nil || !webhook.NonceOK(nonce) {
+		t.Fatalf("Begin = %q, %v; want a valid nonce", nonce, refusal)
+	}
+	r, secret, _ := newTestReceiver(t, discardMessage)
+	body := `{"type":"verification","challenge":"` + nonce + `"}`
+	res := r.Handle(signDelivery(secret, "msg_verification_test", testSub, testNow, testNow, body))
+	if refusal := webhook.ChallengeEcho(res.Status, string(res.Body), nonce); refusal != nil {
+		t.Fatalf("receiver challenge echo: %v", refusal)
+	}
+	var echo struct {
+		Challenge string `json:"challenge"`
+	}
+	if err := json.Unmarshal(res.Body, &echo); err != nil {
+		t.Fatal(err)
+	}
+	if refusal := gate.Accept(principal, callback, nonce, echo.Challenge, ttl); refusal != nil {
+		t.Fatal(refusal)
+	}
+	if !gate.Fresh(principal, callback) {
+		t.Fatal("accepted challenge did not cache a fresh verdict")
+	}
+	if refusal := gate.Covers(t.Context(), principal, callback, ttl); refusal != nil {
+		t.Fatalf("Covers after challenge = %v, want cached consent", refusal)
+	}
 }
 
 func TestWebhookRetryProperty(t *testing.T) {
@@ -274,7 +473,7 @@ func TestWebhookRebindingAndDialGuard(t *testing.T) {
 }
 
 func TestWebhookReplayWindowBoundaries(t *testing.T) {
-	r, key, _ := newTestReceiver(t)
+	r, key, _ := newTestReceiver(t, discardMessage)
 	for i, tc := range []struct {
 		delta  int64
 		badMAC bool
@@ -303,7 +502,7 @@ func TestWebhookReplayWindowBoundaries(t *testing.T) {
 }
 
 func TestWebhookNoSecretInErrors(t *testing.T) {
-	r, key, encoded := newTestReceiver(t)
+	r, key, encoded := newTestReceiver(t, discardMessage)
 	valid := func(sub string, ts int64) webhook.Delivery {
 		return signDelivery(key, testID, sub, testNow, ts, testBody)
 	}

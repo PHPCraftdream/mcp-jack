@@ -153,8 +153,9 @@ func TestServerCardFetchRefusalOrder(t *testing.T) {
 func TestServerCardFetchAcceptedAtLimits(t *testing.T) {
 	jwk, _ := cardTestJWK(11)
 	server, _ := cardTestJWK(12)
+	signingKeys := cardTestJSON(t, map[string]any{"keys": []any{jwk, server}})
 	body := cardTestBody(t, map[string]any{
-		"signingKeys":    map[string]any{"keys": []any{jwk, server}},
+		"signingKeys":    signingKeys,
 		"egressIpRanges": []any{"203.0.113.0/24", "203.0.113.1/24", false, "2001:db8::/32"},
 	})
 	padded := append([]byte(body), bytes.Repeat([]byte{' '}, card.MaxCardBytes-len(body))...)
@@ -173,8 +174,9 @@ func TestServerCardFetchAcceptedAtLimits(t *testing.T) {
 		if err != nil {
 			t.Fatalf("FetchDecision at limits: %+v", err)
 		}
-		if got.CacheTTL != tt.ttl || len(got.Keys) != 1 || card.JWKOf(got.Keys[0]) != jwk ||
-			!reflect.DeepEqual(got.Rejected, []card.Rejected{{KID: &server.Kid, Reason: "mcp_server_key"}}) ||
+		if got.CacheTTL != tt.ttl || !bytes.Equal(got.Keys.Raw, signingKeys) ||
+			len(got.Keys.Accepted) != 1 || card.JWKOf(got.Keys.Accepted[0]) != jwk ||
+			!reflect.DeepEqual(got.Keys.Rejected, []card.Rejected{{KID: &server.Kid, Reason: "mcp_server_key"}}) ||
 			!reflect.DeepEqual(got.Egress, []card.EgressRange{{CIDR: "203.0.113.0/24", Family: "ipv4", Prefix: 24}, {CIDR: "2001:db8::/32", Family: "ipv6", Prefix: 32}}) {
 			t.Errorf("unexpected FetchDecision result: %+v (want TTL %d)", got, tt.ttl)
 		}
@@ -184,7 +186,7 @@ func TestServerCardFetchAcceptedAtLimits(t *testing.T) {
 			MCPURL: cardTestMCPURL, CardURL: "https://mcp.example.test/server-card", Status: 200,
 			Body: cardTestBody(t, webhooks),
 		})
-		if err != nil || len(got.Keys) != 0 || len(got.Rejected) != 0 {
+		if err != nil || len(got.Keys.Accepted) != 0 || len(got.Keys.Rejected) != 0 {
 			t.Errorf("absent JWK array: result %+v, error %+v", got, err)
 		}
 	}

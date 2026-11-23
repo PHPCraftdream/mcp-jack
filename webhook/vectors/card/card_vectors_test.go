@@ -170,15 +170,15 @@ func runCardCase(t *testing.T, c vector.Case, fixtures map[string]card.Key) map[
 			return outcome(err.Code)
 		}
 		if c.Kind == "webhook-key-discovery" {
-			return outcome(card.CrossCheck(result.Keys, input.ToolResult, true))
+			return outcome(card.CrossCheckWebhookKey(result.Keys.Raw, input.ToolResult, true))
 		}
 		egress := make([]string, 0, len(result.Egress))
 		for _, entry := range result.Egress {
 			egress = append(egress, entry.CIDR)
 		}
 		return map[string]any{
-			"result": "accept", "keys": kids(result.Keys), "egress": egress,
-			"rejected": rejectedKeys(result.Rejected), "cache_ttl": result.CacheTTL,
+			"result": "accept", "keys": kids(result.Keys.Accepted), "egress": egress,
+			"rejected": rejectedKeys(result.Keys.Rejected), "cache_ttl": result.CacheTTL,
 		}
 
 	case "kid":
@@ -188,29 +188,20 @@ func runCardCase(t *testing.T, c vector.Case, fixtures map[string]card.Key) map[
 		return outcome("")
 
 	case "webhook-key-check":
-		var own []json.RawMessage
-		if input.CardKeys != nil {
-			if err := json.Unmarshal(input.CardKeys, &own); err != nil {
-				t.Fatalf("decode card_keys: %v", err)
+		var own any = input.CardKeys
+		if input.CardKeys == nil {
+			keys := namedKeys(t, fixtures, input.Keys)
+			jwks := make([]card.JWK, 0, len(keys))
+			for _, key := range keys {
+				jwks = append(jwks, card.JWKOf(key))
 			}
-		} else {
-			for _, key := range namedKeys(t, fixtures, input.Keys) {
-				raw, err := json.Marshal(card.JWKOf(key))
-				if err != nil {
-					t.Fatalf("marshal fixture JWK: %v", err)
-				}
-				own = append(own, raw)
-			}
+			own = jwks
 		}
-		keys := make([]card.Key, 0, len(own))
-		for _, raw := range own {
-			key, reason := card.ValidateJWK(raw)
-			if reason != "" {
-				return outcome("webhook_key_mismatch")
-			}
-			keys = append(keys, key)
+		cardRaw, err := json.Marshal(map[string]any{"keys": own})
+		if err != nil {
+			t.Fatalf("marshal card keys: %v", err)
 		}
-		return outcome(card.CrossCheck(keys, input.ToolResult, input.Require))
+		return outcome(card.CrossCheckWebhookKey(cardRaw, input.ToolResult, input.Require))
 
 	default:
 		t.Fatalf("unknown kind %q", c.Kind)

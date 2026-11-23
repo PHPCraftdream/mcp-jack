@@ -86,6 +86,62 @@ func validateJWK(jwk map[string]json.RawMessage) (Key, string) {
 	return Key{KID: kid, KTY: "OKP", CRV: "Ed25519", X: x, PublicKey: x, Raw: pub}, ""
 }
 
+// KeySet is one snapshot of a published webhook key set: the raw JWKs as
+// published, the accepted keys and the rejected entries.
+type KeySet struct {
+	Raw      json.RawMessage
+	Accepted []Key
+	Rejected []Rejected
+}
+
+// Source yields the current key set without performing network I/O.
+type Source interface {
+	KeySet() KeySet
+}
+
+// Static serves a fixed key set.
+type Static struct{ Set KeySet }
+
+// KeySet returns an independent copy of the fixed snapshot.
+func (s Static) KeySet() KeySet { return s.Set.clone() }
+
+// StaticKeys builds a snapshot from already accepted keys.
+func StaticKeys(keys []Key) Static {
+	jwks := make([]JWK, len(keys))
+	for i, key := range keys {
+		jwks[i] = JWKOf(key)
+	}
+	raw, _ := json.Marshal(map[string][]JWK{"keys": jwks})
+	return Static{Set: (KeySet{Raw: raw, Accepted: keys}).clone()}
+}
+
+func (s KeySet) clone() KeySet {
+	s.Raw = slices.Clone(s.Raw)
+	s.Accepted = slices.Clone(s.Accepted)
+	for i := range s.Accepted {
+		s.Accepted[i].Raw = slices.Clone(s.Accepted[i].Raw)
+	}
+	s.Rejected = slices.Clone(s.Rejected)
+	for i := range s.Rejected {
+		if kid := s.Rejected[i].KID; kid != nil {
+			value := *kid
+			s.Rejected[i].KID = &value
+		}
+	}
+	return s
+}
+
+// AcceptKeySet retains the original signingKeys object and applies R7.3 to
+// its entries for key lookup.
+func AcceptKeySet(signingKeys json.RawMessage, opts Options) KeySet {
+	accepted, rejected := AcceptJWKSet(keySetEntries(signingKeys), opts)
+	return KeySet{Raw: slices.Clone(signingKeys), Accepted: accepted, Rejected: rejected}
+}
+
+func keySetEntries(raw json.RawMessage) []json.RawMessage {
+	return jsonArray(jsonObject(raw)["keys"])
+}
+
 // AcceptJWKSet reports invalid entries first, then server keys, then all
 // surviving duplicates. Each group and the accepted keys retain input order.
 func AcceptJWKSet(entries []json.RawMessage, opts Options) (accepted []Key, rejected []Rejected) {
@@ -139,43 +195,35 @@ func KeyForKID(keys []Key, kid string) (Key, bool) {
 	return Key{}, false
 }
 
-// CrossCheck compares the revalidated card keys to the tool's keys when required.
-// Card keys from discovery have already had optional alg and use checked before
-// projection into Key, which represents only accepted key material.
-func CrossCheck(cardKeys []Key, toolResult json.RawMessage, require bool) string {
+// CrossCheckWebhookKey implements R7.6 against the card's original JWKs, not
+// its accepted subset. Any invalid record on either side causes a mismatch.
+func CrossCheckWebhookKey(cardRaw, toolResult json.RawMessage, require bool) string {
 	if !require {
 		return ""
 	}
 	webhookKey := jsonObject(jsonObject(toolResult)["webhook_key"])
-	entries := jsonArray(jsonObject(webhookKey["signing_keys"])["keys"])
-	if entries == nil {
+	toolEntries := keySetEntries(webhookKey["signing_keys"])
+	if toolEntries == nil {
 		return "webhook_key_missing"
 	}
-	const mismatch = "webhook_key_mismatch"
-	left := make([]JWK, 0, len(cardKeys))
-	for _, key := range cardKeys {
-		// Validate the supplied fields, not the defaults supplied by JWKOf.
-		raw, _ := json.Marshal(JWK{Kty: key.KTY, Crv: key.CRV, X: key.X, Kid: key.KID})
-		validated, reason := ValidateJWK(raw)
-		if reason != "" {
-			return mismatch
-		}
-		left = append(left, JWKOf(validated))
-	}
-	right := make([]JWK, 0, len(entries))
-	for _, raw := range entries {
-		validated, reason := ValidateJWK(raw)
-		if reason != "" {
-			return mismatch
-		}
-		right = append(right, JWKOf(validated))
-	}
-	byKID := func(a, b JWK) int { return strings.Compare(a.Kid, b.Kid) }
-	slices.SortStableFunc(left, byKID)
-	slices.SortStableFunc(right, byKID)
+	left, leftOK := canonicalJWKs(keySetEntries(cardRaw))
+	right, rightOK := canonicalJWKs(toolEntries)
 	// Equal sorted records have equal canonical JSON, including multiplicity.
-	if !slices.Equal(left, right) {
-		return mismatch
+	if !leftOK || !rightOK || !slices.Equal(left, right) {
+		return "webhook_key_mismatch"
 	}
 	return ""
+}
+
+func canonicalJWKs(entries []json.RawMessage) ([]JWK, bool) {
+	keys := make([]JWK, 0, len(entries))
+	for _, raw := range entries {
+		key, reason := ValidateJWK(raw)
+		if reason != "" {
+			return nil, false
+		}
+		keys = append(keys, JWKOf(key))
+	}
+	slices.SortStableFunc(keys, func(a, b JWK) int { return strings.Compare(a.Kid, b.Kid) })
+	return keys, true
 }

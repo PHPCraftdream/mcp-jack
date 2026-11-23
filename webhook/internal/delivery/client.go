@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"io"
 	"net"
@@ -15,6 +16,7 @@ import (
 const (
 	connectTimeout = 10 * time.Second
 	headerTimeout  = 10 * time.Second
+	bodyTimeout    = 10 * time.Second
 	requestTimeout = 20 * time.Second
 )
 
@@ -50,6 +52,10 @@ type Client struct {
 
 // NewClient creates a client for deliveries, verification POSTs and well-known fetches.
 func NewClient(cfg Config) *Client {
+	return newClient(cfg, nil)
+}
+
+func newClient(cfg Config, roots *x509.CertPool) *Client {
 	if cfg.Resolver == nil {
 		cfg.Resolver = net.DefaultResolver
 	}
@@ -58,7 +64,7 @@ func NewClient(cfg Config) *Client {
 	}
 	cfg.AllowedRanges = append([]string(nil), cfg.AllowedRanges...)
 
-	d := pinnedDialer{dialer: cfg.Dialer}
+	d := pinnedDialer{dialer: cfg.Dialer, roots: roots}
 	transport := &http.Transport{
 		Proxy:                 nil,
 		DialContext:           d.dial,
@@ -149,7 +155,8 @@ func prepare(req *http.Request, cfg Config) (*http.Request, *Error) {
 }
 
 // Do sends req and reads at most maxBody+1 response bytes. A negative limit or
-// a body exceeding maxBody is refused with too_large.
+// a body exceeding maxBody is refused with too_large. A body read failure
+// returns the response status and headers alongside the error, without a body.
 func (c *Client) Do(req *http.Request, maxBody int64) (*Response, *Error) {
 	if req == nil || req.URL == nil {
 		return nil, &Error{Code: "scheme_not_https"}
@@ -157,27 +164,55 @@ func (c *Client) Do(req *http.Request, maxBody int64) (*Response, *Error) {
 	if maxBody < 0 {
 		return nil, &Error{Code: "too_large"}
 	}
-	res, err := c.http.Do(req)
+	ctx, cancel := context.WithCancel(req.Context())
+	defer cancel()
+	res, err := c.http.Do(req.WithContext(ctx))
 	if err != nil {
 		return nil, networkError("connection_refused", err)
 	}
 	defer res.Body.Close()
 
-	limited := &io.LimitedReader{R: res.Body, N: maxBody}
+	// R1.6's second cap starts at header receipt and covers the entire body,
+	// including the size probe. Cancel the request to unblock an in-flight read.
+	readBy := time.Now().Add(bodyTimeout)
+	timer := time.AfterFunc(time.Until(readBy), cancel)
+	defer timer.Stop()
+	reader := bodyDeadlineReader{body: res.Body, deadline: readBy}
+	response := &Response{Status: res.StatusCode, Header: res.Header}
+
+	limited := &io.LimitedReader{R: reader, N: maxBody}
 	body, err := io.ReadAll(limited)
 	if err != nil {
-		return nil, networkError("connection_refused", err)
+		return response, networkError("connection_refused", err)
 	}
 	if limited.N == 0 {
 		// Probe for one extra byte without overflowing maxBody+1.
 		var extra [1]byte
-		if _, err := io.ReadFull(res.Body, extra[:]); err == nil {
-			return nil, &Error{Code: "too_large"}
+		if _, err := io.ReadFull(reader, extra[:]); err == nil {
+			return response, &Error{Code: "too_large"}
 		} else if err != io.EOF {
-			return nil, networkError("connection_refused", err)
+			return response, networkError("connection_refused", err)
 		}
 	}
-	return &Response{Status: res.StatusCode, Header: res.Header, Body: body}, nil
+	response.Body = body
+	return response, nil
+}
+
+type bodyDeadlineReader struct {
+	body     io.Reader
+	deadline time.Time
+}
+
+func (r bodyDeadlineReader) Read(p []byte) (int, error) {
+	if !time.Now().Before(r.deadline) {
+		return 0, context.DeadlineExceeded
+	}
+	n, err := r.body.Read(p)
+	if !time.Now().Before(r.deadline) {
+		// Cancellation may surface as context.Canceled or a closed connection.
+		return 0, context.DeadlineExceeded
+	}
+	return n, err
 }
 
 func isTimeout(err error) bool {

@@ -1,5 +1,4 @@
-// Package card processes Server Cards for webhook key discovery without doing
-// network I/O.
+// Package card discovers webhook signing keys from Server Cards.
 package card
 
 import (

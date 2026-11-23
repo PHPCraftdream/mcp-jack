@@ -15,6 +15,7 @@ const (
 	MaxCardBytes   = 65536
 	MaxCardTTL     = 300
 	DefaultCardTTL = 300
+	maxFetchMS     = 10000
 )
 
 // FetchInput is the metadata and body of a Server Card fetch. Header names
@@ -34,12 +35,11 @@ type EgressRange struct {
 	Prefix       int
 }
 
-// FetchResult contains the accepted keys and ranges, discarded keys, and cache
+// FetchResult contains the key snapshot, accepted egress ranges, and cache
 // lifetime in seconds.
 type FetchResult struct {
-	Keys     []Key
+	Keys     KeySet
 	Egress   []EgressRange
-	Rejected []Rejected
 	CacheTTL int64
 }
 
@@ -48,28 +48,49 @@ type FetchError struct {
 	Code, Reason string
 }
 
-// FetchDecision checks a completed fetch and extracts the selected remote's keys.
-func FetchDecision(in FetchInput) (FetchResult, *FetchError) {
-	cardURL, err := urlcheck.Check(in.CardURL)
+func (e *FetchError) Error() string {
+	if e.Reason == "" {
+		return e.Code
+	}
+	return e.Code + ": " + e.Reason
+}
+
+func checkFetchOrigin(mcp, card string) *FetchError {
+	cardURL, err := urlcheck.Check(card)
 	if err != nil {
 		reason := err.Reason
 		if reason == "" {
 			reason = err.Code
 		}
-		return FetchResult{}, &FetchError{Code: "not_https", Reason: reason}
+		return &FetchError{Code: "not_https", Reason: reason}
 	}
 	// Check only accepts HTTPS.
-	mcpURL, err := urlcheck.Check(in.MCPURL)
+	mcpURL, err := urlcheck.Check(mcp)
 	if err != nil || !sameOrigin(cardURL, mcpURL) {
-		return FetchResult{}, &FetchError{Code: "cross_origin", Reason: "origin_mismatch"}
+		return &FetchError{Code: "cross_origin", Reason: "origin_mismatch"}
 	}
-	if in.Status >= 300 && in.Status <= 399 {
-		return FetchResult{}, &FetchError{Code: "redirect_refused", Reason: "redirect"}
+	return nil
+}
+
+func checkFetchStatus(status int) *FetchError {
+	if status >= 300 && status <= 399 {
+		return &FetchError{Code: "redirect_refused", Reason: "redirect"}
 	}
-	if in.Status < 200 || in.Status > 299 {
-		return FetchResult{}, &FetchError{Code: "http_status", Reason: "status"}
+	if status < 200 || status > 299 {
+		return &FetchError{Code: "http_status", Reason: "status"}
 	}
-	if in.ElapsedMS != nil && *in.ElapsedMS > 10000 {
+	return nil
+}
+
+// FetchDecision checks a completed fetch and extracts the selected remote's keys.
+func FetchDecision(in FetchInput) (FetchResult, *FetchError) {
+	if err := checkFetchOrigin(in.MCPURL, in.CardURL); err != nil {
+		return FetchResult{}, err
+	}
+	if err := checkFetchStatus(in.Status); err != nil {
+		return FetchResult{}, err
+	}
+	if in.ElapsedMS != nil && *in.ElapsedMS > maxFetchMS {
 		return FetchResult{}, &FetchError{Code: "timeout", Reason: "elapsed"}
 	}
 	if len(in.Body) > MaxCardBytes {
@@ -85,9 +106,9 @@ func FetchDecision(in FetchInput) (FetchResult, *FetchError) {
 	if code != "" {
 		return FetchResult{}, &FetchError{Code: code, Reason: "no_remote"}
 	}
-	keys, rejected := AcceptJWKSet(jsonArray(jsonObject(info.SigningKeys)["keys"]), in.Options)
+	keys := AcceptKeySet(info.SigningKeys, in.Options)
 	egress, _ := ParseCIDRList(info.Egress)
-	return FetchResult{Keys: keys, Egress: egress, Rejected: rejected, CacheTTL: CardCacheTTL(in.Headers)}, nil
+	return FetchResult{Keys: keys, Egress: egress, CacheTTL: CardCacheTTL(in.Headers)}, nil
 }
 
 // ParseCIDRList splits input into valid egress ranges and malformed texts.

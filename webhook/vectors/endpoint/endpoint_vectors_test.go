@@ -128,7 +128,7 @@ func run(t *testing.T, c vector.Case) map[string]any {
 			"reason": nullable(verdict.Reason),
 		}
 	case "gate":
-		return map[string]any{"action": endpoint.Gate(endpoint.GateInput{
+		return map[string]any{"action": endpoint.DeliveryAction(endpoint.GateInput{
 			Verified: decode[bool](input["verified"]),
 			Message:  input.text("message"),
 		})}

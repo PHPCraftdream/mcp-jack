@@ -44,6 +44,16 @@ func receiverConfig() receiver.Config {
 	return receiver.Config{
 		Secrets: []receiver.Secret{{Key: []byte(hmacKey), SubscriptionID: subA}},
 		Routed:  []string{subA},
+		Enqueue: func(receiver.Message) error { return nil },
+	}
+}
+
+func TestReceiverCoreRequiresEnqueue(t *testing.T) {
+	cfg := receiverConfig() // A nil key source must not mask the error.
+	cfg.Enqueue = nil
+	r, err := receiver.New(cfg)
+	if r != nil || err == nil || err.Error() != "receiver: Config.Enqueue is required" {
+		t.Fatalf("New returned receiver=%v, error=%v; want no receiver and the missing-enqueue error", r != nil, err)
 	}
 }
 
@@ -187,7 +197,7 @@ func TestReceiverCoreOrderedRejections(t *testing.T) {
 		{"wrong asym endpoint", "bad_server_signature", "server signature does not verify", 401,
 			func(cfg *receiver.Config, d *receiver.Delivery) {
 				private, key := exampleKey(1)
-				cfg.EnforceServerIdentity, cfg.Keys = true, []card.Key{key}
+				cfg.EnforceServerIdentity, cfg.Keys = true, card.StaticKeys([]card.Key{key})
 				signV2a(d, private, subB)
 			}},
 		{"key source absent", "webhook_key_missing", "the webhook key source is missing", 401,
@@ -198,7 +208,7 @@ func TestReceiverCoreOrderedRejections(t *testing.T) {
 		{"key source differs", "webhook_key_mismatch", "the webhook key sources disagree", 401,
 			func(cfg *receiver.Config, _ *receiver.Delivery) {
 				_, key := exampleKey(1)
-				cfg.Keys = []card.Key{key}
+				cfg.Keys = card.StaticKeys([]card.Key{key})
 				cfg.WebhookKey = receiver.WebhookKeyCheck{Required: true, ToolResult: json.RawMessage(`{"webhook_key":{"signing_keys":{"keys":[]}}}`)}
 			}},
 		{"not an object", "malformed_body", "body is not a json object", 400,
@@ -240,7 +250,7 @@ func TestReceiverCoreFullDeliveryAndDedup(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := receiverConfig()
-	cfg.Jack, cfg.Keys, cfg.EnforceServerIdentity = jackConfig(), []card.Key{key}, true
+	cfg.Jack, cfg.Keys, cfg.EnforceServerIdentity = jackConfig(), card.StaticKeys([]card.Key{key}), true
 	cfg.WebhookKey = receiver.WebhookKeyCheck{Required: true, ToolResult: tool}
 	cfg.MaxBody = int64(len(eventBody))
 	calls := 0
@@ -259,6 +269,9 @@ func TestReceiverCoreFullDeliveryAndDedup(t *testing.T) {
 	d.Headers = append(d.Headers, jackHeader(d, private, key.KID, callbackA), [2]string{"Content-Length", "000" + strconv.Itoa(len(d.Body))}, [2]string{"content-length", "ignored"})
 	d.Now += 30 // Jack's default window includes the edge.
 	got := r.Handle(d)
+	if calls != 1 {
+		t.Fatalf("Handle returned before exactly one enqueue: calls=%d", calls)
+	}
 	d.Body[0] = '!'
 	checkOK(t, got, accepted, true, eventBody)
 
@@ -322,7 +335,7 @@ func TestReceiverCoreJackRejections(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, d := receiverConfig(), signedDelivery(idA, subA, eventBody, hmacKey, clock)
-			cfg.Keys, cfg.Jack = []card.Key{key}, jackConfig()
+			cfg.Keys, cfg.Jack = card.StaticKeys([]card.Key{key}), jackConfig()
 			tc.change(&cfg, &d)
 			r := newReceiver(t, cfg)
 			checkError(t, r.Handle(d), tc.status, tc.code, tc.message)
@@ -337,7 +350,7 @@ func TestReceiverCoreFiltersServerKeyForAsymmetricVerification(t *testing.T) {
 	private, key := exampleKey(1)
 	for _, byKID := range []bool{true, false} {
 		cfg := receiverConfig()
-		cfg.Keys, cfg.EnforceServerIdentity = []card.Key{key}, true
+		cfg.Keys, cfg.EnforceServerIdentity = card.StaticKeys([]card.Key{key}), true
 		if byKID {
 			cfg.MCPServerKID = key.KID
 		} else {
@@ -349,10 +362,80 @@ func TestReceiverCoreFiltersServerKeyForAsymmetricVerification(t *testing.T) {
 	}
 }
 
+type rotatingSource struct {
+	keys  card.Static
+	calls int
+}
+
+func (s *rotatingSource) KeySet() card.KeySet {
+	s.calls++
+	return s.keys.KeySet()
+}
+
+func TestReceiverCoreReadsRotatedKeysOnNextDelivery(t *testing.T) {
+	oldPrivate, oldKey := exampleKey(1)
+	newPrivate, newKey := exampleKey(2)
+	source := &rotatingSource{keys: card.StaticKeys([]card.Key{oldKey})}
+	cfg := receiverConfig()
+	cfg.Keys, cfg.EnforceServerIdentity = source, true
+	r := newReceiver(t, cfg)
+	if source.calls != 0 {
+		t.Fatalf("New read the key source %d times", source.calls)
+	}
+
+	oldDelivery := signedDelivery(idA, subA, gapBody, hmacKey, clock)
+	signV2a(&oldDelivery, oldPrivate, subA)
+	checkOK(t, r.Handle(oldDelivery), accepted, true, gapBody)
+	newDelivery := signedDelivery(idB, subA, gapBody, hmacKey, clock)
+	signV2a(&newDelivery, newPrivate, subA)
+	checkError(t, r.Handle(newDelivery), 401, "bad_server_signature", "server signature does not verify")
+
+	source.keys = card.StaticKeys([]card.Key{newKey})
+	checkOK(t, r.Handle(newDelivery), accepted, true, gapBody)
+	checkError(t, r.Handle(oldDelivery), 401, "bad_server_signature", "server signature does not verify")
+	if source.calls != 4 {
+		t.Fatalf("key snapshots = %d; want one per Handle (4)", source.calls)
+	}
+}
+
+func TestReceiverCoreCrossCheckRejectsInvalidPublishedKey(t *testing.T) {
+	private, key := exampleKey(1)
+	_, otherKey := exampleKey(2)
+	bad := struct {
+		card.JWK
+		Alg string `json:"alg"`
+	}{JWK: card.JWKOf(otherKey), Alg: "RS256"}
+	raw, err := json.Marshal(map[string]any{"keys": []any{card.JWKOf(key), bad}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	published := card.AcceptKeySet(raw, card.Options{})
+	if !reflect.DeepEqual(published.Accepted, []card.Key{key}) || len(published.Rejected) != 1 || published.Rejected[0].Reason != "alg" {
+		t.Fatalf("bad fixture: %+v", published)
+	}
+	tool, err := json.Marshal(map[string]any{"webhook_key": map[string]any{
+		"signing_keys": card.StaticKeys([]card.Key{key}).KeySet().Raw,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := receiverConfig()
+	cfg.Keys, cfg.EnforceServerIdentity = card.Static{Set: published}, true
+	cfg.WebhookKey = receiver.WebhookKeyCheck{Required: true, ToolResult: tool}
+	cfg.Enqueue = func(receiver.Message) error {
+		t.Fatal("enqueued a delivery after a key mismatch")
+		return nil
+	}
+	r := newReceiver(t, cfg)
+	d := signedDelivery(idA, subA, gapBody, hmacKey, clock)
+	signV2a(&d, private, subA)
+	checkError(t, r.Handle(d), 401, "webhook_key_mismatch", "the webhook key sources disagree")
+}
+
 func TestReceiverCorePendingBinding(t *testing.T) {
 	private, key := exampleKey(1)
 	cfg := receiverConfig()
-	cfg.Keys, cfg.Jack, cfg.Routed = []card.Key{key}, jackConfig(), nil
+	cfg.Keys, cfg.Jack, cfg.Routed = card.StaticKeys([]card.Key{key}), jackConfig(), nil
 	cfg.Secrets = []receiver.Secret{{Key: []byte(otherSecret), CallbackURL: callbackA}, {Key: []byte(hmacKey), CallbackURL: callbackB}}
 	var kinds []string
 	cfg.Enqueue = func(m receiver.Message) error {
@@ -373,7 +456,11 @@ func TestReceiverCorePendingBinding(t *testing.T) {
 	d.Headers = append(d.Headers, jackHeader(d, private, key.KID, callbackA))
 	checkError(t, r.Handle(d), 401, "bad_jack_signature", "jack signature does not verify")
 	d.Headers[4] = jackHeader(d, private, key.KID, callbackB)
-	checkOK(t, r.Handle(d), `{"challenge":"`+challenge+`"}`, true)
+	got := r.Handle(d)
+	if !slices.Equal(kinds, []string{"event", "verification"}) {
+		t.Fatalf("challenge returned before exactly one verification enqueue: %v", kinds)
+	}
+	checkOK(t, got, `{"challenge":"`+challenge+`"}`, true)
 	state := r.State()
 	if !slices.Equal(state.Routed, []string{subA}) || !slices.Equal(state.Accepted, []string{idA}) ||
 		!slices.Equal(state.Secrets, []receiver.SecretState{{CallbackURL: callbackA}, {SubscriptionID: subA, CallbackURL: callbackB}}) {
@@ -381,6 +468,8 @@ func TestReceiverCorePendingBinding(t *testing.T) {
 	}
 
 	// After binding, use the registered callback map, not the pending callback.
+	d.Headers[4] = jackHeader(d, private, key.KID, callbackA)
+	checkOK(t, r.Handle(d), duplicate, false)
 	d = signedDelivery(idB, subA, gapBody, hmacKey, clock)
 	d.Headers = append(d.Headers, jackHeader(d, private, key.KID, callbackA))
 	checkOK(t, r.Handle(d), accepted, true, gapBody)

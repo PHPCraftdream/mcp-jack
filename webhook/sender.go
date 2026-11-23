@@ -14,7 +14,12 @@ import (
 )
 
 // SenderConfig configures signing, delivery policy, and retry scheduling.
+// Verifier is required.
 type SenderConfig = sender.Config
+
+// VerificationGate checks consent to delivery and manages verification challenges.
+// A *Gate implements this interface.
+type VerificationGate = sender.VerificationGate
 
 // Sender signs and sends webhook messages.
 type Sender struct{ inner *sender.Sender }
@@ -67,7 +72,7 @@ func NewWebhookID(kind string, random io.Reader) (string, error) {
 	return sender.NewWebhookID(kind, random)
 }
 
-// Message holds the outbound target, identifiers, and raw body for a delivery.
+// Message holds the outbound principal, target, identifiers, raw body, and remaining TTL.
 type Message = sender.Message
 
 // SigningOptions configures Standard Webhooks and Jack signing.

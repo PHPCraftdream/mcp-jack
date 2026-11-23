@@ -1,7 +1,9 @@
 package webhook
 
 import (
+	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/PHPCraftdream/mcp-jack/webhook/internal/card"
 )
@@ -15,6 +17,18 @@ type JWK = card.JWK
 // RejectedKey describes a discarded signing key.
 type RejectedKey = card.Rejected
 
+// KeySet is a snapshot of the original JWK set and its accepted and rejected keys.
+type KeySet = card.KeySet
+
+// KeySource supplies the current signing key snapshot without network I/O.
+type KeySource = card.Source
+
+// Static is a fixed KeySource.
+type Static = card.Static
+
+// StaticKeySource builds a fixed source from already accepted keys.
+func StaticKeySource(keys []SigningKey) KeySource { return card.StaticKeys(keys) }
+
 // CardOptions identifies the MCP server key to exclude from the signing set.
 type CardOptions = card.Options
 
@@ -27,7 +41,7 @@ type CardRemote = card.Remote
 // CardFetchInput describes a completed Server Card fetch.
 type CardFetchInput = card.FetchInput
 
-// CardFetchResult describes the keys, ranges, refusals, and TTL from a card fetch.
+// CardFetchResult contains the key snapshot, accepted egress ranges, and TTL in seconds.
 type CardFetchResult = card.FetchResult
 
 // EgressRange is a validated advisory egress CIDR.
@@ -42,6 +56,11 @@ func ValidateJWK(raw json.RawMessage) (SigningKey, string) { return card.Validat
 // AcceptJWKSet validates the keys, excluding server keys and duplicate IDs.
 func AcceptJWKSet(entries []json.RawMessage, opts CardOptions) (accepted []SigningKey, rejected []RejectedKey) {
 	return card.AcceptJWKSet(entries, opts)
+}
+
+// AcceptKeySet retains the raw signingKeys object and validates its JWK entries.
+func AcceptKeySet(signingKeys json.RawMessage, opts CardOptions) KeySet {
+	return card.AcceptKeySet(signingKeys, opts)
 }
 
 // JWKOf returns the JWK representation of a signing key.
@@ -77,7 +96,39 @@ func CardCacheTTL(headers map[string]string) int64 { return card.CardCacheTTL(he
 // KeyForKID finds an accepted signing key by ID.
 func KeyForKID(keys []SigningKey, kid string) (SigningKey, bool) { return card.KeyForKID(keys, kid) }
 
-// CrossCheck checks agreement with the optional jack.server.webhook_key tool.
-func CrossCheck(cardKeys []SigningKey, toolResult json.RawMessage, require bool) string {
-	return card.CrossCheck(cardKeys, toolResult, require)
+// CrossCheckWebhookKey compares the card's original signingKeys object with
+// the jack.server.webhook_key tool result when require is true.
+func CrossCheckWebhookKey(cardRaw, toolResult json.RawMessage, require bool) string {
+	return card.CrossCheckWebhookKey(cardRaw, toolResult, require)
 }
+
+// CardSourceConfig configures live Server Card discovery. An empty CardURL
+// defaults to the reserved location returned by DefaultCardURL for MCPURL.
+type CardSourceConfig = card.FetcherConfig
+
+// CardSource implements KeySource and can be used as ReceiverConfig.Keys.
+// It serves the most recent successful Server Card snapshot.
+type CardSource struct{ inner *card.Fetcher }
+
+var _ KeySource = (*CardSource)(nil)
+
+// NewCardSource validates the configuration without fetching the card.
+func NewCardSource(cfg CardSourceConfig) (*CardSource, error) {
+	inner, err := card.NewFetcher(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &CardSource{inner: inner}, nil
+}
+
+// KeySet returns a copy of the current snapshot, even if stale, without network I/O.
+func (s *CardSource) KeySet() KeySet { return s.inner.KeySet() }
+
+// TTL returns the remaining cache lifetime, or zero if stale or absent.
+func (s *CardSource) TTL() time.Duration { return s.inner.TTL() }
+
+// Refresh fetches the card and atomically replaces the accepted key set on
+// success. During rotation both keys are trusted while published together;
+// a removed key is dropped on the next successful Refresh. A failed refresh
+// leaves the previous snapshot and expiry unchanged.
+func (s *CardSource) Refresh(ctx context.Context) *CardError { return s.inner.Refresh(ctx) }

@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"net"
 	"strconv"
@@ -44,7 +45,10 @@ type dialTarget struct {
 	connectBy time.Time
 }
 
-type pinnedDialer struct{ dialer Dialer }
+type pinnedDialer struct {
+	dialer Dialer
+	roots  *x509.CertPool
+}
 
 func (d pinnedDialer) dial(ctx context.Context, network, authority string) (net.Conn, error) {
 	target, ok := ctx.Value(dialKey{}).(dialTarget)
@@ -108,7 +112,7 @@ func (d pinnedDialer) dialTLS(ctx context.Context, network, authority string) (n
 	if !target.decision.UsesSNI {
 		serverName = target.decision.Address
 	}
-	tlsConn := tls.Client(conn, &tls.Config{ServerName: serverName})
+	tlsConn := tls.Client(conn, &tls.Config{ServerName: serverName, RootCAs: d.roots})
 	ctx, cancel := context.WithDeadline(ctx, target.connectBy)
 	defer cancel()
 	if err := tlsConn.HandshakeContext(ctx); err != nil {

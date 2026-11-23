@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"time"
 
 	"github.com/PHPCraftdream/mcp-jack/webhook/internal/dsig"
 	"github.com/PHPCraftdream/mcp-jack/webhook/internal/secret"
@@ -30,8 +31,12 @@ type SigningOptions struct {
 
 // Message holds the stable delivery fields and raw JSON across all attempts.
 type Message struct {
+	Principal                              string
 	WebhookID, SubscriptionID, CallbackURL string
 	Body                                   []byte
+	// TTL is the remaining subscription lifetime. The gate caps new cached
+	// verdicts at one hour (the default for zero TTL), so they do not outlive a positive TTL.
+	TTL time.Duration
 }
 
 // NewWebhookID generates a per-message, per-subscription ID. A nil reader uses

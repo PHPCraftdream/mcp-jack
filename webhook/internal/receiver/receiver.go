@@ -39,17 +39,18 @@ type WebhookKeyCheck struct {
 	ToolResult json.RawMessage
 }
 
-// EnqueueFunc durably stores a message before acknowledgement. It runs while
-// the receiver serializes deliveries and must not call back into that receiver.
+// EnqueueFunc must durably store a message before returning nil. It runs for
+// verification envelopes too, while the receiver serializes deliveries. It must
+// not call back into that receiver.
 type EnqueueFunc func(Message) error
 
 // Config configures the receiver. Zero limits use the profile defaults, a nil
-// Jack disables w1, and a nil Enqueue acts as a successful enqueue.
+// Jack disables w1, and a nil Keys provides no verification keys. Enqueue is required.
 type Config struct {
 	Window, MaxBody, DedupRetention  int64
 	EnforceServerIdentity            bool
 	MCPServerKID, MCPServerPublicKey string
-	Keys                             []card.Key
+	Keys                             card.Source
 	Secrets                          []Secret
 	Routed                           []string
 	Jack                             *JackConfig
@@ -87,15 +88,21 @@ type Receiver struct {
 	mu         sync.Mutex
 	cfg        Config
 	serverKID  string
-	asymKeys   []dsig.AsymKey
 	routed     map[string]struct{}
 	terminated map[string]struct{}
 	accepted   map[string]int64
 }
 
-// New initializes a receiver and takes private copies of mutable configuration.
-// Secrets must supply raw key bytes, not a whsec_ string or a nil key.
+// New initializes a receiver and copies mutable configuration, retaining the
+// live key source. Secrets must supply raw key bytes, not a whsec_ string or a
+// nil key.
 func New(cfg Config) (*Receiver, error) {
+	if cfg.Enqueue == nil {
+		return nil, errors.New("receiver: Config.Enqueue is required")
+	}
+	if cfg.Keys == nil {
+		cfg.Keys = card.Static{}
+	}
 	cfg.Window = defaultIfZero(cfg.Window, wire.DefaultWindowSeconds)
 	cfg.MaxBody = defaultIfZero(cfg.MaxBody, wire.MaxBodyBytes)
 	cfg.DedupRetention = defaultIfZero(cfg.DedupRetention, wire.DedupRetentionSeconds)
@@ -120,18 +127,13 @@ func New(cfg Config) (*Receiver, error) {
 	if serverKID == "" {
 		serverKID = serverKidOf(cfg.MCPServerPublicKey)
 	}
-	cfg.Keys = acceptedKeys(cfg.Keys, cfg.MCPServerKID, cfg.MCPServerPublicKey)
-	asymKeys := make([]dsig.AsymKey, 0, len(cfg.Keys))
-	for _, key := range cfg.Keys {
-		asymKeys = append(asymKeys, dsig.AsymKey{KID: key.KID, Raw: key.Raw})
-	}
 	routed := make(map[string]struct{}, len(cfg.Routed))
 	for _, id := range cfg.Routed {
 		routed[id] = struct{}{}
 	}
 	cfg.Routed = nil
 	return &Receiver{
-		cfg: cfg, serverKID: serverKID, asymKeys: asymKeys, routed: routed,
+		cfg: cfg, serverKID: serverKID, routed: routed,
 		terminated: make(map[string]struct{}), accepted: make(map[string]int64),
 	}, nil
 }
@@ -153,9 +155,9 @@ func serverKidOf(publicKey string) string {
 	return ""
 }
 
-// acceptedKeys preserves input order and excludes the MCP response key.
-func acceptedKeys(keys []card.Key, serverKID, serverPublicKey string) []card.Key {
-	accepted := make([]card.Key, 0, len(keys))
+// asymmetricKeys preserves input order and excludes the MCP response key.
+func asymmetricKeys(keys []card.Key, serverKID, serverPublicKey string) []dsig.AsymKey {
+	accepted := make([]dsig.AsymKey, 0, len(keys))
 	for _, key := range keys {
 		if serverKID != "" && key.KID == serverKID {
 			continue
@@ -166,26 +168,11 @@ func acceptedKeys(keys []card.Key, serverKID, serverPublicKey string) []card.Key
 				encoded = key.PublicKey
 			}
 			key.Raw, _ = secret.DecodeURL(encoded)
-		} else {
-			key.Raw = bytes.Clone(key.Raw)
 		}
-		rawEncoded := secret.EncodeURL(key.Raw)
-		if serverPublicKey != "" && (key.PublicKey == serverPublicKey || rawEncoded == serverPublicKey) {
+		if serverPublicKey != "" && (key.PublicKey == serverPublicKey || secret.EncodeURL(key.Raw) == serverPublicKey) {
 			continue
 		}
-		if key.PublicKey == "" {
-			key.PublicKey = rawEncoded
-		}
-		if key.X == "" {
-			key.X = key.PublicKey
-		}
-		if key.KTY == "" {
-			key.KTY = "OKP"
-		}
-		if key.CRV == "" {
-			key.CRV = "Ed25519"
-		}
-		accepted = append(accepted, key)
+		accepted = append(accepted, dsig.AsymKey{KID: key.KID, Raw: key.Raw})
 	}
 	return accepted
 }
@@ -239,6 +226,7 @@ func (r *Receiver) Handle(d Delivery) Result {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	snapshot := r.cfg.Keys.KeySet()
 	all := collectHeaders(d.Headers)
 	for _, name := range requiredHeaders { // R3.1: absence before duplication.
 		if len(all[name]) == 0 {
@@ -303,11 +291,12 @@ func (r *Receiver) Handle(d Delivery) Result {
 	if differenceExceeds(seconds, d.Now, r.cfg.Window) {
 		return reject("future_timestamp")
 	}
+	asymKeys := asymmetricKeys(snapshot.Accepted, r.cfg.MCPServerKID, r.cfg.MCPServerPublicKey)
 	if r.cfg.EnforceServerIdentity {
-		if len(r.asymKeys) == 0 {
+		if len(asymKeys) == 0 {
 			return reject("no_server_keys")
 		}
-		if _, code := dsig.VerifyAsym(entries, r.asymKeys, sub, id, timestamp, d.Body); code != "" {
+		if _, code := dsig.VerifyAsym(entries, asymKeys, sub, id, timestamp, d.Body); code != "" {
 			return reject(code)
 		}
 	}
@@ -324,7 +313,7 @@ func (r *Receiver) Handle(d Delivery) Result {
 			Aud: jack.Aud, SubscriptionID: sub, WebhookID: id, Timestamp: timestamp,
 			CallbackURL: callback, Body: d.Body,
 		}
-		keys := dsig.W1Keys{Keys: r.asymKeys, Now: d.Now, Window: jack.Window, MCPServerKID: r.serverKID}
+		keys := dsig.W1Keys{Keys: asymKeys, Now: d.Now, Window: jack.Window, MCPServerKID: r.serverKID}
 		if _, code := dsig.W1Verify(values[0], parts, keys); code != "" {
 			return reject(code)
 		}
@@ -333,7 +322,7 @@ func (r *Receiver) Handle(d Delivery) Result {
 		}
 	}
 	if check := r.cfg.WebhookKey; check.Required {
-		if code := card.CrossCheck(r.cfg.Keys, check.ToolResult, true); code != "" {
+		if code := card.CrossCheckWebhookKey(snapshot.Raw, check.ToolResult, true); code != "" {
 			return reject(code)
 		}
 	}
@@ -348,14 +337,12 @@ func (r *Receiver) Handle(d Delivery) Result {
 	if terminated {
 		return reject("subscription_terminated")
 	}
-	if r.cfg.Enqueue != nil {
-		queued := Message{
-			SubscriptionID: sub, WebhookID: id, Kind: message.Kind, Type: message.Type,
-			Challenge: message.Challenge, Cursor: message.Cursor, Raw: bytes.Clone(message.Raw),
-		}
-		if err := r.cfg.Enqueue(queued); err != nil {
-			return reject("enqueue_failed")
-		}
+	queued := Message{
+		SubscriptionID: sub, WebhookID: id, Kind: message.Kind, Type: message.Type,
+		Challenge: message.Challenge, Cursor: message.Cursor, Raw: bytes.Clone(message.Raw),
+	}
+	if err := r.cfg.Enqueue(queued); err != nil {
+		return reject("enqueue_failed")
 	}
 	if deferred && message.Kind != wire.KindVerification {
 		return reject("subscription_not_routed")

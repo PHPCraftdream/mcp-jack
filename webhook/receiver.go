@@ -14,6 +14,7 @@ import (
 )
 
 // ReceiverConfig configures authentication, routing, and durable enqueue.
+// Keys may be a live KeySource. Enqueue is required.
 type ReceiverConfig = receiver.Config
 
 // Secret binds a raw HMAC key to a subscription or a pending callback.
@@ -26,7 +27,7 @@ type JackConfig = receiver.JackConfig
 type WebhookKeyCheck = receiver.WebhookKeyCheck
 
 // EnqueueFunc durably stores a verified message before acknowledgement.
-// It must not call back into the receiver. A nil hook does not provide durability.
+// It must not call back into the receiver.
 type EnqueueFunc = receiver.EnqueueFunc
 
 // ReceivedMessage is the verified message passed to EnqueueFunc.
@@ -50,7 +51,8 @@ type Receiver struct {
 	maxBody int64
 }
 
-// NewReceiver constructs a receiver. MaxBody may lower, but not raise, the profile cap.
+// NewReceiver constructs a receiver and rejects a nil Enqueue.
+// MaxBody may lower, but not raise, the profile cap.
 func NewReceiver(cfg ReceiverConfig) (*Receiver, error) {
 	if cfg.MaxBody == 0 || cfg.MaxBody > MaxBodyBytes {
 		cfg.MaxBody = MaxBodyBytes

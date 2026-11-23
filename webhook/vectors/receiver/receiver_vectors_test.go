@@ -202,13 +202,15 @@ func receiverConfig(t *testing.T, in sequenceConfig, keys map[string]card.Key) r
 			ToolResult: in.WebhookKeyTool,
 		},
 	}
+	keysList := make([]card.Key, 0, len(in.Keys))
 	for _, name := range in.Keys {
 		key, ok := keys[name]
 		if !ok {
 			t.Fatalf("unknown fixture key %q", name)
 		}
-		cfg.Keys = append(cfg.Keys, key)
+		keysList = append(keysList, key)
 	}
+	cfg.Keys = card.StaticKeys(keysList)
 	for i, entry := range in.Secrets {
 		key, reason := secret.Parse(entry.Secret)
 		if reason != "" {

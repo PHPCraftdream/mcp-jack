@@ -2,15 +2,17 @@ package endpoint
 
 import (
 	"context"
-	"crypto/tls"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
 	"errors"
-	"net"
+	"io"
 	"net/http"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/PHPCraftdream/mcp-jack/webhook/internal/delivery"
@@ -65,8 +67,8 @@ type GateInput struct {
 	Message  string
 }
 
-// Gate prevents event, gap and terminated delivery before verification (R5.1).
-func Gate(in GateInput) string {
+// DeliveryAction prevents event, gap and terminated delivery before verification (R5.1).
+func DeliveryAction(in GateInput) string {
 	if in.Message == "verification" {
 		return "send-challenge"
 	}
@@ -130,17 +132,16 @@ func (c *Cache) Put(principal, canonicalURL string, ttl time.Duration) {
 	c.entries[key] = expiry
 }
 
-// Config supplies verification routes and the clock for the document cache
-// and, if no Cache is supplied, the private verification cache.
-type Config struct {
-	Client        *delivery.Client
+// GateConfig supplies the verification routes, clock, and nonce source.
+type GateConfig struct {
+	Client        *delivery.Client // nil uses a hardened client with AllowedRanges
 	AllowedRanges []string
 	Allowlist     []string
 	Hook          func(ctx context.Context, principal, canonicalURL string) (bool, error)
-	// Challenge owns the R5.5 handshake and must send it over the hardened delivery path.
-	Challenge func(ctx context.Context, principal, canonicalURL string) error
-	Cache     *Cache
-	Now       func() int64
+	Cache         *Cache       // nil uses a private cache driven by Now when provided
+	Now           func() int64 // nil uses Unix wall time in seconds; a supplied Cache retains its own clock
+	Random        io.Reader    // nil uses crypto/rand.Reader
+	NonceTTL      int64        // seconds; zero defaults to 600
 }
 
 type cachedDoc struct {
@@ -148,15 +149,40 @@ type cachedDoc struct {
 	expires   time.Time
 }
 
-// Verifier tries the configured verification routes and caches their successful results.
-type Verifier struct {
-	cfg   Config
-	docMu sync.Mutex
-	docs  map[string]cachedDoc
+type nonceKey = [sha256.Size]byte
+
+type nonceRecord struct {
+	value    [16]byte
+	pair     pair
+	issuedAt int64
+	consumed bool
 }
 
-// NewVerifier creates a verifier with a hardened client and private cache by default.
-func NewVerifier(cfg Config) (*Verifier, error) {
+// Gate verifies pairs by R5.2 and manages single-use challenge nonces. An
+// empty principal or a URL rejected by urlcheck.Check is challenge_failed/pair;
+// Fresh returns false for such a pair. Gate must not be copied after first use.
+type Gate struct {
+	cfg   GateConfig
+	docMu sync.Mutex
+	docs  map[string]cachedDoc
+
+	nonceMu     sync.Mutex
+	pending     map[pair]nonceKey
+	nonces      map[nonceKey]nonceRecord // reverse index for pending and retired nonces
+	lastPruneAt int64
+}
+
+// NewGate creates a gate with a hardened client and private cache by default.
+func NewGate(cfg GateConfig) (*Gate, error) {
+	if cfg.NonceTTL < 0 {
+		return nil, errors.New("endpoint: negative nonce TTL")
+	}
+	if cfg.NonceTTL == 0 {
+		cfg.NonceTTL = 600
+	}
+	if cfg.Random == nil {
+		cfg.Random = rand.Reader
+	}
 	cfg.Allowlist = slices.Clone(cfg.Allowlist)
 	if cfg.Client == nil {
 		cfg.Client = delivery.NewClient(delivery.Config{AllowedRanges: cfg.AllowedRanges})
@@ -170,92 +196,205 @@ func NewVerifier(cfg Config) (*Verifier, error) {
 	if cfg.Now == nil {
 		cfg.Now = func() int64 { return time.Now().Unix() }
 	}
-	return &Verifier{cfg: cfg, docs: make(map[string]cachedDoc)}, nil
+	return &Gate{
+		cfg: cfg, docs: make(map[string]cachedDoc),
+		pending: make(map[pair]nonceKey), nonces: make(map[nonceKey]nonceRecord),
+	}, nil
 }
 
-// Verify tries the R5.2 routes in order. Without a subscription TTL in this
-// API, new results use Jack's default grant (R8.5); subscription code can set
-// its actual remaining TTL with Cache.Put on the supplied cache.
-func (v *Verifier) Verify(ctx context.Context, principal, canonicalURL string) *Error {
+func checkedPair(principal, canonicalURL string) (pair, urlcheck.URL, bool) {
 	u, err := urlcheck.Check(canonicalURL)
-	if err != nil {
-		return &Error{Code: err.Code, Reason: err.Reason}
-	}
-	if principal == "" {
+	return pair{principal, u.Canonical}, u, principal != "" && err == nil
+}
+
+// Covers tries routes 1–4 in R5.2 order: cached verdict, allowlist, hook, then
+// the origin's well-known document. A non-nil refusal leaves the challenge to
+// the caller. New verdicts use ttl, defaulted and capped at one hour.
+func (g *Gate) Covers(ctx context.Context, principal, canonicalURL string, ttl time.Duration) *Error {
+	key, u, ok := checkedPair(principal, canonicalURL)
+	if !ok {
 		return challengeFailure("pair")
 	}
-	if v.cfg.Cache.Get(principal, u.Canonical) {
+	if g.cfg.Cache.Get(key.principal, key.url) {
 		return nil
 	}
-	verified := func() *Error {
-		v.cfg.Cache.Put(principal, u.Canonical, time.Hour)
+	if _, ok := allowlistMatches(g.cfg.Allowlist, u); ok {
+		g.cacheVerdict(key, ttl)
 		return nil
 	}
-	if _, ok := allowlistMatches(v.cfg.Allowlist, u); ok {
-		return verified()
-	}
-	if v.cfg.Hook != nil {
-		if ok, err := v.cfg.Hook(ctx, principal, u.Canonical); err == nil && ok {
-			return verified()
+	if g.cfg.Hook != nil {
+		if ok, err := g.cfg.Hook(ctx, key.principal, key.url); err == nil && ok {
+			g.cacheVerdict(key, ttl)
+			return nil
 		}
 	}
-	if doc, err := v.fetchDoc(ctx, wellKnownURL(u)); err == nil {
-		if _, ok := ReceiverDocCovers(doc, u.Path); ok {
-			return verified()
-		}
+	doc, refusal := g.fetchDoc(ctx, wellKnownURL(u))
+	if refusal != nil {
+		return refusal
 	}
-	if v.cfg.Challenge == nil {
+	if _, ok := ReceiverDocCovers(doc, u.Path); !ok {
 		return challengeFailure("no_route")
 	}
-	if err := v.cfg.Challenge(ctx, principal, u.Canonical); err != nil {
-		if refusal := challengeError(err); refusal != nil {
-			return refusal
+	g.cacheVerdict(key, ttl)
+	return nil
+}
+
+// Fresh reports whether the pair has an unexpired verdict, without network I/O.
+func (g *Gate) Fresh(principal, canonicalURL string) bool {
+	key, _, ok := checkedPair(principal, canonicalURL)
+	return ok && g.cfg.Cache.Get(key.principal, key.url)
+}
+
+func (g *Gate) cacheVerdict(key pair, ttl time.Duration) {
+	if ttl <= 0 || ttl > time.Hour {
+		ttl = time.Hour
+	}
+	g.cfg.Cache.Put(key.principal, key.url, ttl)
+}
+
+// Begin issues 16 random bytes as a 22-character unpadded base64url nonce,
+// replacing any pending nonce for the pair. Its age may not exceed NonceTTL.
+// A nonce source failure or collision returns challenge_failed/random.
+func (g *Gate) Begin(principal, canonicalURL string) (string, *Error) {
+	key, _, ok := checkedPair(principal, canonicalURL)
+	if !ok {
+		return "", challengeFailure("pair")
+	}
+	g.nonceMu.Lock()
+	defer g.nonceMu.Unlock()
+
+	var value [16]byte
+	if _, err := io.ReadFull(g.cfg.Random, value[:]); err != nil {
+		return "", challengeFailure("random")
+	}
+	now := g.cfg.Now()
+	g.pruneNonces(now)
+	id := sha256.Sum256(value[:])
+	if _, exists := g.nonces[id]; exists {
+		return "", challengeFailure("random")
+	}
+	g.nonces[id] = nonceRecord{value: value, pair: key, issuedAt: now}
+	// Replacing the pair index invalidates its previous nonce immediately.
+	g.pending[key] = id
+	return base64.RawURLEncoding.EncodeToString(value[:]), nil
+}
+
+// Accept verifies and consumes a nonce, then caches the verdict as in Covers.
+// The caller must check the HTTP status and JSON body with ChallengeEcho.
+func (g *Gate) Accept(principal, canonicalURL, nonce, echoed string, ttl time.Duration) *Error {
+	key, _, ok := checkedPair(principal, canonicalURL)
+	if !ok {
+		return challengeFailure("pair")
+	}
+	sent, sentOK := decodeGateNonce(nonce)
+	echo, echoOK := decodeGateNonce(echoed)
+	if !sentOK || !echoOK {
+		return challengeFailure("mismatch")
+	}
+	matchesSent := subtle.ConstantTimeCompare(sent[:], echo[:]) == 1
+	// Index by a digest, but verify the decoded nonce bytes in constant time.
+	id := sha256.Sum256(echo[:])
+
+	g.nonceMu.Lock()
+	defer g.nonceMu.Unlock()
+	now := g.cfg.Now()
+	g.pruneNonces(now)
+	record, found := g.nonces[id]
+	pendingID, pending := g.pending[record.pair]
+	switch {
+	case !found || subtle.ConstantTimeCompare(record.value[:], echo[:]) != 1:
+		return challengeFailure("mismatch")
+	case !record.consumed && (!pending || pendingID != id || (record.pair == key && !matchesSent)):
+		return challengeFailure("mismatch")
+	case g.nonceExpired(record, now):
+		return challengeFailure("expired")
+	case record.consumed:
+		return challengeFailure("reused")
+	case record.pair != key:
+		return challengeFailure("pair")
+	}
+	record.consumed = true
+	g.nonces[id] = record
+	delete(g.pending, key)
+	g.cacheVerdict(key, ttl)
+	return nil
+}
+
+func decodeGateNonce(encoded string) ([16]byte, bool) {
+	var value [16]byte
+	if !NonceOK(encoded) {
+		return value, false
+	}
+	n, err := base64.RawURLEncoding.Strict().Decode(value[:], []byte(encoded))
+	return value, err == nil && n == len(value)
+}
+
+func (g *Gate) nonceExpired(record nonceRecord, now int64) bool {
+	return now >= record.issuedAt && uint64(now)-uint64(record.issuedAt) > uint64(g.cfg.NonceTTL)
+}
+
+// Sweep lazily on nonce operations, at most once per clock second. Keep a
+// bounded grace period (one more TTL) to distinguish expired echoes from
+// unknown ones, even if another nonce operation already ran after expiry.
+func (g *Gate) pruneNonces(now int64) {
+	if g.lastPruneAt == now {
+		return
+	}
+	g.lastPruneAt = now
+	for id, record := range g.nonces {
+		if now >= record.issuedAt && uint64(now)-uint64(record.issuedAt) > 2*uint64(g.cfg.NonceTTL) {
+			if current, ok := g.pending[record.pair]; ok && current == id {
+				delete(g.pending, record.pair)
+			}
+			delete(g.nonces, id)
 		}
 	}
-	return verified()
 }
 
-// FetchDoc fetches and validates the well-known document, with per-origin caching.
-func (v *Verifier) FetchDoc(ctx context.Context, canonicalURL string) ([]string, *Error) {
-	u, err := urlcheck.Check(canonicalURL)
-	if err != nil {
-		return nil, &Error{Code: err.Code, Reason: err.Reason}
-	}
-	return v.fetchDoc(ctx, wellKnownURL(u))
-}
-
-func (v *Verifier) fetchDoc(ctx context.Context, docURL string) ([]string, *Error) {
-	now := time.Unix(v.cfg.Now(), 0)
-	v.docMu.Lock()
-	if cached, ok := v.docs[docURL]; ok {
+func (g *Gate) fetchDoc(ctx context.Context, docURL string) ([]string, *Error) {
+	now := time.Unix(g.cfg.Now(), 0)
+	g.docMu.Lock()
+	if cached, ok := g.docs[docURL]; ok {
 		if now.Before(cached.expires) {
-			v.docMu.Unlock()
+			g.docMu.Unlock()
 			return slices.Clone(cached.receivers), nil
 		}
-		delete(v.docs, docURL)
+		delete(g.docs, docURL)
 	}
-	v.docMu.Unlock()
+	g.docMu.Unlock()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, docURL, nil)
 	if err != nil {
 		return nil, &Error{Code: "document_fetch_failed", Reason: "request"}
 	}
-	res, refusal := v.cfg.Client.Do(req, MaxDocBytes)
+	res, refusal := g.cfg.Client.Do(req, MaxDocBytes)
+	// A known HTTP status wins even when reading its body failed.
+	if res != nil && res.Status != http.StatusOK {
+		return CheckReceiverDocFetch(res.Status, "", MaxDocBytes)
+	}
 	if refusal != nil {
-		if refusal.Code == "too_large" {
+		switch refusal.Code {
+		case "too_large":
 			return nil, &Error{Code: "document_fetch_failed", Reason: "too_large"}
+		case "redirect_refused":
+			// The hardened client refuses redirects before returning a Response.
+			if text, ok := strings.CutPrefix(refusal.Reason, "status_"); ok {
+				if status, err := strconv.Atoi(text); err == nil && status >= 300 && status < 400 {
+					return CheckReceiverDocFetch(status, "", MaxDocBytes)
+				}
+			}
 		}
-		return nil, &Error{Code: refusal.Code, Reason: refusal.Reason}
+		return nil, challengeFailure("no_route")
 	}
 	receivers, invalid := CheckReceiverDocFetch(res.Status, string(res.Body), MaxDocBytes)
 	if invalid != nil {
 		return nil, invalid
 	}
 	if ttl := cacheControlTTL(res.Header); ttl > 0 {
-		expires := time.Unix(v.cfg.Now(), 0).Add(time.Duration(ttl) * time.Second)
-		v.docMu.Lock()
-		v.docs[docURL] = cachedDoc{receivers: slices.Clone(receivers), expires: expires}
-		v.docMu.Unlock()
+		expires := time.Unix(g.cfg.Now(), 0).Add(time.Duration(ttl) * time.Second)
+		g.docMu.Lock()
+		g.docs[docURL] = cachedDoc{receivers: slices.Clone(receivers), expires: expires}
+		g.docMu.Unlock()
 	}
 	return receivers, nil
 }
@@ -285,64 +424,4 @@ func cacheControlTTL(header http.Header) int64 {
 		}
 	}
 	return DocCacheTTL(nil)
-}
-
-// challengeError maps only known categories and reasons, never raw error text.
-func challengeError(err error) *Error {
-	// A callback can directly return ChallengeEcho's nil *Error as an error.
-	if rejection, ok := err.(*Error); ok && rejection == nil {
-		return nil
-	}
-	var rejection *Error
-	if errors.As(err, &rejection) {
-		if rejection == nil {
-			return challengeFailure("")
-		}
-		return challengeCategory(rejection.Code, rejection.Reason)
-	}
-	var deliveryErr *delivery.Error
-	if errors.As(err, &deliveryErr) {
-		if deliveryErr == nil {
-			return challengeFailure("")
-		}
-		return challengeCategory(deliveryErr.Code, deliveryErr.Reason)
-	}
-	var netErr net.Error
-	if errors.Is(err, context.DeadlineExceeded) || errors.As(err, &netErr) && netErr.Timeout() {
-		return &Error{Code: "timeout"}
-	}
-	var certificate *tls.CertificateVerificationError
-	var record tls.RecordHeaderError
-	var alert tls.AlertError
-	if errors.As(err, &certificate) || errors.As(err, &record) || errors.As(err, &alert) {
-		return &Error{Code: "tls_error"}
-	}
-	var op *net.OpError
-	var dns *net.DNSError
-	if errors.Is(err, syscall.ECONNREFUSED) || errors.As(err, &op) || errors.As(err, &dns) {
-		return &Error{Code: "connection_refused"}
-	}
-	// Callbacks may also report a category as an exact token.
-	return challengeCategory(err.Error(), "")
-}
-
-func challengeCategory(code, reason string) *Error {
-	switch code {
-	case "timeout", "connection_refused", "tls_error", "http_4xx":
-		return &Error{Code: code}
-	case "blocked_address", "dns_rebinding", "no_answer":
-		return &Error{Code: "connection_refused"}
-	case "redirect_refused":
-		return &Error{Code: "http_4xx"}
-	case "too_large":
-		return challengeFailure("too_large")
-	case "http_5xx":
-		return challengeFailure("status")
-	case "challenge_failed":
-		switch reason {
-		case "status", "body", "too_large", "json", "missing", "mismatch", "expired", "reused", "pair", "no_route":
-			return challengeFailure(reason)
-		}
-	}
-	return challengeFailure("")
 }

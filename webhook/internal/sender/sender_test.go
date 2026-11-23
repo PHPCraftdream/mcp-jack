@@ -15,6 +15,7 @@ import (
 
 	"github.com/PHPCraftdream/mcp-jack/webhook/internal/delivery"
 	"github.com/PHPCraftdream/mcp-jack/webhook/internal/dsig"
+	"github.com/PHPCraftdream/mcp-jack/webhook/internal/endpoint"
 	"github.com/PHPCraftdream/mcp-jack/webhook/internal/sender"
 	"github.com/PHPCraftdream/mcp-jack/webhook/internal/wire"
 )
@@ -22,11 +23,12 @@ import (
 func profileSenderConfig() sender.Config {
 	return sender.Config{Signing: sender.SigningOptions{Secrets: []dsig.EmissionSecret{
 		{Secret: bytes.Repeat([]byte{0xa7}, 32), Current: true},
-	}}}
+	}}, Verifier: &stubGate{}}
 }
 
 func profileSenderMessage() sender.Message {
 	return sender.Message{
+		Principal: "alice",
 		WebhookID: "msg_" + strings.Repeat("A", 32), SubscriptionID: "sub_a3f1c8e2b0d49f7e",
 		CallbackURL: "https://hooks.example.test/events",
 		Body:        []byte(`{"eventId":"evt_789","name":"incident.created","timestamp":"2026-11-22T09:00:00Z","data":{}}`),
@@ -130,11 +132,13 @@ func TestSenderProfileDeliverRetrySchedule(t *testing.T) {
 
 func TestSenderProfileDeliverStopsOnHTTPStatus(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		want sender.Result
+		name    string
+		bodyErr *delivery.Error
+		want    sender.Result
 	}{
-		{"accepted", sender.Result{Accepted: true, Attempts: 1, Status: 204}},
-		{"final", sender.Result{Attempts: 1, Status: 410, LastError: "http_4xx"}},
+		{"accepted", nil, sender.Result{Accepted: true, Attempts: 1, Status: 204}},
+		{"final", nil, sender.Result{Attempts: 1, Status: 410, LastError: "http_4xx"}},
+		{"final with body timeout", &delivery.Error{Code: "timeout"}, sender.Result{Attempts: 1, Status: 410, LastError: "http_4xx"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := profileSenderConfig()
@@ -144,7 +148,7 @@ func TestSenderProfileDeliverStopsOnHTTPStatus(t *testing.T) {
 			}
 			s := newProfileSender(t, cfg)
 			sender.UseDeliveryForTest(s, func(*http.Request, int64) (*delivery.Response, *delivery.Error) {
-				return &delivery.Response{Status: tc.want.Status, Body: []byte("private endpoint response")}, nil
+				return &delivery.Response{Status: tc.want.Status, Body: []byte("private endpoint response")}, tc.bodyErr
 			})
 			if got := s.Deliver(context.Background(), profileSenderMessage()); got != tc.want {
 				t.Errorf("Deliver = %+v, want %+v", got, tc.want)
@@ -211,6 +215,11 @@ func TestSenderProfileDeliverRetryAfterHeaders(t *testing.T) {
 			var now int64 = 1767225600
 			var sleeps []time.Duration
 			cfg := profileSenderConfig()
+			covers := 0
+			cfg.Verifier = &stubGate{covers: func(context.Context, string, string, time.Duration) *endpoint.Error {
+				covers++
+				return nil
+			}}
 			cfg.Now = func() int64 { return now }
 			cfg.Sleep = func(_ context.Context, d time.Duration) error {
 				sleeps = append(sleeps, d)
@@ -220,12 +229,15 @@ func TestSenderProfileDeliverRetryAfterHeaders(t *testing.T) {
 			s := newProfileSender(t, cfg)
 			sender.UseDeliveryForTest(s, func(*http.Request, int64) (*delivery.Response, *delivery.Error) {
 				if len(sleeps) == 0 {
-					return &delivery.Response{Status: 503, Header: http.Header{"Retry-After": {tc.value}}}, nil
+					return &delivery.Response{Status: 503, Header: http.Header{"Retry-After": {tc.value}}}, &delivery.Error{Code: "timeout"}
 				}
 				return &delivery.Response{Status: 200}, nil
 			})
 			if got, want := s.Deliver(context.Background(), profileSenderMessage()), (sender.Result{Accepted: true, Attempts: 2, Status: 200}); got != want {
 				t.Errorf("Deliver = %+v, want %+v", got, want)
+			}
+			if covers != 1 {
+				t.Errorf("Covers was called %d times across retries; want once", covers)
 			}
 			if want := []time.Duration{tc.delay}; !slices.Equal(sleeps, want) {
 				t.Errorf("sleeps = %v, want %v", sleeps, want)

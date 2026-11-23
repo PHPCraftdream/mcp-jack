@@ -99,7 +99,7 @@ func TestServerCardValidateJWKReasons(t *testing.T) {
 	}
 }
 
-func TestServerCardAcceptJWKSetPhases(t *testing.T) {
+func TestServerCardAcceptKeySetPhases(t *testing.T) {
 	first, _ := cardTestJWK(2)
 	second, _ := cardTestJWK(3)
 	dupeA, _ := cardTestJWK(4)
@@ -114,9 +114,14 @@ func TestServerCardAcceptJWKSetPhases(t *testing.T) {
 		cardTestJSON(t, invalid), cardTestJSON(t, dupeA), cardTestJSON(t, serverRaw),
 		cardTestJSON(t, first), json.RawMessage(`{"kid":""}`), cardTestJSON(t, dupeB),
 	}
-	accepted, rejected := card.AcceptJWKSet(entries, card.Options{
+	raw := cardTestSigningKeys(t, cardTestJSON(t, entries))
+	set := card.AcceptKeySet(raw, card.Options{
 		MCPServerKID: serverKID.Kid, MCPServerPublicKey: serverRaw.X,
 	})
+	if !bytes.Equal(set.Raw, raw) {
+		t.Fatalf("raw signing keys = %s, want %s", set.Raw, raw)
+	}
+	accepted, rejected := set.Accepted, set.Rejected
 	if len(accepted) != 2 || card.JWKOf(accepted[0]) != second || card.JWKOf(accepted[1]) != first {
 		t.Fatalf("unexpected accepted keys: %+v", accepted)
 	}
@@ -156,33 +161,49 @@ func cardTestTool(t *testing.T, keys ...any) json.RawMessage {
 	}})
 }
 
+func cardTestSigningKeys(t *testing.T, keys any) json.RawMessage {
+	t.Helper()
+	return cardTestJSON(t, map[string]any{"keys": keys})
+}
+
+func TestStaticKeys(t *testing.T) {
+	jwk, _ := cardTestJWK(13)
+	key, reason := card.ValidateJWK(cardTestJSON(t, jwk))
+	if reason != "" {
+		t.Fatal(reason)
+	}
+	keys := []card.Key{key}
+	var source card.Source = card.StaticKeys(keys)
+	want := cardTestSigningKeys(t, []card.JWK{jwk})
+	keys[0].Raw[0] ^= 1
+	snapshot := source.KeySet()
+	if !bytes.Equal(snapshot.Raw, want) || len(snapshot.Accepted) != 1 || snapshot.Accepted[0].Raw[0] == keys[0].Raw[0] || len(snapshot.Rejected) != 0 {
+		t.Fatalf("unexpected static snapshot: %+v", snapshot)
+	}
+	snapshot.Raw[0] = '!'
+	if got := source.KeySet().Raw; !bytes.Equal(got, want) {
+		t.Errorf("static raw after snapshot mutation = %s, want %s", got, want)
+	}
+	if got := card.StaticKeys(nil).KeySet().Raw; string(got) != `{"keys":[]}` {
+		t.Errorf("empty static raw = %s, want an empty keys array", got)
+	}
+}
+
 func TestServerCardCrossCheck(t *testing.T) {
 	first, _ := cardTestJWK(9)
 	second, _ := cardTestJWK(10)
-	keys, rejected := card.AcceptJWKSet([]json.RawMessage{cardTestJSON(t, first), cardTestJSON(t, second)}, card.Options{})
-	if len(keys) != 2 || len(rejected) != 0 {
-		t.Fatalf("unexpected accepted keys: %+v; rejected: %+v", keys, rejected)
-	}
+	keys := cardTestSigningKeys(t, []card.JWK{first, second})
 	good := cardTestJWKMembers(first)
 	good["alg"], good["use"] = "EdDSA", "sig"
-	bad := cardTestJWKMembers(first)
-	bad["alg"] = "RS256"
-	invalidCard := append([]card.Key(nil), keys...)
-	invalidCard[0].KTY = "RSA"
-
-	// Optional members cannot be represented by Key: a bad card alg is rejected
-	// during discovery, before comparing the surviving keys to the tool result.
-	badBody := cardTestBody(t, map[string]any{"signingKeys": map[string]any{"keys": []any{bad, second}}})
-	discovered, fetchErr := card.FetchDecision(card.FetchInput{
-		MCPURL: cardTestMCPURL, CardURL: cardTestMCPURL + "/server-card", Status: 200, Body: badBody,
-	})
-	if fetchErr != nil || len(discovered.Rejected) != 1 || discovered.Rejected[0].Reason != "alg" {
-		t.Fatalf("card with bad alg = %+v, %+v", discovered, fetchErr)
-	}
+	badAlg := cardTestJWKMembers(first)
+	badAlg["alg"] = "RS256"
+	badUse := cardTestJWKMembers(first)
+	badUse["use"] = "enc"
+	invalidCard := cardTestSigningKeys(t, []any{badAlg, second})
 
 	tests := []struct {
 		name    string
-		keys    []card.Key
+		keys    json.RawMessage
 		tool    json.RawMessage
 		require bool
 		want    string
@@ -194,14 +215,15 @@ func TestServerCardCrossCheck(t *testing.T) {
 		{"missing", keys, nil, true, "webhook_key_missing"},
 		{"keys not an array", keys, json.RawMessage(`{"webhook_key":{"signing_keys":{"keys":null}}}`), true, "webhook_key_missing"},
 		{"not required", invalidCard, nil, false, ""},
-		{"invalid tool alg", keys, cardTestTool(t, second, bad), true, "webhook_key_mismatch"},
-		{"invalid card alg refused at discovery", discovered.Keys, cardTestTool(t, second, first), true, "webhook_key_mismatch"},
-		{"invalid card record", invalidCard, cardTestTool(t, second, first), true, "webhook_key_mismatch"},
+		{"invalid tool alg", keys, cardTestTool(t, second, badAlg), true, "webhook_key_mismatch"},
+		{"invalid card alg even with matching accepted subset", invalidCard, cardTestTool(t, second), true, "webhook_key_mismatch"},
+		{"invalid card use", cardTestSigningKeys(t, []any{badUse, second}), cardTestTool(t, second, first), true, "webhook_key_mismatch"},
+		{"same invalid record on both sides", invalidCard, cardTestTool(t, second, badAlg), true, "webhook_key_mismatch"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := card.CrossCheck(tt.keys, tt.tool, tt.require); got != tt.want {
-				t.Errorf("CrossCheck = %q, want %q", got, tt.want)
+			if got := card.CrossCheckWebhookKey(tt.keys, tt.tool, tt.require); got != tt.want {
+				t.Errorf("CrossCheckWebhookKey = %q, want %q", got, tt.want)
 			}
 		})
 	}

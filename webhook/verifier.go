@@ -1,38 +1,20 @@
 package webhook
 
-import (
-	"context"
+import "github.com/PHPCraftdream/mcp-jack/webhook/internal/endpoint"
 
-	"github.com/PHPCraftdream/mcp-jack/webhook/internal/endpoint"
-)
+// GateConfig configures endpoint verification routes, caching, and challenges.
+type GateConfig = endpoint.GateConfig
 
-// VerifierConfig configures the endpoint verification routes and cache.
-type VerifierConfig = endpoint.Config
+// Gate verifies consent to delivery and manages single-use challenges.
+// Use Covers to check consent without a challenge, Begin and Accept to
+// complete a challenge, and Fresh to check the cached verdict without I/O.
+type Gate = endpoint.Gate
 
-// Verifier checks whether a subscriber's callback endpoint consents to delivery.
-type Verifier struct{ inner *endpoint.Verifier }
-
-// NewVerifier constructs a verifier with a hardened client and cache by default.
-func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
-	inner, err := endpoint.NewVerifier(cfg)
-	if err != nil {
-		return nil, err
-	}
-	return &Verifier{inner: inner}, nil
-}
+// NewGate constructs a gate with a hardened client and cache by default.
+func NewGate(cfg GateConfig) (*Gate, error) { return endpoint.NewGate(cfg) }
 
 // VerificationError describes a failed verification or document check.
 type VerificationError = endpoint.Error
-
-// Verify tries the configured verification routes in profile order.
-func (v *Verifier) Verify(ctx context.Context, principal, canonicalURL string) *VerificationError {
-	return v.inner.Verify(ctx, principal, canonicalURL)
-}
-
-// FetchDoc fetches and validates the endpoint's well-known receiver document.
-func (v *Verifier) FetchDoc(ctx context.Context, canonicalURL string) ([]string, *VerificationError) {
-	return v.inner.FetchDoc(ctx, canonicalURL)
-}
 
 // RouteInput supplies the available verification evidence.
 type RouteInput = endpoint.RouteInput
@@ -97,8 +79,8 @@ func DocCacheTTL(maxAge *int64) int64 { return endpoint.DocCacheTTL(maxAge) }
 // VerificationRoute chooses the first successful route in profile order.
 func VerificationRoute(in RouteInput) Route { return endpoint.VerificationRoute(in) }
 
-// Gate decides whether to allow an event or send a verification challenge.
-func Gate(in GateInput) string { return endpoint.Gate(in) }
+// DeliveryAction decides whether to deliver, refuse, or send a verification challenge.
+func DeliveryAction(in GateInput) string { return endpoint.DeliveryAction(in) }
 
 // VerificationCache stores verification per principal and canonical callback URL.
 type VerificationCache = endpoint.Cache

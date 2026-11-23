@@ -3,11 +3,15 @@ package sender
 
 import (
 	"context"
+	"crypto/rand"
+	"errors"
 	"net/http"
+	"reflect"
 	"strconv"
 	"time"
 
 	"github.com/PHPCraftdream/mcp-jack/webhook/internal/delivery"
+	"github.com/PHPCraftdream/mcp-jack/webhook/internal/endpoint"
 	"github.com/PHPCraftdream/mcp-jack/webhook/internal/wire"
 )
 
@@ -16,9 +20,18 @@ const (
 	suspensionPoll  = 1 // seconds, only when a suspension hook is configured
 )
 
-// Config supplies signing material, the delivery policy and optional scheduling hooks.
+// VerificationGate is the endpoint verification front-end of R5.1-R5.9.
+// Begin returns an unpadded base64url nonce on success.
+type VerificationGate interface {
+	Covers(ctx context.Context, principal, canonicalURL string, ttl time.Duration) *endpoint.Error
+	Begin(principal, canonicalURL string) (string, *endpoint.Error)
+	Accept(principal, canonicalURL, nonce, echoed string, ttl time.Duration) *endpoint.Error
+}
+
+// Config supplies signing material, verification, delivery policy and optional scheduling hooks.
 type Config struct {
 	Signing       SigningOptions
+	Verifier      VerificationGate // required
 	AllowedRanges []string
 	Resolver      delivery.Resolver
 	Dialer        delivery.Dialer
@@ -34,6 +47,7 @@ type deliveryClient interface {
 // Sender performs signed webhook attempts and runs the retry schedule.
 type Sender struct {
 	client    deliveryClient
+	verifier  VerificationGate
 	signing   SigningOptions
 	now       func() int64
 	sleep     func(context.Context, time.Duration) error
@@ -42,6 +56,9 @@ type Sender struct {
 
 // New constructs a sender with a dedicated, policy-enforcing delivery client.
 func New(cfg Config) (*Sender, error) {
+	if nilVerifier(cfg.Verifier) {
+		return nil, errors.New("sender requires an endpoint verification gate")
+	}
 	signing, err := prepareSigning(cfg.Signing)
 	if err != nil {
 		return nil, err
@@ -56,8 +73,69 @@ func New(cfg Config) (*Sender, error) {
 		client: delivery.NewClient(delivery.Config{
 			AllowedRanges: cfg.AllowedRanges, Resolver: cfg.Resolver, Dialer: cfg.Dialer,
 		}),
-		signing: signing, now: cfg.Now, sleep: cfg.Sleep, suspended: cfg.Suspended,
+		verifier: cfg.Verifier, signing: signing, now: cfg.Now, sleep: cfg.Sleep, suspended: cfg.Suspended,
 	}, nil
+}
+
+func nilVerifier(g VerificationGate) bool {
+	v := reflect.ValueOf(g)
+	switch v.Kind() {
+	case reflect.Invalid:
+		return true
+	case reflect.Chan, reflect.Func, reflect.Map, reflect.Pointer, reflect.Slice:
+		return v.IsNil()
+	default:
+		return false
+	}
+}
+
+func (s *Sender) ensureVerified(ctx context.Context, msg Message) *endpoint.Error {
+	if s.verifier == nil {
+		return &endpoint.Error{Code: "challenge_failed", Reason: "missing_verifier"}
+	}
+	if msg.Principal == "" || msg.CallbackURL == "" || msg.SubscriptionID == "" {
+		return &endpoint.Error{Code: "challenge_failed", Reason: "pair"}
+	}
+	if s.verifier.Covers(ctx, msg.Principal, msg.CallbackURL, msg.TTL) == nil {
+		return nil
+	}
+
+	nonce, refusal := s.verifier.Begin(msg.Principal, msg.CallbackURL)
+	if refusal != nil {
+		return refusal
+	}
+	id, err := NewWebhookID("verification", rand.Reader)
+	if err != nil {
+		return &endpoint.Error{Code: "challenge_failed", Reason: "random"}
+	}
+	challenge := msg
+	challenge.WebhookID = id
+	challenge.Body = []byte(`{"type":"verification","challenge":"` + nonce + `"}`)
+	req, code := s.signing.request(ctx, challenge, s.now())
+	if code != "" {
+		return &endpoint.Error{Code: "challenge_failed", Reason: code}
+	}
+
+	res, deliveryErr := s.client.Do(req, endpoint.MaxChallengeBytes)
+	// A returned non-2xx status fails the echo even if its body could not be read.
+	if res != nil && (res.Status < 200 || res.Status > 299) {
+		return endpoint.ChallengeEcho(res.Status, "", nonce)
+	}
+	if deliveryErr != nil {
+		if deliveryErr.Code == "too_large" {
+			// The client discards the body. Preserve ChallengeEcho's size refusal.
+			return &endpoint.Error{Code: "challenge_failed", Reason: "too_large"}
+		}
+		return &endpoint.Error{Code: transportCategory(deliveryErr.Code), Reason: deliveryErr.Code}
+	}
+	if res == nil {
+		return &endpoint.Error{Code: "connection_refused"}
+	}
+	if refusal := endpoint.ChallengeEcho(res.Status, string(res.Body), nonce); refusal != nil {
+		return refusal
+	}
+	// ChallengeEcho proves the decoded echo equals nonce, so no second parse is needed.
+	return s.verifier.Accept(msg.Principal, msg.CallbackURL, nonce, nonce, msg.TTL)
 }
 
 // AttemptResult reports the HTTP status or an internal refusal code. LastError
@@ -69,9 +147,16 @@ type AttemptResult struct {
 	HasRetryAfter   bool
 }
 
-// Attempt makes one delivery attempt with a fresh timestamp and signature.
-// It does not wait for suspension or retry.
+// Attempt verifies the endpoint, then makes one delivery attempt with a fresh
+// timestamp and signature. It does not wait for suspension or retry.
 func (s *Sender) Attempt(ctx context.Context, msg Message) AttemptResult {
+	if refusal := s.ensureVerified(ctx, msg); refusal != nil {
+		return AttemptResult{Code: refusal.Code, LastError: refusal.Code}
+	}
+	return s.attemptVerified(ctx, msg)
+}
+
+func (s *Sender) attemptVerified(ctx context.Context, msg Message) AttemptResult {
 	if len(msg.Body) > wire.MaxBodyBytes {
 		return AttemptResult{Code: "body_too_large", LastError: "http_4xx"}
 	}
@@ -80,15 +165,12 @@ func (s *Sender) Attempt(ctx context.Context, msg Message) AttemptResult {
 		return AttemptResult{Code: code, LastError: "http_4xx"}
 	}
 	response, err := s.client.Do(req, maxResponseBody)
-	if err != nil {
-		category := "http_4xx"
-		switch err.Code {
-		case "connection_refused", "timeout", "tls_error", "challenge_failed":
-			category = err.Code
-		case "blocked_address", "dns_rebinding", "no_answer":
-			category = "connection_refused"
+	// Once the status arrives, R1.7 classifies the delivery by it, not the body.
+	if response == nil {
+		if err == nil {
+			return AttemptResult{Code: "connection_refused", LastError: "connection_refused"}
 		}
-		return AttemptResult{Code: err.Code, LastError: category}
+		return AttemptResult{Code: err.Code, LastError: transportCategory(err.Code)}
 	}
 	category := LastError(response.Status)
 	if category == "" && (response.Status < 200 || response.Status > 299) {
@@ -96,6 +178,17 @@ func (s *Sender) Attempt(ctx context.Context, msg Message) AttemptResult {
 	}
 	retryAfter, hasRetryAfter := parseRetryAfter(response.Header.Get("Retry-After"))
 	return AttemptResult{Status: response.Status, LastError: category, RetryAfter: retryAfter, HasRetryAfter: hasRetryAfter}
+}
+
+func transportCategory(code string) string {
+	switch code {
+	case "connection_refused", "timeout", "tls_error", "challenge_failed":
+		return code
+	case "blocked_address", "dns_rebinding", "no_answer":
+		return "connection_refused"
+	default: // Includes redirect_refused, which the client returns without a status.
+		return "http_4xx"
+	}
 }
 
 func parseRetryAfter(value string) (int64, bool) {
@@ -120,8 +213,12 @@ type Result struct {
 	Status    int
 }
 
-// Deliver runs the R1.8 schedule using the same message ID and bytes each time.
+// Deliver verifies the endpoint once before running the R1.8 schedule with the
+// same message ID and bytes each time. Verification is not retried.
 func (s *Sender) Deliver(ctx context.Context, msg Message) Result {
+	if refusal := s.ensureVerified(ctx, msg); refusal != nil {
+		return Result{LastError: refusal.Code}
+	}
 	var result Result
 	start := s.now()
 	clock := scheduleClock{wall: start, active: start}
@@ -137,7 +234,7 @@ func (s *Sender) Deliver(ctx context.Context, msg Message) Result {
 		} else if clock.active > capAt {
 			return result
 		}
-		res := s.Attempt(ctx, msg)
+		res := s.attemptVerified(ctx, msg)
 		clock.advance(s.now(), 0)
 		result = Result{Attempts: attempt, Status: res.Status, LastError: res.LastError}
 		in := AttemptInput{
