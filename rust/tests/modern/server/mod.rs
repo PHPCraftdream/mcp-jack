@@ -2,6 +2,8 @@
 //! and the client-side rules that need a socket-free exchange.
 
 #[path = "../../common/mod.rs"]
-mod common;
+pub(crate) mod common;
 
+mod mirror_refusal;
 mod native_result;
+mod wire_forward;

@@ -360,6 +360,70 @@ async fn legacy_tools_call_without_string_name_keeps_generic_message() {
     assert_eq!(h.inner.calls(), 0);
 }
 
+/// RFC 9110 and spec 04 `S2`: a HEAD refusal carries NO body — the status and
+/// Content-Type stay those of the same refusal to a POST — and the Jack-Auth
+/// signature covers the EMPTY body every client hashes for a HEAD.
+///
+/// Pipeline: the modern profile authenticates the HEAD request, `S2` refuses
+/// the non-POST method with the signed 405, and the shared writer drops the
+/// body while signing over `b""`.
+#[tokio::test]
+async fn head_refusal_has_no_body_and_signs_the_empty_body() {
+    let state = MemoryState::new();
+    seed_registry(&state);
+    let server_key = server_signing_key();
+    let server_pub = *server_key.verifying_key().as_bytes();
+    let layer = JackLayer::new(HandlerConfig {
+        verifier: build_verifier(state, None),
+        server_key,
+        max_body_bytes: 0,
+        max_response_bytes: 0,
+    })
+    .with_profile(Profile::Modern);
+    let svc = layer.layer(tower::service_fn(
+        |_req: http::Request<Full<Bytes>>| async move {
+            Ok::<http::Response<Full<Bytes>>, String>(http::Response::new(Full::new(Bytes::new())))
+        },
+    ));
+    let alice = harness::signer_by_name("alice");
+    let signed = signed_request(&alice, "HEAD", "/mcp", b"");
+    let req = http::Request::builder()
+        .method("HEAD")
+        .uri("/mcp")
+        .header("Jack-Auth", signed.header_value.as_str())
+        .header("MCP-Protocol-Version", "2026-07-28")
+        .body(Full::new(Bytes::new()))
+        .expect("static request parts");
+    let got = inspect(svc.oneshot(req).await.expect("no inner error")).await;
+
+    assert_eq!(got.status, 405, "S2 refuses a non-POST modern request");
+    assert!(
+        got.body.is_empty(),
+        "a HEAD refusal has no body: {:?}",
+        got.body
+    );
+    assert_eq!(
+        got.content_type.as_deref(),
+        Some("application/json"),
+        "the Content-Type is the one the POST twin carries"
+    );
+    assert!(
+        got.www_authenticate.is_none(),
+        "the refusal is post-nonce, so no WWW-Authenticate"
+    );
+    let values: Vec<&str> = got.jack_auth.iter().map(String::as_str).collect();
+    mcp_jack::signing::verify_response(
+        &server_pub,
+        got.status as i64,
+        &values,
+        &signed.request_sig,
+        b"",
+        FIXTURE_NOW,
+        30,
+    )
+    .expect("Jack-Auth signs the empty HEAD body");
+}
+
 /// Go TestMiddlewareAnswersNativeToolsItself: the real Native answers
 /// jack.admin.user.list and the layer signs its JSON-RPC result.
 ///

@@ -157,8 +157,17 @@ impl<'a> Resync<'a> {
         &self.events
     }
 
+    /// Clears both catalogs (`C10`/`C12` resync). Callers that keep a private
+    /// result cache must drop the live entry for a target before re-listing, so
+    /// the next call is not answered from a catalog that is being replaced.
+    pub fn invalidate(&mut self) {
+        self.tools = ToolCatalog::default();
+        self.events = EventCatalog::default();
+    }
+
     /// Fetches `tools/list` and rebuilds the tool catalog (`C5` filtering).
     pub fn refresh_tools(&mut self) -> Result<(), ClientError> {
+        self.invalidate();
         let response = self.exchange.exchange("tools/list", &json!({}), &[])?;
         let result = listed(success_body(response)?);
         self.tools = ToolCatalog::from_tools_list(&result);
@@ -167,6 +176,7 @@ impl<'a> Resync<'a> {
 
     /// Fetches `events/list` and rebuilds the event catalog (`C11` filtering).
     pub fn refresh_events(&mut self) -> Result<(), ClientError> {
+        self.invalidate();
         let response = self.exchange.exchange("events/list", &json!({}), &[])?;
         let result = listed(success_body(response)?);
         self.events = EventCatalog::from_events_list(&result);

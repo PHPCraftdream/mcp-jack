@@ -134,6 +134,27 @@ fn header_values<'a>(headers: &'a [HeaderField], name: &str) -> Vec<&'a str> {
         .collect()
 }
 
+/// `S3` for one already authenticated request: the era the engine decides for
+/// it, with the `_meta` protocol version of its body when it is a request or
+/// notification.
+///
+/// [`classify_request`] runs the body classification before `S3`, so its era-
+/// neutral [`ModernOutcome::ClassificationRefusal`] carries no era. A caller
+/// that has to interpret such a refusal (to pick the 0.1.x bytes or the fixed
+/// modern message) asks this function with the same request; it is `S3` and
+/// nothing else, so it cannot disagree with the era `classify_request` used
+/// for a request it forwards.
+#[cfg(feature = "http")]
+pub(crate) fn request_era(profile: Profile, request: &ModernRequest<'_>) -> Era {
+    let parsed = parse_body(request);
+    let meta_version = parsed
+        .as_ref()
+        .map(Body::new)
+        .as_ref()
+        .and_then(Body::meta_version);
+    decide_era(profile, request.headers, meta_version)
+}
+
 /// `S3`-`S12` of spec 04 section 5: classifies one already authenticated
 /// request and says how the wrapped handler must receive it.
 ///

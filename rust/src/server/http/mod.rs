@@ -42,7 +42,7 @@ use std::task::{Context, Poll};
 
 use bytes::{Buf, BufMut, Bytes};
 use ed25519_dalek::Signer as _;
-use http::header::{CONTENT_LENGTH, CONTENT_TYPE};
+use http::header::CONTENT_TYPE;
 use http::{HeaderValue, Method, StatusCode};
 use http_body_util::{BodyExt, Full};
 use serde_json::value::RawValue;
@@ -53,11 +53,12 @@ use crate::auth_header::{format_response_auth, ResponseAuth};
 use crate::encoding::{encode_b64url, key_id};
 use crate::modern::{IMPLEMENTATION_NAME, IMPLEMENTATION_VERSION};
 use crate::server::modern::{
-    classify_request, Era, HeaderField, ModernOutcome, ModernRequest, Profile,
+    classify_request, request_era, Era, ModernOutcome, ModernRequest, Profile,
 };
 use crate::server::response_keys::{ReleaseGuard, ResponseKeyRequest, ResponseKeys};
 use crate::server::verify::{Authentication, Verifier, VerifyResult};
 
+mod forward;
 mod modern;
 mod wire;
 
@@ -343,6 +344,12 @@ where
         B::Error: Into<BoxError>,
     {
         let (parts, body) = req.into_parts();
+        // RFC 9110: a HEAD answer carries the status and headers of its GET
+        // twin but no body. This single flag is handed to every writer, which
+        // sends no body and signs over the empty body instead, so each refusal
+        // path (plain rejection, signed reject, modern refusal, native,
+        // forwarded) behaves the same.
+        let head = parts.method == Method::HEAD;
 
         // The 0.1.x pre-authentication method gate. In the modern era it must
         // NOT run: spec 04 `S2` answers a non-`POST` request with a SIGNED 405
@@ -353,6 +360,7 @@ where
             && parts.method != Method::POST
         {
             return Ok(plain_error(
+                head,
                 StatusCode::METHOD_NOT_ALLOWED,
                 "method_not_allowed",
                 "only GET and POST are defined",
@@ -368,6 +376,7 @@ where
             Ok(bytes) => bytes,
             Err(BodyReadError::TooLarge) => {
                 return Ok(plain_error(
+                    head,
                     StatusCode::PAYLOAD_TOO_LARGE,
                     "invalid_request",
                     "request body is too large",
@@ -375,6 +384,7 @@ where
             }
             Err(BodyReadError::Read) => {
                 return Ok(plain_error(
+                    head,
                     StatusCode::BAD_REQUEST,
                     "invalid_request",
                     "request body could not be read",
@@ -386,6 +396,7 @@ where
         // Only origin-form targets are signable (spec 01 section 3.1).
         let Some(target) = origin_form_target(&parts.uri) else {
             return Ok(plain_error(
+                head,
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
                 "request target must be origin-form",
@@ -404,8 +415,12 @@ where
         let single = parts.headers.get_all("Jack-Auth").iter().count() == 1;
         for value in parts.headers.get_all("Jack-Auth") {
             if single && crate::auth_header::scheme_is_unsupported_version(value.as_bytes()) {
-                let mut res =
-                    unsigned_rejection(401, "unsupported_version", "unsupported Jack-Auth version");
+                let mut res = unsigned_rejection(
+                    head,
+                    401,
+                    "unsupported_version",
+                    "unsupported Jack-Auth version",
+                );
                 res.headers_mut()
                     .insert("WWW-Authenticate", HeaderValue::from_static("Jack-Auth"));
                 return Ok(res);
@@ -414,6 +429,7 @@ where
                 Ok(v) => auth_values.push(v.to_owned()),
                 Err(_) => {
                     let mut res = unsigned_rejection(
+                        head,
                         401,
                         "malformed_auth",
                         "Jack-Auth header is not valid UTF-8",
@@ -439,11 +455,11 @@ where
         let response = if self.profile == Profile::Legacy {
             let mut res = self.verifier.verify(&vreq);
             let response = if !res.accepted {
-                self.reject(&res)
+                self.reject(&res, head)
             } else if res.native {
-                self.native(&res, Era::Legacy)
+                self.native(&res, Era::Legacy, head)
             } else {
-                self.forward(parts, buffered, &res, None).await?
+                self.forward(parts, buffered, &res, false, head).await?
             };
             // The durable admission is finished only after the response is
             // produced, on every path (Go middleware: `defer res.Done()`).
@@ -456,32 +472,36 @@ where
                     // every profile, so the legacy bytes (and their
                     // signatures) stay untouched. On the era-aware profiles a
                     // body-classification refusal is replaced by the fixed
-                    // message of spec 04 `S6`, and ONLY when the engine, asked
-                    // with the same profile/method/target/headers/body,
-                    // reports `ClassificationRefusal`.
+                    // message of spec 04 `S6` when the engine, asked with the
+                    // same profile/method/target/headers/body, reports
+                    // `ClassificationRefusal` AND the era it decides for the
+                    // same request is modern. The classification runs BEFORE
+                    // `S3`, so a legacy-era request under `Both` keeps the
+                    // 0.1.x bytes even though its body triggers the same
+                    // classification.
                     let response = if res.http_status == 400
                         && res.code == crate::error::codes::INVALID_REQUEST
                     {
                         let headers = header_fields(&parts.headers);
-                        let classified = classify_request(
-                            self.profile,
-                            &ModernRequest {
-                                method: &method,
-                                target: &target,
-                                headers: &headers,
-                                body: &buffered,
-                            },
-                        );
-                        match classified {
-                            ModernOutcome::ClassificationRefusal { message } => {
-                                self.invalid_request(&res, message)
+                        let request = ModernRequest {
+                            method: &method,
+                            target: &target,
+                            headers: &headers,
+                            body: &buffered,
+                        };
+                        match classify_request(self.profile, &request) {
+                            ModernOutcome::ClassificationRefusal { message }
+                                if request_era(self.profile, &request) == Era::Modern =>
+                            {
+                                self.invalid_request(&res, message, head)
                             }
                             // Header/era refusals are not body classification,
-                            // and the verifier's refusal stands as it is.
-                            _ => self.reject(&res),
+                            // and the verifier's refusal stands as it is; the
+                            // same holds for a legacy-era classification.
+                            _ => self.reject(&res, head),
                         }
                     } else {
-                        self.reject(&res)
+                        self.reject(&res, head)
                     };
                     res.finish_admission();
                     response
@@ -504,32 +524,33 @@ where
                         // it carries no native effect.
                         ModernOutcome::ClassificationRefusal { message } => {
                             let mut res = pending.into_refusal_base();
-                            let response = self.invalid_request(&res, message);
+                            let response = self.invalid_request(&res, message, head);
                             res.finish_admission();
                             response
                         }
                         ModernOutcome::Refuse(refusal) => {
                             let mut res = pending.into_refusal_base();
-                            let response = self.refuse_modern(&res, &refusal);
+                            let response = self.refuse_modern(&res, &refusal, head);
                             res.finish_admission();
                             response
                         }
-                        ModernOutcome::Forward { era, headers } => {
-                            // Only the modern era rebuilds the inner header
-                            // list from the engine's ordered result: `S8` has
-                            // already dropped the session headers and `S9`
-                            // keeps name casing, value bytes, order and
-                            // repetition. A legacy-era request under `Both`
-                            // stays the map as received, byte-identical to
-                            // 0.1.x.
-                            let rebuilt = (era == Era::Modern).then_some(headers);
+                        ModernOutcome::Forward { era, headers: _ } => {
+                            // Only the modern era filters the inner header
+                            // list: `S8` removes the session headers, and the
+                            // forward path re-derives exactly that removal
+                            // from the ORIGINAL entries so value bytes and
+                            // repetition survive. The engine's header list
+                            // above is validation input only. A legacy-era
+                            // request under `Both` keeps the map as received,
+                            // byte-identical to 0.1.x.
+                            let modern = era == Era::Modern;
                             let mut res = self.verifier.dispatch(pending);
                             let response = if !res.accepted {
-                                self.reject(&res)
+                                self.reject(&res, head)
                             } else if res.native {
-                                self.native(&res, era)
+                                self.native(&res, era, head)
                             } else {
-                                self.forward(parts, buffered, &res, rebuilt).await?
+                                self.forward(parts, buffered, &res, modern, head).await?
                             };
                             res.finish_admission();
                             response
@@ -578,8 +599,16 @@ where
     /// Answers a failed request (Go: reject). Once authentication succeeded the
     /// client holds a request signature to bind to, so the answer is signed; an
     /// authentication failure may be unsigned (spec 01 section 5).
-    fn reject(&self, res: &VerifyResult) -> http::Response<Full<Bytes>> {
-        let body = Bytes::from(error_body(&res.code, &res.message));
+    fn reject(&self, res: &VerifyResult, head: bool) -> http::Response<Full<Bytes>> {
+        // RFC 9110: a HEAD answer has no body; the status and Content-Type stay
+        // those of the same refusal to a GET/POST and the signature (signed
+        // branch) covers the empty body. signed_with_headers enforces the same
+        // rule, so both branches agree.
+        let body = if head {
+            Bytes::new()
+        } else {
+            Bytes::from(error_body(&res.code, &res.message))
+        };
         // Go sets WWW-Authenticate on every 401 BEFORE choosing the
         // signed/unsigned branch, so both branches share the header logic.
         let mut headers = http::HeaderMap::new();
@@ -588,7 +617,7 @@ where
         }
         if res.nonce_recorded {
             headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-            return self.signed_with_headers(res.http_status, res, headers, body);
+            return self.signed_with_headers(head, res.http_status, res, headers, body);
         }
         let mut builder = http::Response::builder().status(res.http_status);
         for (name, value) in &headers {
@@ -608,22 +637,22 @@ where
     /// In the modern era the result also carries `resultType: "complete"` and
     /// Jack `_meta` server info (spec 04 `C7`); a legacy-era result is the
     /// 0.1.x shape.
-    fn native(&self, res: &VerifyResult, era: Era) -> http::Response<Full<Bytes>> {
+    fn native(&self, res: &VerifyResult, era: Era, head: bool) -> http::Response<Full<Bytes>> {
         let Some(structured) = &res.structured else {
             // Unreachable: native results always carry structured content, but
             // the fallback keeps the Go error path for refactors.
-            return self.internal(res);
+            return self.internal(res, head);
         };
         let text = match serde_json::to_string(structured) {
             Ok(text) => text,
-            Err(_) => return self.internal(res),
+            Err(_) => return self.internal(res, head),
         };
         let id = match res.rpc_id.as_deref() {
             // None serializes as null, matching Go's nil json.RawMessage.
             None => None,
             Some(raw) => match RawValue::from_string(raw.to_owned()) {
                 Ok(id) => Some(id),
-                Err(_) => return self.internal(res),
+                Err(_) => return self.internal(res, head),
             },
         };
         // Spec 04 `C7`: only the modern era adds `resultType` and `_meta`, so a
@@ -650,136 +679,31 @@ where
         };
         // Unreachable failure: serde cannot fail on String/&str fields.
         let body = serde_json::to_string(&payload).expect("static JSON-RPC shape serializes");
-        self.signed(200, res, body.into_bytes().into())
+        self.signed(head, 200, res, body.into_bytes().into())
     }
 
     /// Go's fallback for a marshal failure: a signed 500 (Go: rejectInternal).
-    fn internal(&self, res: &VerifyResult) -> http::Response<Full<Bytes>> {
+    fn internal(&self, res: &VerifyResult, head: bool) -> http::Response<Full<Bytes>> {
         self.signed(
+            head,
             500,
             res,
             error_body("internal_error", "internal error").into(),
         )
     }
 
-    /// Hands an authorized request to the wrapped service and signs what it
-    /// answers (Go: forward).
-    ///
-    /// `rebuilt_headers` is Some only on the modern-era path: the inner
-    /// request then carries exactly the ordered header list the engine
-    /// returned (spec 04 `S9`), appended value by value so a repeated name
-    /// keeps every instance. `http::HeaderName` lowercases names, which is the
-    /// only thing the rebuilt map cannot preserve; nothing else is lost.
-    async fn forward(
-        &mut self,
-        parts: http::request::Parts,
-        body: Bytes,
-        res: &VerifyResult,
-        rebuilt_headers: Option<Vec<HeaderField>>,
-    ) -> Result<http::Response<Full<Bytes>>, S::Error> {
-        // Typed request extension carrying the verified caller identity
-        // snapshot (spec 02 section 3): the verifier derives it exclusively
-        // from signature verification and the registry, and the extension
-        // type has no public constructor, so the wrapped service cannot read
-        // it from any header/query/body nor fabricate one. It is Some on
-        // every forwarded accept; None here is a verifier bug, answered like
-        // the other unreachable paths with the signed 500.
-        let identity = match res.identity.clone() {
-            Some(identity) => identity,
-            None => return Ok(self.internal(res)),
-        };
-        let mut inner_req = http::Request::from_parts(parts, Full::new(body));
-        if let Some(headers) = rebuilt_headers {
-            let map = inner_req.headers_mut();
-            map.clear();
-            for header in headers {
-                // The engine produced these from an `http::HeaderMap`, so the
-                // names are already lowercase tokens and the values are
-                // visible ASCII or lossy UTF-8; a failure here is unreachable
-                // and answered like the other unreachable paths.
-                let name = match http::HeaderName::from_bytes(header.name.as_bytes()) {
-                    Ok(name) => name,
-                    Err(_) => return Ok(self.internal(res)),
-                };
-                let value = match HeaderValue::from_bytes(header.value.as_bytes()) {
-                    Ok(value) => value,
-                    Err(_) => return Ok(self.internal(res)),
-                };
-                map.append(name, value);
-            }
-        }
-        inner_req.extensions_mut().insert(identity);
-        // Clone-and-swap so the future owns the inner instance and self stays
-        // usable for the next call.
-        let inner = {
-            let inner_clone = self.inner.clone();
-            let mut inner_svc = std::mem::replace(&mut self.inner, inner_clone);
-            match inner_svc.call(inner_req).await {
-                Ok(inner) => inner,
-                // Inner errors propagate unchanged: ServeHTTP has no error path
-                // in Go and propagation is the direct analogue.
-                Err(err) => return Err(err),
-            }
-        };
-
-        let (inner_parts, inner_body) = inner.into_parts();
-        // Go parses the media type and compares the type before ';'; a missing
-        // or non-UTF-8 header means NOT streaming (its error path).
-        let streaming = inner_parts
-            .headers
-            .get(CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.split(';').next())
-            .is_some_and(|media| media.trim().eq_ignore_ascii_case("text/event-stream"));
-        if streaming {
-            // Refuse BEFORE buffering: dropping the body unread is the point —
-            // an endless SSE stream must not be pulled into memory. Fresh
-            // headers, discarding all inner ones (Go builds a new header).
-            let body = error_body(
-                "streaming_unsupported",
-                "streaming responses cannot be signed in v0.1",
-            );
-            return Ok(self.signed(501, res, body.into_bytes().into()));
-        }
-        // Bounded by response_limit (default 1 MiB): the inner body is moved
-        // into buffer_body, which stops polling and drops it on overflow, and
-        // never appends an oversized frame. Overflow is a signed 502 with a
-        // fresh header set, so no upstream header or partial byte survives.
-        // A read error cannot be mapped into S::Error generically, so it is
-        // answered as a signed 500 instead of propagating (request binding
-        // preserved) — Go cannot hit this path at all.
-        let buffered = match Self::buffer_body(inner_body, self.response_limit).await {
-            Ok(bytes) => bytes,
-            Err(BodyReadError::TooLarge) => {
-                let body = error_body(
-                    "response_too_large",
-                    "upstream response exceeds the configured limit",
-                );
-                return Ok(self.signed(502, res, body.into_bytes().into()));
-            }
-            Err(BodyReadError::Read) => return Ok(self.internal(res)),
-        };
-
-        // Content-Length: the buffered length decides (Go: header.Del).
-        // Transfer-Encoding described the inner transport, not this buffered
-        // body. Jack-Auth is REPLACED, not appended (Go: header.Set); the
-        // parser rejects a repeated header. Content-Type keeps append
-        // semantics: Go header.Clone() keeps the inner values, including
-        // multi-value headers.
-        let mut headers = inner_parts.headers;
-        headers.remove(CONTENT_LENGTH);
-        headers.remove(http::header::TRANSFER_ENCODING);
-        headers.remove("Jack-Auth");
-        let status = inner_parts.status;
-        Ok(self.signed_with_headers(status.as_u16(), res, headers, buffered))
-    }
-
     /// Signs a response over a fresh header set holding only its own
     /// `Content-Type`; `Jack-Auth` is then added (Go: writeSigned).
-    fn signed(&self, status: u16, res: &VerifyResult, body: Bytes) -> http::Response<Full<Bytes>> {
+    fn signed(
+        &self,
+        head: bool,
+        status: u16,
+        res: &VerifyResult,
+        body: Bytes,
+    ) -> http::Response<Full<Bytes>> {
         let mut headers = http::HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        self.signed_with_headers(status, res, headers, body)
+        self.signed_with_headers(head, status, res, headers, body)
     }
 
     /// Signs the response over its status, the request signature and the exact
@@ -789,11 +713,17 @@ where
     /// provider-selected authorization (write_authorized).
     fn signed_with_headers(
         &self,
+        head: bool,
         status: u16,
         res: &VerifyResult,
         headers: http::HeaderMap,
         body: Bytes,
     ) -> http::Response<Full<Bytes>> {
+        // RFC 9110: a HEAD answer has no body. This is the one place that
+        // enforces it: the status and headers stay those of the GET twin and
+        // the signature covers the empty body (what every client hashes for a
+        // HEAD). No other response byte changes.
+        let body = if head { Bytes::new() } else { body };
         match &self.signing {
             SigningProfile::Static { key, kid } => {
                 let now = self.verifier.now();
@@ -822,7 +752,7 @@ where
                     .expect("static status and header values cannot fail")
             }
             SigningProfile::Rotating { keys } => {
-                self.write_authorized(keys, status, res, headers, body)
+                self.write_authorized(head, keys, status, res, headers, body)
             }
         }
     }
@@ -833,6 +763,7 @@ where
     /// and answers with the UNSIGNED 503 refusal — no other key is ever used.
     fn write_authorized(
         &self,
+        head: bool,
         keys: &Arc<dyn ResponseKeys>,
         status: u16,
         res: &VerifyResult,
@@ -841,8 +772,10 @@ where
     ) -> http::Response<Full<Bytes>> {
         // Go refuse(): writeError(w, 503, ...) — UNSIGNED, Content-Type only,
         // no WWW-Authenticate, no Jack-Auth; the inner `headers` are discarded.
+        // The shared writer still applies the HEAD rule (no body).
         let refuse = || {
             unsigned_rejection(
+                head,
                 503,
                 "rotation_state_unavailable",
                 "response authorization unavailable",
@@ -948,17 +881,34 @@ fn is_origin_form_target(target: &str) -> bool {
 
 /// Unsigned JSON error for requests that never reached authentication
 /// (Go: writeError): Content-Type only, no WWW-Authenticate, no signature.
-fn plain_error(status: StatusCode, code: &str, message: &str) -> http::Response<Full<Bytes>> {
-    unsigned_rejection(status.as_u16(), code, message)
+fn plain_error(
+    head: bool,
+    status: StatusCode,
+    code: &str,
+    message: &str,
+) -> http::Response<Full<Bytes>> {
+    unsigned_rejection(head, status.as_u16(), code, message)
 }
 
-/// Builds an unsigned JSON rejection body response (Go: writeRaw path).
-fn unsigned_rejection(status: u16, code: &str, message: &str) -> http::Response<Full<Bytes>> {
+/// Builds an unsigned JSON rejection body response (Go: writeRaw path). A
+/// `HEAD` request gets the identical status and `Content-Type` and no body
+/// (RFC 9110), the same rule every signed writer applies.
+fn unsigned_rejection(
+    head: bool,
+    status: u16,
+    code: &str,
+    message: &str,
+) -> http::Response<Full<Bytes>> {
+    let body = if head {
+        Bytes::new()
+    } else {
+        Bytes::from(error_body(code, message))
+    };
     // Statuses here are protocol constants: construction cannot fail.
     http::Response::builder()
         .status(status)
         .header(CONTENT_TYPE, "application/json")
-        .body(Full::new(Bytes::from(error_body(code, message))))
+        .body(Full::new(body))
         .expect("static status and header values cannot fail")
 }
 

@@ -23,7 +23,9 @@ pub use rotation::rotation_auth;
 pub use rotation::rotation_http;
 
 pub use auth::{random_nonce, sign_request, SignedRequest, NONCE_SIZE};
-pub use error::{ClientError, HttpError, RpcError, ToolError, UnauthenticatedResponseError};
+pub use error::{
+    ClientError, HttpError, ReplyEra, ReplyError, RpcError, ToolError, UnauthenticatedResponseError,
+};
 #[cfg(feature = "client-http")]
 pub use http_transport::{HttpTransport, HttpTransportBuilder};
 pub use modern::{

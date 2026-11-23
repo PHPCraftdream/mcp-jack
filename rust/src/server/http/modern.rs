@@ -29,8 +29,10 @@ where
         &self,
         res: &VerifyResult,
         message: &str,
+        head: bool,
     ) -> http::Response<Full<Bytes>> {
         self.signed(
+            head,
             400,
             res,
             error_body("invalid_request", message).into_bytes().into(),
@@ -45,12 +47,13 @@ where
         &self,
         res: &VerifyResult,
         refusal: &crate::server::modern::Refusal,
+        head: bool,
     ) -> http::Response<Full<Bytes>> {
         let id = match refusal.id.as_deref() {
             None => None,
             Some(raw) => match RawValue::from_string(raw.to_owned()) {
                 Ok(id) => Some(id),
-                Err(_) => return self.internal(res),
+                Err(_) => return self.internal(res, head),
             },
         };
         let payload = JsonRpcErrorResponse {
@@ -62,7 +65,12 @@ where
             },
         };
         let body = serde_json::to_string(&payload).expect("static JSON-RPC shape serializes");
-        let response = self.signed(refusal.reason.http_status(), res, body.into_bytes().into());
+        let response = self.signed(
+            head,
+            refusal.reason.http_status(),
+            res,
+            body.into_bytes().into(),
+        );
         if refusal.reason == crate::server::modern::RefusalReason::MethodNotAllowed {
             let mut response = response;
             response

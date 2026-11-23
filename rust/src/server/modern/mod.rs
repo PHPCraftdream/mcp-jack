@@ -263,6 +263,8 @@ pub fn decide_era(profile: Profile, headers: &[HeaderField], meta_version: Optio
 mod rules;
 
 pub use rules::classify_request;
+#[cfg(feature = "http")]
+pub(crate) use rules::request_era;
 
 #[cfg(test)]
 mod tests;

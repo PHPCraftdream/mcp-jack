@@ -2,14 +2,14 @@
 //! signed, response-verified MCP tool calls over JSON-RPC.
 
 use std::fmt;
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::AtomicI64;
+use std::sync::{Arc, Mutex};
 
-use crate::client::error::{parse_error_body, ClientError, HttpError, RpcError, ToolError};
-use crate::client::modern::{add_client_info, build_mirrors, ClientEra};
+use crate::client::error::{ClientError, RpcError, ToolError};
+use crate::client::modern::flow::FlowState;
+use crate::client::modern::ClientEra;
 use crate::client::signer::Signer;
-use crate::client::transport::{Clock, HttpRequest, NonceSource, SigningTransport, Transport};
-use crate::modern::{IMPLEMENTATION_NAME, IMPLEMENTATION_VERSION, MODERN_MIN};
+use crate::client::transport::{Clock, NonceSource, SigningTransport, Transport};
 
 /// Everything NewClient needs to reach and trust one server.
 pub struct Config {
@@ -38,10 +38,10 @@ pub struct Config {
 /// Performs signed, response-verified MCP tool calls over JSON-RPC (Go:
 /// client.Client). Send + Sync; the id counter is atomic.
 pub struct Client {
-    base_url: String,
+    pub(crate) base_url: String,
     pub(crate) aud: String,
     pub(crate) signer: Arc<dyn Signer>,
-    transport: SigningTransport<Arc<dyn Transport>>,
+    pub(crate) transport: SigningTransport<Arc<dyn Transport>>,
     /// Clock for the rotate proof: the proof ts must equal the header ts
     /// (spec 03 section 3.1), so rotate_key pins the transport clock to the
     /// value read here.
@@ -49,10 +49,17 @@ pub struct Client {
     /// Monotonic JSON-RPC id counter starting at 1 (Go: mutex-guarded
     /// nextID). Relaxed is sufficient: the value is returned and used
     /// directly, nothing is published through it.
-    next_id: AtomicI64,
+    pub(crate) next_id: AtomicI64,
     /// The era this client's requests are built in; default
     /// [`ClientEra::Legacy`].
-    era: ClientEra,
+    pub(crate) era: ClientEra,
+    /// The era flow state (spec 04 section 6 `C9`): the resolved era, the
+    /// negotiated legacy version and session, and the one `-32022` retry
+    /// budget. Private.
+    pub(crate) flow: Mutex<FlowState>,
+    /// Single-flight guard around the handshake and the auto probe, so
+    /// concurrent callers never run two of them at once.
+    pub(crate) era_lock: Mutex<()>,
 }
 
 // Manual impl: Debug must never expose signer or key material (spec 01
@@ -126,6 +133,42 @@ fn first_text(contents: &[JsonRpcContent]) -> String {
         .to_string()
 }
 
+/// Decodes a verified 2xx `tools/call` body into its structuredContent (Go:
+/// Client.call's result handling). A JSON-RPC `error` member, an `isError`
+/// result and a missing or null `structuredContent` all fail the call.
+pub(crate) fn decode_tool_result(body: &[u8]) -> Result<serde_json::Value, ClientError> {
+    let wire: JsonRpcResponse = serde_json::from_slice(body).map_err(|e| {
+        ClientError::Client(format!("jack client: decoding json-rpc response: {e}"))
+    })?;
+    if let Some(err) = wire.error {
+        return Err(ClientError::Rpc(RpcError {
+            code: err.code,
+            message: err.message,
+            data: err.data,
+        }));
+    }
+    let Some(result) = wire.result else {
+        return Err(ClientError::Client(
+            "jack client: json-rpc response has neither result nor error".to_string(),
+        ));
+    };
+    if result.is_error {
+        return Err(ClientError::Tool(ToolError {
+            message: first_text(&result.content),
+            structured: result.structured_content.clone(),
+        }));
+    }
+    // Go treats an explicit null as a present-but-empty raw message
+    // (decode no-op); this port treats it as missing — a documented,
+    // harmless divergence for every tool result shape in the spec.
+    match result.structured_content {
+        None | Some(serde_json::Value::Null) => Err(ClientError::Client(
+            "jack client: missing structuredContent".to_string(),
+        )),
+        Some(v) => Ok(v),
+    }
+}
+
 impl Client {
     /// Validates cfg and returns a Client (Go: NewClient; validations in the
     /// same order).
@@ -172,13 +215,18 @@ impl Client {
             now,
             next_id: AtomicI64::new(0),
             era: ClientEra::default(),
+            flow: Mutex::new(FlowState::default()),
+            era_lock: Mutex::new(()),
         })
     }
 
     /// Selects the era this client builds its requests in (spec 04 section 6).
     /// The default [`ClientEra::Legacy`] keeps every 0.1.x byte of the request
-    /// unchanged; [`ClientEra::Modern`] adds `params._meta` and the
-    /// `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name` headers.
+    /// unchanged and issues exactly one request per call; [`ClientEra::Modern`]
+    /// adds `params._meta` and the `MCP-Protocol-Version`, `Mcp-Method` and
+    /// `Mcp-Name` headers, also one request per call; [`ClientEra::Auto`] is the
+    /// only era that resolves anything — it probes once with `server/discover`
+    /// and follows the verified verdict (`C9`).
     pub fn with_era(mut self, era: ClientEra) -> Self {
         self.era = era;
         self
@@ -189,10 +237,17 @@ impl Client {
         self.era
     }
 
-    /// Builds the JSON-RPC request body: fields in wire order and the
-    /// argument bytes embedded exactly as given (matches the fixtures' byte
-    /// order). `args_json` must already be valid JSON.
-    fn build_request_body(id: i64, tool: &str, args_json: Option<&str>) -> String {
+    /// Forgets the resolved era, the negotiated legacy version and the legacy
+    /// session, so the next call of an [`ClientEra::Auto`] client probes again
+    /// (spec 04 `C9`).
+    pub fn reset_era(&self) {
+        crate::client::modern::flow::reset_era(self);
+    }
+
+    /// Builds the legacy JSON-RPC `tools/call` body: fields in wire order and
+    /// the argument bytes embedded exactly as given (matches the fixtures' byte
+    /// order, the 0.1.x shape). `args_json` must already be valid JSON.
+    pub(crate) fn build_request_body(id: i64, tool: &str, args_json: Option<&str>) -> String {
         // serde_json::to_string of a &str cannot fail (it is infallible for
         // strings), so only the format! allocation remains.
         let name = serde_json::to_string(tool).expect("string serialization is infallible");
@@ -202,54 +257,15 @@ impl Client {
         )
     }
 
-    /// One `tools/call` exchange: the JSON-RPC body and the request headers.
-    /// The legacy era is the 0.1.x body and `Content-Type` only; the modern era
-    /// adds `params._meta` (version, capabilities, client info) and the mirror
-    /// headers in `C2` order after `Content-Type`.
-    fn build_call(
-        &self,
-        id: i64,
-        tool: &str,
-        args_json: Option<&str>,
-    ) -> Result<(String, Vec<(String, String)>), ClientError> {
-        if self.era == ClientEra::Legacy {
-            return Ok((
-                Self::build_request_body(id, tool, args_json),
-                vec![("Content-Type".to_string(), "application/json".to_string())],
-            ));
-        }
-        // call_raw already validated the argument JSON: no second validation
-        // path, an unparsable value is treated as the empty arguments object.
-        let args: serde_json::Value = serde_json::from_str(args_json.unwrap_or("{}"))
-            .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
-        let mut params = serde_json::Map::new();
-        params.insert(
-            "name".to_owned(),
-            serde_json::Value::String(tool.to_owned()),
-        );
-        params.insert("arguments".to_owned(), args);
-
-        let mirrors = build_mirrors(
-            MODERN_MIN,
-            "tools/call",
-            &serde_json::Value::Object(params.clone()),
-        )
-        .map_err(|e| ClientError::Client(format!("jack client: {e}")))?;
-        let mut meta = mirrors.meta;
-        add_client_info(&mut meta, IMPLEMENTATION_NAME, IMPLEMENTATION_VERSION);
-        params.insert("_meta".to_owned(), meta);
-
-        let body = format!(
-            "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"tools/call\",\"params\":{}}}",
-            serde_json::Value::Object(params)
-        );
-        let mut headers = vec![("Content-Type".to_string(), "application/json".to_string())];
-        headers.extend(mirrors.headers);
-        Ok((body, headers))
-    }
-
     /// One signed, verified tool call returning the raw structuredContent
-    /// (Go: Client.call).
+    /// (Go: Client.call). The configured era decides the request: the default
+    /// legacy era is the 0.1.x one-shot request, the modern era mirrors `_meta`,
+    /// and only `Auto` resolves the era first (spec 04 section 6, `C9`) by
+    /// probing once with `server/discover`; a legacy verdict then runs the
+    /// `initialize` handshake once and carries the session and the negotiated
+    /// version. Neither fixed era adds a request. A per-request signer override
+    /// is a self-authenticating one-off and skips the flow (`enroll` signs with
+    /// the new key, which may not be registered yet).
     pub(crate) fn call_raw(
         &self,
         signer: Option<&dyn Signer>,
@@ -268,61 +284,7 @@ impl Client {
                 Some(s)
             }
         };
-
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
-        let (req_json, headers) = self.build_call(id, tool, args_json)?;
-
-        let req = HttpRequest {
-            method: "POST".to_string(),
-            url: self.base_url.clone(),
-            headers,
-            body: req_json.into_bytes(),
-        };
-        // From<TransportError> for ClientError does the mapping: transport
-        // errors pass through unchanged (Go client.call).
-        let resp =
-            self.transport
-                .round_trip_as(signer.unwrap_or(self.signer.as_ref()), pinned_ts, req)?;
-
-        if !(200..=299).contains(&resp.status) {
-            let (code, message) = parse_error_body(&resp.body);
-            return Err(ClientError::Http(HttpError {
-                status: resp.status,
-                code,
-                message,
-            }));
-        }
-
-        let wire: JsonRpcResponse = serde_json::from_slice(&resp.body).map_err(|e| {
-            ClientError::Client(format!("jack client: decoding json-rpc response: {e}"))
-        })?;
-        if let Some(err) = wire.error {
-            return Err(ClientError::Rpc(RpcError {
-                code: err.code,
-                message: err.message,
-                data: err.data,
-            }));
-        }
-        let Some(result) = wire.result else {
-            return Err(ClientError::Client(
-                "jack client: json-rpc response has neither result nor error".to_string(),
-            ));
-        };
-        if result.is_error {
-            return Err(ClientError::Tool(ToolError {
-                message: first_text(&result.content),
-                structured: result.structured_content.clone(),
-            }));
-        }
-        // Go treats an explicit null as a present-but-empty raw message
-        // (decode no-op); this port treats it as missing — a documented,
-        // harmless divergence for every tool result shape in the spec.
-        match result.structured_content {
-            None | Some(serde_json::Value::Null) => Err(ClientError::Client(
-                "jack client: missing structuredContent".to_string(),
-            )),
-            Some(v) => Ok(v),
-        }
+        crate::client::modern::flow::tool_call(self, signer, pinned_ts, tool, args_json)
     }
 
     /// Calls a tool and returns the raw structuredContent. A
@@ -374,7 +336,7 @@ mod tests {
     use super::*;
     use crate::auth_header::{format_response_auth, parse_request_auth, ResponseAuth};
     use crate::client::signer::InMemorySigner;
-    use crate::client::transport::{HttpResponse, TransportError};
+    use crate::client::transport::{HttpRequest, HttpResponse, TransportError};
     use crate::encoding::{decode_b64url_fixed, encode_b64url, key_id};
     use crate::signing::{request_signing_string, response_signing_string};
     use ed25519_dalek::{Signer as DalekSigner, SigningKey};
@@ -465,7 +427,8 @@ mod tests {
 
     #[test]
     fn build_call_legacy_and_modern_shapes() {
-        let mk = || Config {
+        // The default era is the 0.1.x shape: unchanged body, one header.
+        let legacy = Client::new(Config {
             base_url: BASE_URL.to_string(),
             aud: AUD.to_string(),
             signer: alice(),
@@ -474,27 +437,24 @@ mod tests {
             now: None,
             nonce: None,
             window_seconds: 30,
-        };
-
-        // The default era is the 0.1.x shape: unchanged body, one header.
-        let legacy = Client::new(mk()).expect("valid config");
+        })
+        .expect("valid config");
         assert_eq!(legacy.era(), ClientEra::Legacy);
-        let (body, headers) = legacy
-            .build_call(1, "jack.whoami", None)
-            .expect("legacy build");
         assert_eq!(
-            body,
+            Client::build_request_body(1, "jack.whoami", None),
             r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.whoami","arguments":{}}}"#
         );
-        assert_eq!(pairs(&headers), [("Content-Type", "application/json")]);
 
-        let modern = Client::new(mk())
-            .expect("valid config")
-            .with_era(ClientEra::Modern);
-        assert_eq!(modern.era(), ClientEra::Modern);
-        let (body, headers) = modern
-            .build_call(1, "get_weather", Some(r#"{"region":"eu"}"#))
-            .expect("modern build");
+        // The modern era: `params._meta` plus the `C2` mirror headers.
+        let (params_text, headers) = crate::client::modern::flow::build_modern_parts(
+            "tools/call",
+            &serde_json::json!({"name": "get_weather", "arguments": {"region": "eu"}}),
+            crate::modern::MODERN_MIN,
+        )
+        .expect("modern build");
+        let body = format!(
+            "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{params_text}}}"
+        );
         let wire: serde_json::Value = serde_json::from_str(&body).expect("body is JSON");
         assert_eq!(wire["jsonrpc"], "2.0");
         assert_eq!(wire["id"], 1);
@@ -516,7 +476,6 @@ mod tests {
         assert_eq!(
             pairs(&headers),
             [
-                ("Content-Type", "application/json"),
                 ("MCP-Protocol-Version", crate::modern::MODERN_MIN),
                 ("Mcp-Method", "tools/call"),
                 ("Mcp-Name", "get_weather"),
