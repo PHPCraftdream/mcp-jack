@@ -6,7 +6,9 @@
     "rotation_server": ["interop/bin/go-rotation-server"],
     "rotation_client": ["interop/bin/go-rotation-client"],
     "modern_server": ["interop/bin/go-modern-server"],
-    "modern_client": ["interop/bin/go-modern-client"]
+    "modern_client": ["interop/bin/go-modern-client"],
+    "webhook_sender": ["interop/bin/go-webhook-sender"],
+    "webhook_receiver": ["interop/bin/go-webhook-receiver"]
   },
   "rust": {
     "server": ["interop/rust/target/release/interop-server"],
@@ -15,7 +17,9 @@
     "rotation_server": ["interop/rust/target/release/interop-server", "--mode", "rotation-server"],
     "rotation_client": ["interop/rust/target/release/interop-client", "--mode", "rotation-client"],
     "modern_server": ["interop/rust/target/release/interop-server", "--mode", "modern-server"],
-    "modern_client": ["interop/rust/target/release/interop-client", "--mode", "modern-client"]
+    "modern_client": ["interop/rust/target/release/interop-client", "--mode", "modern-client"],
+    "webhook_sender": ["interop/rust/target/release/interop-client", "--mode", "webhook-sender"],
+    "webhook_receiver": ["interop/rust/target/release/interop-server", "--mode", "webhook-receiver"]
   },
   "typescript": {
     "server": ["node", "ts/dist/interop/server.js"],
@@ -24,6 +28,8 @@
     "rotation_server": ["node", "ts/dist/interop/rotation-server.js"],
     "rotation_client": ["node", "ts/dist/interop/rotation-client.js"],
     "modern_server": ["node", "ts/dist/interop/modern-server.js"],
-    "modern_client": ["node", "ts/dist/interop/modern-client.js"]
+    "modern_client": ["node", "ts/dist/interop/modern-client.js"],
+    "webhook_sender": ["node", "ts/dist/interop/webhook-sender.js"],
+    "webhook_receiver": ["node", "ts/dist/interop/webhook-receiver.js"]
   }
 }

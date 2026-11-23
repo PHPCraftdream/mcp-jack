@@ -548,3 +548,117 @@ because interop/targets.json maps every language to its modern_server and modern
 job exits 1 on any scenario failure and 2 on a usage or contract error; both are CI failures without
 further configuration. No new workflow file, permission or secret is required.
 -->
+
+## 15. Webhook matrix
+
+The webhook matrix runs the delivery profile of [`spec/06-webhooks.md`](../spec/06-webhooks.md) across every sender language against every receiver language: the Standard Webhooks `v1` signature, the Jack `w1` signature bound to the audience, the subscription and the callback URL, the `v1a`/`v2a` asymmetric signatures with the keys taken from the Server Card, the endpoint-verification handshake, the receiver's refusals, deduplication, the `gap` and `terminated` control envelopes, the retry schedule, and the SSRF decisions of the sender. It adds no SDK API and no protocol change. The normative executable contract is [`webhook/contract.md`](webhook/contract.md); the expected outcomes are [`webhook-scenarios.json`](webhook-scenarios.json).
+
+Entry point (Node >= 20, no external runtime dependencies; the driver needs the `openssl` CLI to mint its throw-away TLS files):
+
+```sh
+node interop/webhook.mjs [--targets <file>] [--senders <l,l,...>] [--receivers <l,l,...>]
+                         [--scenario <id>[,<id>...]] [--list] [--self-test]
+```
+
+Exit codes match section 3: `0` every selected scenario passes in every selected cell; `1` a scenario failure; `2` a usage or contract error (unknown language or scenario id, a targets entry without `webhook_sender`/`webhook_receiver`, a missing target, missing TLS tooling). `--list` prints the scenario ids in order; `--scenario` is repeatable and comma-separated; `--self-test` exercises the harness against the bundled fakes only and is not SDK evidence.
+
+Output conventions match the other matrices: `== pair sender=<s> receiver=<r> ==`, one `PASS <id>` or `FAIL <id> (<reason>)` per scenario (a failure adds a block with `scenario`, `pair`, `expected`, `actual`, one `reason` line per mismatch, and the sender and receiver stderr tails), `pair sender=<s> receiver=<r>: <passed>/<total>`, a `SKIP <id> (sender=<lang>: <reason>)` line for a cell that a declared SDK gap excludes, the matrix table, then both summary lines:
+
+```text
+webhook matrix: all pairs pass
+INTEROP-SUMMARY matrix=webhook pairs=<cells> checks=<scenarios per cell> passed=<passes> failed=<failures> result=pass|fail
+```
+
+```text
+interop/webhook.mjs                    entry point: CLI, matrix table, summary lines
+interop/webhook-scenarios.json         the scenarios, their sender and receiver configuration and exact outcomes
+interop/webhook/contract.md            normative contract for the executables and the fakes
+interop/webhook/derive.mjs             pinned constants, subscription id and webhook id derivation, body builders, signature verification
+interop/webhook/support.mjs            fixtures, placeholders, throw-away TLS generation, clock files, child and target helpers
+interop/webhook/relay.mjs              tamper relay: TLS loopback relay that rewrites after signing
+interop/webhook/matrix.mjs             the per-cell driver and its independent verification
+interop/webhook/evaluate.mjs           the driver's per-delivery views, its own signature checks and the expectation matching
+interop/webhook/selftest.mjs           relay units, fakes, negative controls
+interop/tools/fakes/webhook/webhook-sign.mjs      self-test signing and derivation helpers
+interop/tools/fakes/webhook/fake-webhook-sender.mjs    self-test sender fake (not an SDK)
+interop/tools/fakes/webhook/fake-webhook-receiver.mjs  self-test receiver fake (not an SDK)
+```
+
+Every scenario runs against a dedicated `webhook_receiver` process on a driver-chosen loopback TLS port, and through the tamper relay where the scenario asks for one. The relay terminates TLS, reads one complete request and rewrites it after the sender signed it: the body, a header value, the declared `Content-Length`, or nothing at all, plus a replay of the exact bytes and a pure `503` answer for the retry scenario. Three scenarios need no receiver (`retry-http-503`) or assert that nothing arrived at it (`ssrf-private-address`, `ssrf-dns-rebinding`).
+
+Determinism: every role reads `--clock-file` for "now" and never the wall clock. The driver writes `1800000000`; the sender's retry waits are virtual, so its clock walks `t0`, `t0 + 30`, `t0 + 270`, `t0 + 870` and every attempt carries the matching `webhook-timestamp`. The delivery secret is the 32 bytes of `SHA-256("mcp-jack-interop-webhook/secret/1")`, the subscription id is the spec 06 R8.4 derivation of the fixed `(alice, callback url, incident.created, {"severity":"P1"})` key (so it changes with the driver-chosen port), the message bodies are fixed byte strings, and the sender derives the `webhook-id` of message `i` from `SHA-256("mcp-jack-interop-webhook/id/<scenario>/<i>")`. The driver does not trust either executable's verdict: it re-verifies every received delivery itself with the independently pinned fixtures (`v1` HMAC over the raw bytes with the derived secret, `v1a`/`v2a`/`w1` over the same bytes with the fixture `newbie` public key), checks the id and timestamp grammars, and takes the attempt evidence from the receiving side (the relay's recorded requests or the receiver's delivery lines).
+
+TLS: the driver mints a throw-away CA and a `DNS:hooks.example.test` leaf with `openssl` in its temporary directory, so no private key is committed. The receiver serves them, the relay terminates them, and each sender trusts the CA through its SDK: `--tls-ca` for TypeScript, `--tls-ca-der` for Rust, and the `SSL_CERT_FILE` environment variable for Go, whose public delivery client exposes no root pool (gap 1 of the contract). Every callback URL uses the name `hooks.example.test`; the driver's injected resolver answers it, so no DNS is consulted and the operator override `--allowed-range 127.0.0.0/8` is the only SSRF relaxation.
+
+Scenario summary (per cell, in order; the exact expectations are in the scenario file):
+
+| Scenario | Expected |
+|---|---|
+| `deliver-v1` | `v1` over the raw body, 200 `accepted`, one attempt at `t0` |
+| `deliver-w1` | `v1` and a `w1` bound to the audience, the subscription and the callback URL, verified against the card key |
+| `deliver-asymmetric` | `v1 v1a v2a` in that order, all verified with enforced server identity |
+| `refuse-unpublished-signing-key` | 401 `bad_server_signature`: a key the card does not publish never verifies |
+| `refuse-jack-server-key` | 401 `webhook_key_is_server_key`: the MCP server key is never a webhook key |
+| `verify-challenge` | the receiver holds only a pending secret, so the echoed 22-character nonce is what routes the id before the event is forwarded |
+| `verify-challenge-w1` | the same handshake with the challenge itself `w1`-signed |
+| `refuse-tampered-body`, `refuse-tampered-header` | 401 `bad_signature` after the relay changed one byte after signing |
+| `refuse-stale-timestamp`, `refuse-future-timestamp` | 401 `stale_timestamp` / `future_timestamp`, only after the HMAC verified |
+| `refuse-unknown-subscription` | 401 `unknown_subscription` although the HMAC would verify |
+| `refuse-unknown-envelope-type`, `refuse-malformed-body` | 400 `unknown_envelope_type` / `malformed_body` |
+| `refuse-body-too-large` | 413 `body_too_large` from the declared length alone: the logged body is empty |
+| `dedup-repeated-delivery` | 200 `accepted` then 200 `duplicate` for the identical replayed bytes |
+| `control-gap`, `control-terminated` | `gap` accepted; `terminated` accepted and every later delivery for that id 410 `subscription_terminated` |
+| `retry-http-503` | four signed POSTs recorded by the relay at `t0`, `t0+30`, `t0+270`, `t0+870`, one unchanged `webhook-id`, `http_5xx`, abandoned |
+| `retry-enqueue-failed` | 503 `enqueue_failed` then 200 `accepted` for the same id 30 s later |
+| `ssrf-private-address` | refused before any request: `ssrf_blocked_address`, zero POSTs, nothing received |
+| `ssrf-dns-rebinding` | `ssrf_rebinding_blocked`, final, zero POSTs, nothing received (skipped for the TypeScript sender) |
+
+Targets and build commands. `targets.json` gains `webhook_sender` and `webhook_receiver` next to the other roles: Go `interop/bin/go-webhook-{sender,receiver}`, Rust `interop-client --mode webhook-sender` and `interop-server --mode webhook-receiver`, TypeScript `node ts/dist/interop/webhook-{sender,receiver}.js`. These are build/output paths, not claims that binaries currently exist.
+
+```sh
+go build -o interop/bin/go-webhook-sender ./interop/go/webhooksender
+go build -o interop/bin/go-webhook-receiver ./interop/go/webhookreceiver
+cargo build --manifest-path interop/rust/Cargo.toml --locked --release
+npm --prefix ts run build
+```
+
+Limits: the matrix runs on Linux only (it needs `openssl` and the loopback alias `127.0.0.2` for the rebinding scenario, and the durable/rotation matrices are Linux-only for the same reason); the Server Card is handed to the receiver as a document, so its HTTP fetch rules are not exercised; secret rotation, `Retry-After`, the well-known verification document, `no_server_keys`, `webhook_key_mismatch`/`webhook_key_missing`, the terminating `410`/`413` sender finality cases other than the ones listed above, and every `malformed_*` header-grammar refusal stay with the SDK suites and the webhook vectors. The sender's `last_error` separates the two SSRF policy refusals (`ssrf_blocked_address`, `ssrf_rebinding_blocked`) from a plain `connection_refused`; the retry schedule and the id stability are read from the receiving side (the relay's recorded requests), never from a sender log; the challenge scenarios use the pending-secret path of R5.6, so the receiver starts with no routed subscription and the handshake routes it: the receiver proves its initial state itself, its ready line reporting whether the subscription was already routed, and in the challenge scenarios it reports that it was not, so the handshake is what routes it; a plain transport failure (`connection_refused`) is not a scenario of this matrix. `ssrf-dns-rebinding` is skipped for the TypeScript sender because the hardened transport has no rebinding seam (contract section 10, gap 2); the fakes are harness tooling, never SDK evidence. The scenarios of sections 1 to 14 are unchanged and share no state with this one.
+
+<!--
+CI NOTE for the parent PR (this file's scope stops at documentation; .github/ is not edited here).
+Add one job to .github/workflows/ci.yml, modelled on `modern-interop`:
+
+  webhook-interop:
+    name: webhook delivery interop matrix (3x3)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [go, rust, ts, fixtures]
+
+It needs the same setup steps as `modern-interop` (checkout; actions/setup-go with
+go-version-file: go.mod; dtolnay/rust-toolchain stable; Swatinem/rust-cache with workspaces `rust`
+and `interop/rust`; actions/setup-node node-version 22) and these build and run steps:
+
+  - run: node interop/webhook.mjs --self-test
+  - name: Build Go webhook executables
+    run: |
+      go build -o interop/bin/go-webhook-sender ./interop/go/webhooksender
+      go build -o interop/bin/go-webhook-receiver ./interop/go/webhookreceiver
+  - name: Build Rust executables
+    working-directory: interop/rust
+    run: cargo build --locked --release
+  - name: Build TypeScript executables
+    working-directory: ts
+    run: |
+      npm ci --no-audit --no-fund
+      npm run build
+  - name: Run the webhook matrix
+    run: node interop/webhook.mjs
+
+The self-test needs no SDK target and no network beyond loopback and `openssl`, and is the first gate:
+it would fail on a harness or contract defect before any language build is exercised. The matrix itself
+needs all three languages built, because interop/targets.json maps every language to its webhook_sender
+and webhook_receiver argv. The job exits 1 on any scenario failure and 2 on a usage or contract error;
+both are CI failures without further configuration. No new workflow file, permission or secret is
+required. The matrix is Linux-only: it needs the `openssl` CLI, the loopback alias `127.0.0.2`, and
+`SSL_CERT_FILE` for the Go sender.
+-->
