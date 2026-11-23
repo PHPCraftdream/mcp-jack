@@ -317,16 +317,14 @@ async fn replay_is_refused_after_stream_open_without_reading_first_body() {
         .await
         .expect("replay refusal is an HTTP response");
     assert_eq!(replay.status().as_u16(), 401);
-    let auth = replay
-        .headers()
-        .get("Jack-Auth")
-        .and_then(|value| value.to_str().ok())
-        .expect("replay refusal is signed");
-    assert!(auth.starts_with("v1 "), "refusal uses v1");
+    // A replayed_nonce refusal is in the unsigned 401 family of spec 01 section 5.
+    assert!(
+        replay.headers().get("Jack-Auth").is_none(),
+        "replay refusal is unsigned"
+    );
     let body = body_bytes(replay.into_body()).await;
     let value: serde_json::Value = serde_json::from_slice(&body).expect("JSON refusal body");
-    assert_eq!(value["error"]["code"], -32020);
-    assert_eq!(value["error"]["message"], "nonce was already used");
+    assert_eq!(value["error"]["code"], "replayed_nonce");
     assert_eq!(seen.calls.load(Ordering::SeqCst), 1, "handler invoked once");
 }
 
