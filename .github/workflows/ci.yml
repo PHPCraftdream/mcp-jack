@@ -38,6 +38,14 @@ jobs:
           set -o pipefail
           go test -count=1 -v -run '^Test(CandidateRotationStateVectors|CandidateNonceVectors|RotationStateClockVectors|RotationStateSelectionVectors|RotationStateEmissionVectors)$' ./client/rotation ./durable ./durable/internal/rotationstore ./rotation ./server/rotation | tee vector-summary.log
           test "$(grep -c VECTOR-SUMMARY vector-summary.log)" -ge 5
+      - name: Modern-profile and webhook vector summaries (Go)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -count=1 -v -run '^Test(ModernRequestVectors|ModernHeaderEncodingVectors|ModernXMcpHeaderVectors|ModernEraDetectionVectors|WebhookSignatureVectors|WebhookW1Vectors|WebhookReceiverVectors|WebhookEndpointVerificationVectors|WebhookSubscriptionVectors|WebhookSSRFVectors|WebhookServerCardKeysVectors)$' ./server/internal/modern/vectors ./webhook/vectors/... | tee modern-vector-summary.log
+          test "$(grep -c VECTOR-SUMMARY modern-vector-summary.log)" -ge 11
+          ! grep -E 'VECTOR-SUMMARY .*(excluded=[1-9]|deviation=[1-9])' modern-vector-summary.log
 
   go-race:
     name: go race
@@ -180,6 +188,14 @@ jobs:
           set -o pipefail
           cargo test --locked --all-features --test durable_nonce_vectors --test rotation_state_vectors -- --nocapture --test-threads=1 2>&1 | tee vector-summary.log
           test "$(grep -c VECTOR-SUMMARY vector-summary.log)" -ge 2
+      - name: Modern-profile and webhook vector summaries (Rust)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked --all-features --test modern --test webhook_vectors -- --nocapture --test-threads=1 2>&1 | tee modern-vector-summary.log
+          test "$(grep -c VECTOR-SUMMARY modern-vector-summary.log)" -ge 11
+          ! grep -E 'VECTOR-SUMMARY .*(excluded=[1-9]|deviation=[1-9])' modern-vector-summary.log
       - name: Core without the http feature
         if: runner.os == 'Linux'
         run: cargo test --locked --no-default-features
@@ -216,7 +232,17 @@ jobs:
           node-version: ${{ matrix.node }}
       - run: npm ci --no-audit --no-fund
       - run: npm run typecheck
-      - run: npm test
+      - name: Test
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee test-output.log
+      - name: Modern-profile and webhook vector summaries (TypeScript)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          test "$(grep -cE 'VECTOR-SUMMARY corpus=(modern-request|header-encoding|x-mcp-header|era-detection|webhook-|ssrf|server-card-keys)' test-output.log)" -ge 11
+          ! grep -E 'VECTOR-SUMMARY .*(excluded=[1-9]|deviation=[1-9])' test-output.log
 
   interop:
     name: interop matrix (3x3)
