@@ -14,6 +14,7 @@ pub mod modern;
 pub mod rotation;
 pub mod server;
 pub mod signing;
+pub mod stream;
 pub mod syntax;
 pub mod user_key;
 pub mod webhook;

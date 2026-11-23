@@ -625,5 +625,8 @@ async fn perform(
     })
 }
 
+#[cfg(feature = "client-http")]
+mod stream;
+
 #[cfg(test)]
 mod tests;

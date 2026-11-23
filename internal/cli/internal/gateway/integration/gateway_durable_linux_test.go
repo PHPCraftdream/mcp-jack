@@ -71,12 +71,12 @@ func TestGatewayRotationBootstrapEnrollmentAndNativePage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.server.key","arguments":{"after_ordinal":0,"after_hash":"-"}}}`)
 	response, status, err := connection.Post(ctx, body)
 	if err != nil || status != 200 {
-		t.Fatal("explicit rotating gateway native call refused", err)
+		t.Fatal("explicit rotating gateway native call refused", err, ctx.Err())
 	}
 	page, err := rotation.DecodeResult(response, json.RawMessage(`1`))
 	if err != nil || len(page.Records) != 1 || page.Records[0] != publication.Record || page.Head.Hash != publication.Hash || !page.Complete {

@@ -27,6 +27,36 @@ struct ErrorEnvelope<'a> {
     error: ErrorDetail<'a>,
 }
 
+/// Renders the 3.3 concurrency refusal: the request's JSON-RPC id keeps its
+/// exact lexeme, and a missing id is `null`.
+pub(super) fn stream_limit_body(rpc_id: Option<&str>) -> String {
+    let id = rpc_id.and_then(|raw| RawValue::from_string(raw.to_owned()).ok());
+    // Unreachable failure: serde cannot fail on String fields.
+    serde_json::to_string(&StreamLimitEnvelope {
+        jsonrpc: "2.0",
+        id,
+        error: StreamLimitDetail {
+            code: -32603,
+            message: "stream_limit_exceeded",
+        },
+    })
+    .expect("stream limit envelope always serializes")
+}
+
+#[derive(serde::Serialize)]
+struct StreamLimitDetail<'a> {
+    code: i64,
+    message: &'a str,
+}
+
+/// Field declaration order is load-bearing: it fixes the JSON key order.
+#[derive(serde::Serialize)]
+struct StreamLimitEnvelope<'a> {
+    jsonrpc: &'a str,
+    id: Option<Box<RawValue>>,
+    error: StreamLimitDetail<'a>,
+}
+
 /// Field declaration order is load-bearing: it fixes the JSON key order to
 /// match Go's struct marshaling byte for byte.
 #[derive(serde::Serialize)]

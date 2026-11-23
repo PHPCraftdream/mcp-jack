@@ -16,12 +16,15 @@
 //! forward and the [`crate::server::modern::Profile::Legacy`] profile pass the
 //! received map through unchanged, keeping 0.1.x byte identity.
 
+use std::sync::Arc;
+
 use bytes::Bytes;
 use http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use http::HeaderValue;
 use http_body_util::{BodyExt, Full};
 use tower_service::Service;
 
+use super::stream::{rpc_method, StreamSeam};
 use super::wire::error_body;
 use super::{BodyReadError, BoxError, JackService};
 use crate::server::verify::VerifyResult;
@@ -73,6 +76,15 @@ where
             Some(identity) => identity,
             None => return Ok(self.internal(res, head)),
         };
+        // Captured before `parts` is moved into the inner request: the seam is the only handle
+        // through which this request may open a signed stream.
+        let seam = parts.extensions.get::<Arc<StreamSeam>>().cloned();
+        // 6.3: the opening method goes with the work; it is only needed on the stream path.
+        let method = if seam.is_some() && modern && !head {
+            rpc_method(&body)
+        } else {
+            String::new()
+        };
         if modern {
             // `S8` removes exactly the session headers and nothing else: `S7`
             // and `S9` add, rewrite and reorder nothing. The surviving pairs
@@ -88,6 +100,14 @@ where
             parts.headers.clear();
             for (name, value) in headers {
                 parts.headers.append(name, value);
+            }
+        }
+        // 3.3: the per-identity ceiling is checked BEFORE the inner service runs, so an already
+        // consumed nonce is not spent on a stream that can never start. The slot stays in the
+        // seam; `StreamService` releases it whenever no stream is produced.
+        if let Some(seam) = &seam {
+            if modern && !head && !seam.admit(identity.name()) {
+                return Ok(self.stream_limit(res, head));
             }
         }
         let mut inner_req = http::Request::from_parts(parts, Full::new(body));
@@ -115,6 +135,17 @@ where
             .and_then(|v| v.split(';').next())
             .is_some_and(|media| media.trim().eq_ignore_ascii_case("text/event-stream"));
         if streaming {
+            // 1.1/1.2/3.8: only an opted-in, modern, non-HEAD request that carries a JSON-RPC
+            // id may open a signed stream; every other shape keeps the v1 501 below.
+            // 1.4: a stream exists only when the response status is 200, so any other status
+            // keeps that signed 501 path and drops the seam's 3.3 slot as today.
+            if let Some(seam) = seam {
+                if let (true, false, Some(_)) = (modern, head, res.rpc_id.as_ref()) {
+                    if inner_parts.status == http::StatusCode::OK {
+                        return Ok(self.open_stream(res, inner_parts, inner_body, method, &seam));
+                    }
+                }
+            }
             // Refuse BEFORE buffering: dropping the body unread is the point —
             // an endless SSE stream must not be pulled into memory. Fresh
             // headers, discarding all inner ones (Go builds a new header).

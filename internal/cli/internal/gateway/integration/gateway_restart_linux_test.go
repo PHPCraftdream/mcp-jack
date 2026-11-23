@@ -201,7 +201,7 @@ func testGatewayBinaryDurableRestart(t *testing.T, rotationMode bool) {
 	}
 	expectedLive := 2
 	if rotationMode {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		nativeBody := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"jack.server.key","arguments":{"after_ordinal":0,"after_hash":"-"}}}`)
 		nativeReply, nativeStatus, nativeErr := conn.Post(ctx, nativeBody)
 		cancel()

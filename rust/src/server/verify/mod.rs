@@ -272,6 +272,12 @@ impl Verifier {
         (self.cfg.now)()
     }
 
+    /// Effective response window in seconds (spec 01 section 4); the stream heartbeat grant of
+    /// spec 05 3.5 uses the server's own window.
+    pub fn window_seconds(&self) -> i64 {
+        self.window()
+    }
+
     /// Request time that never goes backwards: max(sample, highest seen).
     fn effective_now(&self, sample: i64) -> i64 {
         self.high_water

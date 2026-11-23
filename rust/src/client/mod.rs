@@ -11,6 +11,7 @@ pub mod profile;
 mod request_signing;
 mod rotation;
 pub mod rpc;
+pub mod stream;
 pub mod tools;
 pub mod transport;
 
@@ -39,6 +40,7 @@ pub use rotation_auth::{verify_rotation_carrier, RotationCarrier, RotationRespon
 pub use rotation_http::RotationHttpClient;
 pub use rpc::{Client, Config};
 pub use signer::{InMemorySigner, Signer};
+pub use stream::{ChunkRead, StreamBody, StreamResponse, StreamSource, VerifiedStream};
 pub use tools::{
     EnrollResult, Entry, InviteCreateParams, InviteCreateResult, InviteListEntry,
     InviteRevokeResult, KidResult, UserCreateParams, WhoAmIResult, TOOL_ADMIN_INVITE_CREATE,

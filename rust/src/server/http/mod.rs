@@ -34,6 +34,10 @@
 //! are validated, session headers are stripped, and a violation is refused with
 //! the signed JSON-RPC shape of `S10`. The default [`Profile::Legacy`] runs no
 //! rule of section 5 and stays byte-identical to 0.1.x.
+//!
+//! A [`StreamLayer`] replaces the v1 `501 streaming_unsupported` with a signed
+//! `s1` stream (spec 05) when the modern client sent `Jack-Accept: s1`; the
+//! default [`JackLayer`] is unchanged and keeps answering the 501.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -60,7 +64,14 @@ use crate::server::verify::{Authentication, Verifier, VerifyResult};
 
 mod forward;
 mod modern;
+mod stream;
+mod stream_layer;
 mod wire;
+
+pub use stream::{StreamCancellation, StreamHeartbeat};
+pub use stream_layer::{
+    RotatingStreamConfig, StreamBody, StreamConfig, StreamLayer, StreamService,
+};
 
 use modern::header_fields;
 use wire::{error_body, CallToolResult, RpcResponse, ServerInfo, ServerInfoMeta, TextContent};
