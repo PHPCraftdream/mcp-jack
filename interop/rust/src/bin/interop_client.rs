@@ -130,7 +130,10 @@ fn parse_flags() -> Flags {
                 // Rotation-mode-only flags are consumed here so the rotation
                 // parser can see them; without --mode they remain unknown.
                 if !ROTATION_MODE_FLAGS.contains(&name.as_str()) {
-                    fatal(format!("unknown flag --{name}"));
+                    fatal(format!(
+                        "unknown flag --{name} (argv {:?})",
+                        std::env::args().collect::<Vec<_>>()
+                    ));
                 }
                 let _ = value(&name);
                 flags.rotation_flag = true;
