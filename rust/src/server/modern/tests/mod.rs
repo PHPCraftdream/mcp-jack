@@ -181,7 +181,9 @@ fn era_decision_repeated_header_any_modern_value() {
 
     let request = TestRequest::new("POST", &pairs, MODERN_TOOLS_LIST);
     let outcome = request.classify(Profile::Both);
-    assert_eq!(forwarded_era(&outcome), Era::Modern);
+    // A repeated header is `header_repeated` whatever its value: the outcome is
+    // a refusal, so only the refusal shape is asserted here (the era helpers
+    // panic on a refusal and would contradict this expectation).
     assert_eq!(refused(&outcome).reason, RefusalReason::HeaderRepeated);
 }
 

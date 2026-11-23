@@ -52,13 +52,17 @@ use tower_service::Service;
 use crate::auth_header::{format_response_auth, ResponseAuth};
 use crate::encoding::{encode_b64url, key_id};
 use crate::modern::{IMPLEMENTATION_NAME, IMPLEMENTATION_VERSION};
-use crate::server::modern::{classify_request, Era, ModernOutcome, ModernRequest, Profile};
+use crate::server::modern::{
+    classify_request, Era, HeaderField, ModernOutcome, ModernRequest, Profile,
+};
 use crate::server::response_keys::{ReleaseGuard, ResponseKeyRequest, ResponseKeys};
-use crate::server::verify::{Verifier, VerifyResult};
+use crate::server::verify::{Authentication, Verifier, VerifyResult};
 
 mod modern;
+mod wire;
 
-use modern::{header_fields, strip_session_headers};
+use modern::header_fields;
+use wire::{error_body, CallToolResult, RpcResponse, ServerInfo, ServerInfoMeta, TextContent};
 
 /// Alias for boxed errors flowing through body polling; http-body's own alias
 /// is not nameable because the `http-body` crate is not a direct dependency.
@@ -427,52 +431,113 @@ where
             auth_values,
             body: buffered.to_vec(),
         };
-        let res = self.verifier.verify(&vreq);
-        let response = if !res.accepted {
-            self.reject(&res)
-        } else if self.profile == Profile::Legacy {
-            // Legacy profile: no rule of spec 04 section 5 runs, so the bytes
-            // are exactly those of 0.1.x.
-            if res.native {
+        // The legacy profile keeps the one-shot path, byte-identical to 0.1.x.
+        // The era-aware profiles split it: authentication and body
+        // classification first, then the era decision and the rules `S1`-`S12`,
+        // and only THEN the native dispatch or the forward — so a modern native
+        // call with wrong mirrors can never commit state before its refusal.
+        let response = if self.profile == Profile::Legacy {
+            let mut res = self.verifier.verify(&vreq);
+            let response = if !res.accepted {
+                self.reject(&res)
+            } else if res.native {
                 self.native(&res, Era::Legacy)
             } else {
-                self.forward(parts, buffered, &res).await?
-            }
+                self.forward(parts, buffered, &res, None).await?
+            };
+            // The durable admission is finished only after the response is
+            // produced, on every path (Go middleware: `defer res.Done()`).
+            res.finish_admission();
+            response
         } else {
-            let headers = header_fields(&parts.headers);
-            let classified = classify_request(
-                self.profile,
-                &ModernRequest {
-                    method: &method,
-                    target: &target,
-                    headers: &headers,
-                    body: &buffered,
-                },
-            );
-            match classified {
-                // Unreachable after verification classified the body; kept for
-                // parity with the engine.
-                ModernOutcome::ClassificationRefusal { message } => {
-                    self.invalid_request(&res, message)
-                }
-                ModernOutcome::Refuse(refusal) => self.refuse_modern(&res, &refusal),
-                ModernOutcome::Forward { era, .. } => {
-                    let mut parts = parts;
-                    if era == Era::Modern {
-                        strip_session_headers(&mut parts.headers);
-                    }
-                    if res.native {
-                        self.native(&res, era)
+            match self.verifier.authenticate(&vreq) {
+                Authentication::Refused(mut res) => {
+                    // The verifier emits the 0.1.x generic body message on
+                    // every profile, so the legacy bytes (and their
+                    // signatures) stay untouched. On the era-aware profiles a
+                    // body-classification refusal is replaced by the fixed
+                    // message of spec 04 `S6`, and ONLY when the engine, asked
+                    // with the same profile/method/target/headers/body,
+                    // reports `ClassificationRefusal`.
+                    let response = if res.http_status == 400
+                        && res.code == crate::error::codes::INVALID_REQUEST
+                    {
+                        let headers = header_fields(&parts.headers);
+                        let classified = classify_request(
+                            self.profile,
+                            &ModernRequest {
+                                method: &method,
+                                target: &target,
+                                headers: &headers,
+                                body: &buffered,
+                            },
+                        );
+                        match classified {
+                            ModernOutcome::ClassificationRefusal { message } => {
+                                self.invalid_request(&res, message)
+                            }
+                            // Header/era refusals are not body classification,
+                            // and the verifier's refusal stands as it is.
+                            _ => self.reject(&res),
+                        }
                     } else {
-                        self.forward(parts, buffered, &res).await?
+                        self.reject(&res)
+                    };
+                    res.finish_admission();
+                    response
+                }
+                Authentication::Pending(pending) => {
+                    let headers = header_fields(&parts.headers);
+                    let classified = classify_request(
+                        self.profile,
+                        &ModernRequest {
+                            method: &method,
+                            target: &target,
+                            headers: &headers,
+                            body: &buffered,
+                        },
+                    );
+                    match classified {
+                        // Unreachable after authentication classified the body;
+                        // kept for parity with the engine. The pending request
+                        // is answered here, so it must not be dispatched, and
+                        // it carries no native effect.
+                        ModernOutcome::ClassificationRefusal { message } => {
+                            let mut res = pending.into_refusal_base();
+                            let response = self.invalid_request(&res, message);
+                            res.finish_admission();
+                            response
+                        }
+                        ModernOutcome::Refuse(refusal) => {
+                            let mut res = pending.into_refusal_base();
+                            let response = self.refuse_modern(&res, &refusal);
+                            res.finish_admission();
+                            response
+                        }
+                        ModernOutcome::Forward { era, headers } => {
+                            // Only the modern era rebuilds the inner header
+                            // list from the engine's ordered result: `S8` has
+                            // already dropped the session headers and `S9`
+                            // keeps name casing, value bytes, order and
+                            // repetition. A legacy-era request under `Both`
+                            // stays the map as received, byte-identical to
+                            // 0.1.x.
+                            let rebuilt = (era == Era::Modern).then_some(headers);
+                            let mut res = self.verifier.dispatch(pending);
+                            let response = if !res.accepted {
+                                self.reject(&res)
+                            } else if res.native {
+                                self.native(&res, era)
+                            } else {
+                                self.forward(parts, buffered, &res, rebuilt).await?
+                            };
+                            res.finish_admission();
+                            response
+                        }
                     }
                 }
             }
         };
-        // The durable admission is finished only after the response is
-        // produced, on every path (Go middleware: `defer res.Done()`).
-        #[cfg(target_os = "linux")]
-        drop(res.admission);
         Ok(response)
     }
 
@@ -599,11 +664,18 @@ where
 
     /// Hands an authorized request to the wrapped service and signs what it
     /// answers (Go: forward).
+    ///
+    /// `rebuilt_headers` is Some only on the modern-era path: the inner
+    /// request then carries exactly the ordered header list the engine
+    /// returned (spec 04 `S9`), appended value by value so a repeated name
+    /// keeps every instance. `http::HeaderName` lowercases names, which is the
+    /// only thing the rebuilt map cannot preserve; nothing else is lost.
     async fn forward(
         &mut self,
         parts: http::request::Parts,
         body: Bytes,
         res: &VerifyResult,
+        rebuilt_headers: Option<Vec<HeaderField>>,
     ) -> Result<http::Response<Full<Bytes>>, S::Error> {
         // Typed request extension carrying the verified caller identity
         // snapshot (spec 02 section 3): the verifier derives it exclusively
@@ -617,6 +689,25 @@ where
             None => return Ok(self.internal(res)),
         };
         let mut inner_req = http::Request::from_parts(parts, Full::new(body));
+        if let Some(headers) = rebuilt_headers {
+            let map = inner_req.headers_mut();
+            map.clear();
+            for header in headers {
+                // The engine produced these from an `http::HeaderMap`, so the
+                // names are already lowercase tokens and the values are
+                // visible ASCII or lossy UTF-8; a failure here is unreachable
+                // and answered like the other unreachable paths.
+                let name = match http::HeaderName::from_bytes(header.name.as_bytes()) {
+                    Ok(name) => name,
+                    Err(_) => return Ok(self.internal(res)),
+                };
+                let value = match HeaderValue::from_bytes(header.value.as_bytes()) {
+                    Ok(value) => value,
+                    Err(_) => return Ok(self.internal(res)),
+                };
+                map.append(name, value);
+            }
+        }
         inner_req.extensions_mut().insert(identity);
         // Clone-and-swap so the future owns the inner instance and self stays
         // usable for the next call.
@@ -869,70 +960,6 @@ fn unsigned_rejection(status: u16, code: &str, message: &str) -> http::Response<
         .header(CONTENT_TYPE, "application/json")
         .body(Full::new(Bytes::from(error_body(code, message))))
         .expect("static status and header values cannot fail")
-}
-
-/// Renders the rejection body of spec 01 section 4 (Go: errorBody).
-fn error_body(code: &str, message: &str) -> String {
-    // Unreachable failure: serde cannot fail on String fields.
-    serde_json::to_string(&ErrorEnvelope {
-        error: ErrorDetail { code, message },
-    })
-    .expect("error envelope always serializes")
-}
-
-#[derive(serde::Serialize)]
-struct ErrorDetail<'a> {
-    code: &'a str,
-    message: &'a str,
-}
-
-#[derive(serde::Serialize)]
-struct ErrorEnvelope<'a> {
-    error: ErrorDetail<'a>,
-}
-
-/// Field declaration order is load-bearing: it fixes the JSON key order to
-/// match Go's struct marshaling byte for byte.
-#[derive(serde::Serialize)]
-struct TextContent<'a> {
-    #[serde(rename = "type")]
-    r#type: &'a str,
-    text: &'a str,
-}
-
-#[derive(serde::Serialize)]
-struct CallToolResult<'a> {
-    content: [TextContent<'a>; 1],
-    #[serde(rename = "structuredContent")]
-    structured_content: &'a serde_json::Value,
-    #[serde(rename = "isError")]
-    is_error: bool,
-    /// Spec 04 `C7`: present only in the modern era.
-    #[serde(rename = "resultType", skip_serializing_if = "Option::is_none")]
-    result_type: Option<&'a str>,
-    /// Spec 04 `C7`: Jack implementation info, modern era only.
-    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
-    meta: Option<ServerInfoMeta<'a>>,
-}
-
-#[derive(serde::Serialize)]
-struct ServerInfoMeta<'a> {
-    #[serde(rename = "io.modelcontextprotocol/serverInfo")]
-    server_info: ServerInfo<'a>,
-}
-
-#[derive(serde::Serialize)]
-struct ServerInfo<'a> {
-    name: &'a str,
-    version: &'a str,
-}
-
-#[derive(serde::Serialize)]
-struct RpcResponse<'a> {
-    jsonrpc: &'a str,
-    /// None serializes as null, matching Go's nil json.RawMessage.
-    id: Option<Box<RawValue>>,
-    result: CallToolResult<'a>,
 }
 
 #[cfg(test)]

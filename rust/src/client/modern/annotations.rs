@@ -120,7 +120,9 @@ pub fn collect_annotations(input_schema: &Value) -> Vec<Annotation> {
 }
 
 /// Walks a schema node: its members are keywords, and only here is a member
-/// named `x-mcp-header` an annotation.
+/// named `x-mcp-header` an annotation. Each keyword is pushed onto `path`
+/// before its value is walked, so the path of an annotated node is the full
+/// member chain from the schema root.
 fn walk_schema(node: &Value, path: &mut Vec<String>, out: &mut Vec<Annotation>) {
     let Some(members) = node.as_object() else {
         return;
@@ -128,9 +130,20 @@ fn walk_schema(node: &Value, path: &mut Vec<String>, out: &mut Vec<Annotation>) 
     for (key, child) in members {
         match key.as_str() {
             ANNOTATION_KEY => push_annotation(out, node, path),
-            keyword if is_name_map_keyword(keyword) => walk_name_map(child, path, out),
-            keyword if is_schema_keyword(keyword) => walk_subschema(child, path, out),
-            _ => walk_value(child, path, out),
+            // The keyword itself is a member on the way to an annotated node,
+            // so it belongs to the path (`["properties", "region"]` and not
+            // `["region"]`).
+            keyword => {
+                path.push(keyword.to_owned());
+                if is_name_map_keyword(keyword) {
+                    walk_name_map(child, path, out);
+                } else if is_schema_keyword(keyword) {
+                    walk_subschema(child, path, out);
+                } else {
+                    walk_value(child, path, out);
+                }
+                path.pop();
+            }
         }
     }
 }

@@ -332,6 +332,34 @@ async fn method_not_allowed() {
     assert_eq!(h.inner.calls(), 0);
 }
 
+/// P2 wire compat: a LEGACY-profile `tools/call` body without a string
+/// `params.name` keeps the 0.1.x refusal bytes message for message.
+///
+/// Pipeline: verification steps pass, body classification stops at the
+/// `tools/call` name rule (spec 02 section 2) -> 400 invalid_request. The
+/// modern fixed message of spec 04 `S6` is reserved for the era-aware
+/// profiles, so the rendered body must stay exactly the generic one.
+#[tokio::test]
+async fn legacy_tools_call_without_string_name_keeps_generic_message() {
+    let h = new_harness(0, InnerResponse::ok_json(INNER_OK_BODY));
+    let body = br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":7}}"#;
+    let alice = harness::signer_by_name("alice");
+    let signed = signed_request(&alice, "POST", "/mcp", body);
+    let got = inspect(
+        send(&h.service, build_request(&signed, "POST", "/mcp", body))
+            .await
+            .expect("no inner error"),
+    )
+    .await;
+    assert_eq!(got.status, 400);
+    assert_eq!(
+        String::from_utf8_lossy(&got.body),
+        r#"{"error":{"code":"invalid_request","message":"the body is not an acceptable JSON-RPC object"}}"#
+    );
+    assert_eq!(got.content_type.as_deref(), Some("application/json"));
+    assert_eq!(h.inner.calls(), 0);
+}
+
 /// Go TestMiddlewareAnswersNativeToolsItself: the real Native answers
 /// jack.admin.user.list and the layer signs its JSON-RPC result.
 ///

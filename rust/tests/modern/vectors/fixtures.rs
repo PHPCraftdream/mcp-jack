@@ -61,7 +61,10 @@ pub fn load_header_encoding_vectors() -> Value {
 }
 
 pub fn load_x_mcp_header_vectors() -> Value {
-    load("x-mcp-header-vectors.json", "mcp-jack-x-mcp-header-v1")
+    load(
+        "x-mcp-header-vectors.json",
+        "mcp-jack-modern-x-mcp-header-v1",
+    )
 }
 
 pub fn load_era_detection_vectors() -> Value {
@@ -69,6 +72,17 @@ pub fn load_era_detection_vectors() -> Value {
         "era-detection-vectors.json",
         "mcp-jack-modern-era-detection-v1",
     )
+}
+
+/// Loads `spec/fixtures/response-vectors.json` (spec 01 section 5), the
+/// corpus the request runner's `cache-replay` by-reference entry points at.
+/// It carries no `format` member, so [`load`] cannot be used.
+pub fn load_response_vectors() -> Value {
+    let path = modern_dir().join("../response-vectors.json");
+    let text = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("response vectors {}: read failed: {}", path.display(), e));
+    serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("response vectors {}: decode failed: {}", path.display(), e))
 }
 
 /// The `cases` array of a corpus.

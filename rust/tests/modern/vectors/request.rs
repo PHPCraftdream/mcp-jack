@@ -1,6 +1,8 @@
 //! Runner for `spec/fixtures/modern/modern-request-vectors.json`: the 98
 //! request-classification cases of spec 04 section 5, plus the single
-//! by-reference entry, driven through `classify_request`.
+//! by-reference entry, driven through `classify_request`. The by-reference
+//! entry runs the referenced response cases through the real
+//! `mcp_jack::signing::verify_response`.
 
 use serde_json::Value;
 
@@ -54,16 +56,8 @@ fn body_of(case: &Value) -> &str {
     opt_text(case, &["request", "body_text"]).unwrap_or("")
 }
 
-/// The raw JSON text of `expect.id`: `None` for `null`, otherwise the JSON
-/// literal (`"\"x\""` for a string, `"1"` for an integer).
-fn expected_id(expect: &Value) -> Option<String> {
-    let id = expect
-        .get("id")
-        .unwrap_or_else(|| panic!("refuse case without `expect.id`"));
-    (!id.is_null()).then(|| id.to_string())
-}
-
-/// `expect.outcome == "forward"`: era, exact header list and request line.
+/// `expect.outcome == "forward"`: the engine's era and the exact header list
+/// it hands the handler, compared with the fixture's `expect.forward`.
 fn check_forward(case: &Value, outcome: &ModernOutcome) -> Result<(), String> {
     let ModernOutcome::Forward { era, headers } = outcome else {
         return Err(format!("expected Forward, got {:?}", outcome));
@@ -82,26 +76,42 @@ fn check_forward(case: &Value, outcome: &ModernOutcome) -> Result<(), String> {
             headers, expected_headers
         ));
     }
-    if text(case, &["expect", "forward", "method"]) != text(case, &["request", "method"]) {
-        return Err(format!(
-            "forward method `{}` != request method `{}`",
-            text(case, &["expect", "forward", "method"]),
-            text(case, &["request", "method"])
-        ));
-    }
-    if text(case, &["expect", "forward", "target"]) != text(case, &["request", "target"]) {
-        return Err(format!(
-            "forward target `{}` != request target `{}`",
-            text(case, &["expect", "forward", "target"]),
-            text(case, &["request", "target"])
-        ));
-    }
     Ok(())
 }
 
-/// `expect.outcome == "refuse"`: the signed error fields and the echoed id.
+/// The signed JSON-RPC envelope of one refusal (spec 04 `S10`):
+/// `{"jsonrpc":"2.0","id":<id>,"error":{"code":<code>,"message":<message>}}`.
+///
+/// The renderer itself (`mcp_jack::server::http`) sits behind the `http`
+/// feature, which this test binary does not enable, so the envelope is
+/// rebuilt here from the fixture-independent pieces of the outcome type:
+/// `RefusalReason::code`/`message` and `Refusal::id`. A non-`null` id stays
+/// the raw JSON text (`1` for an integer, `"x"` for a string).
+fn refusal_envelope(refusal: &Refusal) -> Value {
+    let id = match refusal.id.as_deref() {
+        None => Value::Null,
+        Some(raw) => serde_json::from_str(raw)
+            .unwrap_or_else(|e| panic!("refusal id `{}` is not a JSON value: {}", raw, e)),
+    };
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {
+            "code": refusal.reason.code(),
+            "message": refusal.reason.message(),
+        },
+    })
+}
+
+/// The `Content-Type` of every refusal rendering (spec 04 `S10`), repeated
+/// from the renderer because `mcp_jack::server::http` is behind the `http`
+/// feature.
+const REFUSAL_CONTENT_TYPE: &str = "application/json";
+
+/// `expect.outcome == "refuse"`: the rendered envelope, the HTTP status and
+/// the properties every `Refuse` outcome carries by construction.
 fn check_refuse(case: &Value, outcome: &ModernOutcome) -> Result<(), String> {
-    let ModernOutcome::Refuse(Refusal { reason, id }) = outcome else {
+    let ModernOutcome::Refuse(refusal) = outcome else {
         return Err(format!("expected Refuse, got {:?}", outcome));
     };
     let expect = at(case, &["expect"]);
@@ -113,47 +123,61 @@ fn check_refuse(case: &Value, outcome: &ModernOutcome) -> Result<(), String> {
                 case_id(case)
             )
         });
-    if u64::from(reason.http_status()) != status {
+    if u64::from(refusal.reason.http_status()) != status {
         return Err(format!(
             "http_status {} != expected {}",
-            reason.http_status(),
+            refusal.reason.http_status(),
             status
         ));
     }
-    let code = at(case, &["expect", "error", "code"])
-        .as_i64()
-        .unwrap_or_else(|| {
-            panic!(
-                "case {}: `expect.error.code` is not an integer",
-                case_id(case)
-            )
-        });
-    if reason.code() != code {
-        return Err(format!("error code {} != expected {}", reason.code(), code));
-    }
-    let message = text(case, &["expect", "error", "message"]);
-    if reason.message() != message {
+    // The envelope is built from the real outcome, so the id, the code and
+    // the message below are compared against it, never against the fixture's
+    // own copy of the same request fields.
+    let envelope = refusal_envelope(refusal);
+    if expect.get("error") != envelope.get("error") {
         return Err(format!(
-            "error message `{}` != expected `{}`",
-            reason.message(),
-            message
+            "refusal error {:?} != rendered {:?}",
+            expect.get("error"),
+            envelope.get("error")
         ));
     }
-    let expected = expected_id(expect);
-    if id != &expected {
-        return Err(format!("refusal id {:?} != expected {:?}", id, expected));
+    if expect.get("id") != envelope.get("id") {
+        return Err(format!(
+            "refusal id {:?} != rendered {:?}",
+            expect.get("id"),
+            envelope.get("id")
+        ));
+    }
+    if expect.get("jsonrpc") != envelope.get("jsonrpc") {
+        return Err(format!(
+            "refusal jsonrpc {:?} != rendered {:?}",
+            expect.get("jsonrpc"),
+            envelope.get("jsonrpc")
+        ));
+    }
+    if expect.get("content_type").and_then(Value::as_str) != Some(REFUSAL_CONTENT_TYPE) {
+        return Err(format!(
+            "refusal content type {:?} != renderer `{}`",
+            expect.get("content_type"),
+            REFUSAL_CONTENT_TYPE
+        ));
+    }
+    // A `Refuse` outcome is produced by rules that run strictly after
+    // authentication (spec 01 section 4 step 8 recorded the nonce) and every
+    // response of that path is signed (spec 01 section 5), so the vector must
+    // carry both properties; neither is read from the fixture as a truth.
+    if expect.get("consumes_nonce").and_then(Value::as_bool) != Some(true) {
+        return Err(
+            "a Refuse outcome only exists after the nonce was recorded, so the vector must \
+             carry consumes_nonce == true"
+                .to_owned(),
+        );
     }
     if expect.get("signed").and_then(Value::as_bool) != Some(true) {
-        return Err("vector does not carry signed == true".to_owned());
-    }
-    if expect.get("content_type").and_then(Value::as_str) != Some("application/json") {
-        return Err("vector does not carry content_type == \"application/json\"".to_owned());
-    }
-    if expect.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
-        return Err("vector does not carry jsonrpc == \"2.0\"".to_owned());
-    }
-    if expect.get("consumes_nonce").and_then(Value::as_bool) != Some(true) {
-        return Err("vector does not carry consumes_nonce == true".to_owned());
+        return Err(
+            "a Refuse outcome is rendered signed, so the vector must carry signed == true"
+                .to_owned(),
+        );
     }
     Ok(())
 }
@@ -250,6 +274,68 @@ fn check_by_reference(document: &Value) {
         "referenced corpus {} does not exist",
         path.display()
     );
+    // The entry is by reference, so the referenced cases must actually RUN:
+    // `res-accept` verifies and `res-wrong-request-binding` fails, both
+    // through the real response verifier (spec 01 section 5), mirroring
+    // `tests/conformance/responses.rs`.
+    let responses = load_response_vectors();
+    check_response_vector(&responses, "res-accept", true);
+    check_response_vector(&responses, "res-wrong-request-binding", false);
+}
+
+/// Runs one case of `response-vectors.json` through
+/// `mcp_jack::signing::verify_response`: `must_verify` says whether the
+/// response has to verify or to fail verification.
+fn check_response_vector(document: &Value, id: &str, must_verify: bool) {
+    let case = cases(document)
+        .iter()
+        .find(|case| case.get("id").and_then(Value::as_str) == Some(id))
+        .unwrap_or_else(|| panic!("response-vectors.json: case `{}` is missing", id));
+    // Header names are case-insensitive per the runner contract.
+    let values: Vec<String> = header_pairs(case, at(case, &["response", "headers"]))
+        .into_iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("Jack-Auth"))
+        .map(|(_, value)| value)
+        .collect();
+    let values: Vec<&str> = values.iter().map(String::as_str).collect();
+    let key_vec = mcp_jack::encoding::decode_b64url_fixed(
+        text(case, &["state", "pinned_server_public_key"]),
+        32,
+    )
+    .unwrap_or_else(|e| panic!("case {}: bad pinned key b64u: {:?}", id, e));
+    let key: [u8; 32] = key_vec
+        .try_into()
+        .unwrap_or_else(|_| panic!("case {}: pinned key is not 32 bytes", id));
+    let body = mcp_jack::encoding::decode_b64url(text(case, &["response", "body_b64u"]))
+        .unwrap_or_else(|e| panic!("case {}: bad body b64u: {:?}", id, e));
+    let integer = |path: &[&str]| {
+        at(case, path)
+            .as_i64()
+            .unwrap_or_else(|| panic!("case {}: `{}` is not an integer", id, path.join(".")))
+    };
+    let result = mcp_jack::signing::verify_response(
+        &key,
+        integer(&["response", "status"]),
+        &values,
+        text(case, &["state", "request_sig"]),
+        &body,
+        integer(&["state", "now"]),
+        integer(&["state", "window_seconds"]),
+    );
+    if must_verify {
+        assert!(
+            result.is_ok(),
+            "case {}: expected the response to verify, got {:?}",
+            id,
+            result
+        );
+    } else {
+        assert!(
+            result.is_err(),
+            "case {}: expected the response to fail verification",
+            id
+        );
+    }
 }
 
 #[test]

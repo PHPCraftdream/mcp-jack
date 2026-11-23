@@ -7,8 +7,8 @@ use http_body_util::{BodyExt, Full};
 use serde_json::value::RawValue;
 use tower_service::Service;
 
-use super::{error_body, BoxError, JackService};
-use crate::modern::is_session_header;
+use super::wire::error_body;
+use super::{BoxError, JackService};
 use crate::server::modern::HeaderField;
 use crate::server::verify::VerifyResult;
 
@@ -87,20 +87,6 @@ pub(super) fn header_fields(headers: &http::HeaderMap) -> Vec<HeaderField> {
             )
         })
         .collect()
-}
-
-/// Removes every `Mcp-Session-Id` and `Last-Event-ID` header (spec 04 `S8`).
-/// The names come from `crate::modern::is_session_header`, so the list has one
-/// definition; `http::HeaderMap` names are already lowercase.
-pub(super) fn strip_session_headers(headers: &mut http::HeaderMap) {
-    let names: Vec<http::HeaderName> = headers
-        .keys()
-        .filter(|name| is_session_header(name.as_str()))
-        .cloned()
-        .collect();
-    for name in names {
-        headers.remove(&name);
-    }
 }
 
 #[derive(serde::Serialize)]

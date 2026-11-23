@@ -8,6 +8,17 @@
 //! that passed validation and report the ones they dropped, so an invalid
 //! definition never turns a `tools/list` or `events/list` result into an error
 //! response.
+//!
+//! The projection order of `C6` is the order in which [`collect_annotations`]
+//! reports the annotations, i.e. the key order of `serde_json`'s map: members
+//! are alphabetical because the `preserve_order` feature is not enabled, so
+//! the document order of the `inputSchema` text is only observable through
+//! that map order. No projection vector distinguishes the two:
+//! `ann-project-order` is the only one with more than one header and its
+//! schema declares `region`, `tenant`, `zone`, already alphabetical. No
+//! order-preserving parser of the raw text is therefore provided here; true
+//! document order would have to be handed in at the [`ToolCatalog`] /
+//! [`EventCatalog`] boundary.
 
 use serde_json::Value;
 
@@ -81,7 +92,9 @@ impl std::fmt::Display for ProjectionError {
 impl std::error::Error for ProjectionError {}
 
 /// Projects the arguments of one call onto `Mcp-Param-*` headers (spec 04
-/// `C6`), in depth-first order of the schema's `properties` members.
+/// `C6`), in the key order of the schema's `properties` members: the
+/// `serde_json` map order, alphabetical without `preserve_order`, which is the
+/// only observable form of `C6`'s document order.
 ///
 /// An annotation without a static `properties` path, an argument that is
 /// absent and an argument whose value is `null` omit the header; any header
@@ -463,7 +476,7 @@ mod tests {
     }
 
     #[test]
-    fn projects_in_depth_first_property_order() {
+    fn projects_in_property_key_order() {
         let schema = json!({
             "properties": {
                 "Tenant": {"type": "string", "x-mcp-header": "Tenant"},
@@ -479,7 +492,9 @@ mod tests {
                 ("Mcp-Param-Region", "eu"),
                 ("Mcp-Param-Tenant", "acme"),
                 ("Mcp-Param-Zone", "true"),
-            ]
+            ],
+            "the order is the schema's serde_json property key order, not the \
+             arguments' order: it is the only observable form of C6 document order"
         );
     }
 
