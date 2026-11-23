@@ -459,6 +459,7 @@ function readBeforeIdle(reader: ReadableStreamDefaultReader<Uint8Array>, waitMs:
       settled = true;
       resolve({ kind: "idle" });
     }, waitMs);
+    (timer as { unref?: () => void }).unref?.();
     reader.read().then(
       (result) => {
         if (settled) {

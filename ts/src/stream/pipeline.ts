@@ -145,7 +145,12 @@ export class StreamPump {
     if (cutoffOf !== undefined && typeof cutoffOf !== "function") {
       throw new Error("server: StreamPumpOptions.successorActivation must be a function");
     }
-    const schedule = options.schedule ?? ((callback: () => void, delayMs: number): unknown => setTimeout(callback, delayMs));
+    // Unref'd: a duration or cutoff timer never keeps the process alive after its socket is gone.
+    const schedule = options.schedule ?? ((callback: () => void, delayMs: number): unknown => {
+      const handle = setTimeout(callback, delayMs);
+      handle.unref();
+      return handle;
+    });
     const cancelSchedule = options.cancelSchedule ?? ((handle: unknown): void => {
       clearTimeout(handle as Parameters<typeof clearTimeout>[0]);
     });
