@@ -397,6 +397,53 @@ fn refusal_echoes_the_request_id() {
 }
 
 #[test]
+fn id_member_separates_request_from_notification() {
+    // The four id forms of the `refusal-id-forms` interop contract pin this:
+    // a body with an `id` member is a request even when `S10` cannot echo that
+    // id, and only the absence of the member makes a notification, because
+    // `S11` says "no `id`". A notification owes no mirror, so it must still be
+    // forwarded without `Mcp-Name`.
+    let headers = [
+        ("MCP-Protocol-Version", "2026-07-28"),
+        ("Mcp-Method", "tools/call"),
+    ];
+    let body = |id: &str| {
+        format!(
+            "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"tools/call\",\
+             \"params\":{{\"name\":\"region.echo\",\"_meta\":\
+             {{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\"}}}}}}"
+        )
+    };
+
+    let cases = [
+        ("null", None),
+        ("1.5", None),
+        ("\"abc\"", Some("\"abc\"".to_string())),
+        ("7", Some("7".to_string())),
+    ];
+    for (id_json, want_id) in cases {
+        let body = body(id_json);
+        let outcome = TestRequest::new("POST", &headers, &body).classify(Profile::Modern);
+        let refusal = refused(&outcome);
+        assert_eq!(
+            refusal.reason,
+            RefusalReason::NameHeaderMissing,
+            "{id_json}"
+        );
+        assert_eq!(refusal.id, want_id, "{id_json}");
+    }
+
+    // The same body with no `id` member at all is a notification.
+    let notification = concat!(
+        r#"{"jsonrpc":"2.0","method":"tools/call","#,
+        r#""params":{"name":"region.echo","_meta":{"#,
+        r#""io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}"#
+    );
+    let outcome = TestRequest::new("POST", &headers, notification).classify(Profile::Modern);
+    assert_eq!(forwarded_era(&outcome), Era::Modern);
+}
+
+#[test]
 fn classification_refusal_for_tools_call_without_name() {
     let bodies = [
         r#"{"jsonrpc":"2.0","id":1,"method":"tools/call"}"#,

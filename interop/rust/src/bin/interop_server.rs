@@ -13,6 +13,12 @@ mod interop;
 #[path = "interop/mcp.rs"]
 mod mcp;
 
+// The modern-matrix mode (interop/modern/contract.md sections 3-4) lives in its
+// own tree; it is dead code in the client bin, hence allow(dead_code).
+#[allow(dead_code)]
+#[path = "modern/mod.rs"]
+mod modern;
+
 // Durable nonce store helpers are linux-only, mirroring the SDK modules.
 #[cfg(target_os = "linux")]
 #[path = "interop/durable.rs"]
@@ -233,6 +239,11 @@ fn run_verify_only(aud: &str, state: &FileState) -> ! {
 }
 
 fn main() {
+    // The modern matrix has its own flag set (interop/modern/contract.md
+    // section 3.1), so it dispatches before the default parser runs.
+    if modern::mode_from_args().as_deref() == Some("modern-server") {
+        modern::server::run();
+    }
     // Rotation dispatch happens before the runtime: rotation-server builds
     // its own tokio runtime and must not run inside block_on.
     let probe = parse_flags();
