@@ -145,8 +145,10 @@ export class StreamPump {
     if (cutoffOf !== undefined && typeof cutoffOf !== "function") {
       throw new Error("server: StreamPumpOptions.successorActivation must be a function");
     }
-    const schedule = options.schedule ?? setTimeout;
-    const cancelSchedule = options.cancelSchedule ?? clearTimeout;
+    const schedule = options.schedule ?? ((callback: () => void, delayMs: number): unknown => setTimeout(callback, delayMs));
+    const cancelSchedule = options.cancelSchedule ?? ((handle: unknown): void => {
+      clearTimeout(handle as Parameters<typeof clearTimeout>[0]);
+    });
     if (typeof schedule !== "function" || typeof cancelSchedule !== "function") {
       throw new Error("server: StreamPumpOptions.schedule and cancelSchedule must be functions");
     }

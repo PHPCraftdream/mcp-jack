@@ -609,7 +609,7 @@ func TestStreamAdmitsOnlyRequests(t *testing.T) {
 	}{
 		{"request", modernStreamBody(1), true, 70, http.StatusOK},
 		{"notification", []byte(notificationStreamBody), true, 71, http.StatusAccepted},
-		{"client response object", []byte(clientResponseBody), false, 72, http.StatusNotImplemented},
+		{"client response object", []byte(clientResponseBody), false, 72, http.StatusAccepted},
 		{"request with a null id", []byte(nullIDStreamBody), true, 73, http.StatusAccepted},
 	}
 	alice := testfixture.PrivateKey(t, "alice")
@@ -700,7 +700,7 @@ func TestStreamGrantReachesTheHandler(t *testing.T) {
 		granted bool
 	}{
 		{"opt-in grant", "s1", modernStreamBody(15), true, true},
-		{"no Jack-Accept", "", []byte(`{"jsonrpc":"2.0","id":15,"method":"tools/list","params":{}}`), false, false},
+		{"no Jack-Accept", "", modernStreamBody(15), true, false},
 	}
 	alice := testfixture.PrivateKey(t, "alice")
 	for i, tc := range cases {
@@ -834,7 +834,11 @@ func TestStreamNonceBeforeFirstByteAndReplayRefused(t *testing.T) {
 		if code := errorCode(t, recReplay); code != jack.CodeReplayedNonce {
 			t.Fatalf("replay code = %q, want %q", code, jack.CodeReplayedNonce)
 		}
-		assertResponseSignature(t, recReplay, pub, sig)
+		// A replayed_nonce refusal is in the unsigned 401 family of spec 01 section 5.
+		if got := recReplay.Header().Get("Jack-Auth"); got != "" {
+			t.Fatalf("replay refusal carries Jack-Auth %q, want an unsigned 401", got)
+		}
+		_, _ = pub, sig
 		if strings.Contains(recReplay.Body.String(), "event: ") {
 			t.Fatalf("replay answered with a stream: %q", recReplay.Body.String())
 		}

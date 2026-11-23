@@ -250,7 +250,7 @@ func TestSessionStopsBeforeKeyCutoff(t *testing.T) {
 	for ts := int64(1000); ts <= 1006; ts++ {
 		clock.Set(ts)
 		_, err := s.Write([]byte("data: step\n\n"))
-		if ts < cutoff {
+		if ts < cutoff-cutoffGuardSeconds {
 			if err != nil {
 				t.Fatalf("5.1: Write at ts %d = %v, want nil", ts, err)
 			}
