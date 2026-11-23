@@ -12,10 +12,13 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
+	"github.com/PHPCraftdream/mcp-jack/server/internal/modern"
+	"github.com/PHPCraftdream/mcp-jack/server/internal/rpcbody"
 	verify "github.com/PHPCraftdream/mcp-jack/server/internal/verify"
 )
 
@@ -50,6 +53,10 @@ type HandlerConfig struct {
 	// that never writes, is not stopped by this cap and can still delay the
 	// answer. The adapter never detaches the wrapped handler.
 	MaxResponseBytes int64
+	// Profile is the deployment profile of spec 04 section 3: legacy, modern
+	// or both. The zero value is legacy and keeps 0.1.x behaviour
+	// byte-identical.
+	Profile modern.Profile
 }
 
 type handler struct {
@@ -62,7 +69,9 @@ type handler struct {
 	limit  int64
 	// respLimit bounds the buffered upstream response body.
 	respLimit int64
-	next      http.Handler
+	// profile selects the era handling of every request (spec 04 section 3).
+	profile modern.Profile
+	next    http.Handler
 }
 
 // NewHandler wraps next, an unmodified MCP server, so that only authenticated
@@ -111,6 +120,12 @@ func NewHandler(cfg HandlerConfig, next http.Handler) (http.Handler, error) {
 	case cfg.MaxResponseBytes < 0:
 		// A limit must never silently disable itself.
 		return nil, errors.New("server: HandlerConfig.MaxResponseBytes must not be negative")
+	case cfg.Profile != "" && !modern.ValidProfile(cfg.Profile):
+		return nil, errors.New("server: HandlerConfig.Profile must be legacy, modern or both")
+	}
+	profile := cfg.Profile
+	if profile == "" {
+		profile = modern.ProfileLegacy
 	}
 	limit := cfg.MaxBodyBytes
 	if limit <= 0 {
@@ -134,11 +149,23 @@ func NewHandler(cfg HandlerConfig, next http.Handler) (http.Handler, error) {
 	if public != nil {
 		kid = jack.KeyID(public)
 	}
-	return &handler{v: cfg.Verifier, key: cfg.ServerKey, signer: cfg.ResponseSigner, keys: cfg.ResponseKeys, public: public, kid: kid, limit: limit, respLimit: respLimit, next: next}, nil
+	return &handler{v: cfg.Verifier, key: cfg.ServerKey, signer: cfg.ResponseSigner, keys: cfg.ResponseKeys, public: public, kid: kid, limit: limit, respLimit: respLimit, profile: profile, next: next}, nil
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+	if h.profile == modern.ProfileLegacy {
+		h.serve(w, r, false)
+		return
+	}
+	h.serve(w, r, true)
+}
+
+// serve is the request pipeline shared by every deployment profile. eraAware
+// is false for the legacy profile, where 0.1.x behaviour stays byte-identical;
+// it is true otherwise, so the spec 04 era decision runs after authentication
+// and before any era-neutral method refusal.
+func (h *handler) serve(w http.ResponseWriter, r *http.Request, eraAware bool) {
+	if !eraAware && r.Method != http.MethodGet && r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "only GET and POST are defined")
 		return
 	}
@@ -162,16 +189,142 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res := h.v.Verify(verify.Request{Method: r.Method, Target: target, AuthValues: r.Header.Values("Jack-Auth"), Body: body})
+	authenticateOnly := eraAware && r.Method != http.MethodPost
+	classifyOnly := eraAware && r.Method == http.MethodPost
+	res := h.v.Verify(verify.Request{Method: r.Method, Target: target, AuthValues: r.Header.Values("Jack-Auth"), Body: body, AuthenticateOnly: authenticateOnly, ClassifyOnly: classifyOnly})
 	defer res.Done()
 	switch {
-	case !res.Accepted:
+	case !res.Accepted && !res.Pending:
+		if eraAware && res.NonceRecorded && res.Code == jack.CodeInvalidRequest && res.BodyRefusal == rpcbody.ReasonToolName {
+			header := http.Header{}
+			header.Set("Content-Type", "application/json")
+			h.writeSigned(w, http.StatusBadRequest, header, errorBody(modern.ClassificationCode, modern.ClassificationMessage), res.RequestSig, res.Tool)
+			return
+		}
 		h.reject(w, res)
-	case res.Native:
-		h.native(w, res)
-	default:
+	case !eraAware:
+		if res.Native {
+			h.native(w, res, false)
+			return
+		}
 		h.forward(w, r, body, res)
+	default:
+		h.serveModern(w, r, target, body, res)
 	}
+}
+
+// serveModern applies the era rules of spec 04 section 5 to an authenticated,
+// classified request and dispatches its outcome. The rules run before the
+// deferred Dispatch, so a request they refuse has no native effect and no
+// audit event.
+func (h *handler) serveModern(w http.ResponseWriter, r *http.Request, target string, body []byte, res verify.Result) {
+	out := modern.Classify(h.profile, modern.Request{Method: r.Method, Target: target, Headers: headerList(r.Header), Body: body})
+	switch out.Kind {
+	case modern.KindRefuse:
+		h.writeModernRefusal(w, out, res.RequestSig, res.Tool)
+	case modern.KindRefuseInvalidRequest:
+		header := http.Header{}
+		header.Set("Content-Type", "application/json")
+		h.writeSigned(w, http.StatusBadRequest, header, errorBody(out.ErrorCode, out.Error.Message), res.RequestSig, res.Tool)
+	case modern.KindForward:
+		if out.Era == "legacy" {
+			// 02 section 2 item 1: GET is accepted; methods other than GET and
+			// POST are not defined; POST is dispatched and forwarded exactly as
+			// the legacy profile does.
+			if r.Method != http.MethodGet && r.Method != http.MethodPost {
+				writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "only GET and POST are defined")
+				return
+			}
+			res = h.v.Dispatch(res)
+			if !res.Accepted {
+				h.reject(w, res)
+				return
+			}
+			if res.Native {
+				h.native(w, res, false)
+				return
+			}
+			h.forward(w, r, body, res) // the original r.Header is untouched
+			return
+		}
+		res = h.v.Dispatch(res)
+		if !res.Accepted {
+			h.reject(w, res)
+			return
+		}
+		if res.Native {
+			h.native(w, res, true)
+			return
+		}
+		r.Header = headerMap(out.Forward.Headers)
+		h.forward(w, r, body, res)
+	default:
+		h.rejectInternal(w, res)
+	}
+}
+
+// headerList renders the received header list as spec 04 section 2 Header
+// values, with names sorted for determinism and values in received order.
+// Go's net/http stores headers in a map, so the received wire order is already
+// gone by the time the middleware sees the request; the slice order here is a
+// deterministic reconstruction, not the wire order, and the names were
+// canonicalised by net/http (see Forward.Headers in server/internal/modern).
+func headerList(h http.Header) []modern.Header {
+	names := make([]string, 0, len(h))
+	for name := range h {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	list := make([]modern.Header, 0, len(names))
+	for _, name := range names {
+		for _, value := range h[name] {
+			list = append(list, modern.Header{Name: name, Value: value})
+		}
+	}
+	return list
+}
+
+// headerMap rebuilds a header map from a forwarded header list. Go's net/http
+// canonicalises received header names and stores headers in a map, so this
+// rebuild preserves the values and the names of the list but not the wire
+// order; the spec 04 S9 order and casing are the classification-level
+// modern.Header slice (see Forward.Headers in server/internal/modern).
+func headerMap(list []modern.Header) http.Header {
+	dst := make(http.Header, len(list))
+	for _, h := range list {
+		dst[h.Name] = append(dst[h.Name], h.Value)
+	}
+	return dst
+}
+
+// writeModernRefusal writes a signed JSON-RPC refusal of spec 04 section 5.1.
+func (h *handler) writeModernRefusal(w http.ResponseWriter, out modern.Outcome, requestSig, tool string) {
+	header := http.Header{}
+	header.Set("Content-Type", out.ContentType)
+	if out.HTTPStatus == http.StatusMethodNotAllowed {
+		header.Set("Allow", "POST")
+	}
+	id := out.ID
+	if len(id) == 0 {
+		id = []byte("null")
+	}
+	payload := struct {
+		JSONRPC string          `json:"jsonrpc"`
+		ID      json.RawMessage `json:"id"`
+		Error   struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}{JSONRPC: "2.0", ID: json.RawMessage(id)}
+	payload.Error.Code = out.Error.Code
+	payload.Error.Message = out.Error.Message
+	body, err := json.Marshal(payload)
+	if err != nil {
+		// Marshal of this shape cannot fail; never answer unsigned regardless.
+		h.writeSigned(w, http.StatusInternalServerError, header, errorBody("internal_error", "internal error"), requestSig, tool)
+		return
+	}
+	h.writeSigned(w, out.HTTPStatus, header, body, requestSig, tool)
 }
 
 // originFormTarget reports whether the raw request target is origin-form: it
@@ -223,9 +376,11 @@ type textContent struct {
 }
 
 type callToolResult struct {
-	Content           []textContent `json:"content"`
-	StructuredContent any           `json:"structuredContent"`
-	IsError           bool          `json:"isError"`
+	Content           []textContent  `json:"content"`
+	StructuredContent any            `json:"structuredContent"`
+	IsError           bool           `json:"isError"`
+	ResultType        string         `json:"resultType,omitempty"`
+	Meta              map[string]any `json:"_meta,omitempty"`
 }
 
 type rpcResponse struct {
@@ -235,20 +390,30 @@ type rpcResponse struct {
 }
 
 // native answers a protocol-native tool call as a JSON-RPC response whose
-// result is an MCP CallToolResult carrying the structured payload.
-func (h *handler) native(w http.ResponseWriter, res verify.Result) {
+// result is an MCP CallToolResult carrying the structured payload. In the
+// modern era the result also carries resultType and Jack's serverInfo meta
+// (spec 04 C7); modernEra false keeps the 0.1.x bytes exactly.
+func (h *handler) native(w http.ResponseWriter, res verify.Result, modernEra bool) {
 	text, err := json.Marshal(res.Structured)
 	if err != nil {
 		h.rejectInternal(w, res)
 		return
 	}
+	result := callToolResult{
+		Content:           []textContent{{Type: "text", Text: string(text)}},
+		StructuredContent: res.Structured,
+	}
+	if modernEra {
+		result.ResultType = "complete"
+		result.Meta = map[string]any{"io.modelcontextprotocol/serverInfo": map[string]string{
+			"name":    modern.ImplementationName,
+			"version": modern.ImplementationVersion,
+		}}
+	}
 	body, err := json.Marshal(rpcResponse{
 		JSONRPC: "2.0",
 		ID:      res.RPCID,
-		Result: callToolResult{
-			Content:           []textContent{{Type: "text", Text: string(text)}},
-			StructuredContent: res.Structured,
-		},
+		Result:  result,
 	})
 	if err != nil {
 		h.rejectInternal(w, res)

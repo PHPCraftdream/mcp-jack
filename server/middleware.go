@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/PHPCraftdream/mcp-jack/server/internal/modern"
 	transport "github.com/PHPCraftdream/mcp-jack/server/internal/transport"
 	verify "github.com/PHPCraftdream/mcp-jack/server/internal/verify"
 )
@@ -29,6 +30,18 @@ type Identity = verify.Identity
 func IdentityFromContext(ctx context.Context) (Identity, bool) {
 	return verify.IdentityFromContext(ctx)
 }
+
+// Profile is the server deployment profile of spec 04 section 3.
+type Profile = modern.Profile
+
+const (
+	// ProfileLegacy serves every request as legacy-era (the default).
+	ProfileLegacy = modern.ProfileLegacy
+	// ProfileModern serves every request as modern-era.
+	ProfileModern = modern.ProfileModern
+	// ProfileBoth decides the era per request.
+	ProfileBoth = modern.ProfileBoth
+)
 
 // HandlerConfig configures NewHandler.
 type HandlerConfig = transport.HandlerConfig

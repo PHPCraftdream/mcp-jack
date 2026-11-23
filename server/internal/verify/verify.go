@@ -217,6 +217,18 @@ type Request struct {
 	AuthValues []string
 	// Body is the exact request body.
 	Body []byte
+	// AuthenticateOnly stops after spec 01 section 4 steps 1-8 (authentication
+	// and nonce recording) with no body classification or dispatch. It is used
+	// for non-POST requests in a non-legacy deployment profile, where the spec
+	// 04 era decision runs after authentication.
+	AuthenticateOnly bool
+	// ClassifyOnly stops after body classification and before dispatch: the
+	// request is authenticated and classified (identity, request signature,
+	// RPCID, Tool and Native are set) but no native tool runs and the wrapped
+	// handler is never reached. The caller completes the request with Dispatch.
+	// It is used for POST requests of a non-legacy deployment profile, where the
+	// spec 04 rules run before dispatch.
+	ClassifyOnly bool
 }
 
 // Result is the outcome of Verify.
@@ -247,11 +259,27 @@ type Result struct {
 	Tool string
 	// Native is true when the request called a protocol-native tool.
 	Native bool
+	// BodyRefusal is the rpcbody reason when body classification refused the
+	// body; rpcbody.ReasonNone otherwise.
+	BodyRefusal int
 	// Structured is the structuredContent of a successful native tool call.
 	Structured any
 	// Audit is the audit event written for the call, if any.
-	Audit     *AuditEvent
+	Audit *AuditEvent
+	// Pending is true when Verify ran with Request.ClassifyOnly and stopped
+	// before dispatch: authentication and body classification succeeded,
+	// Accepted is false and HTTPStatus is zero. Call Dispatch to finish it.
+	Pending   bool
 	admission *admissionLease
+	pending   *pendingDispatch
+}
+
+// pendingDispatch carries the authenticated, classified request to Dispatch.
+type pendingDispatch struct {
+	auth   jack.RequestAuth
+	now    int64
+	caller *RegistryEntry
+	msg    rpcbody.RPCMessage
 }
 
 func rejection(status int, code, message string) Result {
@@ -277,7 +305,10 @@ func EntryActive(e RegistryEntry, now int64) bool {
 
 // Verify runs the pipeline of spec 01 section 4 and spec 02 section 4 on one
 // request. It stops at the first failing step; a rejection never reveals more
-// than its code.
+// than its code. With Request.ClassifyOnly it runs in two phases: Verify
+// authenticates and classifies and hands back a Pending Result, and Dispatch
+// runs the native tool call (or marks an ordinary request accepted) once the
+// caller has applied its own pre-dispatch rules.
 func (v *Verifier) Verify(req Request) Result {
 	now := v.cfg.Now()
 	effective := v.effectiveNow(now)
@@ -362,7 +393,8 @@ func (v *Verifier) Verify(req Request) Result {
 
 // authorize is step 9: body shape, protocol-native tools, the admin gate for
 // jack.admin.*, and forwarding of everything else unchanged (spec 02 sections
-// 2-3).
+// 2-3). With req.ClassifyOnly it stops before running the native tool and
+// defers that step to Dispatch.
 func (v *Verifier) authorize(req Request, auth jack.RequestAuth, now int64, caller *RegistryEntry, res Result) Result {
 	if caller != nil {
 		res.Identity = snapshotOf(*caller)
@@ -371,13 +403,18 @@ func (v *Verifier) authorize(req Request, auth jack.RequestAuth, now int64, call
 		res.HTTPStatus, res.Code, res.Message = status, code, message
 		return res
 	}
+	if req.AuthenticateOnly {
+		res.Accepted = true
+		return res
+	}
 	if req.Method == "GET" {
 		res.Accepted = true
 		return res
 	}
 
-	msg, ok := rpcbody.Classify(req.Body)
-	if !ok {
+	msg, bodyRefusal := rpcbody.ClassifyReason(req.Body)
+	if bodyRefusal != rpcbody.ReasonNone {
+		res.BodyRefusal = bodyRefusal
 		return fail(400, jack.CodeInvalidRequest, "the body is not an acceptable JSON-RPC object")
 	}
 	res.RPCID = msg.ID
@@ -400,37 +437,80 @@ func (v *Verifier) authorize(req Request, auth jack.RequestAuth, now int64, call
 		if native == nil {
 			return fail(403, jack.CodeOperationDenied, "operation is not permitted")
 		}
-		call := &NativeCall{
-			Tool: msg.Tool, Arguments: msg.Arguments, Caller: caller, Kid: auth.Kid, TS: auth.TS,
-			Now: now, Aud: v.cfg.Aud, State: v.cfg.State,
+		if req.ClassifyOnly {
+			res.Pending = true
+			res.pending = &pendingDispatch{auth: auth, now: now, caller: caller, msg: msg}
+			return res
 		}
-		out, jerr := native.Call(call)
-		var event *AuditEvent
-		if auditedTool(msg.Tool) {
-			event = &AuditEvent{Time: now, Tool: msg.Tool, Outcome: AuditSuccess, ActorKid: auth.Kid, Target: call.Target}
-			if caller != nil {
-				event.ActorName = caller.Name
-			}
-			if jerr != nil {
-				event.Outcome, event.Code = AuditFailure, jerr.Code
-			}
-			res.Audit = event
-			if v.cfg.Audit != nil {
-				_ = v.cfg.Audit.Record(*event)
-			}
-		}
-		if jerr != nil {
-			return fail(jerr.HTTPStatus, jerr.Code, jerr.Message)
-		}
-		res.Accepted = true
-		res.Structured = out.Structured
-		return res
+		return v.runNative(res, auth, now, caller, msg)
 	}
 
 	if caller == nil {
 		// Unreachable: only a jack.enroll request passes step 4 without a
 		// registry entry, and it was handled above.
 		return fail(401, jack.CodeUnknownKey, "unknown key")
+	}
+	if req.ClassifyOnly {
+		res.Pending = true
+		res.pending = &pendingDispatch{auth: auth, now: now, caller: caller, msg: msg}
+		return res
+	}
+	res.Accepted = true
+	return res
+}
+
+// runNative runs the protocol-native tool of an authenticated, classified
+// request and records its audit event (spec 02 sections 2-3, spec 03 section 8).
+func (v *Verifier) runNative(res Result, auth jack.RequestAuth, now int64, caller *RegistryEntry, msg rpcbody.RPCMessage) Result {
+	fail := func(status int, code, message string) Result {
+		res.HTTPStatus, res.Code, res.Message = status, code, message
+		return res
+	}
+	native := v.cfg.Native
+	if msg.Tool == ToolServerKey {
+		native = v.cfg.ServerKeys
+	}
+	call := &NativeCall{
+		Tool: msg.Tool, Arguments: msg.Arguments, Caller: caller, Kid: auth.Kid, TS: auth.TS,
+		Now: now, Aud: v.cfg.Aud, State: v.cfg.State,
+	}
+	out, jerr := native.Call(call)
+	var event *AuditEvent
+	if auditedTool(msg.Tool) {
+		event = &AuditEvent{Time: now, Tool: msg.Tool, Outcome: AuditSuccess, ActorKid: auth.Kid, Target: call.Target}
+		if caller != nil {
+			event.ActorName = caller.Name
+		}
+		if jerr != nil {
+			event.Outcome, event.Code = AuditFailure, jerr.Code
+		}
+		res.Audit = event
+		if v.cfg.Audit != nil {
+			_ = v.cfg.Audit.Record(*event)
+		}
+	}
+	if jerr != nil {
+		return fail(jerr.HTTPStatus, jerr.Code, jerr.Message)
+	}
+	res.Accepted = true
+	res.Structured = out.Structured
+	return res
+}
+
+// Dispatch runs the deferred step of a Request.ClassifyOnly verification: the
+// native tool call and its audit event, or marks an ordinary request accepted
+// for forwarding. It is a no-op when the result is not Pending. The nonce
+// lease is still held by the Result and is released by Done after the caller
+// has answered.
+func (v *Verifier) Dispatch(res Result) Result {
+	p := res.pending
+	if p == nil {
+		return res
+	}
+	res.pending = nil
+	res.Pending = false
+	if p.msg.HasTool && strings.HasPrefix(p.msg.Tool, "jack.") {
+		return v.runNative(res, p.auth, p.now, p.caller, p.msg)
 	}
 	res.Accepted = true
 	return res
