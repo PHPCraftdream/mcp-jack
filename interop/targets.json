@@ -29,7 +29,7 @@
     "rotation_client": ["node", "ts/dist/interop/rotation-client.js"],
     "modern_server": ["node", "ts/dist/interop/modern-server.js"],
     "modern_client": ["node", "ts/dist/interop/modern-client.js"],
-    "webhook_sender": ["node", "ts/dist/interop/webhook-sender.js"],
-    "webhook_receiver": ["node", "ts/dist/interop/webhook-receiver.js"]
+    "webhook_sender": ["node", "ts/dist/interop/webhook/sender.js"],
+    "webhook_receiver": ["node", "ts/dist/interop/webhook/receiver.js"]
   }
 }
