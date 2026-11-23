@@ -205,10 +205,10 @@ func (h *handler) serve(w http.ResponseWriter, r *http.Request, eraAware bool) {
 		if eraAware && res.NonceRecorded && res.Code == jack.CodeInvalidRequest && res.BodyRefusal == rpcbody.ReasonToolName {
 			header := http.Header{}
 			header.Set("Content-Type", "application/json")
-			h.writeSigned(w, http.StatusBadRequest, header, errorBody(modern.ClassificationCode, modern.ClassificationMessage), res.RequestSig, res.Tool)
+			h.writeSignedMethod(w, r.Method, http.StatusBadRequest, header, errorBody(modern.ClassificationCode, modern.ClassificationMessage), res.RequestSig, res.Tool)
 			return
 		}
-		h.reject(w, res)
+		h.reject(w, r.Method, res)
 	case !eraAware:
 		if res.Native {
 			h.native(w, res, false)
@@ -228,11 +228,11 @@ func (h *handler) serveModern(w http.ResponseWriter, r *http.Request, target str
 	out := modern.Classify(h.profile, modern.Request{Method: r.Method, Target: target, Headers: headerList(r.Header), Body: body})
 	switch out.Kind {
 	case modern.KindRefuse:
-		h.writeModernRefusal(w, out, res.RequestSig, res.Tool)
+		h.writeModernRefusal(w, r.Method, out, res.RequestSig, res.Tool)
 	case modern.KindRefuseInvalidRequest:
 		header := http.Header{}
 		header.Set("Content-Type", "application/json")
-		h.writeSigned(w, http.StatusBadRequest, header, errorBody(out.ErrorCode, out.Error.Message), res.RequestSig, res.Tool)
+		h.writeSignedMethod(w, r.Method, http.StatusBadRequest, header, errorBody(out.ErrorCode, out.Error.Message), res.RequestSig, res.Tool)
 	case modern.KindForward:
 		if out.Era == "legacy" {
 			// 02 section 2 item 1: GET is accepted and POST is dispatched and
@@ -241,7 +241,7 @@ func (h *handler) serveModern(w http.ResponseWriter, r *http.Request, target str
 			// the body is read (spec 04 section 3).
 			res = verify.Dispatch(h.v, res)
 			if !res.Accepted {
-				h.reject(w, res)
+				h.reject(w, r.Method, res)
 				return
 			}
 			if res.Native {
@@ -253,7 +253,7 @@ func (h *handler) serveModern(w http.ResponseWriter, r *http.Request, target str
 		}
 		res = verify.Dispatch(h.v, res)
 		if !res.Accepted {
-			h.reject(w, res)
+			h.reject(w, r.Method, res)
 			return
 		}
 		if res.Native {
@@ -302,7 +302,9 @@ func headerMap(list []modern.Header) http.Header {
 }
 
 // writeModernRefusal writes a signed JSON-RPC refusal of spec 04 section 5.1.
-func (h *handler) writeModernRefusal(w http.ResponseWriter, out modern.Outcome, requestSig, tool string) {
+// method lets the answer honour S10: a HEAD refusal is signed over the empty
+// body it sends.
+func (h *handler) writeModernRefusal(w http.ResponseWriter, method string, out modern.Outcome, requestSig, tool string) {
 	header := http.Header{}
 	header.Set("Content-Type", out.ContentType)
 	if out.HTTPStatus == http.StatusMethodNotAllowed {
@@ -325,10 +327,10 @@ func (h *handler) writeModernRefusal(w http.ResponseWriter, out modern.Outcome, 
 	body, err := json.Marshal(payload)
 	if err != nil {
 		// Marshal of this shape cannot fail; never answer unsigned regardless.
-		h.writeSigned(w, http.StatusInternalServerError, header, errorBody("internal_error", "internal error"), requestSig, tool)
+		h.writeSignedMethod(w, method, http.StatusInternalServerError, header, errorBody("internal_error", "internal error"), requestSig, tool)
 		return
 	}
-	h.writeSigned(w, out.HTTPStatus, header, body, requestSig, tool)
+	h.writeSignedMethod(w, method, out.HTTPStatus, header, body, requestSig, tool)
 }
 
 // originFormTarget reports whether the raw request target is origin-form: it
@@ -359,8 +361,10 @@ func signedTarget(raw string) string {
 
 // reject answers a failed request. Once authentication has succeeded the
 // client holds a request signature to bind to, so the answer is signed; an
-// authentication failure may be unsigned (spec 01 section 5).
-func (h *handler) reject(w http.ResponseWriter, res verify.Result) {
+// authentication failure may be unsigned (spec 01 section 5). After
+// authentication a HEAD refusal is signed over the empty body (spec 04 section
+// 5 S10), which is what writeSignedMethod does.
+func (h *handler) reject(w http.ResponseWriter, method string, res verify.Result) {
 	header := http.Header{}
 	header.Set("Content-Type", "application/json")
 	if res.HTTPStatus == http.StatusUnauthorized {
@@ -368,7 +372,7 @@ func (h *handler) reject(w http.ResponseWriter, res verify.Result) {
 	}
 	body := errorBody(res.Code, res.Message)
 	if res.NonceRecorded {
-		h.writeSigned(w, res.HTTPStatus, header, body, res.RequestSig, res.Tool)
+		h.writeSignedMethod(w, method, res.HTTPStatus, header, body, res.RequestSig, res.Tool)
 		return
 	}
 	writeRaw(w, res.HTTPStatus, header, body)
@@ -472,6 +476,18 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, body []byte, r
 	header := bw.header.Clone()
 	header.Del("Content-Length")
 	h.writeSigned(w, status, header, bw.body.Bytes(), res.RequestSig, res.Tool)
+}
+
+// writeSignedMethod signs and writes an answer to a request with HTTP method
+// m. A response to HEAD carries no content on the wire, so spec 04 section 5
+// S10 signs every refusal of such a request over the EMPTY body and sends no
+// body: the client then verifies exactly the bytes it received. Every other
+// method is answered unchanged.
+func (h *handler) writeSignedMethod(w http.ResponseWriter, m string, status int, header http.Header, body []byte, requestSig, tool string) {
+	if m == http.MethodHead {
+		body = nil
+	}
+	h.writeSigned(w, status, header, body, requestSig, tool)
 }
 
 // writeSigned signs the response over its status, the request signature and
