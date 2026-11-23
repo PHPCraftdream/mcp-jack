@@ -4,20 +4,26 @@
     "client": ["interop/bin/go-client"],
     "transfer": ["interop/bin/go-transfer"],
     "rotation_server": ["interop/bin/go-rotation-server"],
-    "rotation_client": ["interop/bin/go-rotation-client"]
+    "rotation_client": ["interop/bin/go-rotation-client"],
+    "modern_server": ["interop/bin/go-modern-server"],
+    "modern_client": ["interop/bin/go-modern-client"]
   },
   "rust": {
     "server": ["interop/rust/target/release/interop-server"],
     "client": ["interop/rust/target/release/interop-client"],
     "transfer": ["interop/rust/target/release/interop-transfer"],
     "rotation_server": ["interop/rust/target/release/interop-server", "--mode", "rotation-server"],
-    "rotation_client": ["interop/rust/target/release/interop-client", "--mode", "rotation-client"]
+    "rotation_client": ["interop/rust/target/release/interop-client", "--mode", "rotation-client"],
+    "modern_server": ["interop/rust/target/release/interop-server", "--mode", "modern-server"],
+    "modern_client": ["interop/rust/target/release/interop-client", "--mode", "modern-client"]
   },
   "typescript": {
     "server": ["node", "ts/dist/interop/server.js"],
     "client": ["node", "ts/dist/interop/client.js"],
     "transfer": ["node", "ts/dist/interop/transfer.js"],
     "rotation_server": ["node", "ts/dist/interop/rotation-server.js"],
-    "rotation_client": ["node", "ts/dist/interop/rotation-client.js"]
+    "rotation_client": ["node", "ts/dist/interop/rotation-client.js"],
+    "modern_server": ["node", "ts/dist/interop/modern-server.js"],
+    "modern_client": ["node", "ts/dist/interop/modern-client.js"]
   }
 }

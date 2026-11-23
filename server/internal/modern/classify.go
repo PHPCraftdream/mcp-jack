@@ -383,7 +383,12 @@ func parseBody(raw []byte) (bodyFields, bool) {
 		return b, true
 	}
 	b.method, _ = jsonStringOf(members["method"])
-	if id, ok := members["id"]; ok && (isJSONString(id) || isJSONNumber(id)) {
+	// Spec 04 section 5 S11 defines a notification as a body with a method and
+	// NO id member, so any id member makes the body a request and the mirrors
+	// of S4 to S6 are required for it. b.id keeps the raw token; refusalID
+	// echoes it only for a string or an integer (S10), so a null, boolean,
+	// object or array id is echoed as null.
+	if id, ok := members["id"]; ok {
 		b.kind = bodyRequest
 		b.id = bytes.TrimSpace(id)
 	} else {
@@ -522,13 +527,4 @@ func jsonStringOf(raw json.RawMessage) (string, bool) {
 		return "", false
 	}
 	return s, true
-}
-
-// isJSONNumber reports whether raw starts a JSON number token.
-func isJSONNumber(raw json.RawMessage) bool {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 {
-		return false
-	}
-	return trimmed[0] == '-' || (trimmed[0] >= '0' && trimmed[0] <= '9')
 }

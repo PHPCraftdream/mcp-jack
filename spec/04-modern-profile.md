@@ -328,6 +328,7 @@ Jack MUST NOT accept `Mcp-Name` on a method without a source field: there is no 
 - `<id>` is the request's `id` when the body is an acceptable JSON-RPC request object with a string or integer `id`, and `null` otherwise (always `null` for a non-`POST` request). The refusal never omits `id`.
 - `<code>` and `<message>` are the fixed values of section 5.1; `<message>` MUST NOT echo any header or body value, so a refusal is not an oracle.
 - JSON member order and insignificant whitespace are implementation-defined, because the signature covers whatever bytes an implementation sends.
+- A `HEAD` request has no response body on the wire. Every refusal to a `HEAD` request (this section, the S2 405, and any refusal after the nonce was recorded) is signed over the EMPTY body and sent without a body, so the client can verify the bytes it actually received. For every other method the refusal body is sent and signed as above.
 - Every refusal here consumes the request's nonce (01 section 4 step 8 already recorded it; there is no rollback), exactly as 02 section 2 requires of every post-authentication refusal.
 - Contrast the pre-authentication refusals of 01 section 4: unsigned, `{"error":{...}}` envelope. A signed JSON-RPC error with `jsonrpc` and `error.message` is what a client uses to recognise the modern era (`C9`); a bare `{"error":{"code":...}}` object is not.
 

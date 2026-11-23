@@ -199,9 +199,10 @@ impl RefusalReason {
 pub struct Refusal {
     /// Why the request was refused.
     pub reason: RefusalReason,
-    /// Raw JSON text of the request id for a JSON-RPC Request body; `None`
-    /// (rendered as `null`) for a notification, a response object and every
-    /// non-`POST` request.
+    /// Raw JSON text of the request id for a JSON-RPC Request body with a
+    /// string or integer id; `None` (rendered as `null`) for a request with a
+    /// `null` or fractional id (`S10`), for a notification, for a response
+    /// object and for every non-`POST` request.
     pub id: Option<String>,
 }
 

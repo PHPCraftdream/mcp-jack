@@ -14,6 +14,12 @@ mod interop; // src/bin/interop/: shared helpers, net transport, scenarios
 #[path = "interop/mcp.rs"]
 mod mcp;
 
+// The modern-matrix mode (interop/modern/contract.md sections 3-4) lives in its
+// own tree; it is dead code in the server bin, hence allow(dead_code).
+#[allow(dead_code)]
+#[path = "modern/mod.rs"]
+mod modern;
+
 use std::collections::HashMap;
 
 use mcp_jack::client::signer::{InMemorySigner, Signer as _};
@@ -208,6 +214,11 @@ fn run_sign_only(flags: &Flags, primary: &InMemorySigner) -> ! {
 }
 
 fn main() {
+    // The modern matrix has its own flag set (interop/modern/contract.md
+    // section 4.1), so it dispatches before the default parser runs.
+    if modern::mode_from_args().as_deref() == Some("modern-client") {
+        modern::client::run();
+    }
     let flags = parse_flags();
     if !flags.mode.is_empty() {
         // The rotation profile is linux-gated: private-file rotation stores.

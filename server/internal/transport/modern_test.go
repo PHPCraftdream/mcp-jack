@@ -2,6 +2,7 @@ package transport
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"testing/iotest"
 
+	jack "github.com/PHPCraftdream/mcp-jack"
 	auditimpl "github.com/PHPCraftdream/mcp-jack/server/internal/audit"
 	"github.com/PHPCraftdream/mcp-jack/server/internal/modern"
 	nonceimpl "github.com/PHPCraftdream/mcp-jack/server/internal/nonce"
@@ -209,6 +211,65 @@ func TestModernMiddlewareEraDispatch(t *testing.T) {
 
 	t.Run("modern GET is a signed 405", func(t *testing.T) { check405(t, "GET") })
 	t.Run("modern DELETE is a signed 405", func(t *testing.T) { check405(t, "DELETE") })
+
+	t.Run("modern HEAD is a signed 405 over the empty body", func(t *testing.T) {
+		// Spec 04 section 5 S10: a HEAD response carries no body, so the
+		// signature covers the empty bytes the client receives. Both profiles
+		// that can serve the modern era are covered: ProfileModern decides the
+		// era itself, ProfileBoth decides it from the version header.
+		cases := []struct {
+			name    string
+			profile modern.Profile
+			version string
+		}{
+			{"profile modern", modern.ProfileModern, ""},
+			{"profile both", modern.ProfileBoth, "2026-07-28"},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				h := newProfileHarness(t, tc.profile)
+				req, sig := signedRequest(t, testPrivateKey(t, "alice"), "HEAD", "/mcp", nil)
+				if tc.version != "" {
+					// Headers are unsigned mirrors: they are set after signing.
+					req.Header.Set("MCP-Protocol-Version", tc.version)
+				}
+				rec := httptest.NewRecorder()
+				h.handler.ServeHTTP(rec, req)
+
+				if rec.Code != http.StatusMethodNotAllowed {
+					t.Fatalf("status = %d, body %q", rec.Code, rec.Body.String())
+				}
+				if rec.Body.Len() != 0 {
+					t.Fatalf("a HEAD refusal must send no body, got %q", rec.Body.String())
+				}
+				if got := rec.Header().Get("Allow"); got != "POST" {
+					t.Fatalf("Allow = %q", got)
+				}
+				if got := rec.Header().Get("Content-Type"); got != "application/json" {
+					t.Fatalf("Content-Type = %q", got)
+				}
+				auth, err := jack.ParseResponseAuth(rec.Header().Values("Jack-Auth"))
+				if err != nil {
+					t.Fatalf("response Jack-Auth: %v", err)
+				}
+				pub := h.server.Public().(ed25519.PublicKey)
+				if auth.Kid != jack.KeyID(pub) {
+					t.Fatalf("response kid %q is not the server key", auth.Kid)
+				}
+				responseSig, err := jack.DecodeBase64URLFixed(auth.Sig, 64)
+				if err != nil {
+					t.Fatalf("response sig: %v", err)
+				}
+				signing := jack.ResponseSigningString(rec.Code, sig, auth.Kid, auth.TS, nil)
+				if !jack.Verify(pub, []byte(signing), responseSig) {
+					t.Fatal("the HEAD refusal signature does not verify over the empty body")
+				}
+				if h.next.Load() != 0 {
+					t.Fatalf("the wrapped handler was reached %d times", h.next.Load())
+				}
+			})
+		}
+	})
 
 	t.Run("missing version header is refused", func(t *testing.T) {
 		h := newProfileHarness(t, modern.ProfileModern)
