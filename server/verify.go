@@ -14,6 +14,7 @@ const DefaultWindow = verify.DefaultWindow
 // never reach the wrapped handler.
 const (
 	ToolServerKey         = verify.ToolServerKey
+	ToolWebhookKey        = verify.ToolWebhookKey
 	ToolEnroll            = verify.ToolEnroll
 	ToolWhoAmI            = verify.ToolWhoAmI
 	ToolRotateKey         = verify.ToolRotateKey
