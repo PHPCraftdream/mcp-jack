@@ -22,6 +22,10 @@ mod modern;
 
 use std::collections::HashMap;
 
+#[allow(dead_code)]
+#[path = "webhook/sender.rs"]
+mod webhook_sender;
+
 use mcp_jack::client::signer::{InMemorySigner, Signer as _};
 use mcp_jack::client::transport::SigningTransport;
 use mcp_jack::encoding::{decode_b64url, decode_b64url_fixed};
@@ -218,6 +222,9 @@ fn main() {
     // section 4.1), so it dispatches before the default parser runs.
     if modern::mode_from_args().as_deref() == Some("modern-client") {
         modern::client::run();
+    }
+    if webhook_sender::mode_from_args().as_deref() == Some("webhook-sender") {
+        webhook_sender::run_mode();
     }
     let flags = parse_flags();
     if !flags.mode.is_empty() {

@@ -833,6 +833,7 @@ dependencies = [
 name = "mcp-jack-interop"
 version = "0.0.0"
 dependencies = [
+ "base64",
  "bytes",
  "ed25519-dalek",
  "http",
@@ -843,6 +844,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tokio-rustls",
  "tower-layer",
  "tower-service",
 ]
