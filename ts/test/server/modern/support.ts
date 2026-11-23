@@ -11,7 +11,7 @@ import { MemoryAuditSink } from "../../../src/server/audit.js";
 import { Native } from "../../../src/server/native.js";
 import { NonceStore } from "../../../src/server/registry/nonce.js";
 import { Verifier } from "../../../src/server/verify.js";
-import { jackFetchHandler } from "../../../src/server/http/fetch.js";
+import { jackFetchHandler, jackHeaders } from "../../../src/server/http/fetch.js";
 import type { HandlerConfig } from "../../../src/server/http/fetch.js";
 import type { ServerProfile } from "../../../src/modern/server.js";
 import { fixtureAud, fixtureNow } from "../../support/client-harness.js";
@@ -27,7 +27,13 @@ export const MODERN = "2026-07-28";
 
 export interface ModernHarness {
   handle(req: Request): Promise<Response>;
-  seen: { calls: number; body: Uint8Array | null; headers: readonly (readonly [string, string])[] | null };
+  seen: {
+    calls: number;
+    body: Uint8Array | null;
+    headers: readonly (readonly [string, string])[] | null;
+    /** The exact forwarded instances the wrapped handler read with jackHeaders (S9), or null when it carried none. */
+    rawHeaders: readonly (readonly [string, string])[] | null;
+  };
   serverPub: Uint8Array;
 }
 
@@ -39,7 +45,8 @@ const forwardedAnswer = (): Response =>
  * Like newHarness in ../http/fetch/support.js, but with an explicit
  * deployment profile (spec 04 section 3): `undefined` means the option is not
  * passed at all, so the adapter keeps its own legacy default. The wrapped
- * handler records the forwarded header instances and body bytes.
+ * handler records the forwarded header instances (both the Headers view and
+ * the exact jackHeaders list) and body bytes.
  */
 export function newModernHarness(profile: ServerProfile | undefined, next?: (req: Request) => Promise<Response>): ModernHarness {
   const state = newRegistryState();
@@ -53,11 +60,12 @@ export function newModernHarness(profile: ServerProfile | undefined, next?: (req
     native: new Native(),
     now: () => fixtureNow,
   });
-  const seen: ModernHarness["seen"] = { calls: 0, body: null, headers: null };
+  const seen: ModernHarness["seen"] = { calls: 0, body: null, headers: null, rawHeaders: null };
   const upstream = next ?? (async (): Promise<Response> => forwardedAnswer());
   const wrapped = async (req: Request): Promise<Response> => {
     seen.calls += 1;
     seen.headers = [...req.headers];
+    seen.rawHeaders = jackHeaders(req) ?? null;
     seen.body = new Uint8Array(await req.arrayBuffer());
     return upstream(req);
   };

@@ -129,6 +129,50 @@ export function jackIdentity(req: Request): JackIdentity | undefined {
 }
 
 /**
+ * SDK-PRIVATE header-instance storage, keyed like `identities` by the request
+ * object the adapter hands to the wrapped handler: the same association
+ * boundary, so a copied Request carries no entry and the list cannot be
+ * replaced from handler code. The list is the exact forwarded list (modern
+ * era: S8 removals applied, received order and casing kept).
+ */
+const forwardedHeaderLists = new WeakMap<object, readonly (readonly [string, string])[]>();
+
+/** The received header instances of a request the wrapped handler sees, in original order and casing (S9); undefined for any other request. */
+export function jackHeaders(req: Request): readonly (readonly [string, string])[] | undefined {
+  return forwardedHeaderLists.get(req);
+}
+
+/**
+ * The received header instances. Without the node adapter's raw list a
+ * Headers object has merged repeats with ", " and lowercased names; for the
+ * single-valued mirrors MCP-Protocol-Version and Mcp-Method a valid value
+ * never contains a comma, so each comma-separated piece is treated as one
+ * instance (S1 header_repeated); Mcp-Name may legitimately contain a comma,
+ * so its merged value stays one instance (a genuine repeat then refuses as
+ * name_header_mismatch).
+ */
+function receivedHeaderInstances(req: Request): readonly (readonly [string, string])[] {
+  const raw = (req as JackRequest)[HEADER_VALUES_SYMBOL];
+  if (raw !== undefined) return raw;
+  const out: [string, string][] = [];
+  for (const [name, value] of req.headers) {
+    // The names of a Headers object are lowercased; only these two are
+    // single-valued mirrors whose merged form can be split again.
+    if (name === "mcp-protocol-version" || name === "mcp-method") {
+      if (value === "") {
+        // The empty merged value is the empty value itself, not zero pieces.
+        out.push([name, value]);
+        continue;
+      }
+      for (const piece of value.split(",")) out.push([name, piece.trim()]);
+      continue;
+    }
+    out.push([name, value]);
+  }
+  return out;
+}
+
+/**
  * Spec 01 section 3.1: the signed target is an origin-form request target:
  * it starts with '/' (so not absolute-, authority- or asterisk-form) and
  * consists only of the bytes 0x21 to 0x7E.
@@ -213,10 +257,15 @@ function targetFromUrl(requestUrl: string): string | undefined {
  * byte-identical. "modern" and "both" authenticate and classify the request,
  * then decide the era (S3) and either refuse with a signed JSON-RPC error
  * (S10; the 405 answer also carries Allow: POST) or forward with
- * Mcp-Session-Id and Last-Event-ID removed (S8). A Fetch Request carries only
- * the merged header view, so repeated header instances are observable only
- * through the node adapter's HEADER_VALUES_SYMBOL; without it a repeated
- * mirror arrives as one comma-joined value.
+ * Mcp-Session-Id and Last-Event-ID removed (S8). Repeated header instances:
+ * the node adapter supplies the true received instances; without it a Fetch
+ * Request carries only the merged header view, where a Headers object joined
+ * repeats with ", " and lowercased the names — for the single-valued mirrors
+ * MCP-Protocol-Version and Mcp-Method a valid value never contains a comma,
+ * so each comma-separated piece counts as one instance, while Mcp-Name may
+ * legitimately contain a comma and its merged value stays one instance. The
+ * wrapped handler reads the exact forwarded list, in received order and
+ * casing, with jackHeaders(req).
  */
 export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => Promise<Response>): (req: Request) => Promise<Response> {
   if (config.verifier === undefined) throw new Error("server: HandlerConfig.verifier must be set");
@@ -417,12 +466,18 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
   }
 
   // Hands an authorized request to the wrapped server and signs what it answers.
-  async function forward(req: Request, body: Uint8Array, res: VerifyResult): Promise<Response> {
-    // Spec 04 S9: the modern era forwards the header list the era rules
+  async function forward(
+    req: Request,
+    body: Uint8Array,
+    res: VerifyResult,
+    headerInstances: readonly (readonly [string, string])[],
+  ): Promise<Response> {
+    // Spec 04 S9: the modern era forwards the header instances the era rules
     // returned (S8 removals applied); the legacy era forwards the request's
-    // headers exactly as before.
-    const forwardedHeaderList = res.era === "modern" ? res.forwardHeaders : [...req.headers];
-    const forwardedHeaders = new Headers(forwardedHeaderList);
+    // headers exactly as before (`[...req.headers]`, the merged view that
+    // `new Headers(req.headers)` would have produced anyway).
+    const forwardedList: readonly (readonly [string, string])[] = res.era === "modern" ? res.forwardHeaders ?? [] : headerInstances;
+    const forwardedHeaders = new Headers(forwardedList);
     // Restore the EXACT buffered body bytes. undici throws for a GET body,
     // so the body is only attached for methods that can carry one; a
     // conditional spread, never an explicit undefined, keeps
@@ -445,6 +500,10 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     if (res.identity !== undefined) {
       identities.set(restored, res.identity);
     }
+    // Hand the wrapped handler the exact forwarded instances (received order
+    // and casing, S8 removals applied) through the jackHeaders() accessor:
+    // a Headers object can neither keep repeats nor the received casing.
+    forwardedHeaderLists.set(restored, forwardedList);
 
     let resp: Response;
     try {
@@ -545,9 +604,10 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
   return async (req: Request): Promise<Response> => {
     const method = req.method;
     // The received header instances (received order and casing) for the
-    // modern-profile rules; a Fetch Request alone carries only the merged view.
-    const headerInstances: readonly (readonly [string, string])[] =
-      (req as JackRequest)[HEADER_VALUES_SYMBOL] ?? [...req.headers];
+    // modern-profile rules; a Fetch Request alone carries only the merged view,
+    // which receivedHeaderInstances() splits back for the single-valued
+    // mirrors.
+    const headerInstances = receivedHeaderInstances(req);
     if (method !== "GET" && method !== "POST") {
       // A modern-era non-POST request is authenticated first and refused by S2
       // with a signed 405; anything else keeps the 0.1.x unsigned answer.
@@ -647,7 +707,7 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     const finish = takeResultFinish(res);
     let out!: Response;
     try {
-      out = !res.accepted ? reject(res) : res.native ? native(res) : await forward(req, body, res);
+      out = !res.accepted ? reject(res) : res.native ? native(res) : await forward(req, body, res, headerInstances);
     } catch (error) {
       // Release even on response failure; idempotent with the node adapter.
       finish?.();

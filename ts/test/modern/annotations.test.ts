@@ -109,6 +109,83 @@ test("annotations: every unreachable position", () => {
   );
 });
 
+test("annotations: applicator traversal boundaries", () => {
+  const deep: JsonValue = {
+    type: "object",
+    properties: {
+      a: { type: "object", properties: { b: { type: "object", properties: { c: { type: "string", "x-mcp-header": "Deep" } } } } },
+    },
+  };
+  assert.deepEqual(validateAnnotations(deep), { valid: true, reason: null }, "A deep properties chain must be reachable.");
+  assert.deepEqual(
+    projectArguments(deep, { a: { b: { c: "v" } } }),
+    { outcome: "headers", headers: [["Mcp-Param-Deep", "v"]] },
+    "A deep properties chain must project its header.",
+  );
+
+  const namedItems: JsonValue = { type: "object", properties: { items: { type: "string", "x-mcp-header": "Items" } } };
+  assert.deepEqual(validateAnnotations(namedItems), { valid: true, reason: null }, "A property named items must be reachable.");
+  assert.deepEqual(
+    projectArguments(namedItems, { items: "v" }),
+    { outcome: "headers", headers: [["Mcp-Param-Items", "v"]] },
+    "A property named items must project its header.",
+  );
+
+  const insideItems: JsonValue = {
+    type: "object",
+    items: { type: "object", properties: { x: { type: "string", "x-mcp-header": "X" } } },
+  };
+  assert.deepEqual(
+    validateAnnotations(insideItems),
+    { valid: false, reason: "annotation_not_statically_reachable" },
+    "An annotation under items must be unreachable.",
+  );
+
+  const insidePrefixItems: JsonValue = { type: "array", prefixItems: [{ type: "string", "x-mcp-header": "Prefix" }] };
+  assert.deepEqual(
+    validateAnnotations(insidePrefixItems),
+    { valid: false, reason: "annotation_not_statically_reachable" },
+    "An annotation under prefixItems must be unreachable.",
+  );
+
+  const insideUnevaluatedItems: JsonValue = { type: "array", unevaluatedItems: { type: "string", "x-mcp-header": "Unevaluated" } };
+  assert.deepEqual(
+    validateAnnotations(insideUnevaluatedItems),
+    { valid: false, reason: "annotation_not_statically_reachable" },
+    "An annotation under unevaluatedItems must be unreachable.",
+  );
+
+  const underDefs: JsonValue = {
+    type: "object",
+    $defs: { Named: { type: "string", "x-mcp-header": "Named" } },
+    properties: { p: { $ref: "#/$defs/Named" } },
+  };
+  assert.deepEqual(
+    validateAnnotations(underDefs),
+    { valid: false, reason: "annotation_not_statically_reachable" },
+    "A $defs annotation reached through $ref must be unreachable.",
+  );
+
+  const propertiesNotObject: JsonValue = { type: "object", properties: 7 };
+  assert.deepEqual(
+    validateAnnotations(propertiesNotObject),
+    { valid: true, reason: null },
+    "A non-object properties member must collect no annotation.",
+  );
+  assert.deepEqual(
+    projectArguments(propertiesNotObject, {}),
+    { outcome: "headers", headers: [] },
+    "A non-object properties member must project no header.",
+  );
+
+  const propertyNamedAnnotation: JsonValue = { allOf: [{ properties: { "x-mcp-header": { type: "string" } } }] };
+  assert.deepEqual(
+    validateAnnotations(propertyNamedAnnotation),
+    { valid: true, reason: null },
+    "A property named x-mcp-header under allOf is not an annotation.",
+  );
+});
+
 test("annotations: the C5 rule order and tokens", () => {
   const cases: readonly (readonly [string, JsonValue, AnnotationReason])[] = [
     ["non-string name", schemaFor(7), "annotation_name_not_string"],

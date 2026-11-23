@@ -47,6 +47,12 @@ export interface ModernServer {
   handle: ((req: RecordedRequest) => Response | Promise<Response>) | null;
   /** Signs status + auth.sig + kid + fixtureNow + body with the server key (spec 01 section 5). */
   sign(status: number, auth: RequestAuth, body: string | Uint8Array): Response;
+  /**
+   * `sign`, then every `extra` pair is set on the response headers: the
+   * legacy handshake assigns `Mcp-Session-Id` this way. Fetch lowercases the
+   * names, so the client reads them lowercased.
+   */
+  signWithHeaders(status: number, auth: RequestAuth, body: string | Uint8Array, extra: readonly (readonly [string, string])[]): Response;
 }
 
 /** The header values of one recorded request whose name matches case-insensitively, in order. */
@@ -110,6 +116,19 @@ export function newModernServer(): ModernServer {
     });
   };
 
+  // The response signature covers status and body only (spec 01 section 5), so
+  // an extra header can be added after signing without invalidating it.
+  const signWithHeaders = (
+    status: number,
+    auth: RequestAuth,
+    body: string | Uint8Array,
+    extra: readonly (readonly [string, string])[],
+  ): Response => {
+    const response = sign(status, auth, body);
+    for (const [name, value] of extra) response.headers.set(name, value);
+    return response;
+  };
+
   const fetchImpl = async (input: string | Request | URL, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input));
     const method = init?.method ?? "GET";
@@ -171,7 +190,7 @@ export function newModernServer(): ModernServer {
     return server.handle(request);
   };
 
-  const server: ModernServer = { fetch: fetchImpl, requests: [], pub, kid, handle: null, sign };
+  const server: ModernServer = { fetch: fetchImpl, requests: [], pub, kid, handle: null, sign, signWithHeaders };
   return server;
 }
 

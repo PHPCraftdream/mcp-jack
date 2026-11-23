@@ -41,7 +41,14 @@ export interface RequestMirrorsInput {
 export interface RequestMirrors {
   /** params._meta: protocolVersion, then clientInfo when given, then clientCapabilities ({} by default). */
   readonly meta: { readonly [key: string]: JsonValue };
-  /** The C2 headers in C2 order. */
+  /**
+   * The C2 headers in C2 order (spec 04 section 6): `MCP-Protocol-Version`,
+   * `Mcp-Method`, then `Mcp-Name` for an `S6` method, then one
+   * `Mcp-Param-{Name}` per valid annotation in C6 order. Only this list order
+   * is guaranteed by the SDK: a Fetch or Node transport may normalize header
+   * order and spelling when it serializes the request, so the order actually
+   * on the wire is the transport's.
+   */
   readonly headers: readonly HeaderPair[];
 }
 
@@ -51,15 +58,25 @@ function isContainer(value: JsonValue | undefined): value is { readonly [key: st
 }
 
 /**
- * C1 and C2: the request `_meta` and its mirror headers in C2 order. A `Mcp-Name`
- * source field whose body value is not a string is a caller bug, not a skip.
+ * C1 and C2: the request `_meta` and its mirror headers. The returned pair
+ * list is in C2 order (spec 04 section 6) and nothing more is claimed: Fetch
+ * and Node transports may normalize header order and spelling when they
+ * serialize, so only the list order is guaranteed by the SDK.
+ *
+ * A `Mcp-Name` source field whose body value is not a string is a caller bug,
+ * not a skip. C1 requires `clientCapabilities` to be a JSON object, so a
+ * supplied value that is not a non-null, non-array object throws.
  */
 export function buildRequestMirrors(input: RequestMirrorsInput): RequestMirrors {
+  const capabilities = input.clientCapabilities;
+  if (capabilities !== undefined && !isContainer(capabilities)) {
+    throw new Error("modern profile: clientCapabilities must be a JSON object");
+  }
   const meta: { [key: string]: JsonValue } = { [META_PROTOCOL_VERSION]: input.version };
   if (input.clientInfo !== undefined) {
     meta[META_CLIENT_INFO] = { name: input.clientInfo.name, version: input.clientInfo.version };
   }
-  meta[META_CLIENT_CAPABILITIES] = input.clientCapabilities ?? {};
+  meta[META_CLIENT_CAPABILITIES] = capabilities ?? {};
   const headers: HeaderPair[] = [
     ["MCP-Protocol-Version", input.version],
     ["Mcp-Method", input.method],

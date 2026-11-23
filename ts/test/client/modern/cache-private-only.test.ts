@@ -49,6 +49,15 @@ test("client_cache_private_only", async () => {
   assert.deepEqual(second, { area: 1 }, "cache: the cached call returns the same value");
   assert.equal(howManyCalls(server), 1, "cache: the same request is reused within ttl");
 
+  // 2b. Defensive copies on both sides: mutating a served value changes neither
+  // the stored entry nor the value a later lookup returns.
+  (first as { area: number }).area = 99;
+  const third = await mc.call("tools/call", { name: "svc.status" });
+  assert.deepEqual(third, { area: 1 }, "cache: a mutated served value does not change what the cache returns next");
+  assert.equal(howManyCalls(server), 1, "cache: the mutated value is still a cache hit");
+  (third as { area: number }).area = 7;
+  assert.deepEqual(await mc.call("tools/call", { name: "svc.status" }), { area: 1 }, "cache: a mutation of a cache hit is not stored");
+
   // 3. C8: a different request is a different key and reaches the server.
   const other = await mc.call("tools/call", { name: "svc.other" });
   assert.deepEqual(other, { area: 1 }, "cache: a different request is answered by the server");
@@ -121,8 +130,26 @@ test("client_cache_private_only", async () => {
   unit.clear();
   assert.equal(unit.get("unit"), undefined, "cache: clear drops every entry");
 
-  const key = resultCacheKey("tools/call", '{"name":"svc.status"}', "modern");
-  assert.notEqual(resultCacheKey("tools/other", '{"name":"svc.status"}', "modern"), key, "cache: the key differs for a different method");
-  assert.notEqual(resultCacheKey("tools/call", '{"name":"svc.other"}', "modern"), key, "cache: the key differs for different params text");
-  assert.notEqual(resultCacheKey("tools/call", '{"name":"svc.status"}', "legacy"), key, "cache: the key differs for a different era");
+  const key = resultCacheKey("tools/call", '{"name":"svc.status"}', "modern", "2026-07-28");
+  assert.notEqual(resultCacheKey("tools/other", '{"name":"svc.status"}', "modern", "2026-07-28"), key, "cache: the key differs for a different method");
+  assert.notEqual(resultCacheKey("tools/call", '{"name":"svc.other"}', "modern", "2026-07-28"), key, "cache: the key differs for different params text");
+  assert.notEqual(resultCacheKey("tools/call", '{"name":"svc.status"}', "legacy", "2026-07-28"), key, "cache: the key differs for a different era");
+  const otherVersionKey = resultCacheKey("tools/call", '{"name":"svc.status"}', "modern", "2025-11-25");
+  assert.notEqual(otherVersionKey, key, "cache: the key differs for a different negotiated version");
+
+  // A value stored under one version is never served for a key built under
+  // another version, even with the same method and params text.
+  const versions = new PrivateResultCache(() => 0);
+  versions.put(key, { area: 1 }, 60000);
+  assert.deepEqual(versions.get(key), { area: 1 }, "cache: the entry is served under its own version");
+  assert.equal(versions.get(otherVersionKey), undefined, "cache: an entry is not served under another negotiated version");
+
+  // The store and the load both copy: a mutation through either side is invisible.
+  const source = { area: 1 };
+  versions.put(key, source, 60000);
+  source.area = 42;
+  assert.deepEqual(versions.get(key), { area: 1 }, "cache: the stored value is a copy of the caller's value");
+  const served = versions.get(key) as { area: number };
+  served.area = 43;
+  assert.deepEqual(versions.get(key), { area: 1 }, "cache: each load returns its own copy");
 });

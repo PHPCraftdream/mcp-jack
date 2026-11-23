@@ -263,8 +263,18 @@ function metaVersion(body: BodyView): string | null {
 /**
  * S1-S12 of spec 04 section 5: classify one request. The era decision (S3)
  * runs first; the legacy era forwards unchanged, and every later rule runs
- * only in the modern era, in reference order. A body that is not a JSON-RPC
- * object, or a modern POST without a body, is a caller bug and throws.
+ * only in the modern era, in reference order.
+ *
+ * A non-POST request has no body, so — spec 04 section 3, "Non-POST under
+ * `both`: there is no body, so only `H` counts" — its body text is NEVER read
+ * or parsed: classification never throws on a non-JSON body, the era-neutral
+ * `tools/call` classification refusal never applies to it, the era comes from
+ * the `MCP-Protocol-Version` header alone (no `_meta`), `S1` still runs and
+ * `S2` refuses it with `method_not_allowed`, `idText` "null" and
+ * `allowPost: true`.
+ *
+ * A POST body that is not a JSON-RPC object, or a modern POST without a body,
+ * is a caller bug and throws.
  */
 export function classifyModernRequest(input: ModernRequestInput): ModernRequestDecision {
   const find = (name: string): readonly HeaderPair[] => input.headers.filter(([n]) => n.toLowerCase() === name);
@@ -286,7 +296,13 @@ export function classifyModernRequest(input: ModernRequestInput): ModernRequestD
     forward: { method: input.method, target: input.target, headers },
   });
 
-  const body = readBody(input.bodyText);
+  // A non-POST request carries no body in the modern rules (spec 04 section
+  // 3): it is never read or parsed, so a non-JSON body cannot make this throw
+  // and the classification refusal below never applies to it.
+  const nonPost = input.method !== "POST";
+  const body: BodyView = nonPost
+    ? { kind: "none", method: undefined, idText: "null", obj: undefined }
+    : readBody(input.bodyText);
 
   // Spec 02 section 2 item 4 runs before any rule of section 5: a tools/call
   // whose params.name is not a string is refused era-neutrally at classification.

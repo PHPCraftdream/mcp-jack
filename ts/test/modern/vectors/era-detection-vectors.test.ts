@@ -49,3 +49,60 @@ test("era-detection vectors: every case", () => {
   printSummary("era-detection", pass);
   assert.equal(pass, 38, "era-detection pass count");
 });
+
+test("era detection: recognition boundaries", () => {
+  const legacy = { era: "legacy", action: "fallback_initialize", reason: "no_modern_error" };
+  const clientVersions = ["2026-07-28"];
+
+  const stringCode = detectEra(
+    { verified: true, status: 400, bodyText: '{"jsonrpc":"1.0","error":{"code":"-32020","message":"x"}}' },
+    clientVersions,
+  );
+  assert.deepEqual(stringCode, legacy, "A non-2.0 envelope is not a modern error.");
+
+  const missingId = detectEra(
+    { verified: true, status: 400, bodyText: '{"jsonrpc":"2.0","error":{"code":-32020,"message":"x"}}' },
+    clientVersions,
+  );
+  assert.deepEqual(missingId, legacy, "A recognised error needs an id member.");
+
+  const mixedSupported = detectEra(
+    {
+      verified: true,
+      status: 400,
+      bodyText: '{"jsonrpc":"2.0","id":1,"error":{"code":-32022,"message":"x","data":{"supported":["2026-07-28",7]}}}',
+    },
+    clientVersions,
+  );
+  assert.deepEqual(
+    mixedSupported,
+    { era: "modern", action: "abort", reason: "unsupported_version_no_overlap" },
+    "A mixed supported list is not usable.",
+  );
+
+  const retry = detectEra(
+    {
+      verified: true,
+      status: 400,
+      bodyText: '{"jsonrpc":"2.0","id":1,"error":{"code":-32022,"message":"x","data":{"supported":["2025-11-25","2026-07-28"]}}}',
+    },
+    clientVersions,
+  );
+  assert.deepEqual(
+    retry,
+    { era: "modern", action: "retry_with_supported", reason: null, supported: ["2026-07-28"] },
+    "The mutual versions keep server order.",
+  );
+
+  const notFound = detectEra(
+    { verified: true, status: 404, bodyText: '{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"x"}}' },
+    clientVersions,
+  );
+  assert.deepEqual(notFound, legacy, "Only -32601 is a modern signal on a 404.");
+
+  const methodNotAllowed = detectEra(
+    { verified: true, status: 405, bodyText: '{"jsonrpc":"2.0","id":1,"error":{"code":-32020,"message":"x"}}' },
+    clientVersions,
+  );
+  assert.deepEqual(methodNotAllowed, legacy, "A 405 is legacy whatever the body says.");
+});

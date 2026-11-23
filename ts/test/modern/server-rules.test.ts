@@ -172,6 +172,38 @@ test("server rules: header names are case-insensitive and values case-sensitive"
   );
 });
 
+test("server rules: a comma never splits Mcp-Name but splits the single-valued mirrors at the adapter boundary", () => {
+  const headers: readonly HeaderPair[] = [
+    ["MCP-Protocol-Version", "2026-07-28"],
+    ["Mcp-Method", "tools/call"],
+    ["Mcp-Name", "a,b"],
+  ];
+  const callBody =
+    '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"a,b","_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}';
+  const forward = forwardOf(post("both", headers, callBody));
+  assert.equal(forward.era, "modern", "A comma must not split Mcp-Name.");
+  assert.deepEqual(forward.forward.headers, headers, "The one comma-bearing instance must be forwarded unchanged.");
+
+  const splitBody =
+    '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"a","_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}';
+  const mismatched = refuseOf(post("both", headers, splitBody));
+  assert.equal(mismatched.message, MODERN_REFUSALS.name_header_mismatch.message, "A split name must mismatch, not repeat.");
+  assert.notEqual(mismatched.message, MODERN_REFUSALS.header_repeated.message, "A comma is never a repeated header.");
+
+  const mixedVersions = refuseOf(
+    post(
+      "both",
+      [
+        ["MCP-Protocol-Version", "2026-07-28"],
+        ["MCP-Protocol-Version", "2025-11-25"],
+      ],
+      LIST_PLAIN,
+    ),
+  );
+  assert.equal(mixedVersions.era, "modern", "One modern instance must select the modern era.");
+  assert.equal(mixedVersions.message, MODERN_REFUSALS.header_repeated.message, "Two separate instances are repeated at the adapter.");
+});
+
 test("server rules: S1 rejects repeated and invalid mirror values", () => {
   const repeated: readonly (readonly HeaderPair[])[] = [
     [

@@ -80,6 +80,29 @@ test("values: C4 rejects every non-canonical sentinel", () => {
   assert.deepEqual(decodeHeaderValue("=?BASE64?SGVsbG8=?="), { ok: true, text: "=?BASE64?SGVsbG8=?=" }, "An upper-case marker must be plain text.");
 });
 
+test("values: sentinel decode boundaries", () => {
+  const bad: readonly string[] = [
+    "=?base64?A?=",
+    "=?base64?AAAAA?=",
+    "=?base64?A===?=",
+    "=?base64?====?=",
+    "=?base64?AB==?=",
+    "=?base64?SGVsbG8===?=",
+    "=?base64?SGVsbG8=\u0000?=",
+    "=?base64?SGVsbG8=/w==?=",
+  ];
+  for (const input of bad) {
+    assert.deepEqual(decodeHeaderValue(input), { ok: false, reason: "bad_encoding" }, "An undecodable sentinel must not decode.");
+  }
+
+  const plain: readonly string[] = ["=?base64??=x", "x=?base64??="];
+  for (const input of plain) {
+    assert.deepEqual(decodeHeaderValue(input), { ok: true, text: input }, "A value that is not an envelope must stay plain text.");
+  }
+  assert.deepEqual(decodeHeaderValue("=?base64??="), { ok: true, text: "" }, "The empty sentinel must decode to the empty string, not plain text.");
+  assert.deepEqual(decodeHeaderValue("=?base64?SGVsbG8=?="), { ok: true, text: "Hello" }, "A canonical sentinel must decode to its UTF-8 text.");
+});
+
 test("values: character classes", () => {
   const fieldValueOk: readonly string[] = ["a b", "\ta", ""];
   for (const value of fieldValueOk) {

@@ -215,12 +215,16 @@ export interface VerifyResult {
    */
   readonly identity: JackIdentity | undefined;
   readonly audit: AuditEvent | undefined;
-  /** "" unless the modern profile decided an era for this request. */
-  readonly era: "legacy" | "modern" | "";
-  /** The header list the wrapped handler sees in the modern era (S8 removals applied); empty otherwise. */
-  readonly forwardHeaders: readonly (readonly [string, string])[];
+  /**
+   * The era the modern profile decided for this request; absent when no
+   * profile decided one and "" is never assigned (additive optional member:
+   * an existing caller that builds a VerifyResult still compiles).
+   */
+  readonly era?: "legacy" | "modern" | "";
+  /** The header list the wrapped handler sees in the modern era (S8 removals applied); absent otherwise, and never empty when set. */
+  readonly forwardHeaders?: readonly (readonly [string, string])[];
   /** Set when a spec 04 rule refused the request after authentication. */
-  readonly rpcRefusal: RpcRefusal | undefined;
+  readonly rpcRefusal?: RpcRefusal | undefined;
 }
 
 /** Verifier configuration. */
@@ -504,9 +508,9 @@ export class Verifier {
         structured: done.structured,
         identity: done.identity,
         audit: done.audit,
-        era: done.era,
-        forwardHeaders: done.forwardHeaders,
-        rpcRefusal: done.rpcRefusal,
+        ...(done.era !== undefined && done.era !== "" ? { era: done.era } : {}),
+        ...(done.forwardHeaders !== undefined && done.forwardHeaders.length > 0 ? { forwardHeaders: done.forwardHeaders } : {}),
+        ...(done.rpcRefusal !== undefined ? { rpcRefusal: done.rpcRefusal } : {}),
       };
       rememberResultFinish(res, outcome.finish);
       return res;
@@ -554,9 +558,9 @@ export class Verifier {
       structured: done.structured,
       identity: done.identity,
       audit: done.audit,
-      era: done.era,
-      forwardHeaders: done.forwardHeaders,
-      rpcRefusal: done.rpcRefusal,
+      ...(done.era !== undefined && done.era !== "" ? { era: done.era } : {}),
+      ...(done.forwardHeaders !== undefined && done.forwardHeaders.length > 0 ? { forwardHeaders: done.forwardHeaders } : {}),
+      ...(done.rpcRefusal !== undefined ? { rpcRefusal: done.rpcRefusal } : {}),
     };
   }
 
@@ -586,7 +590,9 @@ export class Verifier {
     const modernProfile = req.profile !== undefined && req.profile !== "legacy" ? req.profile : undefined;
     const decideEra = (): boolean => {
       if (modernProfile === undefined) return true;
-      const text = bodyText(req.body);
+      // Spec 04 section 3: a non-POST request has no body, so the modern rules
+      // must never read or parse one (only `H` counts for the era decision).
+      const text = req.method === "POST" ? bodyText(req.body) : undefined;
       const decision = classifyModernRequest({
         profile: modernProfile,
         method: req.method,
@@ -830,8 +836,5 @@ function rejected(httpStatus: number, code: string, message: string): VerifyResu
     structured: undefined,
     identity: undefined,
     audit: undefined,
-    era: "",
-    forwardHeaders: [],
-    rpcRefusal: undefined,
   };
 }

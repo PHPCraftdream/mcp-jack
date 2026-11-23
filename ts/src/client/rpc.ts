@@ -72,6 +72,13 @@ export interface SignedReply {
   readonly bodyText: string;
   /** The parsed JSON body; undefined when the body is empty or not JSON. */
   readonly json: JsonValue | undefined;
+  /**
+   * Every response header pair, in the order the Fetch `Headers` iterator
+   * yields them; Fetch lowercases header names, so a caller reads
+   * `mcp-session-id` for `Mcp-Session-Id` (spec 04 C9's legacy handshake needs
+   * it). Order and spelling are the transport's, not the SDK's.
+   */
+  readonly headers: readonly (readonly [string, string])[];
 }
 
 /** Client performs signed, response-verified MCP tool calls over JSON-RPC. */
@@ -237,6 +244,30 @@ export class Client {
     this.#nextID++;
     const bodyText =
       '{"jsonrpc":"2.0","id":' + id + ',"method":' + JSON.stringify(method) + ',"params":' + (paramsJson ?? "{}") + "}";
+    return this.sendJsonRpc(bodyText, headers, fixedNow);
+  }
+
+  /** signedNotify sends one signed JSON-RPC NOTIFICATION (no id) through the same transport and returns the verified response, headers included. */
+  async signedNotify(
+    method: string,
+    paramsJson: string | undefined,
+    headers: readonly (readonly [string, string])[] = [],
+    fixedNow?: number,
+  ): Promise<SignedReply> {
+    const bodyText = '{"jsonrpc":"2.0","method":' + JSON.stringify(method) + ',"params":' + (paramsJson ?? "{}") + "}";
+    return this.sendJsonRpc(bodyText, headers, fixedNow);
+  }
+
+  /**
+   * sendJsonRpc: the shared transport step of `signedRequest` and
+   * `signedNotify`. `bodyText` is the exact signed body; the pairs are sent
+   * after `content-type: application/json`, in the given order.
+   */
+  private async sendJsonRpc(
+    bodyText: string,
+    headers: readonly (readonly [string, string])[],
+    fixedNow: number | undefined,
+  ): Promise<SignedReply> {
     const requestHeaders: [string, string][] = [["content-type", "application/json"]];
     for (const [name, value] of headers) {
       requestHeaders.push([name, value]);
@@ -257,7 +288,7 @@ export class Client {
         json = undefined;
       }
     }
-    return { status: resp.status, bodyText: bodyTextOut, json };
+    return { status: resp.status, bodyText: bodyTextOut, json, headers: [...resp.headers] };
   }
 
   /** Enrolls a NEW key with an invite code; the WHOLE request is signed by the new key (spec 03 section 3.2). */

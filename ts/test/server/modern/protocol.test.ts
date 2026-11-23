@@ -17,6 +17,8 @@ import {
   utf8,
 } from "./support.js";
 import type { ModernHarness } from "./support.js";
+import { HEADER_VALUES_SYMBOL, RAW_BODY_SYMBOL } from "../../../src/server/http/fetch.js";
+import type { JackRequest } from "../../../src/server/http/fetch.js";
 
 /** The forwarded values of one header name (name compared case-insensitively). */
 function forwarded(harness: ModernHarness, name: string): string[] {
@@ -221,4 +223,175 @@ test("modern profile: the legacy profile ignores modern mirrors entirely", async
   assert.equal(response.status, 200);
   await assertSigned(response, harness.serverPub, sig);
   assert.equal(harness.seen.calls, 1);
+});
+
+test("modern profile: a comma-joined single-valued mirror is a repeated instance", async () => {
+  // A bare Fetch Request has already merged repeated lines with ", ". Because
+  // MCP-Protocol-Version is single-valued, each comma-separated piece counts
+  // as one instance: the era comes from the first piece (modern) and S1 then
+  // refuses the repetition — a merged-that-stays-one reading would forward it
+  // as a legacy request instead.
+  const harness = newModernHarness("both");
+  const { request, sig } = modernRequest(seedSignerByName("alice"), {
+    headers: [["MCP-Protocol-Version", "2026-07-28, 2025-11-25"]],
+    body: utf8('{"jsonrpc":"2.0","id":1,"method":"tools/list"}'),
+  });
+  const response = await harness.handle(request);
+
+  assert.equal(response.status, 400);
+  const out = await assertSigned(response, harness.serverPub, sig);
+  assert.equal(
+    Buffer.from(out).toString("utf-8"),
+    '{"jsonrpc":"2.0","id":1,"error":{"code":-32020,"message":"Header mismatch: a request metadata header appears more than once"}}',
+  );
+  assert.equal(harness.seen.calls, 0);
+});
+
+test("modern profile: a comma-joined Mcp-Method is a repeated instance", async () => {
+  // Mcp-Method is single-valued too: the merged value is split, so S1 refuses
+  // the repetition before S5 could compare the first piece with the body.
+  const harness = newModernHarness("both");
+  const { request, sig } = modernRequest(seedSignerByName("alice"), {
+    headers: [
+      ["MCP-Protocol-Version", MODERN],
+      ["Mcp-Method", "tools/list, tools/call"],
+    ],
+    body: utf8(
+      '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{' +
+        '"io.modelcontextprotocol/protocolVersion":"' +
+        MODERN +
+        '","io.modelcontextprotocol/clientCapabilities":{}}}}',
+    ),
+  });
+  const response = await harness.handle(request);
+
+  assert.equal(response.status, 400);
+  const out = await assertSigned(response, harness.serverPub, sig);
+  assert.deepEqual(JSON.parse(Buffer.from(out).toString("utf-8")), {
+    jsonrpc: "2.0",
+    id: 1,
+    error: { code: -32020, message: "Header mismatch: a request metadata header appears more than once" },
+  });
+  assert.equal(harness.seen.calls, 0);
+});
+
+test("modern profile: a comma in Mcp-Name stays one instance", async () => {
+  // Mcp-Name may legitimately contain a comma, so its merged value is NOT
+  // split: the single instance decodes to the body value and is forwarded.
+  const harness = newModernHarness("modern");
+  const { request, sig } = modernRequest(seedSignerByName("alice"), {
+    body: modernToolCallBody("1", "a,b"),
+    headers: mirrorsFor("tools/call", "a,b"),
+  });
+  const response = await harness.handle(request);
+
+  assert.equal(response.status, 200);
+  await assertSigned(response, harness.serverPub, sig);
+  assert.equal(harness.seen.calls, 1);
+});
+
+test("modern profile: the wrapped handler sees the forwarded instances in order", async () => {
+  const harness = newModernHarness("modern");
+  const body = modernToolCallBody("1", "svc.status");
+  const { request, sig } = modernRequest(seedSignerByName("alice"), {
+    body,
+    headers: [
+      ["MCP-Protocol-Version", MODERN],
+      ["Mcp-Method", "tools/call"],
+      ["Mcp-Name", "svc.status"],
+      ["Mcp-Param-Region", "eu"],
+      ["Mcp-Session-Id", "s"],
+      ["Mcp-Param-Region", "us"],
+    ],
+  });
+  // The node adapter hands the TRUE received instances over on the symbol (a
+  // Headers object would have merged the two Mcp-Param-Region lines and
+  // lowercased every name); this test uses the same handoff.
+  const jackAuth = request.headers.get("jack-auth");
+  assert.ok(jackAuth !== null);
+  (request as JackRequest)[HEADER_VALUES_SYMBOL] = [
+    ["jack-auth", jackAuth],
+    ["MCP-Protocol-Version", MODERN],
+    ["Mcp-Method", "tools/call"],
+    ["Mcp-Name", "svc.status"],
+    ["Mcp-Param-Region", "eu"],
+    ["Mcp-Session-Id", "s"],
+    ["Mcp-Param-Region", "us"],
+  ];
+  const response = await harness.handle(request);
+
+  assert.equal(response.status, 200);
+  await assertSigned(response, harness.serverPub, sig);
+  assert.equal(harness.seen.calls, 1);
+  const raw = harness.seen.rawHeaders ?? [];
+  const eu = raw.findIndex(([n, v]) => n === "Mcp-Param-Region" && v === "eu");
+  const us = raw.findIndex(([n, v]) => n === "Mcp-Param-Region" && v === "us");
+  assert.ok(eu >= 0, "the first instance is forwarded with its received casing");
+  assert.ok(us > eu, "the second instance follows the first, in received order");
+  assert.deepEqual(raw.filter(([n]) => n.toLowerCase() === "mcp-session-id"), [], "S8 removes Mcp-Session-Id");
+});
+
+test("modern profile: DELETE with a non-JSON body is a signed 405", async () => {
+  // A non-POST body is never read or parsed: the non-JSON body cannot become a
+  // classification refusal, and S2 answers the signed 405 with id null.
+  const harness = newModernHarness("modern");
+  const { request, sig } = modernRequest(seedSignerByName("alice"), {
+    method: "DELETE",
+    body: utf8("not json"),
+    headers: [["MCP-Protocol-Version", MODERN]],
+  });
+  const response = await harness.handle(request);
+
+  assert.equal(response.status, 405);
+  assert.equal(response.headers.get("allow"), "POST");
+  const out = await assertSigned(response, harness.serverPub, sig);
+  assert.equal(
+    Buffer.from(out).toString("utf-8"),
+    '{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"HTTP method not allowed"}}',
+  );
+  assert.equal(harness.seen.calls, 0);
+});
+
+test("modern profile: PUT with a non-JSON body in the legacy era keeps the 0.1.x answer", async () => {
+  // No modern signal at all under profile both: the adapter's own 0.1.x 405 is
+  // unsigned and keeps the 01 section 4 envelope, whatever the body bytes are.
+  const harness = newModernHarness("both");
+  const { request } = modernRequest(seedSignerByName("alice"), { method: "PUT", body: utf8("not json") });
+  const response = await harness.handle(request);
+
+  assert.equal(response.status, 405);
+  assert.equal(response.headers.get("jack-auth"), null, "the adapter's own 405 is unsigned");
+  assert.equal(response.headers.get("allow"), null);
+  assert.equal(errorCode(new Uint8Array(await response.arrayBuffer())), "method_not_allowed");
+  assert.equal(harness.seen.calls, 0);
+});
+
+test("modern profile: GET with a body is a signed 405", async () => {
+  // undici refuses a GET body, so the bytes travel on RAW_BODY_SYMBOL exactly
+  // like the node adapter hands them over; the signature is taken from a
+  // modernRequest call over the same method, target and bytes.
+  const harness = newModernHarness("modern");
+  const body = utf8("not json");
+  const { request, sig } = modernRequest(seedSignerByName("alice"), { method: "GET", body });
+  const jackAuth = request.headers.get("jack-auth");
+  assert.ok(jackAuth !== null);
+  const req = new Request("http://localhost/mcp", {
+    method: "GET",
+    headers: [
+      ["jack-auth", jackAuth],
+      ["MCP-Protocol-Version", MODERN],
+    ],
+  });
+  (req as JackRequest)[RAW_BODY_SYMBOL] = body;
+  const response = await harness.handle(req);
+
+  assert.equal(response.status, 405);
+  assert.equal(response.headers.get("allow"), "POST");
+  const out = await assertSigned(response, harness.serverPub, sig);
+  assert.deepEqual(JSON.parse(Buffer.from(out).toString("utf-8")), {
+    jsonrpc: "2.0",
+    id: null,
+    error: { code: -32600, message: "HTTP method not allowed" },
+  });
+  assert.equal(harness.seen.calls, 0);
 });
