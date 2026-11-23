@@ -1,11 +1,58 @@
-//! Webhook delivery profile of spec 06: Standard Webhooks secrets and
-//! signatures (section 2), the Jack `w1` signature (section 4) and the
-//! receiver-side Jack `w1` check (section 3, step 15).
+//! Webhook delivery profile of spec 06: the Standard Webhooks secret and
+//! signature rules (section 2), the Jack `w1` signature (section 4) and its
+//! receiver-side check (section 3, step 15), the subscription lifecycle
+//! (section 8), endpoint verification (section 5), the SSRF-hardened delivery
+//! path (section 6), the server-neutral receiver (section 3) and Server Card
+//! key discovery (section 7), as laid out in
+//! `docs/design/mcp-2026-07-28.md` section 6.1.
 //!
-//! This module holds only the pure cryptographic layer. It never parses a
-//! request body, never logs a header value and never puts request bytes into
-//! an error: every rejection carries the spec-assigned HTTP status and code,
-//! and a message that is a fixed literal (spec 06 section 3).
+//! The wrapped MCP server owns subscriptions, events and cursors, and this
+//! module supplies only the building blocks a Jack sender and receiver are
+//! made of: the canonical subscription key and id, the TTL grant,
+//! active-secret selection with grace, the `gap` and `terminated` envelopes,
+//! the sender, the receiver, endpoint verification, the SSRF-hardened delivery
+//! path and Server Card discovery (spec 06, design section 6.1). It
+//! deliberately provides no authenticated subscribe/unsubscribe endpoint and
+//! no subscription store.
+//!
+//! Submodules, one line each:
+//!
+//! * [`subscription`] — the canonical subscription key and `sub_` id, the TTL
+//!   grant with `refreshBefore`, secret rotation and the exact `gap` and
+//!   `terminated` bodies (section 8).
+//! * [`delivery`] — the sender's timeout caps, closed `lastError` categories,
+//!   retry schedule and accept/retry/abandon decision (R1.6-R1.10).
+//! * [`signatures`] — the `v1`/`v1a`/`v2a` signing content and
+//!   `webhook-signature` header grammar (section 2).
+//! * [`w1`] — the Jack `w1` header, signing string, signer and check
+//!   (section 4).
+//! * [`encoding`] — canonical standard base64, SHA-256, HMAC-SHA-256,
+//!   constant-time comparison and the delivery secret (section 2).
+//! * [`ssrf`] — the delivery-time host, address and url rules plus the
+//!   `ConnectTarget` decision (section 6).
+//! * [`verification`] — the endpoint verification routes, their cache and the
+//!   per-pair delivery gate (section 5).
+//! * [`receiver`] — the framework-neutral receiver: bounded body collection,
+//!   the verification order, deduplication and the answer rendering
+//!   (section 3).
+//! * [`card`] — Server Card discovery and the operational signing key source
+//!   with its R7.3 validator and R7.6 cross-check (section 7).
+//! * `http` (feature `http`) — the spawn-free sender loop, the well-known
+//!   document fetcher, the request/response adapters and the hardened
+//!   delivery decision; its `https` submodule (feature `client-http`) adds the
+//!   concrete TLS dialer.
+//!
+//! Features follow the pure/impure split: the pure layer — `subscription`,
+//! `delivery`, `signatures`, `w1`, `encoding`, `ssrf`, `verification`,
+//! `receiver` and `card` — compiles with no feature at all; `http` adds the
+//! spawn-free sender, document fetcher and adapters; `client-http` adds the
+//! concrete TLS dialer (`SystemResolver`, `HttpsTransport` and
+//! `HttpCardTransport`).
+//!
+//! Nothing on an acceptance path parses an unverified body, logs a header
+//! value or puts request bytes into an error: every rejection carries the
+//! status and code the spec assigns and a message that is a fixed literal
+//! (spec 06 section 3).
 
 pub mod card;
 pub mod delivery;

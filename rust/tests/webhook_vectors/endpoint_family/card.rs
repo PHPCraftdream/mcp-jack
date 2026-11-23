@@ -9,13 +9,14 @@
 //! `webhook-key-discovery` (R7.2 discovery followed by the R7.6 check).
 
 use mcp_jack::webhook::card::{
-    accept_jwk_set, card_key_for_kid, cross_check_webhook_key, fetch_decision, parse_cidr_list,
-    select_remote, webhook_info, CardFetchInput, KeyRejection, WebhookKeyRecord,
+    accept_jwk_set, card_key_for_kid, cross_check_webhook_key_jwks, fetch_decision,
+    parse_cidr_list, published_jwks, select_remote, webhook_info, CardFetchInput, KeyRejection,
+    WebhookKeyRecord,
 };
 use mcp_jack::webhook::{codes, WebhookError};
 use serde_json::{json, Value};
 
-use crate::common::{assert_case, cases, key_record, summary, text_of};
+use crate::common::{assert_case, cases, jwk_for, key_record, summary, text_of};
 
 /// The committed case count of the corpus (spec/tests/modern/CASES.md).
 const CASE_COUNT: usize = 43;
@@ -92,6 +93,7 @@ fn fetch_case(case: &Value) -> Value {
         status: status_of(response, case),
         redirect: response.get("redirect_to").is_some(),
         body: &body,
+        overflow: false,
         elapsed_ms: input["elapsed_ms"].as_i64(),
         cache_control,
         mcp_server_kid: input["mcp_server_kid"].as_str(),
@@ -167,43 +169,67 @@ fn cidr_case(case: &Value) -> Value {
     })
 }
 
-/// R7.6: the required or optional cross-check of the named card keys.
+/// R7.6: the required or optional cross-check of the case's card-side JWKs.
 fn check_case(case: &Value) -> Value {
     let input = &case["input"];
-    let keys = named_keys(case);
     let require = input["require"]
         .as_bool()
         .unwrap_or_else(|| panic!("{}: require is not a boolean", id_of(case)));
-    match cross_check_webhook_key(&keys, tool_result(input), require) {
+    let card_keys = card_keys(case);
+    match cross_check_webhook_key_jwks(&card_keys, tool_result(input), require) {
         Ok(()) => json!({"result": "accept"}),
         Err(error) => refusal(&error),
     }
 }
 
-/// R7.2, R7.6: the card fetch, then the required cross-check.
+/// R7.2, R7.6: the card fetch, then the required cross-check of the raw
+/// published JWKs the fetched card carries.
 fn discovery_case(case: &Value) -> Value {
     let input = &case["input"];
     let response = &input["response"];
     let mcp_url = text_of(&input["mcpUrl"]);
     let card_url = text_of(&input["cardUrl"]);
     let body = response_body(response);
-    let fetched = match fetch_decision(&CardFetchInput {
+    if let Err(error) = fetch_decision(&CardFetchInput {
         mcp_url: &mcp_url,
         card_url: &card_url,
         status: status_of(response, case),
         redirect: false,
         body: &body,
+        overflow: false,
         elapsed_ms: None,
         cache_control: None,
         mcp_server_kid: None,
         mcp_server_public_key: None,
     }) {
-        Ok(fetched) => fetched,
+        return refusal(&error);
+    }
+    let card: Value = serde_json::from_slice(&body)
+        .unwrap_or_else(|error| panic!("{}: the fetched card is not JSON: {error}", id_of(case)));
+    let published = match published_jwks(&card, &mcp_url) {
+        Ok(published) => published,
         Err(error) => return refusal(&error),
     };
-    match cross_check_webhook_key(&fetched.keys, tool_result(input), true) {
+    match cross_check_webhook_key_jwks(&published, tool_result(input), true) {
         Ok(()) => json!({"result": "accept"}),
         Err(error) => refusal(&error),
+    }
+}
+
+/// Returns the raw card-side JWKs of a `webhook-key-check` case: the
+/// `card_keys` the case publishes verbatim, else the JWKs of the fixture
+/// identities it names (spec 06 R7.3, R7.6).
+fn card_keys(case: &Value) -> Vec<Value> {
+    match case["input"].get("card_keys") {
+        Some(Value::Array(keys)) => keys.clone(),
+        Some(other) => panic!("{}: card_keys is not an array: {other}", id_of(case)),
+        None => {
+            let mut keys = Vec::new();
+            for name in strings_of(&case["input"]["keys"], id_of(case)) {
+                keys.push(jwk_for(&name));
+            }
+            keys
+        }
     }
 }
 

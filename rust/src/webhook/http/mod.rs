@@ -1,36 +1,52 @@
 //! HTTP-facing webhook layer of spec 06 sections 1, 5 and 6: the sender
-//! attempt loop (R1.6-R1.10), the hardened delivery decision and connect
-//! target of section 6 (R6.8-R6.10), the R1.1 header set, and the adapters
-//! between `http` requests/responses and the framework-neutral receiver.
+//! attempt loop (R1.6-R1.10), the fail-closed per-pair verification of
+//! section 5 (R5.1, R5.2, R5.9, R5.12), the hardened delivery decision and
+//! connect target of section 6 (R6.8-R6.10), the R1.1 header set, and the
+//! adapters between `http` requests/responses and the framework-neutral
+//! receiver.
 //!
-//! Two feature levels gate the folder, because the pieces have different
-//! dependency needs:
+//! The folder is split by dependency need, and the features follow exactly
+//! that split:
 //!
-//! * The orchestration, the transport traits and the receiver adapters use
-//!   only the `http` and `bytes` crates, so they live behind the crate's
-//!   `http` feature (`transport`).
-//! * The real TLS/TCP transport needs `hyper`, `tokio`, `tokio-rustls` and
+//! * The spawn-free orchestration lives behind the crate's `http` feature:
+//!   [`transport`] holds the traits, [`prepare`] and the request/response
+//!   types, [`sender`] holds the R1.8 loop and the R5.1 gate, [`document`]
+//!   holds the R5.9 fetcher over an injected transport, and [`transport`]
+//!   also holds the receiver adapters. These files use only the `http` and
+//!   `bytes` crates and spawn nothing.
+//! * The concrete dialer — [`https::SystemResolver`] and
+//!   [`https::HttpsTransport`] — needs `hyper`, `tokio`, `tokio-rustls` and
 //!   `hickory-resolver`, which this crate enables only through its
-//!   `client-http` feature. `https` is therefore gated on `client-http` on
-//!   top of the `http` gate of this module: a build with `http` alone keeps
-//!   the pure layer and leaves the network implementation out.
+//!   `client-http` feature. [`https`] is therefore `#[cfg(feature =
+//!   "client-http")]` on top of this module's own `http` gate: a build with
+//!   `http` alone has no dialer and must inject a [`transport::WebhookTransport`]
+//!   and a [`transport::HostResolver`].
 //!
-//! Everything in the pure layer is deterministic: `now` and sleep come from
-//! a [`transport::Clock`], DNS answers from a [`transport::HostResolver`] and
-//! the wire from a [`transport::WebhookTransport`], so the R1.8 schedule can
-//! be exercised without a socket.
+//! Everything in the pure layer is deterministic: `now` and sleep come from a
+//! [`sender::Clock`], DNS answers from a [`transport::HostResolver`], the wire
+//! from a [`transport::WebhookTransport`] and the verification status from a
+//! [`crate::webhook::verification::gate::EndpointVerifier`], so the R1.8
+//! schedule and the R5.1 gate can be exercised without a socket.
+
+pub mod document;
+pub mod sender;
+pub mod transport;
 
 #[cfg(feature = "client-http")]
 pub mod https;
-pub mod transport;
 
 #[cfg(all(test, feature = "http"))]
 mod tests;
 
+pub use document::WebhookDocumentFetcher;
 #[cfg(feature = "client-http")]
 pub use https::{HttpsTransport, SystemResolver};
+pub use sender::{
+    delivery_headers, Clock, OutgoingMessage, SendAction, SendOutcome, Sender, SenderConfig,
+    JACK_WINDOW_SECONDS,
+};
 pub use transport::{
-    adapt_request, adapt_response, delivery_headers, prepare, Clock, HostResolver, OutgoingMessage,
-    PreparedRequest, SendAction, SendOutcome, Sender, SenderConfig, TransportFailure,
-    TransportRequest, TransportResponse, WebhookTransport, JACK_WINDOW_SECONDS,
+    adapt_request, adapt_response, prepare, FailureKind, HostResolver, PreparedRequest,
+    TransportFailure, TransportRequest, TransportResponse, WebhookTransport,
+    ATTEMPT_TIMEOUT_SECONDS, CONNECT_TIMEOUT_SECONDS, MAX_DOCUMENT_BYTES, RESPONSE_TIMEOUT_SECONDS,
 };

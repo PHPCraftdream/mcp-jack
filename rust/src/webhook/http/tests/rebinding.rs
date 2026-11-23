@@ -1,25 +1,31 @@
-//! Fake-resolver and fake-transport tests of the hardened delivery path
-//! (spec 06 R6.8-R6.10, R1.7, R1.9).
+//! Fake-resolver, fake-transport and scripted-gate tests of the hardened
+//! delivery path (spec 06 R6.8-R6.10, R1.7, R1.9, R5.1, R5.2).
 //!
 //! Nothing below touches a socket, a DNS server or Tokio. [`FakeResolver`]
 //! returns a scripted answer list per call, [`FakeTransport`] records every
-//! [`TransportRequest`] and returns a scripted response, and [`FakeClock`]
-//! records every `sleep_until`. The real [`prepare`] and [`Sender`] run over
-//! those fakes, so the R6.8 connect target, the R6.9 recheck, the R6.10
-//! redirect refusal and the R1.8 schedule are checked without I/O.
+//! [`TransportRequest`] and returns a scripted response, [`FakeClock`]
+//! records every `sleep_until`, and [`ScriptedGate`] scripts the pair's
+//! verification status. The real [`prepare`] and [`Sender`] run over those
+//! fakes, so the R6.8 connect target, the R6.9 recheck, the R6.10 redirect
+//! refusal, the R1.8 schedule and the R5.1 gate are checked without I/O.
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use ed25519_dalek::SigningKey;
 
 use crate::webhook::delivery::{LastError, MAX_BODY_BYTES};
 use crate::webhook::encoding::WebhookSecret;
+use crate::webhook::http::sender::{Clock, OutgoingMessage, SendAction, Sender, SenderConfig};
 use crate::webhook::http::transport::{
-    prepare, Clock, HostResolver, OutgoingMessage, PreparedRequest, SendAction, Sender,
-    SenderConfig, TransportFailure, TransportRequest, TransportResponse, WebhookTransport,
+    prepare, FailureKind, HostResolver, PreparedRequest, TransportFailure, TransportRequest,
+    TransportResponse, WebhookTransport, MAX_DOCUMENT_BYTES,
 };
-use crate::webhook::{MessageKind, WebhookError};
+use crate::webhook::verification::gate::{EndpointPair, EndpointVerifier, VerificationRequest};
+use crate::webhook::verification::nonce::EchoVerdict;
+use crate::webhook::verification::route::VerificationRoute;
+use crate::webhook::{codes, MessageKind, WebhookError};
 
 /// The schedule origin every sender test uses, in unix seconds.
 pub(super) const T0: i64 = 1_767_225_600;
@@ -42,11 +48,20 @@ pub(super) const PORT_URL: &str = "https://example.com:8443/hook";
 /// A global IPv6 literal url.
 pub(super) const IPV6_URL: &str = "https://[2606:4700::1111]/hook";
 
+/// The verified principal of every test pair (spec 06 R5.2).
+pub(super) const PRINCIPAL: &str = "principal.example";
+
 /// A valid `whsec_` secret (spec 06 R2.1), taken from the signature vectors.
 pub(super) const SECRET: &str = "whsec_Ha+2nPDW61Z9H5/Uc/1B8csaLDZJ6SeG9jHX+FmQbZk=";
 
 /// The seed of the fixed signed-emission key.
 pub(super) const KEY_SEED: [u8; 32] = [7u8; 32];
+
+/// A nonce of the R5.3 shape: 22 base64url characters.
+pub(super) const NONCE: &str = "abcdefghijklmnopqrstuv";
+
+/// The whole-attempt budget every test request carries (spec 06 R1.6).
+pub(super) const ATTEMPT: Duration = Duration::from_secs(20);
 
 /// A resolver that returns one scripted answer list per call and records
 /// every `(host, port)` it was asked for (spec 06 R6.8, R6.9).
@@ -80,11 +95,13 @@ impl HostResolver for FakeResolver {
     }
 }
 
-/// A transport that records every request and returns one scripted
-/// `(status, retry_after)` per call (spec 06 R1.7).
+/// How a [`FakeTransport`] answers (spec 06 R1.7, R6.9, R1.2).
 pub(super) struct FakeTransport {
     script: Vec<(u16, Option<i64>)>,
     body: Vec<u8>,
+    declared: Option<u64>,
+    overflow: bool,
+    mismatch: bool,
     requests: Mutex<Vec<TransportRequest>>,
 }
 
@@ -96,6 +113,9 @@ impl FakeTransport {
         Self {
             script,
             body: Vec::new(),
+            declared: None,
+            overflow: false,
+            mismatch: false,
             requests: Mutex::new(Vec::new()),
         }
     }
@@ -103,6 +123,27 @@ impl FakeTransport {
     /// Returns the transport answering every scripted response with `body`.
     pub(super) fn with_body(mut self, body: Vec<u8>) -> Self {
         self.body = body;
+        self
+    }
+
+    /// Returns the transport declaring `length` on every response
+    /// (spec 06 R5.9).
+    pub(super) fn with_declared(mut self, length: u64) -> Self {
+        self.declared = Some(length);
+        self
+    }
+
+    /// Returns the transport reporting every response as overflowing the
+    /// body cap (spec 06 R1.2, R5.9).
+    pub(super) fn with_overflow(mut self) -> Self {
+        self.overflow = true;
+        self
+    }
+
+    /// Returns the transport refusing every send with the R6.9 peer
+    /// mismatch, after recording the request (spec 06 R6.9).
+    pub(super) fn with_peer_mismatch(mut self) -> Self {
+        self.mismatch = true;
         self
     }
 
@@ -122,13 +163,22 @@ impl WebhookTransport for FakeTransport {
         let mut requests = self.requests.lock().expect("transport requests");
         let index = requests.len().min(self.script.len().saturating_sub(1));
         let (status, retry_after) = self.script[index];
-        let body = self.body.clone();
         requests.push(request.clone());
+        if self.mismatch {
+            return Err(TransportFailure::peer_mismatch());
+        }
+        let mut body = self.body.clone();
+        let mut overflow = self.overflow;
+        if body.len() > request.max_body_bytes {
+            body.truncate(request.max_body_bytes);
+            overflow = true;
+        }
         Ok(TransportResponse {
             status,
             retry_after,
             body,
-            declared_length: None,
+            declared_length: self.declared,
+            overflow,
         })
     }
 }
@@ -166,20 +216,130 @@ impl Clock for FakeClock {
     }
 }
 
-/// One sender wired to its fakes, so a test can read back what they saw.
-struct Rig {
-    sender: Sender,
-    transport: Arc<FakeTransport>,
-    resolver: Arc<FakeResolver>,
-    clock: Arc<FakeClock>,
+/// How a [`ScriptedGate`] answers the R5.1/R5.2 calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum GateMode {
+    /// Every pair is already verified; `verify` is never called.
+    Verified,
+    /// No pair is verified and every `verify` is refused.
+    Refusing,
+    /// The pair is verified only until this instant; later `verify` is
+    /// refused, so a grant that expires during a retry sleep stops it.
+    VerifiedUntil(i64),
+    /// No pair is verified until `verify` runs the challenge; the echo
+    /// verdict decides and a success grants the pair.
+    Challenge,
 }
 
-/// Builds the real sender over the scripted resolver and transport and the
-/// recording clock.
-fn rig(answers: Vec<Vec<IpAddr>>, responses: Vec<(u16, Option<i64>)>) -> Rig {
+/// A gate that scripts [`EndpointVerifier`] and records what it was asked
+/// (spec 06 R5.1, R5.2).
+pub(super) struct ScriptedGate {
+    mode: GateMode,
+    granted: Mutex<bool>,
+    verifies: Mutex<Vec<i64>>,
+    verdicts: Mutex<Vec<EchoVerdict>>,
+}
+
+impl ScriptedGate {
+    /// Builds a gate in the given mode.
+    pub(super) fn new(mode: GateMode) -> Self {
+        Self {
+            mode,
+            granted: Mutex::new(false),
+            verifies: Mutex::new(Vec::new()),
+            verdicts: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Returns the `now` of every `verify` call, in call order.
+    pub(super) fn verifies(&self) -> Vec<i64> {
+        self.verifies.lock().expect("gate verifies").clone()
+    }
+
+    /// Returns every challenge echo verdict the gate judged.
+    pub(super) fn verdicts(&self) -> Vec<EchoVerdict> {
+        self.verdicts.lock().expect("gate verdicts").clone()
+    }
+}
+
+impl EndpointVerifier for ScriptedGate {
+    fn is_verified(&self, _pair: &EndpointPair, now: i64) -> bool {
+        match self.mode {
+            GateMode::Verified => true,
+            GateMode::Refusing => false,
+            GateMode::VerifiedUntil(limit) => now <= limit,
+            GateMode::Challenge => *self.granted.lock().expect("gate grant"),
+        }
+    }
+
+    fn verify(
+        &self,
+        pair: &EndpointPair,
+        subscription_id: &str,
+        now: i64,
+        challenge: &dyn crate::webhook::verification::gate::ChallengeSender,
+    ) -> Result<VerificationRoute, WebhookError> {
+        self.verifies.lock().expect("gate verifies").push(now);
+        match self.mode {
+            GateMode::Verified => Ok(VerificationRoute::Cache),
+            GateMode::Refusing | GateMode::VerifiedUntil(_) => Err(challenge_refusal()),
+            GateMode::Challenge => {
+                let request = VerificationRequest {
+                    pair,
+                    subscription_id,
+                    nonce: NONCE,
+                    now,
+                };
+                let verdict = challenge.send_challenge(&request);
+                let accepted = verdict.ok;
+                self.verdicts.lock().expect("gate verdicts").push(verdict);
+                if accepted {
+                    *self.granted.lock().expect("gate grant") = true;
+                    Ok(VerificationRoute::Challenge)
+                } else {
+                    Err(challenge_refusal())
+                }
+            }
+        }
+    }
+}
+
+/// Builds the `challenge_failed` error a refusing gate returns
+/// (spec 06 R5.1, R5.4).
+fn challenge_refusal() -> WebhookError {
+    WebhookError::with_reason(
+        0,
+        codes::CHALLENGE_FAILED,
+        "no_route",
+        "the pair is not verified",
+    )
+}
+
+/// One sender wired to its fakes, so a test can read back what they saw.
+pub(super) struct Rig {
+    pub(super) sender: Sender,
+    pub(super) transport: Arc<FakeTransport>,
+    pub(super) resolver: Arc<FakeResolver>,
+    pub(super) clock: Arc<FakeClock>,
+    pub(super) gate: Arc<ScriptedGate>,
+}
+
+/// Builds the real sender over a verified pair, the scripted resolver and
+/// transport, and the recording clock.
+pub(super) fn rig(answers: Vec<Vec<IpAddr>>, responses: Vec<(u16, Option<i64>)>) -> Rig {
+    rig_with_gate(GateMode::Verified, answers, responses)
+}
+
+/// Builds the real sender over the given gate mode.
+pub(super) fn rig_with_gate(
+    mode: GateMode,
+    answers: Vec<Vec<IpAddr>>,
+    responses: Vec<(u16, Option<i64>)>,
+) -> Rig {
     let transport = Arc::new(FakeTransport::new(responses));
     let resolver = Arc::new(FakeResolver::new(answers));
     let clock = Arc::new(FakeClock::new(T0));
+    let gate = Arc::new(ScriptedGate::new(mode));
     let sender = Sender::new(
         transport.clone(),
         resolver.clone(),
@@ -187,13 +347,16 @@ fn rig(answers: Vec<Vec<IpAddr>>, responses: Vec<(u16, Option<i64>)>) -> Rig {
         SenderConfig {
             allowed_ranges: Vec::new(),
             max_body_bytes: MAX_BODY_BYTES,
+            verification_ttl_ms: None,
         },
+        gate.clone(),
     );
     Rig {
         sender,
         transport,
         resolver,
         clock,
+        gate,
     }
 }
 
@@ -217,6 +380,7 @@ fn prepared(
         Vec::new(),
         b"{}".to_vec(),
         MAX_BODY_BYTES,
+        ATTEMPT,
     )
 }
 
@@ -234,6 +398,7 @@ fn expect_refusal(result: Result<PreparedRequest, WebhookError>) -> WebhookError
 /// Builds one verification message carrying a real secret and signing key.
 pub(super) fn message(url: &str) -> OutgoingMessage {
     OutgoingMessage {
+        principal: PRINCIPAL.to_owned(),
         url: url.to_owned(),
         subscription_id: "sub_0123456789abcdef".to_owned(),
         kind: MessageKind::Verification,
@@ -243,6 +408,14 @@ pub(super) fn message(url: &str) -> OutgoingMessage {
         aud: None,
         jack_signing: None,
     }
+}
+
+/// Reports whether one sent request carries the named header.
+pub(super) fn has_header(request: &TransportRequest, name: &str) -> bool {
+    request
+        .headers
+        .iter()
+        .any(|(header, _)| header.eq_ignore_ascii_case(name))
 }
 
 #[test]
@@ -330,6 +503,124 @@ fn r6_8_the_connect_target_carries_the_validated_address() {
 }
 
 #[test]
+fn r1_6_the_request_carries_the_whole_attempt_budget() {
+    let prepared = prepared(NAME_URL, &[ip(PUBLIC)], &[]).expect("a global answer is allowed");
+    assert_eq!(prepared.request.attempt_timeout, ATTEMPT);
+}
+
+#[test]
+fn r1_2_the_body_cap_is_checked_before_the_decision() {
+    let error = expect_refusal(prepare(
+        NAME_URL,
+        &[ip(PUBLIC)],
+        &[ip(PUBLIC)],
+        &[],
+        "POST",
+        Vec::new(),
+        vec![b'x'; MAX_BODY_BYTES + 1],
+        MAX_BODY_BYTES,
+        ATTEMPT,
+    ));
+    assert_eq!(error.http_status, 413);
+    assert_eq!(error.code, "body_too_large");
+}
+
+#[test]
+fn r1_2_an_overflowing_response_keeps_the_prefix() {
+    // The transport reads one byte past the cap, so the body it stores is the
+    // prefix and the overflow flag is set (spec 06 R1.2, R5.9).
+    let mut bytes = Vec::new();
+    let prefix = vec![b'{'; MAX_DOCUMENT_BYTES];
+    assert!(!crate::webhook::http::transport::capture_body(
+        &mut bytes,
+        &prefix,
+        MAX_DOCUMENT_BYTES
+    ));
+    assert!(crate::webhook::http::transport::capture_body(
+        &mut bytes,
+        b"x",
+        MAX_DOCUMENT_BYTES
+    ));
+    assert_eq!(bytes.len(), MAX_DOCUMENT_BYTES);
+    assert_eq!(bytes, prefix);
+}
+
+#[test]
+fn r5_1_an_unverified_pair_is_final_with_challenge_failed() {
+    let rig = rig_with_gate(
+        GateMode::Refusing,
+        vec![vec![ip(PUBLIC)]],
+        vec![(200, None)],
+    );
+    let outcome = rig.sender.deliver(&message(NAME_URL));
+    assert_eq!(
+        outcome.action,
+        SendAction::Final {
+            last_error: LastError::ChallengeFailed
+        }
+    );
+    assert_eq!(outcome.attempts, 0);
+    assert_eq!(outcome.last_status, None);
+    assert_eq!(rig.transport.calls(), 0);
+    assert_eq!(rig.gate.verifies(), vec![T0]);
+    assert!(rig.clock.sleeps().is_empty());
+}
+
+#[test]
+fn r5_1_verification_runs_before_every_retry() {
+    // The grant covers two seconds only, so the 503 retry at T0 + 30 must
+    // re-verify and must not receive the event (spec 06 R5.1, R5.2).
+    let rig = rig_with_gate(
+        GateMode::VerifiedUntil(T0 + 2),
+        vec![vec![ip(PUBLIC)]],
+        vec![(503, None)],
+    );
+    let outcome = rig.sender.deliver(&message(NAME_URL));
+    assert_eq!(
+        outcome.action,
+        SendAction::Final {
+            last_error: LastError::ChallengeFailed
+        }
+    );
+    assert_eq!(outcome.attempts, 1);
+    assert_eq!(rig.transport.calls(), 1);
+    assert_eq!(rig.clock.sleeps(), vec![T0 + 30]);
+    assert_eq!(rig.gate.verifies(), vec![T0 + 30]);
+}
+
+#[test]
+fn r6_9_a_peer_mismatch_is_final_after_one_attempt() {
+    let rig = rig(vec![vec![ip(PUBLIC)]], vec![(200, None)]);
+    // The fake transport reports the R6.9 mismatch instead of a response.
+    let transport = Arc::new(FakeTransport::new(vec![(200, None)]).with_peer_mismatch());
+    let sender = Sender::new(
+        transport.clone(),
+        rig.resolver.clone(),
+        rig.clock.clone(),
+        SenderConfig {
+            allowed_ranges: Vec::new(),
+            max_body_bytes: MAX_BODY_BYTES,
+            verification_ttl_ms: None,
+        },
+        rig.gate.clone(),
+    );
+    let outcome = sender.deliver(&message(NAME_URL));
+    assert_eq!(
+        outcome.action,
+        SendAction::Final {
+            last_error: LastError::ConnectionRefused
+        }
+    );
+    assert_eq!(outcome.attempts, 1);
+    assert_eq!(transport.calls(), 1);
+    assert!(rig.clock.sleeps().is_empty());
+    assert_eq!(
+        FailureKind::PeerMismatch,
+        TransportFailure::peer_mismatch().kind
+    );
+}
+
+#[test]
 fn r6_10_a_redirect_is_final_and_never_followed() {
     let rig = rig(vec![vec![ip(PUBLIC)]], vec![(302, None)]);
     let outcome = rig.sender.deliver(&message(NAME_URL));
@@ -362,6 +653,7 @@ fn r1_8_a_503_retries_on_the_pinned_slots_and_stops_after_four() {
     assert_eq!(outcome.last_status, Some(503));
     assert_eq!(rig.transport.calls(), 4);
     assert_eq!(rig.clock.sleeps(), vec![T0 + 30, T0 + 270, T0 + 870]);
+    assert!(rig.gate.verifies().is_empty());
 }
 
 #[test]

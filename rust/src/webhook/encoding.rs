@@ -6,7 +6,10 @@
 //! rejection here is expressed as a fixed literal: a secret is never printed
 //! and never copied into an error or a log line (spec 06 section 3).
 
+use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig};
+use base64::{alphabet, engine::DecodePaddingMode, Engine as _};
 use core::fmt;
+use std::sync::LazyLock;
 
 use hmac::digest::crypto_common::KeyInit;
 use hmac::{Hmac, Mac};
@@ -14,8 +17,27 @@ use sha2::{Digest, Sha256};
 
 use crate::webhook::{codes, WebhookError};
 
-/// The RFC 4648 section 4 standard base64 alphabet (`A-Za-z0-9+/`).
-const STD_ALPHABET: [u8; 64] = *b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+/// Strict padded standard-base64 engine: the RFC 4648 section 4 alphabet with
+/// the padding Standard Webhooks requires (spec 06 R2.1).
+///
+/// Every setting is load-bearing. `with_decode_padding_mode(RequireCanonical)`
+/// accepts a `=` only as the last one or two characters of a length that is a
+/// multiple of four, and `with_decode_allow_trailing_bits(false)` rejects a
+/// final symbol whose unused bits are not zero, so only the one encoding of a
+/// byte string decodes.
+static STD_B64: LazyLock<GeneralPurpose> = LazyLock::new(|| {
+    // The RFC 4648 section 4 standard alphabet, `A-Za-z0-9+/`.
+    let alphabet =
+        alphabet::Alphabet::new("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
+            .expect("literal alphabet is valid");
+    GeneralPurpose::new(
+        &alphabet,
+        GeneralPurposeConfig::new()
+            .with_encode_padding(true)
+            .with_decode_padding_mode(DecodePaddingMode::RequireCanonical)
+            .with_decode_allow_trailing_bits(false),
+    )
+});
 
 /// The literal Standard Webhooks secret prefix (spec 06 R2.1).
 const SECRET_PREFIX: &str = "whsec_";
@@ -39,26 +61,7 @@ type HmacSha256 = Hmac<Sha256>;
 /// This is the encoding Standard Webhooks uses for a secret and a signature
 /// value (spec 06 R2.1, R2.2).
 pub fn encode_b64_std(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let mut triple = 0u32;
-        for (index, byte) in chunk.iter().enumerate() {
-            triple |= u32::from(*byte) << (16 - 8 * index);
-        }
-        out.push(char::from(STD_ALPHABET[(triple >> 18) as usize & 0x3f]));
-        out.push(char::from(STD_ALPHABET[(triple >> 12) as usize & 0x3f]));
-        if chunk.len() > 1 {
-            out.push(char::from(STD_ALPHABET[(triple >> 6) as usize & 0x3f]));
-        } else {
-            out.push('=');
-        }
-        if chunk.len() > 2 {
-            out.push(char::from(STD_ALPHABET[triple as usize & 0x3f]));
-        } else {
-            out.push('=');
-        }
-    }
-    out
+    STD_B64.encode(bytes)
 }
 
 /// Why `text` is not canonical padded standard base64 (spec 06 R2.1).
@@ -78,7 +81,8 @@ enum B64Reject {
 }
 
 /// Returns the six-bit value of one standard base64 symbol, or `None` for a
-/// byte outside `A-Za-z0-9+/` (RFC 4648 section 4).
+/// byte outside `A-Za-z0-9+/`, `=` being judged by its position alone
+/// (RFC 4648 section 4).
 fn b64_symbol(byte: u8) -> Option<u32> {
     match byte {
         b'A'..=b'Z' => Some(u32::from(byte - b'A')),
@@ -90,62 +94,42 @@ fn b64_symbol(byte: u8) -> Option<u32> {
     }
 }
 
+/// Reports whether every byte of `text` is a standard base64 symbol or `=`
+/// (RFC 4648 section 4).
+///
+/// The engine alone would not flag every foreign byte, so the alphabet rule of
+/// the strict decoder is checked here (spec 06 R2.1).
+fn std_alphabet_ok(text: &str) -> bool {
+    text.bytes()
+        .all(|byte| byte == b'=' || b64_symbol(byte).is_some())
+}
+
 /// Decodes padded standard base64, reporting which rule rejected the input.
 ///
 /// Accepts exactly the strings `encode_b64_std` produces, classifying every
 /// other string by the first rule it violates: alphabet, then padding, then
 /// canonical form (spec 06 R2.1).
 fn decode_b64_std_classified(text: &str) -> Result<Vec<u8>, B64Reject> {
-    let bytes = text.as_bytes();
-    let len = bytes.len();
-    // The alphabet rule comes first: every byte must be a symbol of
-    // `A-Za-z0-9+/`, `=` being judged by its position alone.
-    for byte in bytes {
-        if *byte != b'=' && b64_symbol(*byte).is_none() {
-            return Err(B64Reject::Alphabet);
-        }
+    if !std_alphabet_ok(text) {
+        return Err(B64Reject::Alphabet);
     }
-    // `=` may only be the last one or two characters; a `=` anywhere else is
-    // a padding failure, not an alphabet one (spec 06 R2.1).
-    let pad = bytes.iter().rev().take_while(|byte| **byte == b'=').count();
-    if pad > 2 {
+    // `=` may only be the last one or two characters, and the total length
+    // must be a multiple of four; a `=` anywhere else is a padding failure,
+    // not an alphabet one (spec 06 R2.1).
+    let pad = text.bytes().rev().take_while(|byte| *byte == b'=').count();
+    let data = &text[..text.len() - pad];
+    if pad > 2 || data.contains('=') || !text.len().is_multiple_of(4) {
         return Err(B64Reject::Padding);
     }
-    let data = &bytes[..len - pad];
-    if data.contains(&b'=') {
-        return Err(B64Reject::Padding);
-    }
-    if !len.is_multiple_of(4) {
-        return Err(B64Reject::Padding);
-    }
-
-    let mut out = Vec::with_capacity(len / 4 * 3);
-    let mut accumulator = 0u32;
-    let mut bits = 0u32;
-    for byte in data {
-        let value = match b64_symbol(*byte) {
-            Some(value) => value,
-            None => return Err(B64Reject::Alphabet),
-        };
-        accumulator = (accumulator << 6) | value;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push(((accumulator >> bits) & 0xff) as u8);
-        }
-    }
-    // With a length that is a multiple of four, `bits` is 0, 2 or 4; the
-    // unused low bits of the last symbol must be zero, otherwise the encoding
-    // is not canonical (spec 01 section 2, applied to the standard alphabet).
-    if bits > 0 && (accumulator & ((1u32 << bits) - 1)) != 0 {
-        return Err(B64Reject::Canonical);
-    }
+    // The engine rejects a misplaced `=` and non-zero unused trailing bits, so
+    // any remaining error is a canonical-form failure (spec 06 R2.1).
+    let decoded = STD_B64.decode(text).map_err(|_| B64Reject::Canonical)?;
     // The strongest check: only the one encoding of these bytes is accepted
     // (spec 06 R2.1, reason `canonical`).
-    if encode_b64_std(&out) != text {
+    if encode_b64_std(&decoded) != text {
         return Err(B64Reject::Canonical);
     }
-    Ok(out)
+    Ok(decoded)
 }
 
 /// Strictly decodes canonical *padded* standard base64 (spec 06 R2.1, R2.2).

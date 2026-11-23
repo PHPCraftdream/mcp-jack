@@ -6,19 +6,22 @@
 //! module. A build with `http` alone keeps the pure orchestration and the
 //! receiver adapters and leaves this network implementation out.
 //!
-//! Both types mirror the blocking idiom of
+//! Both types, and the [`HttpCardTransport`] that reuses them for the R7.2
+//! card fetch, mirror the blocking idiom of
 //! `crate::client::network::http_transport`: the system DNS configuration,
 //! hosts file and trust roots are snapshotted at build time, and every call
 //! builds a private current-thread Tokio runtime and blocks on it. The
 //! transport connects to [`ConnectTarget::address`] and never re-resolves,
 //! presents [`ConnectTarget::host_header`] in `Host`, verifies the
 //! certificate against [`ConnectTarget::sni`] (or against the IP literal,
-//! with no SNI extension), never follows a redirect, and maps every failure
-//! to one of the three R1.9 network categories.
+//! with no SNI extension), never follows a redirect, bounds the WHOLE attempt
+//! by [`TransportRequest::attempt_timeout`] (R1.6), reports a connected peer
+//! that differs from the validated address as its own failure (R6.9), and
+//! maps every other failure to one of the three R1.9 network categories.
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
@@ -30,13 +33,19 @@ use tokio_rustls::rustls::{
     ClientConfig, RootCertStore,
 };
 
+use crate::webhook::card::discovery::MAX_CARD_BYTES;
+use crate::webhook::card::source::{CardResponse, CardTransport, CARD_FETCH_SECONDS};
 use crate::webhook::delivery::LastError;
 use crate::webhook::http::transport::{
-    declared_length, HostResolver, TransportFailure, TransportRequest, TransportResponse,
-    WebhookTransport,
+    capture_body, declared_length, prepare, resolve_answers, HostResolver, TransportFailure,
+    TransportRequest, TransportResponse, WebhookTransport,
 };
 use crate::webhook::ssrf::url::check_url;
 use crate::webhook::WebhookError;
+
+/// The whole-lookup budget [`SystemResolver::resolve`] delegates with, in
+/// seconds (spec 06 R1.6, R6.8).
+const RESOLVE_TIMEOUT_SECONDS: u64 = 10;
 
 /// The DNS snapshot of the platform resolver, taken once at build time.
 #[derive(Clone)]
@@ -79,7 +88,22 @@ impl SystemResolver {
 }
 
 impl HostResolver for SystemResolver {
-    fn resolve(&self, host: &str, _port: u16) -> Result<Vec<IpAddr>, WebhookError> {
+    fn resolve(&self, host: &str, port: u16) -> Result<Vec<IpAddr>, WebhookError> {
+        self.resolve_within(host, port, Duration::from_secs(RESOLVE_TIMEOUT_SECONDS))
+    }
+
+    /// Resolves `host` within `budget` (spec 06 R6.8).
+    ///
+    /// An IP literal is its own answer and never touches DNS. The lookup runs
+    /// inside `tokio::time::timeout`, so a lookup that spends the budget is
+    /// the fixed `timeout` error rather than a `connection_refused` one
+    /// (spec 06 R1.6, R1.9).
+    fn resolve_within(
+        &self,
+        host: &str,
+        _port: u16,
+        budget: Duration,
+    ) -> Result<Vec<IpAddr>, WebhookError> {
         if let Ok(address) = host.parse::<IpAddr>() {
             return Ok(vec![address]);
         }
@@ -100,12 +124,10 @@ impl HostResolver for SystemResolver {
             .build()
             .map_err(|_| resolver_error())?;
             resolver.set_hosts(dns.hosts);
-            match resolver.lookup_ip(query).await {
-                Ok(lookup) => {
-                    let found: Vec<IpAddr> = lookup.iter().collect();
-                    Ok(found)
-                }
-                Err(_) => Err(resolver_error()),
+            match tokio::time::timeout(budget, resolver.lookup_ip(query)).await {
+                Ok(Ok(lookup)) => Ok(lookup.iter().collect::<Vec<IpAddr>>()),
+                Ok(Err(_)) => Err(resolver_error()),
+                Err(_) => Err(resolver_timeout()),
             }
         })?;
         if addresses.is_empty() {
@@ -187,22 +209,35 @@ impl WebhookTransport for HttpsTransport {
         let roots = Arc::clone(&self.roots);
         let connect_timeout = request.connect_timeout;
         let response_timeout = request.response_timeout;
+        let attempt_timeout = request.attempt_timeout;
         let max_body_bytes = request.max_body_bytes;
         let port = parts.port;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|_| refused())?;
-        runtime.block_on(run(
-            http_request,
-            address,
-            port,
-            server_name,
-            roots,
-            connect_timeout,
-            response_timeout,
-            max_body_bytes,
-        ))
+        // R1.6: the WHOLE attempt — connect, TLS, handshake, request write and
+        // response read — is bounded by the whole-attempt cap.
+        runtime.block_on(async {
+            match tokio::time::timeout(
+                attempt_timeout,
+                run(
+                    http_request,
+                    address,
+                    port,
+                    server_name,
+                    roots,
+                    connect_timeout,
+                    response_timeout,
+                    max_body_bytes,
+                ),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(timeout()),
+            }
+        })
     }
 }
 
@@ -234,9 +269,10 @@ async fn run(
             .map_err(|_| refused())?;
         let peer = stream.peer_addr().map_err(|_| refused())?;
         // R6.9: the connected peer must be the validated address, never a
-        // second answer of a fresh lookup.
+        // second answer of a fresh lookup. A differing peer is its own
+        // failure, so the sender can make it final instead of retrying it.
         if peer.ip() != address {
-            return Err(refused());
+            return Err(TransportFailure::peer_mismatch());
         }
         let tls = connector
             .connect(server_name, stream)
@@ -285,13 +321,15 @@ async fn read_response(
     let declared = declared_length(response.headers());
     let mut body = response.into_body();
     let mut bytes = Vec::new();
+    let mut overflow = declared.is_some_and(|length| length > max_body_bytes as u64);
+    // R1.2, R5.9: read one byte past the cap, so an oversized body is
+    // reported as overflow instead of being silently truncated to look
+    // complete.
     while let Some(frame) = body.frame().await {
         let frame = frame.map_err(|_| refused())?;
         if let Ok(data) = frame.into_data() {
-            let remaining = max_body_bytes.saturating_sub(bytes.len());
-            let take = data.len().min(remaining);
-            bytes.extend_from_slice(&data[..take]);
-            if bytes.len() >= max_body_bytes {
+            if capture_body(&mut bytes, &data, max_body_bytes) {
+                overflow = true;
                 break;
             }
         }
@@ -301,6 +339,7 @@ async fn read_response(
         retry_after,
         body: bytes,
         declared_length: declared,
+        overflow,
     })
 }
 
@@ -315,23 +354,17 @@ fn parse_retry_after(text: &str) -> Option<i64> {
 
 /// Builds a `connection_refused` transport failure.
 fn refused() -> TransportFailure {
-    TransportFailure {
-        error: LastError::ConnectionRefused,
-    }
+    TransportFailure::network(LastError::ConnectionRefused)
 }
 
 /// Builds a `timeout` transport failure.
 fn timeout() -> TransportFailure {
-    TransportFailure {
-        error: LastError::Timeout,
-    }
+    TransportFailure::network(LastError::Timeout)
 }
 
 /// Builds a `tls_error` transport failure.
 fn tls() -> TransportFailure {
-    TransportFailure {
-        error: LastError::TlsError,
-    }
+    TransportFailure::network(LastError::TlsError)
 }
 
 /// Builds the fixed DNS failure; its code is the R1.9 category a DNS
@@ -342,6 +375,12 @@ fn resolver_error() -> WebhookError {
         "connection_refused",
         "the webhook host could not be resolved",
     )
+}
+
+/// Builds the fixed DNS budget failure; its `timeout` code is the R1.9
+/// category a spent whole-attempt budget maps to (spec 06 R1.6, R1.9).
+fn resolver_timeout() -> WebhookError {
+    WebhookError::new(500, "timeout", "the webhook host lookup ran out of time")
 }
 
 /// Builds the fixed TLS configuration failure.
@@ -363,4 +402,121 @@ where
         .build()
         .map_err(|_| resolver_error())?;
     runtime.block_on(future)
+}
+
+/// The `Accept` value of one R7.2 card fetch (spec 06 R7.2).
+const ACCEPT_CARD: &str = "application/mcp-server-card+json";
+
+/// The status of a card rejection: R7.2 assigns the fetch refusals no HTTP
+/// answer, so no wire status is reported (spec 06 R7.2).
+const NO_HTTP_STATUS: u16 = 0;
+
+/// Fetches the Server Card over the hardened delivery path
+/// (spec 06 R7.2).
+///
+/// The transport, the resolver and the operator override ranges are the
+/// sender's own, so a card fetch follows the same R6.8-R6.10 decision, the
+/// same R6.9 peer check and the same body cap as a delivery; only the method,
+/// the URL, the `Accept` value and the verdict differ (spec 06 R7.2, R6.8).
+/// Nothing is retried and no redirect is followed: a `3xx` comes back as its
+/// status and the R7.2 decision refuses it (spec 06 R7.2).
+pub struct HttpCardTransport {
+    /// The hardened dialer of the sender (spec 06 R6.8-R6.10).
+    transport: Arc<dyn WebhookTransport>,
+    /// The R6.8 resolver that answers the card host twice (spec 06 R6.8).
+    resolver: Arc<dyn HostResolver>,
+    /// The operator override ranges of R6.11.
+    allowed_ranges: Vec<String>,
+}
+
+impl HttpCardTransport {
+    /// Builds a card transport over the sender's transport and resolver and
+    /// the operator override ranges of R6.11.
+    pub fn new(
+        transport: Arc<dyn WebhookTransport>,
+        resolver: Arc<dyn HostResolver>,
+        allowed_ranges: Vec<String>,
+    ) -> Self {
+        Self {
+            transport,
+            resolver,
+            allowed_ranges,
+        }
+    }
+}
+
+impl CardTransport for HttpCardTransport {
+    /// Fetches `url` with the R7.2 deadline, `Accept` value and body cap
+    /// (spec 06 R7.2).
+    ///
+    /// The whole fetch — DNS, connect, TLS, the request write and the
+    /// response read — is bounded by [`CARD_FETCH_SECONDS`], and the elapsed
+    /// wall clock is measured from before the first lookup so the R7.2
+    /// `timeout` verdict sees the real cost. The host is resolved twice
+    /// (validation and the R6.9 recheck), the section 6 decision of
+    /// [`prepare`] surfaces as its own error, a transport failure maps to its
+    /// R1.9 code, and the 65536-byte cap is the R1.2 read cap, so a body that
+    /// crossed it is reported through `overflow` rather than silently
+    /// truncated (spec 06 R1.2, R1.9, R6.8-R6.10, R7.2).
+    ///
+    /// `TransportResponse` carries no header map, so the `Cache-Control`
+    /// value of R7.2 is not readable here and is reported as absent; the card
+    /// cache then keeps its 300 s cap (spec 06 R7.2).
+    fn fetch_card(&self, url: &str) -> Result<CardResponse, WebhookError> {
+        let endpoint = match check_url(url) {
+            Ok(endpoint) => endpoint,
+            Err(_) => return Err(card_not_https()),
+        };
+        let budget = Duration::from_secs(CARD_FETCH_SECONDS);
+        let started = Instant::now();
+        let (answers, recheck) = resolve_answers(&*self.resolver, &endpoint, budget)?;
+        let remaining = budget.saturating_sub(started.elapsed());
+        let prepared = prepare(
+            url,
+            &answers,
+            &recheck,
+            &self.allowed_ranges,
+            "GET",
+            vec![("Accept".to_owned(), ACCEPT_CARD.to_owned())],
+            Vec::new(),
+            MAX_CARD_BYTES,
+            remaining,
+        )?;
+        let response = match self.transport.send(&prepared.request) {
+            Ok(response) => response,
+            Err(failure) => return Err(card_network_error(&failure)),
+        };
+        let elapsed_ms = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
+        Ok(CardResponse {
+            status: response.status,
+            body: response.body,
+            declared_length: response.declared_length,
+            overflow: response.overflow,
+            cache_control: None,
+            elapsed_ms,
+        })
+    }
+}
+
+/// Builds the `not_https` rejection of a card url that is not `https`
+/// (spec 06 R7.2).
+fn card_not_https() -> WebhookError {
+    WebhookError::with_reason(
+        NO_HTTP_STATUS,
+        crate::webhook::codes::NOT_HTTPS,
+        "url",
+        "the card url is not an https url",
+    )
+}
+
+/// Maps one R1.9 transport category to the code of a failed card fetch
+/// (spec 06 R1.9, R7.2).
+fn card_network_error(failure: &TransportFailure) -> WebhookError {
+    let last_error = failure.error;
+    WebhookError::with_reason(
+        NO_HTTP_STATUS,
+        last_error.as_str(),
+        last_error.as_str(),
+        "the card fetch failed before a response was read",
+    )
 }

@@ -8,7 +8,7 @@
 
 use mcp_jack::webhook::encoding::WebhookSecret;
 use mcp_jack::webhook::subscription::{
-    active_secrets, cursor_ok, gap_body, subscription_key, terminated_body, ttl_grant, TtlInput,
+    active_secrets, cursor_ok, gap_body, subscription_key, terminated_envelope, ttl_grant_from_json,
 };
 use mcp_jack::webhook::WebhookError;
 use serde_json::{json, Value};
@@ -79,25 +79,12 @@ fn sub_id(case: &Value) -> Value {
 }
 
 /// R8.5: the grant and its refresh deadline; absent and explicit `null` are
-/// different inputs.
+/// different inputs, and every other value is passed through to the R8.5
+/// validator as it is.
 fn ttl(case: &Value) -> Value {
     let input = &case["input"];
-    let id = id_of(case);
     let now = integer_of(&input["now"]);
-    let requested = match input.get("ttlMs") {
-        None => TtlInput::Absent,
-        Some(Value::Null) => TtlInput::Null,
-        Some(value) => match value.as_i64() {
-            Some(milliseconds) => TtlInput::Milliseconds(milliseconds),
-            None => panic!(
-                "{id}: the SDK cannot pass this case: R8.5 answers `invalid_arguments` with reason \
-                 `ttl` for a fractional ttlMs, but `TtlInput` only has `Absent`, `Null` and \
-                 `Milliseconds(i64)`, so a non-integer request value has no public entry point and \
-                 the rejection is unreachable. Report as an SDK bug."
-            ),
-        },
-    };
-    match ttl_grant(requested, now) {
+    match ttl_grant_from_json(input.get("ttlMs"), now) {
         Ok(grant) => json!({
             "result": "accept",
             "grantMs": grant.grant_ms,
@@ -138,26 +125,12 @@ fn envelope(case: &Value) -> Value {
             "body_text": gap_body(cursor.as_deref()),
         });
     }
-    assert_eq!(kind, "terminated", "{id}: unknown envelope kind");
-    let code = input.get("code").cloned().unwrap_or(Value::Null);
-    let message = match input.get("message") {
-        Some(Value::String(text)) => text.clone(),
-        Some(other) => panic!(
-            "{id}: the SDK cannot pass this case: R8.8 rejects a non-string message with \
-             `invalid_envelope`, but `terminated_body` takes the message as `&str`, and the \
-             JSON-shape check that would reject {other} is the private `fields_ok` of \
-             `webhook::receiver::state`, so no public entry point reaches this row. \
-             Report as an SDK bug."
-        ),
-        None => panic!(
-            "{id}: the SDK cannot pass this case: R8.8 rejects a missing message with \
-             `invalid_envelope`, but `terminated_body` requires a `&str` message, and the \
-             JSON-shape check that would reject its absence is the private `fields_ok` of \
-             `webhook::receiver::state`, so no public entry point reaches this row. \
-             Report as an SDK bug."
-        ),
-    };
-    match terminated_body(&code, &message, input.get("data")) {
+    if kind != "terminated" {
+        panic!("{id}: unknown envelope kind {kind}");
+    }
+    // R8.8: the serializer validates `code`, `message` and the optional `data`
+    // itself, so a malformed envelope is a refusal, never a panic.
+    match terminated_envelope(input) {
         Ok(body) => json!({"result": "accept", "body_text": body}),
         Err(error) => rejection(&error),
     }

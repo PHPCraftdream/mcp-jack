@@ -213,21 +213,66 @@ fn secret_debug_never_renders_the_bytes() {
 
 #[test]
 fn invalid_secret_error_never_renders_the_input() {
+    // Every rejected body below still yields the one fixed `invalid_secret`
+    // code; the message itself is asserted once, by the redaction part.
     for body in REJECT_BODIES {
         let value = format!("whsec_{body}");
         let error = match WebhookSecret::parse(&value) {
             Ok(_) => panic!("{value} was accepted"),
             Err(error) => error,
         };
-        assert_eq!(error.code, codes::INVALID_SECRET);
-        let rendered = error.to_string();
-        assert!(!rendered.contains(body), "{rendered} rendered the input");
-        for window in eight_char_substrings(body) {
-            assert!(
-                !rendered.contains(window),
-                "{rendered} rendered an input substring"
-            );
-        }
+        assert_eq!(error.code, codes::INVALID_SECRET, "{value}");
+    }
+
+    // A fixed byte pattern whose base64 text no message literal contains, so
+    // neither the body nor any eight-character window of it can appear in a
+    // rendered error by accident (spec 06 section 3).
+    let pattern = |len: u8| -> Vec<u8> {
+        (0..len)
+            .map(|index| index.wrapping_mul(37).wrapping_add(11))
+            .collect()
+    };
+    // The prefix is wrong here, so the value is refused before the body is
+    // even looked at.
+    let body = encode_b64_std(&pattern(32));
+    assert_eq!(body.len(), 44, "the body is 32 bytes of padded base64");
+    let value = format!("WHSEC_{body}");
+    let error = match WebhookSecret::parse(&value) {
+        Ok(_) => panic!("{value} was accepted"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, codes::INVALID_SECRET);
+    assert_eq!(error.reason(), Some("prefix"));
+    let rendered = error.to_string();
+    assert!(!rendered.contains(&body), "{rendered} rendered the input");
+    for window in eight_char_substrings(&body) {
+        assert!(
+            !rendered.contains(window),
+            "{rendered} rendered an input substring"
+        );
+    }
+
+    // The same pattern under the literal prefix is canonical base64 but 65
+    // bytes, one over the limit, so the length rule refuses it after the bytes
+    // exist and the failure must still not render them.
+    let long_body = encode_b64_std(&pattern(65));
+    let long_value = format!("whsec_{long_body}");
+    let long_error = match WebhookSecret::parse(&long_value) {
+        Ok(_) => panic!("{long_value} was accepted"),
+        Err(error) => error,
+    };
+    assert_eq!(long_error.code, codes::INVALID_SECRET);
+    assert_eq!(long_error.reason(), Some("length"));
+    let long_rendered = long_error.to_string();
+    assert!(
+        !long_rendered.contains(&long_body),
+        "{long_rendered} rendered the input"
+    );
+    for window in eight_char_substrings(&long_body) {
+        assert!(
+            !long_rendered.contains(window),
+            "{long_rendered} rendered an input substring"
+        );
     }
 }
 

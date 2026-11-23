@@ -193,6 +193,26 @@ pub fn webhook_info(card: &Value, mcp_url: &str) -> Result<WebhookInfo, WebhookE
     })
 }
 
+/// Returns the raw JWKs the selected remote publishes (spec 06 R7.1, R7.6).
+///
+/// The selection is exactly the one of [`webhook_info`], so a caller that
+/// already knows the card is accepted never re-implements the R7.1 remote
+/// matching. The entries are returned unvalidated and in card order, so a
+/// member the R7.3 validator refuses is still reported: the R7.6 cross-check
+/// must see it and fail, rather than compare a silently narrowed set
+/// (spec 06 R7.3, R7.6). An absent `signingKeys` member, or one without a
+/// `keys` array, publishes no key and is not an error (spec 06 R7.1).
+pub fn published_jwks(card: &Value, mcp_url: &str) -> Result<Vec<Value>, WebhookError> {
+    let info = webhook_info(card, mcp_url)?;
+    Ok(info
+        .signing_keys
+        .as_ref()
+        .and_then(|keys| keys.get("keys"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default())
+}
+
 /// One accepted advisory egress range (spec 06 R7.5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcceptedCidr {
@@ -281,9 +301,12 @@ pub fn card_cache_ttl(cache_control: Option<&str>) -> i64 {
 /// The caller performs the fetch; `status` and `redirect` describe the
 /// response, `body` is the raw body exactly as received, `elapsed_ms` is the
 /// measured wall clock and `cache_control` is the `Cache-Control` header
-/// value. The configured MCP server key is applied at the JWK step, so a card
-/// that publishes the server key yields no accepted key from that member
-/// (spec 06 R7.2, R7.3).
+/// value. `overflow` is the transport's own cap flag: it is true when the
+/// response carried, or declared, more than [`MAX_CARD_BYTES`], so `body` is
+/// only the truncated prefix of a card that is already over the cap
+/// (spec 06 R7.2). The configured MCP server key is applied at the JWK step,
+/// so a card that publishes the server key yields no accepted key from that
+/// member (spec 06 R7.2, R7.3).
 #[derive(Debug, Clone, Copy)]
 pub struct CardFetchInput<'a> {
     /// The MCP streamable-HTTP endpoint the card must match (spec 06 R7.2).
@@ -297,6 +320,10 @@ pub struct CardFetchInput<'a> {
     pub redirect: bool,
     /// The raw body bytes (spec 06 R7.2).
     pub body: &'a [u8],
+    /// True when the transport saw a body, or a declared `Content-Length`,
+    /// above [`MAX_CARD_BYTES`], so the card is `too_large` whatever the
+    /// truncated body looks like (spec 06 R7.2).
+    pub overflow: bool,
     /// The measured wall clock of the fetch in milliseconds (spec 06 R7.2).
     pub elapsed_ms: Option<i64>,
     /// The `Cache-Control` header value of the response (spec 06 R7.2).
@@ -329,9 +356,11 @@ pub struct FetchedCard {
 /// must be `https` (`not_https`); it must be the same origin as the MCP
 /// endpoint (`cross_origin`); a redirect is refused (`redirect_refused`);
 /// the status must be `2xx` (`http_status`); `elapsed_ms > 10000` is
-/// `timeout`; a body above 65536 bytes is `too_large`; a body that is not a
-/// JSON object is `bad_json`; and a card with no remote matching the MCP
-/// endpoint is `no_remote`. On success the JWK set of the selected remote is
+/// `timeout`; a body above 65536 bytes, or one the transport flags as
+/// overflowing that cap, is `too_large` — decided before the JSON step, so a
+/// truncated prefix is never parsed as the card (spec 06 R7.2); a body that
+/// is not a JSON object is `bad_json`; and a card with no remote matching the
+/// MCP endpoint is `no_remote`. On success the JWK set of the selected remote is
 /// validated, the configured MCP server key is applied at that step, and the
 /// advisory egress ranges are parsed (spec 06 R7.2, R7.3, R7.5).
 pub fn fetch_decision(input: &CardFetchInput<'_>) -> Result<FetchedCard, WebhookError> {
@@ -376,7 +405,9 @@ pub fn fetch_decision(input: &CardFetchInput<'_>) -> Result<FetchedCard, Webhook
             "the card fetch exceeded the time cap",
         ));
     }
-    if input.body.len() > MAX_CARD_BYTES {
+    // R7.2: a body the transport flagged as overflowing is refused here, on
+    // the truncated prefix, before the JSON step ever parses it.
+    if input.overflow || input.body.len() > MAX_CARD_BYTES {
         return Err(fetch_error(
             codes::TOO_LARGE,
             "body",

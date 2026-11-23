@@ -41,6 +41,10 @@ pub const SECRET_GRACE_SECONDS: i64 = 300;
 /// The longest accepted `cursor`, in characters (spec 06 R8.9).
 pub const CURSOR_MAX_CHARS: usize = 512;
 
+/// The largest integer magnitude an IEEE-754 double represents exactly
+/// (spec 06 R8.3).
+const MAX_EXACT_INTEGER: u64 = 1 << 53;
+
 /// The prefix of every derived subscription id (spec 06 R8.4).
 const ID_PREFIX: &str = "sub_";
 
@@ -231,8 +235,9 @@ pub fn ttl_grant(ttl: TtlInput, now: i64) -> Result<TtlGrant, WebhookError> {
 ///
 /// `None` is the absent member and takes [`DEFAULT_TTL_MS`],
 /// `Some(Value::Null)` grants no expiry, and `Some(number)` must be a
-/// non-negative integer JSON number: a fraction, an exponent and every
-/// non-number value are `invalid_arguments` with reason `ttl`. The accepted
+/// non-negative integer JSON number under the reference's JavaScript number
+/// semantics, so `1e3` is the integer 1000: a fraction and every non-number
+/// value are `invalid_arguments` with reason `ttl`. The accepted
 /// integer is then clamped into `[MIN_TTL_MS, MAX_TTL_MS]` and its
 /// `refresh_before` rendered exactly as [`ttl_grant`] does it, so the grant
 /// rule itself lives in one place (spec 06 R8.5).
@@ -255,17 +260,31 @@ pub fn ttl_grant_from_json(
 
 /// Returns `value` as a JSON integer number of milliseconds (spec 06 R8.5).
 ///
-/// Only a number written without a fraction or an exponent is accepted, so
-/// `1000` is `Some(1000)` while `1.5` and `1e3` are `None`; an integer above
-/// `i64::MAX` saturates, leaving the grant to the clamp of [`ttl_grant`]
-/// (spec 06 R8.5).
+/// Follows the reference's JavaScript number semantics: the value is accepted
+/// whenever JavaScript's `Number.isInteger` accepts it, so `1000` and `1e3`
+/// are both `Some(1000)` while `1.5` is `None`. An integer above `i64::MAX`
+/// saturates, and a float outside the `i64` range is refused, leaving the
+/// grant to the clamp of [`ttl_grant`] (spec 06 R8.5).
 fn integer_number(value: &Value) -> Option<i64> {
-    match value.as_i64() {
-        Some(number) => Some(number),
-        None => value
-            .as_u64()
-            .map(|number| i64::try_from(number).unwrap_or(i64::MAX)),
+    if let Some(number) = value.as_i64() {
+        return Some(number);
     }
+    if let Some(number) = value.as_u64() {
+        return Some(i64::try_from(number).unwrap_or(i64::MAX));
+    }
+    let number = value.as_f64()?;
+    // An integral float such as `1e3` is an integer, so it is truncated to its
+    // `i64` value; a fraction, a non-finite value and a magnitude no `i64`
+    // holds are all refused (spec 06 R8.5).
+    const I64_MIN_F64: f64 = -9_223_372_036_854_775_808.0;
+    const I64_MAX_EXCLUSIVE_F64: f64 = 9_223_372_036_854_775_808.0;
+    if !number.is_finite() || number.fract() != 0.0 {
+        return None;
+    }
+    if !(I64_MIN_F64..I64_MAX_EXCLUSIVE_F64).contains(&number) {
+        return None;
+    }
+    Some(number as i64)
 }
 
 /// Returns the secrets that may sign right now, current first (spec 06 R8.6).
@@ -534,12 +553,21 @@ fn write_json_string(text: &str, out: &mut String) {
 
 /// Returns the ECMAScript `Number::toString` form of one JSON number
 /// (spec 06 R8.3).
+///
+/// Follows the reference's JavaScript number semantics, where `jcs` renders a
+/// value that came through `JSON.parse`, so every number is an IEEE-754
+/// double: an integer member of magnitude at most `2^53` is emitted as its
+/// exact decimal text, an integer beyond that range is converted to `f64`
+/// first, and a float is rendered by [`ecma_number`] (spec 06 R8.3).
 fn canonical_number(number: &Number) -> Result<String, WebhookError> {
     if let Some(value) = number.as_i64() {
-        return Ok(value.to_string());
-    }
-    if let Some(value) = number.as_u64() {
-        return Ok(value.to_string());
+        if value.unsigned_abs() <= MAX_EXACT_INTEGER {
+            return Ok(value.to_string());
+        }
+    } else if let Some(value) = number.as_u64() {
+        if value <= MAX_EXACT_INTEGER {
+            return Ok(value.to_string());
+        }
     }
     let Some(value) = number.as_f64() else {
         return Err(invalid_arguments("arguments"));

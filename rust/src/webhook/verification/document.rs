@@ -15,7 +15,11 @@ use crate::webhook::ssrf::url::check_url;
 use crate::webhook::{codes, WebhookError};
 
 /// The largest receiver document accepted, in bytes (spec 06 R5.9).
-const MAX_DOCUMENT_BYTES: usize = 8192;
+///
+/// The constant lives here because this module owns the R5.9 body cap; the
+/// HTTP layer re-exports it so the fetch path and the verdict judge the same
+/// number (spec 06 R5.9, R5.12).
+pub const MAX_DOCUMENT_BYTES: usize = 8192;
 
 /// The largest number of `receivers` entries (spec 06 R5.9).
 const MAX_RECEIVERS: usize = 64;
@@ -138,6 +142,58 @@ pub fn check_document_fetch(
         return Err(document_fetch_failed(REASON_TOO_LARGE));
     }
     parse_receiver_doc(body_text)
+}
+
+/// One well-known document response, before the R5.9 verdict
+/// (spec 06 R5.9).
+///
+/// The transport reports the framing it saw, so the verdict can refuse an
+/// oversized document from the declaration or the overflow flag alone,
+/// without re-reading a buffered body (spec 06 R5.9).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentResponse<'a> {
+    /// The response status (spec 06 R5.9).
+    pub status: u16,
+    /// The response body bytes exactly as received (spec 06 R5.9).
+    pub body: &'a [u8],
+    /// The response's declared `Content-Length`, when one was present
+    /// (spec 06 R5.9).
+    pub declared_length: Option<u64>,
+    /// True when the transport observed more body than the cap allowed and
+    /// truncated it (spec 06 R5.9).
+    pub overflow: bool,
+}
+
+/// Runs the well-known document verdict over one response (spec 06 R5.9).
+///
+/// An overflowed read, a `Content-Length` above [`MAX_DOCUMENT_BYTES`] or a
+/// body above it is `document_fetch_failed` with reason `too_large` before
+/// any byte is parsed; otherwise the body is judged by
+/// [`check_document_fetch`], which owns the status and shape rules
+/// (spec 06 R5.9).
+pub fn document_verdict(response: &DocumentResponse<'_>) -> Result<ReceiverDocument, WebhookError> {
+    let cap = MAX_DOCUMENT_BYTES as u64;
+    if response.overflow
+        || response.declared_length.is_some_and(|length| length > cap)
+        || response.body.len() > MAX_DOCUMENT_BYTES
+    {
+        return Err(document_fetch_failed(REASON_TOO_LARGE));
+    }
+    check_document_fetch(response.status, &String::from_utf8_lossy(response.body))
+}
+
+/// Fetches the well-known receiver document of one origin (spec 06 R5.9,
+/// R5.12).
+///
+/// The implementation performs the only network I/O of route 4: it fetches
+/// `/.well-known/mcp-webhook-receiver.json` over the hardened path of
+/// section 6, with no redirect, and returns the verdict of
+/// [`document_verdict`]. A failure is a route that did not count, never a
+/// verification success (spec 06 R5.9).
+pub trait DocumentFetcher: Send + Sync {
+    /// Fetches and judges the document of `canonical_url`'s origin
+    /// (spec 06 R5.9, R5.12).
+    fn fetch(&self, canonical_url: &str) -> Result<ReceiverDocument, WebhookError>;
 }
 
 /// The inputs of one well-known document attempt (spec 06 R5.9, R5.12).

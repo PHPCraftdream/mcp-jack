@@ -5,21 +5,44 @@
 //! table assigns.
 //!
 //! Everything here is pure: `now` is an argument, the caller supplies the raw
-//! headers and body bytes and the durable-enqueue verdict, and no function
+//! headers, the body bytes and the durable-enqueue callback, and no function
 //! performs I/O, reads a clock or logs a secret. The step order, the checks,
 //! the error codes and the response bodies mirror `handle` of
 //! `spec/tools/modern/webhooks/ref/receiver.mjs` exactly, so the same inputs
 //! produce the same observable state.
+//!
+//! # Acknowledgement and durable enqueue (spec 06 R1.10)
+//!
+//! A `2xx` is returned only after the caller's enqueue callback reported
+//! success, and only that `2xx` records the `webhook-id`: a failed enqueue
+//! answers `503 enqueue_failed` and records nothing, so the sender's retry is
+//! processed exactly once. A duplicate answer and an echoed verification
+//! envelope never call the callback at all.
+//!
+//! # Locking order (spec 06 R1.10, R3.16)
+//!
+//! One mutex guards all mutable state — routing, termination, secrets,
+//! accepted ids and the in-flight set of [`dispatch`]. Steps 7 to 15 read it
+//! under one short-lived guard, step 16 reserves the `webhook-id` under it,
+//! and a delivery of an id another thread owns waits on the condition
+//! variable, which releases the mutex while waiting. The enqueue callback, the
+//! key source snapshot and the challenge echo of a verification envelope all
+//! run with **no lock held**, and no other lock is ever taken while the state
+//! mutex is held. A poisoned mutex is recovered with `PoisonError::into_inner`
+//! instead of panicking.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use serde_json::{json, Value};
 
 use crate::encoding::{decode_b64url_fixed, key_id};
-use crate::webhook::card::{accept_jwk_set, WebhookKeyRecord};
+use crate::webhook::card::keys::{record_jwk, KeySnapshot, KeySource};
+use crate::webhook::card::{accept_jwk_set, cross_check_webhook_key_jwks, WebhookKeyRecord};
 use crate::webhook::delivery::freshness;
-use crate::webhook::encoding::WebhookSecret;
+use crate::webhook::receiver::body::BodyCollector;
 use crate::webhook::receiver::config::{JackConfig, ReceiverConfig};
+use crate::webhook::receiver::dispatch::{Dispatch, ReceiverState, Reservation, SecretEntry};
 use crate::webhook::receiver::errors::{rejection, DeliveryOutcome};
 use crate::webhook::signatures::{
     asymmetric_verify, check_schemes, decode_signatures, parse_signature_header, v1_verify,
@@ -27,7 +50,7 @@ use crate::webhook::signatures::{
 };
 use crate::webhook::verification::nonce::nonce_ok;
 use crate::webhook::w1::{self, JackSigningParts};
-use crate::webhook::{codes, MessageKind};
+use crate::webhook::{codes, MessageKind, WebhookError};
 
 /// The `webhook-id` header name, lowercased (spec 06 R1.1).
 const H_ID: &str = "webhook-id";
@@ -72,17 +95,12 @@ const ACCEPTED_STATUS: u16 = 200;
 /// The days of each month in a non-leap year (spec 06 R1.3).
 const MONTH_DAYS: [u32; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
-/// The verdict of the durable enqueue the caller performed before [`Receiver::handle`]
-/// answers (spec 06 R1.10, R3.17).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EnqueueOutcome {
-    /// The message is durably enqueued, so the receiver may return a `2xx`
-    /// (spec 06 R1.10).
-    Ok,
-    /// The durable enqueue failed, so the receiver answers `503` with
-    /// `enqueue_failed` and records nothing (spec 06 R1.10, R3.17).
-    Failed,
-}
+/// The verdict of the caller's durable enqueue (spec 06 R1.10, R3.17).
+///
+/// `Ok(())` means the message is durably enqueued, so a `2xx` may be returned;
+/// `Err` means it is not, so the delivery answers `503 enqueue_failed` and
+/// records nothing (spec 06 R1.10).
+pub type EnqueueResult = Result<(), WebhookError>;
 
 /// The observable state of one configured secret (spec 06 R3.7, R5.6).
 ///
@@ -119,16 +137,36 @@ pub struct ReceiverSnapshot {
     pub accepted: Vec<String>,
 }
 
-/// One configured delivery secret with the state the receiver keeps for it
-/// (spec 06 R3.7, R5.6).
-struct SecretEntry {
-    /// The decoded `whsec_` secret, never rendered (spec 06 R2.1).
-    secret: WebhookSecret,
-    /// The subscription id, `None` while the entry is pending (spec 06 R5.6).
-    subscription_id: Option<String>,
-    /// The callback url the pending entry expects its challenge under
-    /// (spec 06 R5.6).
-    callback_url: Option<String>,
+/// The outcome of steps 7 to 15 for one delivery (spec 06 R3.7-R3.15).
+struct Verified {
+    /// `true` when the secret was selected from the pending entries of
+    /// section 5, so step 18 re-checks routing (spec 06 R5.6).
+    deferred: bool,
+    /// The index of the entry whose secret verified the `v1` HMAC
+    /// (spec 06 R3.13, R5.6).
+    matched: usize,
+}
+
+/// The values steps 7 to 15 read, grouped so the pipeline takes one argument
+/// (spec 06 R3.7-R3.15).
+struct Context<'a> {
+    /// The delivery clock time of step 13 and of the dedup window
+    /// (spec 06 R3.9, R3.16).
+    now: i64,
+    /// The grouped request headers (spec 06 R3.1, R3.2).
+    all: &'a BTreeMap<String, Vec<String>>,
+    /// The raw body bytes of steps 6, 12, 14 and 15 (spec 06 R3.6).
+    body: &'a [u8],
+    /// The `webhook-id` of steps 3 and 12 (spec 06 R1.4, R3.13).
+    webhook_id: &'a str,
+    /// The `webhook-timestamp` of steps 4, 12 and 13 (spec 06 R1.5).
+    timestamp: &'a str,
+    /// The `X-MCP-Subscription-Id` of steps 5, 7 and 8 (spec 06 R3.5).
+    subscription_id: &'a str,
+    /// The accepted card keys of steps 14 and 15 (spec 06 R3.14, R7.3).
+    accepted: &'a [WebhookKeyRecord],
+    /// The raw published JWKs of the R7.6 cross-check (spec 06 R7.6).
+    published: &'a [Value],
 }
 
 /// The framework-neutral receiver of spec 06 section 3 (R3.1-R3.18).
@@ -139,6 +177,11 @@ struct SecretEntry {
 /// adds ids to the routing set; [`Receiver::snapshot`] reads the observable
 /// state. No error carries a secret, a header value or a body byte
 /// (spec 06 section 3).
+///
+/// Every mutable part sits behind the one mutex of [`dispatch`], so `handle`
+/// takes `&self` and a receiver is usable from several threads at once: two
+/// deliveries of the same `webhook-id` enqueue exactly once (spec 06 R1.10,
+/// R3.16).
 pub struct Receiver {
     /// The freshness window of step 13, in seconds (spec 06 R3.9).
     window: i64,
@@ -152,8 +195,15 @@ pub struct Receiver {
     /// `mcp_server_kid`, else the kid of the configured raw server key
     /// (spec 06 R4.5).
     server_key_id: Option<String>,
-    /// The accepted card keys of steps 14 and 15 (spec 06 R2.7, R4.5, R7.3).
+    /// The static accepted card keys of steps 14 and 15, used when no key
+    /// source is configured (spec 06 R2.7, R4.5, R7.3).
     keys: Vec<WebhookKeyRecord>,
+    /// The static keys rendered as the JWKs the R7.6 cross-check compares
+    /// (spec 06 R7.3, R7.6).
+    published: Vec<Value>,
+    /// The rotating key source, or `None` to use `keys`/`published`
+    /// (spec 06 R7.1-R7.4).
+    key_source: Option<Arc<dyn KeySource>>,
     /// Whether the optional R7.6 cross-check is required (spec 06 R7.6).
     require_webhook_key_check: bool,
     /// The `jack.server.webhook_key` tool result of the R7.6 cross-check
@@ -162,28 +212,27 @@ pub struct Receiver {
     /// The `w1` settings, or `None` when the header is ignored
     /// (spec 06 R4.6).
     jack: Option<JackConfig>,
-    /// The registered and pending secrets in configuration order
-    /// (spec 06 R3.7, R5.6).
-    entries: Vec<SecretEntry>,
-    /// The subscription ids the receiver routes (spec 06 R3.8).
-    routed: BTreeSet<String>,
-    /// The subscription ids marked terminated (spec 06 R3.17).
-    terminated: BTreeSet<String>,
-    /// The accepted `webhook-id` values and when each was recorded
-    /// (spec 06 R3.16).
-    accepted: BTreeMap<String, i64>,
+    /// The one mutex and condition variable over routing, termination,
+    /// secrets, accepted ids and in-flight ids (spec 06 R1.10,
+    /// R3.7-R3.17).
+    dispatch: Dispatch,
 }
 
 impl Receiver {
     /// Builds a receiver from its configuration (spec 06 R3.1-R3.18).
     ///
-    /// The configured MCP server key is taken out of the card keys by kid or
-    /// by raw public key (spec 06 R4.5), the raw server key alone names the
-    /// kid a `w1` header must not carry (spec 06 R4.5), and the routing set
-    /// starts from the configured ids (spec 06 R3.8). Every secret entry keeps
-    /// its `subscription_id` and `callback_url`, `None` for a pending entry of
-    /// section 5 (spec 06 R5.6).
-    pub fn new(config: ReceiverConfig) -> Self {
+    /// A `max_body` above [`crate::webhook::receiver::MAX_BODY_BYTES`] is
+    /// refused, because no receiver may accept a body the profile caps
+    /// (spec 06 R1.2). The configured MCP server key is taken out of the
+    /// static card keys by kid or by raw public key (spec 06 R4.5), the raw
+    /// server key alone names the kid a `w1` header must not carry
+    /// (spec 06 R4.5), and the routing set starts from the configured ids
+    /// (spec 06 R3.8). Every secret entry keeps its `subscription_id` and
+    /// `callback_url`, `None` for a pending entry of section 5
+    /// (spec 06 R5.6).
+    pub fn new(config: ReceiverConfig) -> Result<Self, WebhookError> {
+        // R1.2: the shared bounded collector validates the configured limit.
+        BodyCollector::new(config.max_body)?;
         let server_kid = config.mcp_server_kid.clone();
         let server_public_key = config.mcp_server_public_key.clone();
         let server_key_id = server_kid
@@ -194,30 +243,34 @@ impl Receiver {
             server_kid.as_deref(),
             server_public_key.as_deref(),
         );
-        let entries = config
-            .secrets
-            .into_iter()
-            .map(|entry| SecretEntry {
-                secret: entry.secret,
-                subscription_id: entry.subscription_id,
-                callback_url: entry.callback_url,
-            })
-            .collect();
-        Self {
+        let published: Vec<Value> = keys.iter().map(record_jwk).collect();
+        let state = ReceiverState {
+            entries: config
+                .secrets
+                .into_iter()
+                .map(|entry| SecretEntry {
+                    secret: entry.secret,
+                    subscription_id: entry.subscription_id,
+                    callback_url: entry.callback_url,
+                })
+                .collect(),
+            routed: config.routed.into_iter().collect(),
+            ..ReceiverState::default()
+        };
+        Ok(Self {
             window: config.window,
             max_body: config.max_body,
             dedup_retention: config.dedup_retention,
             enforce_server_identity: config.enforce_server_identity,
             server_key_id,
             keys,
+            published,
+            key_source: config.key_source,
             require_webhook_key_check: config.require_webhook_key_check,
             webhook_key_tool: config.webhook_key_tool,
             jack: config.jack,
-            entries,
-            routed: config.routed.into_iter().collect(),
-            terminated: BTreeSet::new(),
-            accepted: BTreeMap::new(),
-        }
+            dispatch: Dispatch::new(state),
+        })
     }
 
     /// Handles one delivery and returns the answer (spec 06 R3.1-R3.18).
@@ -231,18 +284,27 @@ impl Receiver {
     /// cross-check, deduplication, parse and field validation, then
     /// termination, enqueue and dispatch (spec 06 R3.1-R3.18).
     ///
-    /// A `2xx` is returned only after `enqueue` succeeded, and only that
-    /// `2xx` records the `webhook-id`, so a failed attempt never poisons it
-    /// (spec 06 R1.10, R3.16). The answer bodies are the section 3 table's:
-    /// `{"status":"accepted"}`, `{"status":"duplicate"}`,
+    /// `enqueue` is the caller's durable enqueue of the parsed message
+    /// objects; it is required, and it is the only way a delivery is
+    /// acknowledged. `Ok(())` makes the delivery a `2xx` and records the
+    /// `webhook-id`; `Err` answers `503 enqueue_failed` and records nothing, so
+    /// the sender's retry is processed exactly once (spec 06 R1.10). A
+    /// duplicate answer and an echoed verification envelope never call it
+    /// (spec 06 R3.16, R5.6).
+    ///
+    /// `enqueue` runs with no lock held, and the answer bodies are the section
+    /// 3 table's: `{"status":"accepted"}`, `{"status":"duplicate"}`,
     /// `{"challenge":"<nonce>"}` or the fixed error object of the code.
-    pub fn handle(
-        &mut self,
+    pub fn handle<F>(
+        &self,
         now: i64,
         headers: &[(String, String)],
         body: &[u8],
-        enqueue: EnqueueOutcome,
-    ) -> DeliveryOutcome {
+        enqueue: F,
+    ) -> DeliveryOutcome
+    where
+        F: FnOnce(&[Value]) -> EnqueueResult,
+    {
         let all = collect_headers(headers);
 
         // Step 1 (R3.1): a required header absent, or present with an empty
@@ -292,190 +354,93 @@ impl Receiver {
                 return reject(codes::BODY_TOO_LARGE);
             }
         }
-        // Step 7 (R3.7, R5.6): the one registered secret for the id, else
-        // every pending secret of section 5.
-        let registered = self
-            .entries
-            .iter()
-            .position(|entry| entry.subscription_id.as_deref() == Some(subscription_id));
-        let candidates: Vec<usize> = match registered {
-            Some(index) => vec![index],
-            None => self
-                .entries
-                .iter()
-                .enumerate()
-                .filter(|(_, entry)| entry.subscription_id.is_none())
-                .map(|(index, _)| index)
-                .collect(),
-        };
-        let deferred = registered.is_none();
-        if deferred && candidates.is_empty() {
-            return reject(codes::UNKNOWN_SUBSCRIPTION);
-        }
-        // Step 8 (R3.8): a routed or terminated id passes; the pending-secret
-        // path re-checks routing after verification (R5.6).
-        if !deferred
-            && !self.routed.contains(subscription_id)
-            && !self.terminated.contains(subscription_id)
-        {
-            return reject(codes::SUBSCRIPTION_NOT_ROUTED);
-        }
-        // Steps 9, 10 and 11 (R3.10-R3.12): grammar, scheme set, lengths.
-        let Some(signature) = single(&all, H_SIG) else {
-            return reject(codes::MISSING_WEBHOOK_HEADER);
-        };
-        let parsed = match parse_signature_header(signature) {
-            Ok(parsed) => parsed,
-            Err(error) => return reject(error.code),
-        };
-        if let Err(error) = check_schemes(&parsed) {
-            return reject(error.code);
-        }
-        let decoded = match decode_signatures(&parsed) {
-            Ok(decoded) => decoded,
-            Err(error) => return reject(error.code),
-        };
-        // Step 12 (R3.13): the v1 HMAC with every selected secret.
-        let content = SignatureContent {
+        // R7.1-R7.4: the keys valid at this delivery's clock time. The source
+        // is caller code, so its snapshot is taken with no lock held.
+        let snapshot = self.key_source.as_ref().map(|source| source.snapshot(now));
+        let (accepted, published) = self.key_view(snapshot.as_ref());
+        let context = Context {
+            now,
+            all: &all,
+            body,
             webhook_id,
             timestamp,
-            body,
+            subscription_id,
+            accepted,
+            published,
         };
-        let mut matched = None;
-        for index in candidates {
-            if v1_verify(&decoded, &self.entries[index].secret, &content) {
-                matched = Some(index);
-                break;
-            }
-        }
-        let Some(matched) = matched else {
-            return reject(codes::BAD_SIGNATURE);
+        // Steps 7 to 15 (R3.7-R3.15): the pipeline reads the one state mutex.
+        let verified = match self
+            .dispatch
+            .with_state(|state| self.verify(state, &context))
+        {
+            Ok(verified) => verified,
+            Err(code) => return reject(code),
         };
-        // Step 13 (R3.9): freshness, only after the HMAC verified.
-        let Ok(seconds) = timestamp.parse::<i64>() else {
-            return reject(codes::MALFORMED_WEBHOOK_TIMESTAMP);
-        };
-        if let Err(error) = freshness(now, seconds, self.window) {
-            return reject(error.code);
-        }
-        // Step 14 (R3.14): asymmetric verification, only when identity is
-        // enforced.
-        if self.enforce_server_identity {
-            if self.keys.is_empty() {
-                return reject(codes::NO_SERVER_KEYS);
-            }
-            if asymmetric_verify(&decoded, subscription_id, &content, &self.keys).is_none() {
-                return reject(codes::BAD_SERVER_SIGNATURE);
-            }
-        }
-        // Step 15 (R3.15, R4.1-R4.6): the Jack w1 header, when configured.
-        if let Some(jack) = &self.jack {
-            let Some(header_value) = single(&all, H_JACK) else {
-                return reject(codes::MISSING_JACK_AUTH);
-            };
-            // R5.6: the pending path signs the verified entry's callback url;
-            // a routed id signs the configured callback url of R4.3.
-            let callback_url = if deferred {
-                self.entries[matched].callback_url.as_deref()
-            } else {
-                jack.callback_urls.get(subscription_id).map(String::as_str)
-            };
-            let parts = JackSigningParts {
-                aud: &jack.aud,
-                subscription_id,
-                webhook_id,
-                timestamp,
-                // An entry without a callback url cannot verify a signature
-                // that binds one, so the empty placeholder only lets the
-                // earlier checks of R4.1-R4.4 run in their spec order; the
-                // entry is refused as bad_jack_signature right after them.
-                callback_url: callback_url.unwrap_or_default(),
-                body,
-            };
-            if let Err(error) = w1::verify(
-                Some(header_value),
-                &parts,
-                &self.keys,
-                now,
-                jack.window,
-                self.server_key_id.as_deref(),
-            ) {
-                return reject(error.code);
-            }
-            if callback_url.is_none() {
-                return reject(codes::BAD_JACK_SIGNATURE);
-            }
-        }
-        // R7.6: the optional cross-check of the card keys against the native
-        // tool result.
-        if self.require_webhook_key_check {
-            if let Err(error) = crate::webhook::card::cross_check_webhook_key(
-                &self.keys,
-                self.webhook_key_tool.as_ref(),
-                true,
-            ) {
-                return reject(error.code);
-            }
-        }
-        // Step 16 (R3.16): an id already answered with a 2xx stays answered
-        // while retention holds.
-        if let Some(&seen_at) = self.accepted.get(webhook_id) {
-            if now.saturating_sub(seen_at) <= self.dedup_retention {
-                return DeliveryOutcome::ok(
-                    ACCEPTED_STATUS,
-                    json!({ "status": "duplicate" }),
-                    false,
-                );
-            }
+        // Step 16 (R3.16, R1.10): an id already answered with a 2xx stays
+        // answered while retention holds, and an id another delivery owns is
+        // waited for before it is re-checked.
+        let (mut state, reservation) = self.dispatch.reserve(webhook_id, now, self.dedup_retention);
+        if matches!(reservation, Reservation::Duplicate) {
+            return DeliveryOutcome::ok(ACCEPTED_STATUS, json!({ "status": "duplicate" }), false);
         }
         // Step 17 (R3.18): parse and validate only after every verification
         // step passed.
         let message: Value = match serde_json::from_slice(body) {
             Ok(message) => message,
-            Err(_) => return reject(codes::MALFORMED_BODY),
+            Err(_) => return self.leave(&mut state, webhook_id, codes::MALFORMED_BODY),
         };
         if !message.is_object() {
-            return reject(codes::MALFORMED_BODY);
+            return self.leave(&mut state, webhook_id, codes::MALFORMED_BODY);
         }
         let kind = match message.get("type") {
             None => None,
             Some(value) => match value.as_str().and_then(MessageKind::from_type) {
                 Some(kind) => Some(kind),
-                None => return reject(codes::UNKNOWN_ENVELOPE_TYPE),
+                None => return self.leave(&mut state, webhook_id, codes::UNKNOWN_ENVELOPE_TYPE),
             },
         };
         if !fields_ok(kind, &message) {
-            return reject(codes::MALFORMED_BODY);
+            return self.leave(&mut state, webhook_id, codes::MALFORMED_BODY);
         }
         // Step 18 (R3.17): termination, enqueue and dispatch.
-        if self.terminated.contains(subscription_id) {
-            return reject(codes::SUBSCRIPTION_TERMINATED);
+        if state.terminated.contains(subscription_id) {
+            return self.leave(&mut state, webhook_id, codes::SUBSCRIPTION_TERMINATED);
         }
-        if enqueue == EnqueueOutcome::Failed {
+        if kind == Some(MessageKind::Verification) {
+            // R5.6, R3.18: the echoed nonce is consumed locally and the pending
+            // entry keeps its callback url, so the envelope is never
+            // forwarded and nothing is enqueued.
+            let challenge = message.get("challenge").cloned().unwrap_or(Value::Null);
+            if verified.deferred {
+                state.entries[verified.matched].subscription_id = Some(subscription_id.to_owned());
+                state.routed.insert(subscription_id.to_owned());
+            }
+            self.dispatch.record(&mut state, webhook_id, now);
+            return DeliveryOutcome::ok(ACCEPTED_STATUS, json!({ "challenge": challenge }), true);
+        }
+        // R1.10: the durable enqueue runs with no state lock held.
+        drop(state);
+        let enqueued = enqueue(std::slice::from_ref(&message));
+        let mut state = self.dispatch.lock();
+        if enqueued.is_err() {
+            // R1.10, R3.17: nothing is recorded, so the sender's retry of the
+            // same message is processed exactly once.
+            self.dispatch.abandon(&mut state, webhook_id);
             return reject(codes::ENQUEUE_FAILED);
         }
-        // R5.6: only a verification envelope survives the deferred routing
-        // check.
-        if deferred && kind != Some(MessageKind::Verification) {
+        if verified.deferred {
+            // R3.8, R5.6: only a verification envelope survives the deferred
+            // routing check, and this answer records nothing.
+            self.dispatch.abandon(&mut state, webhook_id);
             return reject(codes::SUBSCRIPTION_NOT_ROUTED);
-        }
-        self.accepted.insert(webhook_id.to_owned(), now);
-        if kind == Some(MessageKind::Verification) {
-            // R5.6: the echoed nonce is consumed locally, the pending entry
-            // keeps its callback url and is bound to the header id.
-            if deferred {
-                self.entries[matched].subscription_id = Some(subscription_id.to_owned());
-                self.routed.insert(subscription_id.to_owned());
-            }
-            let challenge = message.get("challenge").cloned().unwrap_or(Value::Null);
-            return DeliveryOutcome::ok(ACCEPTED_STATUS, json!({ "challenge": challenge }), true);
         }
         if kind == Some(MessageKind::Terminated) {
             // R3.17, R8.8: a verified terminated envelope is forwarded and
             // then stops routing.
-            self.terminated.insert(subscription_id.to_owned());
-            self.routed.remove(subscription_id);
+            state.terminated.insert(subscription_id.to_owned());
+            state.routed.remove(subscription_id);
         }
+        self.dispatch.record(&mut state, webhook_id, now);
         DeliveryOutcome {
             status: ACCEPTED_STATUS,
             body: json!({ "status": "accepted" }),
@@ -490,9 +455,10 @@ impl Receiver {
     /// The id becomes routable on the same receiver, so state recorded by
     /// earlier steps stays observable; nothing is parsed and no delivery is
     /// answered here.
-    pub fn route(&mut self, ids: &[String]) {
+    pub fn route(&self, ids: &[String]) {
+        let mut state = self.dispatch.lock();
         for id in ids {
-            self.routed.insert(id.clone());
+            state.routed.insert(id.clone());
         }
     }
 
@@ -503,10 +469,10 @@ impl Receiver {
     /// listed in configuration order with the `subscription_id` and
     /// `callback_url` each entry currently carries.
     pub fn snapshot(&self) -> ReceiverSnapshot {
-        ReceiverSnapshot {
-            routed: self.routed.iter().cloned().collect(),
-            terminated: self.terminated.iter().cloned().collect(),
-            secrets: self
+        self.dispatch.with_state(|state| ReceiverSnapshot {
+            routed: state.routed.iter().cloned().collect(),
+            terminated: state.terminated.iter().cloned().collect(),
+            secrets: state
                 .entries
                 .iter()
                 .map(|entry| ReceiverSecretView {
@@ -514,8 +480,175 @@ impl Receiver {
                     callback_url: entry.callback_url.clone(),
                 })
                 .collect(),
-            accepted: self.accepted.keys().cloned().collect(),
+            accepted: state.accepted.keys().cloned().collect(),
+        })
+    }
+
+    /// Returns the accepted keys and the raw published JWKs of this delivery
+    /// (spec 06 R7.1-R7.4, R7.6).
+    ///
+    /// A configured source wins over the static configuration, and its raw
+    /// published JWKs are compared as they are, so a key the R7.3 validator
+    /// rejects still fails the required R7.6 check (spec 06 R7.6). Without a
+    /// source the static keys are the accepted set and their records are the
+    /// published set.
+    fn key_view<'a>(
+        &'a self,
+        snapshot: Option<&'a KeySnapshot>,
+    ) -> (&'a [WebhookKeyRecord], &'a [Value]) {
+        match snapshot {
+            Some(snapshot) => (snapshot.accepted.as_slice(), snapshot.published.as_slice()),
+            None => (self.keys.as_slice(), self.published.as_slice()),
         }
+    }
+
+    /// Releases the reservation of one id and answers its rejection
+    /// (spec 06 R1.10, R3.16).
+    ///
+    /// Every post-dedup rejection goes through here, so the id is never
+    /// recorded for an answer that is not a `2xx` and a concurrent waiter
+    /// becomes the new owner.
+    fn leave(&self, state: &mut ReceiverState, id: &str, code: &'static str) -> DeliveryOutcome {
+        self.dispatch.abandon(state, id);
+        reject(code)
+    }
+
+    /// Runs steps 7 to 15 against the state under the one lock
+    /// (spec 06 R3.7-R3.15).
+    ///
+    /// The function is pure: it reads secrets, routing, termination, the
+    /// configured callback urls and the accepted keys, verifies the `v1`
+    /// HMAC, the freshness window, the optional asymmetric entries, the Jack
+    /// `w1` header and the optional R7.6 cross-check, and returns the entry
+    /// that matched or the first failing code. It never calls the enqueue
+    /// callback and never takes another lock.
+    fn verify(&self, state: &ReceiverState, ctx: &Context<'_>) -> Result<Verified, &'static str> {
+        // Step 7 (R3.7, R5.6): the one registered secret for the id, else
+        // every pending secret of section 5.
+        let registered = state
+            .entries
+            .iter()
+            .position(|entry| entry.subscription_id.as_deref() == Some(ctx.subscription_id));
+        let candidates: Vec<usize> = match registered {
+            Some(index) => vec![index],
+            None => state
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, entry)| entry.subscription_id.is_none())
+                .map(|(index, _)| index)
+                .collect(),
+        };
+        let deferred = registered.is_none();
+        if deferred && candidates.is_empty() {
+            return Err(codes::UNKNOWN_SUBSCRIPTION);
+        }
+        // Step 8 (R3.8): a routed or terminated id passes; the pending-secret
+        // path re-checks routing after verification (R5.6).
+        if !deferred
+            && !state.routed.contains(ctx.subscription_id)
+            && !state.terminated.contains(ctx.subscription_id)
+        {
+            return Err(codes::SUBSCRIPTION_NOT_ROUTED);
+        }
+        // Steps 9, 10 and 11 (R3.10-R3.12): grammar, scheme set, lengths.
+        let Some(signature) = single(ctx.all, H_SIG) else {
+            return Err(codes::MISSING_WEBHOOK_HEADER);
+        };
+        let parsed = match parse_signature_header(signature) {
+            Ok(parsed) => parsed,
+            Err(error) => return Err(error.code),
+        };
+        if let Err(error) = check_schemes(&parsed) {
+            return Err(error.code);
+        }
+        let decoded = match decode_signatures(&parsed) {
+            Ok(decoded) => decoded,
+            Err(error) => return Err(error.code),
+        };
+        // Step 12 (R3.13): the v1 HMAC with every selected secret.
+        let content = SignatureContent {
+            webhook_id: ctx.webhook_id,
+            timestamp: ctx.timestamp,
+            body: ctx.body,
+        };
+        let mut matched = None;
+        for index in candidates {
+            if v1_verify(&decoded, &state.entries[index].secret, &content) {
+                matched = Some(index);
+                break;
+            }
+        }
+        let Some(matched) = matched else {
+            return Err(codes::BAD_SIGNATURE);
+        };
+        // Step 13 (R3.9): freshness, only after the HMAC verified.
+        let Ok(seconds) = ctx.timestamp.parse::<i64>() else {
+            return Err(codes::MALFORMED_WEBHOOK_TIMESTAMP);
+        };
+        if let Err(error) = freshness(ctx.now, seconds, self.window) {
+            return Err(error.code);
+        }
+        // Step 14 (R3.14): asymmetric verification, only when identity is
+        // enforced.
+        if self.enforce_server_identity {
+            if ctx.accepted.is_empty() {
+                return Err(codes::NO_SERVER_KEYS);
+            }
+            if asymmetric_verify(&decoded, ctx.subscription_id, &content, ctx.accepted).is_none() {
+                return Err(codes::BAD_SERVER_SIGNATURE);
+            }
+        }
+        // Step 15 (R3.15, R4.1-R4.6): the Jack w1 header, when configured.
+        if let Some(jack) = &self.jack {
+            let Some(header_value) = single(ctx.all, H_JACK) else {
+                return Err(codes::MISSING_JACK_AUTH);
+            };
+            // R5.6: the pending path signs the verified entry's callback url;
+            // a routed id signs the configured callback url of R4.3.
+            let callback_url = if deferred {
+                state.entries[matched].callback_url.as_deref()
+            } else {
+                jack.callback_urls
+                    .get(ctx.subscription_id)
+                    .map(String::as_str)
+            };
+            let parts = JackSigningParts {
+                aud: &jack.aud,
+                subscription_id: ctx.subscription_id,
+                webhook_id: ctx.webhook_id,
+                timestamp: ctx.timestamp,
+                // An entry without a callback url cannot verify a signature
+                // that binds one, so the empty placeholder only lets the
+                // earlier checks of R4.1-R4.4 run in their spec order; the
+                // entry is refused as bad_jack_signature right after them.
+                callback_url: callback_url.unwrap_or_default(),
+                body: ctx.body,
+            };
+            if let Err(error) = w1::verify(
+                Some(header_value),
+                &parts,
+                ctx.accepted,
+                ctx.now,
+                jack.window,
+                self.server_key_id.as_deref(),
+            ) {
+                return Err(error.code);
+            }
+            if callback_url.is_none() {
+                return Err(codes::BAD_JACK_SIGNATURE);
+            }
+        }
+        // R7.6: the optional cross-check of the raw published card JWKs
+        // against the native tool result.
+        if self.require_webhook_key_check {
+            if let Err(error) =
+                cross_check_webhook_key_jwks(ctx.published, self.webhook_key_tool.as_ref(), true)
+            {
+                return Err(error.code);
+            }
+        }
+        Ok(Verified { deferred, matched })
     }
 }
 

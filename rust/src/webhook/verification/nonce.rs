@@ -173,6 +173,26 @@ pub fn pair_key(pair: Option<&Value>) -> Option<String> {
     serde_json::to_string(&[principal, url]).ok()
 }
 
+/// One issued nonce that has not been forgotten yet: its issue time, the
+/// `(principal, canonical_url)` pair it is bound to and whether an accepted
+/// echo already spent it (spec 06 R5.3).
+///
+/// The pair is the two members as owned strings; the gate renders it as a
+/// two-element array for [`accept_echo`], so both sides of the pair check
+/// pass through [`pair_key`] (spec 06 R5.3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingNonce {
+    /// The unix time the nonce was issued, in the unit of `now`
+    /// (spec 06 R5.3).
+    pub issued_at: i64,
+    /// The principal and canonical url the nonce is bound to, both non-empty
+    /// (spec 06 R5.3).
+    pub pair: (String, String),
+    /// True once an accepted echo spent the nonce, so a second echo is
+    /// `reused` (spec 06 R5.3).
+    pub consumed: bool,
+}
+
 /// The inputs of one accept decision (spec 06 R5.3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EchoAttempt<'a> {

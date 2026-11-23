@@ -284,10 +284,27 @@ fn freshness_boundaries_are_the_pinned_300_seconds() {
 }
 
 #[test]
-fn a_negative_window_admits_only_the_same_instant() {
-    assert_eq!(freshness(T0, T0, -1).map_err(|error| error.code), Ok(()));
+fn a_negative_window_rejects_even_the_same_instant() {
+    // R3.9 admits a timestamp only while `|now - ts| <= window`, so a window
+    // of -1 admits nothing: the same instant fails with a difference of 0,
+    // which is already greater than the window.
+    assert_eq!(
+        freshness(T0, T0, -1).map_err(|error| error.code),
+        Err("stale_timestamp")
+    );
     assert_eq!(
         freshness(T0, T0 - 1, -1).map_err(|error| error.code),
         Err("stale_timestamp")
+    );
+    // A zero window is the tight boundary: equal timestamps pass, and one
+    // second either side does not.
+    assert_eq!(freshness(T0, T0, 0).map_err(|error| error.code), Ok(()));
+    assert_eq!(
+        freshness(T0, T0 - 1, 0).map_err(|error| error.code),
+        Err("stale_timestamp")
+    );
+    assert_eq!(
+        freshness(T0, T0 + 1, 0).map_err(|error| error.code),
+        Err("future_timestamp")
     );
 }
