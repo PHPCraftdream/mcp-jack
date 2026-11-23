@@ -1,4 +1,4 @@
-import type { HardenedOutcome, HardenedRequest } from "../ssrf/client.js";
+import type { HardenedOutcome, HardenedRequest, HardenedResponse } from "../ssrf/client.js";
 import { checkCallbackUrl } from "../ssrf/url.js";
 import { allowlistMatches } from "./allowlist.js";
 import { checkReceiverDocFetch, docCacheTtl, receiverDocCovers, WELL_KNOWN_PATH, wellKnownUrl } from "./document.js";
@@ -254,20 +254,22 @@ export class EndpointVerifier {
     expiresAt: number,
     options?: { readonly challenge?: ChallengeSigner },
   ): Promise<EndpointVerification> {
+    const bound = boundPair(pair);
+    if (bound === null) return { verified: false, route: null, reason: "invalid_callback_url" };
     const hit = (route: VerificationRoute): EndpointVerification => {
-      this.#cache.set(pair, expiresAt);
+      this.#cache.set(bound, expiresAt);
       return { verified: true, route, reason: null };
     };
-    if (this.#cache.has(pair)) return hit("cache");
-    if (allowlistMatches(this.#deps.allowlist ?? [], pair.canonicalUrl).matched) return hit("allowlist");
+    if (this.#cache.has(bound)) return hit("cache");
+    if (allowlistMatches(this.#deps.allowlist ?? [], bound.canonicalUrl).matched) return hit("allowlist");
     try {
-      if (this.#deps.hook?.(pair) === true) return hit("out_of_band");
+      if (this.#deps.hook?.(bound) === true) return hit("out_of_band");
     } catch {
       // An unavailable hook does not verify the pair.
     }
-    if (await this.#wellKnown(pair.canonicalUrl)) return hit("well_known");
+    if (await this.#wellKnown(bound.canonicalUrl)) return hit("well_known");
     if (options?.challenge === undefined) return { verified: false, route: null, reason: "no_route" };
-    const reason = await this.#challenge(pair, options.challenge);
+    const reason = await this.#challenge(bound, options.challenge);
     return reason === null ? hit("challenge") : { verified: false, route: null, reason };
   }
 
@@ -281,11 +283,12 @@ export class EndpointVerifier {
     const receivers = this.#documents.get(origin);
     if (receivers !== undefined) return { ok: true, receivers };
     try {
-      const outcome = await this.#deps.transport.request(url, {
+      const outcome = transportOutcome(await this.#deps.transport.request(url, {
         method: "GET",
         path: WELL_KNOWN_PATH,
         headers: { accept: "application/json" },
-      });
+      }));
+      if (outcome === null) return { ok: false, code: "document_fetch_failed", reason: "transport_response" };
       if (!outcome.ok) return { ok: false, code: outcome.code, reason: outcome.reason ?? outcome.code };
       if (outcome.response.tooLarge === true) return { ok: false, code: "document_fetch_failed", reason: "too_large" };
       const { status, body, headers } = outcome.response;
@@ -315,7 +318,7 @@ export class EndpointVerifier {
     try {
       nonce = this.#deps.nonceSource?.() ?? randomNonce();
       body = Buffer.from(JSON.stringify({ type: "verification", challenge: nonce }), "utf8");
-      const signingPair = { principal: pair.principal, canonicalUrl: pair.canonicalUrl };
+      const signingPair = Object.freeze({ principal: pair.principal, canonicalUrl: pair.canonicalUrl });
       const signed: unknown = signer({ pair: signingPair, nonce, body, destination: { ...destination } });
       if (!isObject(signed)) return "challenge_failed";
       const candidate = signed.headers;
@@ -329,12 +332,14 @@ export class EndpointVerifier {
     } catch {
       return "challenge_failed";
     }
-    let answer: HardenedOutcome;
+    let raw: unknown;
     try {
-      answer = await this.#deps.transport.request(destination.url, { method: "POST", path: destination.path, headers, body });
+      raw = await this.#deps.transport.request(destination.url, { method: "POST", path: destination.path, headers, body });
     } catch {
       return "connection_refused";
     }
+    const answer = transportOutcome(raw);
+    if (answer === null) return "challenge_failed";
     if (!answer.ok) {
       return answer.code === "timeout" || answer.code === "tls_error" ? answer.code : "connection_refused";
     }
@@ -348,6 +353,50 @@ export class EndpointVerifier {
     } catch {
       return "challenge_failed";
     }
+  }
+}
+
+type TransportOutcome =
+  | Extract<HardenedOutcome, { readonly ok: true }>
+  | { readonly ok: false; readonly code: string; readonly reason?: string };
+
+function boundPair(pair: VerifiedPair): VerifiedPair | null {
+  const value: unknown = pair;
+  if (!isObject(value)) return null;
+  const { principal, canonicalUrl } = value;
+  if (typeof principal !== "string" || typeof canonicalUrl !== "string") return null;
+  return Object.freeze({ principal, canonicalUrl });
+}
+
+function transportOutcome(value: unknown): TransportOutcome | null {
+  try {
+    if (!isObject(value)) return null;
+    if (value.ok === false) {
+      const code = value.code;
+      const reason = value.reason;
+      if (typeof code !== "string") return null;
+      if (reason !== undefined && typeof reason !== "string") return null;
+      return reason === undefined ? { ok: false, code } : { ok: false, code, reason };
+    }
+    if (value.ok !== true) return null;
+    const response = value.response;
+    if (!isObject(response)) return null;
+    const { status, headers, body, tooLarge } = response;
+    if (typeof status !== "number" || !Number.isInteger(status)) return null;
+    if (!isObject(headers)) return null;
+    const names: Record<string, string> = {};
+    for (const [name, entry] of Object.entries(headers)) {
+      if (typeof entry !== "string") return null;
+      names[name] = entry;
+    }
+    if (!(body instanceof Uint8Array)) return null;
+    if (tooLarge !== undefined && typeof tooLarge !== "boolean") return null;
+    const snapshot: HardenedResponse = tooLarge === undefined
+      ? { status, headers: names, body }
+      : { status, headers: names, body, tooLarge };
+    return { ok: true, response: snapshot };
+  } catch {
+    return null;
   }
 }
 

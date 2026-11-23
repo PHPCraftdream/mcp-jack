@@ -158,17 +158,33 @@ test("client_cache_private_only", async () => {
 test("client_result_cache_key_without_version", () => {
   // An existing 3-argument caller must keep compiling and keep a stable key:
   // the omitted version is the empty one, so that call keeps the
-  // version-agnostic key of its era, method and params.
+  // version-agnostic key of its era, method and params in exactly the first
+  // release's three-part byte form.
   const key = resultCacheKey("tools/call", '{"name":"svc.status"}', "modern");
   assert.equal(
     key,
-    "modern" + "\u0000" + "tools/call" + "\u0000" + "" + "\u0000" + '{"name":"svc.status"}',
-    "cache: a 3-argument key uses the empty version",
+    "modern\u0000tools/call\u0000{\"name\":\"svc.status\"}",
+    "cache: a 3-argument key keeps the first release's byte format",
+  );
+  assert.equal(
+    resultCacheKey("tools/call", '{"name":"svc.status"}', "modern", ""),
+    key,
+    "cache: an explicit empty version is the 3-argument key",
   );
   assert.notEqual(
     resultCacheKey("tools/call", '{"name":"svc.status"}', "modern", "2026-07-28"),
     key,
     "cache: a negotiated version keys a different entry than the version-agnostic one",
+  );
+
+  // Backward compatibility: an entry written by the first release under the
+  // three-part key is served for today's 3-argument key.
+  const old = new PrivateResultCache(() => 0);
+  old.put("modern\u0000tools/call\u0000{\"name\":\"svc.status\"}", { area: 1 }, 60000);
+  assert.deepEqual(
+    old.get(resultCacheKey("tools/call", '{"name":"svc.status"}', "modern")),
+    { area: 1 },
+    "cache: a 3-argument key serves an entry stored under the first release's key",
   );
 });
 
