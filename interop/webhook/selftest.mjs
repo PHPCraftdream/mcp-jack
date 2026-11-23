@@ -112,11 +112,11 @@ export async function selfTest() {
       ok(deliveries[1].enqueued === 1, `the ${id} event is enqueued once`);
     }
 
-    for (const id of ['ssrf-private-address', 'ssrf-dns-rebinding']) {
+    for (const [id, field] of [['ssrf-private-address', 'shadow_connections'], ['ssrf-dns-rebinding', 'shadow_bytes']]) {
       const expected = scenarios.scenarios[id].expected;
-      ok(expected.shadow_connections === 0 && expected.attempts.length === 0
+      ok(expected[field] === 0 && expected.attempts.length === 0
         && expected.deliveries.length === 0,
-      `the ${id} row opens no shadow connection and records nothing`);
+      `the ${id} row pins ${field} to 0 and records nothing`);
     }
 
     // ---- 1. relay rewrites, no process needed ----
