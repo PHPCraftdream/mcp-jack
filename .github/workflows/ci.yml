@@ -193,8 +193,8 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cargo test --locked --all-features --test modern --test webhook_vectors -- --nocapture --test-threads=1 2>&1 | tee modern-vector-summary.log
-          test "$(grep -c VECTOR-SUMMARY modern-vector-summary.log)" -ge 11
+          cargo test --locked --all-features --test modern --test webhook_vectors --test stream_vectors -- --nocapture --test-threads=1 2>&1 | tee modern-vector-summary.log
+          test "$(grep -c VECTOR-SUMMARY modern-vector-summary.log)" -ge 13
           # modern-request-wire reports the control-character cases that HTTP cannot carry as excluded; the classification runner covers them.
           ! grep -v 'corpus=modern-request-wire' modern-vector-summary.log | grep -E 'VECTOR-SUMMARY .*(excluded=[1-9]|deviation=[1-9])'
       - name: Core without the http feature

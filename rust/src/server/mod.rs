@@ -12,6 +12,7 @@ mod registry;
 pub mod response_keys;
 #[cfg(target_os = "linux")]
 pub mod server_key;
+pub mod stream;
 pub mod verify;
 pub mod webhook_key;
 

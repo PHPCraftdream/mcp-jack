@@ -493,4 +493,19 @@ impl<C: FnMut() -> Result<u64, RotationError> + Send + 'static> ResponseKeys
             release,
         })
     }
+
+    /// The committed ring is read under the same serving lease as `authorize_response`: a
+    /// store error or an unknown/uncut `kid` is `None`, never a guess (spec 05 5.1).
+    fn successor_activation(&self, kid: &str) -> Option<i64> {
+        let mut store = self.lock_store();
+        let _lease = store.acquire_serving_lease().ok()?;
+        let (snapshot, _) = store.snapshot().ok()?;
+        snapshot
+            .public
+            .keys
+            .iter()
+            .find(|key| key.kid == kid)
+            .and_then(|key| key.known_cutoff)
+            .and_then(|cutoff| i64::try_from(cutoff).ok())
+    }
 }

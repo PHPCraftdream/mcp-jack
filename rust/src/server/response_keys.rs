@@ -88,4 +88,10 @@ pub trait ResponseKeys: Send + Sync {
         &self,
         input: &ResponseKeyRequest,
     ) -> Result<ResponseKeyAuthorization, RotationError>;
+
+    /// Successor activation `A` of `kid` when the provider knows one (spec 05 5.1); `None` means
+    /// no rotation cutoff is known. The HTTP stream signer closes the stream before this instant.
+    fn successor_activation(&self, _kid: &str) -> Option<i64> {
+        None
+    }
 }
