@@ -22,6 +22,7 @@ use mcp_jack::client::signer::{InMemorySigner, Signer};
 use mcp_jack::server::audit::{AuditSink, MemoryAuditSink};
 use mcp_jack::server::http::{HandlerConfig, JackLayer, JackService};
 use mcp_jack::server::identity::VerifiedIdentity;
+use mcp_jack::server::modern::Profile;
 use mcp_jack::server::native::{Native, NativeOptions};
 use mcp_jack::server::nonce::NonceStore;
 use mcp_jack::server::state::{MemoryState, RegistryEntry, StateStore};

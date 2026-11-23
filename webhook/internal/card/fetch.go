@@ -1,0 +1,143 @@
+package card
+
+import (
+	"bytes"
+	"encoding/json"
+	"strconv"
+	"strings"
+	"unicode"
+
+	"github.com/PHPCraftdream/mcp-jack/webhook/internal/ipaddr"
+	"github.com/PHPCraftdream/mcp-jack/webhook/internal/urlcheck"
+)
+
+const (
+	MaxCardBytes   = 65536
+	MaxCardTTL     = 300
+	DefaultCardTTL = 300
+	maxFetchMS     = 10000
+)
+
+// FetchInput is the metadata and body of a Server Card fetch. Header names
+// must be normalized to lowercase.
+type FetchInput struct {
+	MCPURL, CardURL string
+	Status          int
+	Headers         map[string]string
+	Body            []byte
+	ElapsedMS       *int64
+	Options         Options
+}
+
+// EgressRange is one validated advisory egress CIDR.
+type EgressRange struct {
+	CIDR, Family string
+	Prefix       int
+}
+
+// FetchResult contains the key snapshot, accepted egress ranges, and cache
+// lifetime in seconds.
+type FetchResult struct {
+	Keys     KeySet
+	Egress   []EgressRange
+	CacheTTL int64
+}
+
+// FetchError contains the first refusal code and its reason.
+type FetchError struct {
+	Code, Reason string
+}
+
+func (e *FetchError) Error() string {
+	if e.Reason == "" {
+		return e.Code
+	}
+	return e.Code + ": " + e.Reason
+}
+
+func checkFetchOrigin(mcp, card string) *FetchError {
+	cardURL, err := urlcheck.Check(card)
+	if err != nil {
+		reason := err.Reason
+		if reason == "" {
+			reason = err.Code
+		}
+		return &FetchError{Code: "not_https", Reason: reason}
+	}
+	// Check only accepts HTTPS.
+	mcpURL, err := urlcheck.Check(mcp)
+	if err != nil || !sameOrigin(cardURL, mcpURL) {
+		return &FetchError{Code: "cross_origin", Reason: "origin_mismatch"}
+	}
+	return nil
+}
+
+func checkFetchStatus(status int) *FetchError {
+	if status >= 300 && status <= 399 {
+		return &FetchError{Code: "redirect_refused", Reason: "redirect"}
+	}
+	if status < 200 || status > 299 {
+		return &FetchError{Code: "http_status", Reason: "status"}
+	}
+	return nil
+}
+
+// FetchDecision checks a completed fetch and extracts the selected remote's keys.
+func FetchDecision(in FetchInput) (FetchResult, *FetchError) {
+	if err := checkFetchOrigin(in.MCPURL, in.CardURL); err != nil {
+		return FetchResult{}, err
+	}
+	if err := checkFetchStatus(in.Status); err != nil {
+		return FetchResult{}, err
+	}
+	if in.ElapsedMS != nil && *in.ElapsedMS > maxFetchMS {
+		return FetchResult{}, &FetchError{Code: "timeout", Reason: "elapsed"}
+	}
+	if len(in.Body) > MaxCardBytes {
+		return FetchResult{}, &FetchError{Code: "too_large", Reason: "body"}
+	}
+	if !json.Valid(in.Body) {
+		return FetchResult{}, &FetchError{Code: "bad_json", Reason: "json"}
+	}
+	if bytes.TrimLeft(in.Body, " \t\r\n")[0] != '{' {
+		return FetchResult{}, &FetchError{Code: "bad_json", Reason: "shape"}
+	}
+	info, code := WebhookInfo(in.Body, in.MCPURL)
+	if code != "" {
+		return FetchResult{}, &FetchError{Code: code, Reason: "no_remote"}
+	}
+	keys := AcceptKeySet(info.SigningKeys, in.Options)
+	egress, _ := ParseCIDRList(info.Egress)
+	return FetchResult{Keys: keys, Egress: egress, CacheTTL: CardCacheTTL(in.Headers)}, nil
+}
+
+// ParseCIDRList splits input into valid egress ranges and malformed texts.
+func ParseCIDRList(values []string) (accepted []EgressRange, rejected []string) {
+	for _, text := range values {
+		if parsed, ok := ipaddr.ParseCIDR(text); ok {
+			accepted = append(accepted, EgressRange{CIDR: text, Family: parsed.Family, Prefix: parsed.Prefix})
+		} else {
+			rejected = append(rejected, text)
+		}
+	}
+	return accepted, rejected
+}
+
+// CardCacheTTL uses the first exact max-age directive, capped at MaxCardTTL.
+func CardCacheTTL(headers map[string]string) int64 {
+	for part := range strings.SplitSeq(headers["cache-control"], ",") {
+		digits, ok := strings.CutPrefix(strings.TrimFunc(part, cacheSpace), "max-age=")
+		if !ok || digits == "" || strings.IndexFunc(digits, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
+			continue
+		}
+		// On overflow ParseUint returns the maximum uint64, which also caps.
+		age, _ := strconv.ParseUint(digits, 10, 64)
+		return int64(min(age, MaxCardTTL))
+	}
+	return DefaultCardTTL
+}
+
+// cacheSpace matches the reference's JavaScript String.trim whitespace.
+func cacheSpace(r rune) bool {
+	return (r >= '\t' && r <= '\r') || r == '\uFEFF' || r == '\u2028' || r == '\u2029' || unicode.Is(unicode.Zs, r)
+}

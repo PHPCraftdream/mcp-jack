@@ -6,6 +6,7 @@ mod durable;
 #[cfg(feature = "http")]
 pub mod http;
 pub mod identity;
+pub mod modern;
 pub mod native;
 mod registry;
 pub mod response_keys;

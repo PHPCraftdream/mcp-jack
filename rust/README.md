@@ -40,6 +40,21 @@ let service = layer.layer(tower::service_fn(
 ));
 ```
 
+## Modern profile (MCP 2026-07-28)
+
+Spec 04 selects a per-request era (`legacy` = `2025-11-25`/`2025-06-18`, `modern` = `2026-07-28` and later) and adds request-metadata mirror headers around the unchanged `mcp-jack/v1` request and response signatures.
+
+**Server.** `JackLayer::with_profile` takes `mcp_jack::server::modern::Profile::{Legacy, Modern, Both}`. `Legacy` is the default and byte-identical to 0.1.x (no rule of spec 04 section 5 runs); `Modern` serves every request as modern; `Both` decides per request with `decide_era`. In the modern era `classify_request` applies `S1`-`S12`: mirror headers are validated against the signed body, `Mcp-Param-*` is forwarded unchecked, `Mcp-Session-Id` and `Last-Event-ID` are stripped, and a violation becomes a signed JSON-RPC error (`400`/`405`, code `-32020`/`-32600`, `Content-Type: application/json`, nonce consumed). Native `jack.*` results in a modern-era request carry `resultType: "complete"` and `_meta["io.modelcontextprotocol/serverInfo"]`; legacy-era results are unchanged. The engine is pure (`mcp_jack::server::modern::{ModernRequest, ModernOutcome, Refusal, RefusalReason}`) and can be driven without HTTP, which is what the vector runner does.
+
+**Client.** `ClientEra` (`Legacy` default, `Modern`) is selected on `Client::with_era`. `mcp_jack::client::modern::{build_mirrors, add_client_info}` build `params._meta` and the `MCP-Protocol-Version`/`Mcp-Method`/`Mcp-Name` headers in `C2` order; `mcp_jack::modern::{encode_header_value, decode_header_value}` are the RFC 4648 base64 sentinel codec of section 4; `validate_annotations`/`collect_annotations` implement `x-mcp-header` validation (`C5`), `ToolCatalog`/`EventCatalog` filter a `tools/list`/`events/list` result (`C5`, `C11`), `project_arguments` projects arguments onto `Mcp-Param-*` (`C6`), `detect_era` implements the era detection and fallback of `C9` with the closed `{era, action, reason}` vocabulary, `Resync` implements the `tools/list` and `events/list` resync flows (`C10`, `C12`), and `PrivateResultCache` is the private-only result cache of `C8` (keyed by the exact request, bounded by `ttlMs`, never shared because a response is signed over one request's signature).
+
+```rust,ignore
+let layer = JackLayer::new(cfg).with_profile(Profile::Both);
+let client = Client::new(cfg)?.with_era(ClientEra::Modern);
+```
+
+**Conformance.** `rust/tests/modern` runs every case of `spec/fixtures/modern/{modern-request-vectors,header-encoding-vectors,x-mcp-header-vectors,era-detection-vectors}.json` against this crate and prints one `VECTOR-SUMMARY corpus=…` line per corpus; the spec's exemption table (`C7`, `C8`, `C10`, `C12`) is carried by the SDK tests `native_result_era_shape`, `client_cache_private_only`, `client_header_resync` and `client_events_resync` in the same group.
+
 ## Client (`mcp_jack::client`)
 
 ### Client URL policy

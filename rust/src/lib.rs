@@ -10,6 +10,7 @@ pub mod client;
 pub mod ed25519;
 pub mod encoding;
 pub mod error;
+pub mod modern;
 pub mod rotation;
 pub mod server;
 pub mod signing;
