@@ -145,6 +145,15 @@ export class RotationServerProvider {
     return selected;
   }
 
+  /** The 5.1 successor activation of `kid`, or undefined when none is known yet. */
+  successorActivation(kid: string): number | undefined {
+    const { snapshot } = this.store.snapshot();
+    const key = snapshot.trust.keys.find((entry) => entry.kid === kid);
+    if (key === undefined) return undefined;
+    const cutoff = key.knownCutoff;
+    return typeof cutoff === "number" && Number.isSafeInteger(cutoff) && cutoff >= 0 ? cutoff : undefined;
+  }
+
   /**
    * One explicit authorization for the preconfigured next handle. P is pinned by a single fresh
    * sample; failure, conflict, or unknown is not retried automatically.

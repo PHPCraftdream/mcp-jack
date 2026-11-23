@@ -1,4 +1,4 @@
-/** Fetch-standard request handler adapter: body buffering, verification, native tools, response signing, verified-identity hand-off to the wrapped handler. */
+/** Fetch-standard request handler adapter: body buffering, verification, native tools, response signing, signed streams (spec 05), verified-identity hand-off to the wrapped handler. */
 import { createPrivateKey, createPublicKey, sign } from "node:crypto";
 import type { KeyObject } from "node:crypto";
 import { formatResponseAuth } from "../../core/auth-header.js";
@@ -7,11 +7,16 @@ import { validatePublicKey, verify as verifyEd25519 } from "../../core/ed25519.j
 import { ROTATION_MAX_TIMESTAMP } from "../../rotation/wire/record.js";
 import type { RotationResponseAuthorization, RotationResponseKeyRequest } from "../../rotation/server/provider.js";
 import { responseSigningString } from "../../core/signing.js";
+import { STREAM_ACCEPT_HEADER, jackAcceptStreams } from "../../stream/codes.js";
+import type { StreamSigningKey } from "../../stream/signer.js";
+import { classifyBody } from "../verify.js";
 import type { Verifier, VerifyResult } from "../verify.js";
 import type { JackIdentity } from "../verify.js";
 import { markResponseFinish, takeResultFinish } from "../durable/finish.js";
 import { JACK_SERVER_INFO, SERVER_PROFILES, envelopeBodyText, isModernHeaderSignal, refusalBodyText } from "../../modern/server.js";
 import type { ServerProfile } from "../../modern/server.js";
+import { StreamAdmission, attachJackStream, resolveStreamOptions, startSignedStream, streamLimitBody } from "./stream.js";
+import type { StreamServerOptions } from "./stream.js";
 
 // Go NewHandler returns errors; the Fetch-standard API has no error return in
 // its factory shape, so configuration problems THROW a plain Error instead.
@@ -24,6 +29,12 @@ import type { ServerProfile } from "../../modern/server.js";
  */
 export interface ResponseKeyProvider {
   authorizeResponse(input: RotationResponseKeyRequest): RotationResponseAuthorization;
+  /**
+   * Spec 05 5.1: the successor activation of `kid`, or undefined when none is
+   * known yet. RotationServerProvider implements it; a stream armed with it
+   * closes below the cutoff.
+   */
+  successorActivation?(kid: string): number | undefined;
 }
 
 /** Configuration for jackFetchHandler (Go HandlerConfig). */
@@ -75,6 +86,14 @@ export interface HandlerConfig {
    * request after authentication (S3).
    */
   profile?: ServerProfile;
+  /**
+   * Signed streams of spec 05 (scheme s1). undefined means no stream path at
+   * all, so every text/event-stream answer keeps the signed 501 of v1. When
+   * set, only an opted-in modern 200 text/event-stream of a JSON-RPC request
+   * becomes a stream; every other answer stays byte-identical. Invalid limits
+   * throw at construction.
+   */
+  readonly streams?: StreamServerOptions;
 }
 
 /** Go defaultMaxBodyBytes. The body must be read in full to be hashed, so the limit is a denial-of-service guard. */
@@ -187,6 +206,22 @@ function receivedHeaderInstances(req: Request): readonly (readonly [string, stri
 }
 
 /**
+ * Spec 05 section 1.1: the `Jack-Accept` request values in received order.
+ * Read from the received instances because a Headers object merges repeats;
+ * the name compares ASCII case-insensitively like every header name, and the
+ * values are handed to jackAcceptStreams, which combines the lines itself.
+ */
+function acceptHeaderValues(instances: readonly (readonly [string, string])[]): string[] {
+  const values: string[] = [];
+  for (const [name, value] of instances) {
+    if (name.toLowerCase() === STREAM_ACCEPT_HEADER.toLowerCase()) {
+      values.push(value);
+    }
+  }
+  return values;
+}
+
+/**
  * Spec 01 section 3.1: the signed target is an origin-form request target:
  * it starts with '/' (so not absolute-, authority- or asterisk-form) and
  * consists only of the bytes 0x21 to 0x7E.
@@ -285,6 +320,16 @@ function targetFromUrl(requestUrl: string): string | undefined {
  * jackHeaders(req). A HEAD refusal is signed over the empty body, because a
  * HEAD response carries no content and the signature therefore covers the
  * (zero) bytes the client receives.
+ *
+ * Signed streams (spec 05, scheme s1): config.streams enables the stream path
+ * of the modern profile only. An opted-in modern 200 text/event-stream of a
+ * JSON-RPC request takes a 3.3 slot before any stream byte exists (a full
+ * identity gets the signed v1 429), opens with the one-shot response gate
+ * (3.1, 5.1) and is pumped into signed frames; its answer carries only
+ * content-type, x-accel-buffering and the open Jack-Auth (2.1), and the
+ * wrapped handler sees the 3.5 heartbeat grant and the 3.7 cancel signal
+ * through jackStream(). Every other text/event-stream answer, including the
+ * 501 of a request that did not opt in, keeps its v1 bytes exactly.
  */
 export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => Promise<Response>): (req: Request) => Promise<Response> {
   if (config.verifier === undefined) throw new Error("server: HandlerConfig.verifier must be set");
@@ -297,6 +342,9 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
   }
   let priv: KeyObject | undefined;
   let kid = "";
+  // Spec 05 3.1: the stream signer needs the raw 32 public key bytes; kept
+  // next to kid so no stream re-exports the SPKI DER to find them again.
+  let staticPublicKey: Uint8Array | undefined;
   if (rotation === undefined) {
     if (config.serverKey instanceof Uint8Array) {
       if (config.serverKey.length !== 32) {
@@ -313,7 +361,8 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     }
     // SPKI DER is a fixed 44-byte header followed by the 32-byte raw key (client/signer.ts).
     const der = createPublicKey(priv).export({ type: "spki", format: "der" });
-    kid = keyId(new Uint8Array(der.subarray(der.length - 32)));
+    staticPublicKey = new Uint8Array(der.subarray(der.length - 32));
+    kid = keyId(staticPublicKey);
   }
   if (next === undefined) throw new Error("server: next handler must be set");
   const profile = config.profile ?? "legacy";
@@ -330,6 +379,10 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     throw new Error("server: HandlerConfig.maxResponseBytes must be 0 or a positive safe integer");
   }
   const respLimit = mr === undefined || mr === 0 ? DEFAULT_MAX_RESPONSE_BYTES : (mr as number);
+  // Spec 05: resolved once, so a bad stream limit throws here like every other
+  // configuration error, and undefined leaves every v1 path untouched.
+  const streamOptions = config.streams === undefined ? undefined : resolveStreamOptions(config.streams);
+  const admission = streamOptions === undefined ? undefined : new StreamAdmission(streamOptions.maxConcurrentStreams);
 
   // Renders the rejection body of spec 01 section 4 (field order code,message like Go's structs).
   function errorBody(code: string, message: string): Uint8Array {
@@ -408,6 +461,50 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
       return writeRaw(status, headers, body, statusText);
     } catch {
       return refuse();
+    } finally {
+      authorization.release();
+    }
+  }
+
+  // Spec 05 3.1: the static profile signs a stream with the static server key
+  // and the raw public key bytes kept next to kid. The signer re-verifies every
+  // signature against that key, so this callback is never trusted either.
+  function staticStreamKey(key: KeyObject, publicKey: Uint8Array): StreamSigningKey {
+    return {
+      sign: (message: Uint8Array): Uint8Array => new Uint8Array(sign(null, Buffer.from(message), key)),
+      publicKey: (): Uint8Array => publicKey,
+    };
+  }
+
+  // Spec 05 3.1/5.1: the rotation profile opens a stream through the same
+  // pipeline and checks as writeAuthorized. The open header is the response
+  // gate's only consumer, so final() runs before any stream byte and
+  // release() follows immediately in the finally; every failure is the same
+  // undefined, which becomes the one unsigned 503.
+  function openRotationStream(provider: ResponseKeyProvider, tool: string, requestSig: string): { readonly key: StreamSigningKey; readonly openerTs: number } | undefined {
+    let authorization: RotationResponseAuthorization;
+    try {
+      authorization = provider.authorizeResponse({ status: 200, tool, requestSignature: requestSig, body: new Uint8Array(0) });
+    } catch {
+      return undefined;
+    }
+    try {
+      const signer = authorization.signer;
+      const publicKey = signer.publicKey();
+      // Authorization shape and pinned identity are re-checked exactly like
+      // writeAuthorized; provider details never leak into a stream.
+      if (!Number.isSafeInteger(authorization.timestamp) || authorization.timestamp < 0 || authorization.timestamp > ROTATION_MAX_TIMESTAMP ||
+        publicKey.length !== 32 || validatePublicKey(publicKey) !== null) {
+        return undefined;
+      }
+      const key: StreamSigningKey = {
+        sign: (message: Uint8Array): Uint8Array => signer.sign(message),
+        publicKey: (): Uint8Array => signer.publicKey(),
+      };
+      authorization.final();
+      return { key, openerTs: authorization.timestamp };
+    } catch {
+      return undefined;
     } finally {
       authorization.release();
     }
@@ -494,11 +591,13 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     return writeSigned(200, headers, new TextEncoder().encode(body), res.requestSig, res.tool);
   }
 
-  // Hands an authorized request to the wrapped server and signs what it answers.
+  // Hands an authorized request to the wrapped server and signs what it
+  // answers. `acceptStream` is the request's spec 05 opt-in (1.1).
   async function forward(
     req: Request,
     body: Uint8Array,
     res: VerifyResult,
+    acceptStream: boolean,
   ): Promise<Response> {
     // Spec 04 S9: the modern era forwards the header instances the era rules
     // returned (S8 removals applied). The legacy era forwards the ORIGINAL
@@ -508,6 +607,39 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     const forwardedList: readonly (readonly [string, string])[] | undefined =
       res.era === "modern" ? res.forwardHeaders ?? [] : undefined;
     const forwardedHeaders = forwardedList !== undefined ? new Headers(forwardedList.map(([name, value]): [string, string] => [name, value])) : new Headers(req.headers);
+    // Spec 05 3.8: the body decides whether a stream may exist at all. A
+    // JSON-RPC request without an id is a notification; a client-sent response
+    // object and an unclassifiable body are neither, so neither may stream.
+    const message = classifyBody(body);
+    const kind =
+      message === undefined
+        ? undefined
+        : message.kind === "request" && message.id === undefined
+          ? "notification"
+          : message.kind;
+    // Spec 05 1.1/3.7: only a request that may open a stream gets a controller
+    // of its own, and only that forwarded Request replaces the received
+    // signal. Every other request stays exactly as today: no controller, no
+    // stream context, the received signal untouched. A notification carries no
+    // rpcId and so never qualifies (3.8).
+    // The 2.4 sid is drawn here, once: the handler context needs it while it
+    // runs, and the signing key is irrelevant to it.
+    const streamPath =
+      streamOptions !== undefined && admission !== undefined && acceptStream && res.era === "modern" && kind === "request" && res.rpcId !== undefined
+        ? { options: streamOptions, admission, rpcId: res.rpcId, sid: encodeBase64URL(streamOptions.sidSource()), abort: new AbortController() }
+        : undefined;
+    if (streamPath !== undefined) {
+      // A disconnect of the received request cancels the handler as well.
+      const outer = req.signal;
+      const abort = streamPath.abort;
+      if (outer.aborted) {
+        abort.abort();
+      } else {
+        outer.addEventListener("abort", (): void => {
+          abort.abort();
+        }, { once: true });
+      }
+    }
     // Restore the EXACT buffered body bytes. undici throws for a GET body,
     // so the body is only attached for methods that can carry one; a
     // conditional spread, never an explicit undefined, keeps
@@ -516,6 +648,7 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
       method: req.method,
       headers: forwardedHeaders,
       ...(req.method !== "GET" && req.method !== "HEAD" && body.length > 0 ? { body } : {}),
+      ...(streamPath === undefined ? {} : { signal: streamPath.abort.signal }),
     });
     // Preserve the node adapter's exact authenticated target for the wrapped
     // handler too; the Request URL itself remains URL-normalized.
@@ -539,6 +672,16 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     if (forwardedList !== undefined) {
       forwardedHeaderLists.set(restored, forwardedList);
     }
+    // 3.5/3.7: the handler reads its stream context, and observes cancellation,
+    // while it runs, not after it returned.
+    if (streamPath !== undefined) {
+      attachJackStream(restored, {
+        sid: streamPath.sid,
+        heartbeatMs: streamPath.options.heartbeatMs,
+        frameMaxBytes: streamPath.options.frameMaxBytes,
+        signal: streamPath.abort.signal,
+      });
+    }
 
     let resp: Response;
     try {
@@ -559,6 +702,65 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     // never mask it.
     const ct = resp.headers.get("content-type");
     if (ct !== null && ct.split(";")[0]?.trim().toLowerCase() === "text/event-stream") {
+      // Spec 05 3.8: a notification never opens a stream, whatever the handler
+      // answered. Its stream body is discarded and the answer is the signed v1
+      // 202 with no content (built BEFORE cancelling, so a slow cancel cannot
+      // mask it).
+      if (kind === "notification") {
+        const headers = new Headers();
+        headers.set("content-type", "application/json");
+        const out = writeSigned(202, headers, new Uint8Array(0), res.requestSig, res.tool);
+        try {
+          await resp.body?.cancel();
+        } catch {
+          /* cancellation must not mask the 202 already in hand */
+        }
+        return out;
+      }
+      // Spec 05 1.4: an opted-in modern 200 text/event-stream of a JSON-RPC
+      // request becomes a signed stream. Every other case falls through to the
+      // unchanged v1 501 below: streams not configured, no Jack-Accept s1
+      // token, the legacy era, a body that is not a request, or any status but
+      // 200.
+      if (streamPath !== undefined && resp.status === 200) {
+        const rpcId = streamPath.rpcId;
+        // 3.1/5.1: one key signs the open header and every frame, and the open
+        // timestamp is that key's. The static profile uses the static key and
+        // the verifier clock; the rotation profile opens through the one-shot
+        // response gate, so a later rotation epoch cannot change this stream.
+        return startSignedStream({
+          options: streamPath.options,
+          admission: streamPath.admission,
+          identity: res.identity?.kid ?? res.kid,
+          sid: streamPath.sid,
+          rpcId,
+          abort: streamPath.abort,
+          handlerResponse: resp,
+          body,
+          clock: (): number => config.verifier.clock(),
+          requestSig: res.requestSig,
+          tool: res.tool,
+          openKey: (): { key: StreamSigningKey; openerTs: number } | undefined => {
+            if (rotation !== undefined) return openRotationStream(rotation, res.tool, res.requestSig);
+            if (priv === undefined || staticPublicKey === undefined) {
+              // Unreachable: one response-signing profile is always configured.
+              return undefined;
+            }
+            return { key: staticStreamKey(priv, staticPublicKey), openerTs: config.verifier.clock() };
+          },
+          // 3.3: the signed v1 429 of an identity at its limit.
+          refuseLimit: (): Response => {
+            const headers = new Headers();
+            headers.set("content-type", "application/json");
+            return writeSigned(429, headers, streamLimitBody(rpcId), res.requestSig, res.tool);
+          },
+          // 5.1: the stream configuration's cutoff first, then the rotation
+          // provider's own activation of the opening kid.
+          successorActivation: (kid: string): number | undefined => streamPath.options.successorActivation?.(kid) ?? rotation?.successorActivation?.(kid),
+          // The unsigned 503 of a key that cannot be opened.
+          refuseRotation: (): Response => writeError(503, "rotation_state_unavailable", "response authorization unavailable"),
+        });
+      }
       const headers = new Headers();
       headers.set("content-type", "application/json");
       const out = writeSigned(501, headers, errorBody("streaming_unsupported", "streaming responses cannot be signed in v0.1"), res.requestSig, res.tool);
@@ -646,6 +848,11 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     // isModernHeaderSignal (the "both" branch below short-circuits it).
     const headerInstances =
       profile === "legacy" ? EMPTY_HEADER_INSTANCES : receivedHeaderInstances(req);
+    // Spec 05 1.1: the opt-in is request-side and unsigned. Without config
+    // streams this is false and no stream code below runs; the s1 token in a
+    // line the 1.1 grammar rejects enables nothing.
+    const acceptStream =
+      streamOptions !== undefined && jackAcceptStreams(acceptHeaderValues(receivedHeaderInstances(req)));
     if (method !== "GET" && method !== "POST") {
       // A modern-era non-POST request is authenticated first and refused by S2
       // with a signed 405; anything else keeps the 0.1.x unsigned answer.
@@ -745,7 +952,7 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
     const finish = takeResultFinish(res);
     let out!: Response;
     try {
-      out = !res.accepted ? reject(res, method) : res.native ? native(res) : await forward(req, body, res);
+      out = !res.accepted ? reject(res, method) : res.native ? native(res) : await forward(req, body, res, acceptStream);
     } catch (error) {
       // Release even on response failure; idempotent with the node adapter.
       finish?.();

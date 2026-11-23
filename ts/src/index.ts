@@ -22,6 +22,9 @@ export * from "./server/registry/state-file.js";
 export * from "./server/registry/state.js";
 export * from "./server/verify.js";
 export * from "./modern/index.js";
+export * from "./stream/index.js";
+export type { StreamServerOptions, ResolvedStreamOptions, JackStreamContext } from "./server/http/stream.js";
+export { jackStream } from "./server/http/stream.js";
 // Namespaced: the client re-declares JsonValue and the TOOL_* names of the server modules.
 export * as client from "./client/index.js";
 export * as rotation from "./rotation/index.js";

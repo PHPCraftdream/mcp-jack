@@ -9,3 +9,6 @@ export * from "./tools.js";
 export * from "./profile.js";
 export * from "./transport/url-policy.js";
 export * from "./modern.js";
+export * from "./stream/session.js";
+export * from "./stream/pump.js";
+export * from "./stream/sse.js";
