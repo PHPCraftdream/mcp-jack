@@ -511,7 +511,7 @@ func TestReceiverCorePendingBinding(t *testing.T) {
 	checkError(t, r.Handle(d), 401, "bad_jack_signature", "jack signature does not verify")
 	d.Headers[4] = jackHeader(d, private, key.KID, callbackB)
 	got := r.Handle(d)
-	if !slices.Equal(kinds, []string{"event", "verification"}) {
+	if !slices.Equal(kinds, []string{"verification"}) {
 		t.Fatalf("challenge returned before exactly one verification enqueue: %v", kinds)
 	}
 	checkOK(t, got, `{"challenge":"`+challenge+`"}`, true)
