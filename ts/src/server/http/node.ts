@@ -102,6 +102,11 @@ export function serveNode(
       controller.abort();
       if (reader !== undefined) void reader.cancel().catch(() => {});
     };
+    // 3.7: a socket that dies while the loop waits in read() must cancel that read too,
+    // which cancels the signed pump and the handler body behind it.
+    controller.signal.addEventListener("abort", () => {
+      if (reader !== undefined) void reader.cancel().catch(() => {});
+    }, { once: true });
     try {
       for (const [name, value] of resp.headers) {
         if (name.toLowerCase() === "set-cookie") continue;

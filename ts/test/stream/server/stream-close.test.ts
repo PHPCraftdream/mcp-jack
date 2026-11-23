@@ -5,10 +5,16 @@
  * terminal state of the client verifier and the 3.7 cancel hook.
  */
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import { fixtureNow } from "../../support/client-harness.js";
 import { authOf, newStreamServer, parseFrames, readAll, signedPost, sseResponse, verifyBody } from "../support/stream-harness.js";
 import type { StreamHarness } from "../support/stream-harness.js";
+
+// The default pump timers are unref'd: keep the loop alive while a test waits for one.
+const keepAlive = setInterval(() => undefined, 50);
+after(() => {
+  clearInterval(keepAlive);
+});
 
 /** The one ordinary notification a handler forwards in these tests. */
 const NOTIFICATION = '{"jsonrpc":"2.0","method":"notifications/events/active"}';
