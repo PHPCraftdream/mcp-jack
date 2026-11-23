@@ -40,6 +40,7 @@ const DefaultWindow = 30
 // never reach the wrapped handler.
 const (
 	ToolServerKey         = "jack.server.key"
+	ToolWebhookKey        = "jack.server.webhook_key"
 	ToolEnroll            = "jack.enroll"
 	ToolWhoAmI            = "jack.whoami"
 	ToolRotateKey         = "jack.key.rotate"
@@ -125,6 +126,8 @@ type Config struct {
 	Native NativeTools
 	// ServerKeys serves only the candidate jack.server.key; the default native allowlist is unchanged.
 	ServerKeys NativeTools
+	// WebhookKeys serves only the read-only jack.server.webhook_key; the default native allowlist is unchanged.
+	WebhookKeys NativeTools
 	// Window is 0 (default 30) or an integer from 1 through 120 seconds.
 	Window int64
 	// Now returns the current Unix time in seconds; nil means the wall clock.
@@ -164,6 +167,9 @@ func RawNow(v *Verifier) int64 { return v.cfg.Now() }
 // HasServerKeys reports whether the verifier serves the candidate
 // jack.server.key tool through its separate ServerKeys profile.
 func HasServerKeys(v *Verifier) bool { return v.cfg.ServerKeys != nil }
+
+// HasWebhookKeys reports whether the verifier serves jack.server.webhook_key.
+func HasWebhookKeys(v *Verifier) bool { return v.cfg.WebhookKeys != nil }
 
 // effectiveNow returns max(sample, highest sample seen) and records it.
 func (v *Verifier) effectiveNow(sample int64) int64 {
@@ -473,6 +479,8 @@ func (v *Verifier) authorize(req Request, auth jack.RequestAuth, now int64, call
 		native := v.cfg.Native
 		if msg.Tool == ToolServerKey {
 			native = v.cfg.ServerKeys
+		} else if msg.Tool == ToolWebhookKey {
+			native = v.cfg.WebhookKeys
 		} else if !IsNativeTool(msg.Tool) {
 			return fail(403, jack.CodeOperationDenied, "operation is not permitted")
 		}
