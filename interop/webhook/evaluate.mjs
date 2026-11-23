@@ -291,7 +291,7 @@ function crossCheckAttempts(attempts, deliveries, push) {
 }
 
 // One scenario: shape and grammar invariants first, then the table row.
-export function evaluateScenario({ expected, ctx, ready, result, attempts, deliveries, shadowConnections = 0, crossCheck = true }) {
+export function evaluateScenario({ expected, ctx, ready, result, attempts, deliveries, shadowConnections = 0, shadowBytes = 0, crossCheck = true }) {
   const reasons = [];
   const push = (text) => reasons.push(text);
   checkSenderReport(ready, result, ctx, push);
@@ -302,6 +302,9 @@ export function evaluateScenario({ expected, ctx, ready, result, attempts, deliv
     if (shadowConnections !== expected.shadow_connections) {
       push(`the shadow listener accepted ${shadowConnections} connection(s), expected ${expected.shadow_connections}: a policy refusal is decided before any dial`);
     }
+  }
+  if (expected.shadow_bytes !== undefined && shadowBytes !== expected.shadow_bytes) {
+    push(`the shadow listener received ${shadowBytes} byte(s), expected ${expected.shadow_bytes}: a rebinding refusal must stop before any TLS or request byte`);
   }
   if (isObject(expected.sender)) {
     if (result === null) push('no result line to match expected.sender');
@@ -320,6 +323,7 @@ export function evaluateScenario({ expected, ctx, ready, result, attempts, deliv
     reasons,
     actual: {
       shadow_connections: shadowConnections,
+      shadow_bytes: shadowBytes,
       attempts: attempts.map((view) => ({
         seq: view.seq,
         webhook_timestamp: view.webhook_timestamp,

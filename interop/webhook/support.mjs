@@ -140,12 +140,15 @@ export function headerValues(headers, name) {
 export async function startShadowListener(port) {
   const sockets = new Set();
   let accepted = 0;
+  let received = 0;
   const server = net.createServer((socket) => {
     accepted += 1;
     sockets.add(socket);
     socket.on('error', () => {});
+    socket.on('data', (chunk) => { received += chunk.length; });
     socket.on('close', () => sockets.delete(socket));
-    socket.destroy();
+    // Hold the socket briefly so a TLS or request byte a dialer writes is counted.
+    setTimeout(() => socket.destroy(), 300);
   });
   await new Promise((resolve, reject) => {
     server.once('error', (error) => {
@@ -155,6 +158,7 @@ export async function startShadowListener(port) {
   });
   return {
     connections: () => accepted,
+    bytes: () => received,
     close: () => new Promise((resolve) => {
       for (const socket of sockets) socket.destroy();
       sockets.clear();

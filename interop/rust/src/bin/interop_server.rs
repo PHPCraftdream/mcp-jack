@@ -24,7 +24,8 @@ mod modern;
 #[path = "interop/durable.rs"]
 mod durable;
 
-use std::sync::Arc;
+#[path = "webhook/receiver.rs"]
+mod webhook_receiver;
 
 use mcp_jack::encoding::{decode_b64url, decode_b64url_fixed, encode_b64url, key_id};
 use mcp_jack::server::http::{HandlerConfig, JackLayer};
@@ -33,6 +34,7 @@ use mcp_jack::server::nonce::NonceStore;
 use mcp_jack::server::state::StateStore as _;
 use mcp_jack::server::state_file::FileState;
 use mcp_jack::server::verify::{Clock, Config, Verifier};
+use std::sync::Arc;
 use tower_layer::Layer as _;
 
 /// The shared interop helpers re-exported for brevity.
@@ -243,6 +245,9 @@ fn main() {
     // section 3.1), so it dispatches before the default parser runs.
     if modern::mode_from_args().as_deref() == Some("modern-server") {
         modern::server::run();
+    }
+    if webhook_receiver::mode_from_args().as_deref() == Some("webhook-receiver") {
+        webhook_receiver::run_mode();
     }
     // Rotation dispatch happens before the runtime: rotation-server builds
     // its own tokio runtime and must not run inside block_on.
