@@ -1,6 +1,9 @@
 package server
 
-import verify "github.com/PHPCraftdream/mcp-jack/server/internal/verify"
+import (
+	"github.com/PHPCraftdream/mcp-jack/server/internal/verify"
+	"github.com/PHPCraftdream/mcp-jack/server/internal/webhookkey"
+)
 
 // The verifier moved to server/internal/verify; this file is a facade
 // re-exporting the public names so the server package API is unchanged.
@@ -14,6 +17,7 @@ const DefaultWindow = verify.DefaultWindow
 // never reach the wrapped handler.
 const (
 	ToolServerKey         = verify.ToolServerKey
+	ToolWebhookKey        = verify.ToolWebhookKey
 	ToolEnroll            = verify.ToolEnroll
 	ToolWhoAmI            = verify.ToolWhoAmI
 	ToolRotateKey         = verify.ToolRotateKey
@@ -47,6 +51,18 @@ type (
 	// Result is the outcome of Verify.
 	Result = verify.Result
 )
+
+// WebhookKey is one accepted webhook signing key for jack.server.webhook_key.
+type WebhookKey = webhookkey.Key
+
+// WebhookKeyConfig configures the read-only jack.server.webhook_key tool.
+type WebhookKeyConfig = webhookkey.Config
+
+// NewWebhookKeyTool returns the opt-in NativeTools implementation for
+// jack.server.webhook_key. Assign it to Config.WebhookKeys; without it, a
+// verifier answers calls to this tool with 403 operation_denied.
+// The configured keys must be a subset of the keys the Server Card publishes (R7.6).
+func NewWebhookKeyTool(cfg WebhookKeyConfig) (NativeTools, error) { return webhookkey.New(cfg) }
 
 // NewVerifier validates cfg and returns a Verifier.
 func NewVerifier(cfg Config) (*Verifier, error) {
