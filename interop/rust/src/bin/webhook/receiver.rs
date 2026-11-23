@@ -48,7 +48,18 @@ impl Args {
         ];
         const FLAGS: &[&str] = &["pending-secret", "require-jack", "enforce-server-identity"];
         let mut a = Self::default();
-        let mut i = std::env::args().skip(2);
+        let mut i = {
+            let mut raw = std::env::args().skip(1);
+            let mut rest = Vec::new();
+            while let Some(x) = raw.next() {
+                if x == "--mode" {
+                    raw.next();
+                } else if !x.starts_with("--mode=") {
+                    rest.push(x);
+                }
+            }
+            rest.into_iter()
+        };
         while let Some(x) = i.next() {
             let Some(x) = x.strip_prefix("--") else {
                 usage("unexpected positional argument")

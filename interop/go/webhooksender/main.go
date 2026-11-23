@@ -105,9 +105,9 @@ func main() {
 		}
 	}
 	secret := sha256.Sum256([]byte(*secretSeed))
-	derivedKey, err := webhook.SubscriptionKey("alice", *target, "incident.created", map[string]any{"severity": "P1"})
-	if err != nil {
-		fatal("subscription: %v", err)
+	derivedKey, keyErr := webhook.SubscriptionKey("alice", *target, "incident.created", map[string]any{"severity": "P1"})
+	if keyErr != nil {
+		fatal("subscription: %v", keyErr)
 	}
 	derived := derivedKey.ID
 	effective := derived
