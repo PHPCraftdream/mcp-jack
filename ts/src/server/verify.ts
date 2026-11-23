@@ -302,6 +302,12 @@ export const DEFAULT_WINDOW = 30;
  */
 export const TOOL_SERVER_KEY = "jack.server.key";
 
+/**
+ * Candidate read-only webhook-key tool; not one of the 11 current-v1 native
+ * tools. Routed only when the verifier is configured with webhookKey.
+ */
+export const TOOL_WEBHOOK_KEY = "jack.server.webhook_key";
+
 /** Names of the protocol-native tools (spec 03). */
 export const TOOL_ENROLL = "jack.enroll";
 export const TOOL_WHOAMI = "jack.whoami";
@@ -447,6 +453,11 @@ export interface VerifierConfig {
    * allowlist checked by isNativeTool is unchanged.
    */
   readonly serverKeys?: NativeTools;
+  /**
+   * Routes only the candidate jack.server.webhook_key call; undefined denies
+   * it like an unknown jack.* tool. The current-v1 allowlist is unchanged.
+   */
+  readonly webhookKey?: NativeTools;
   /** Seconds; undefined or 0 => DEFAULT_WINDOW; otherwise a safe integer from 1 through 120. */
   readonly window?: number;
   /**
@@ -501,6 +512,7 @@ export class Verifier {
   private readonly audit: AuditSink | undefined;
   private readonly native: NativeTools | undefined;
   private readonly serverKeys: NativeTools | undefined;
+  private readonly webhookKey: NativeTools | undefined;
   private readonly window: number;
   private readonly now: () => number;
   // Highest valid clock sample seen by this instance (see effectiveNow).
@@ -539,6 +551,7 @@ export class Verifier {
     this.audit = cfg.audit;
     this.native = cfg.native;
     this.serverKeys = cfg.serverKeys;
+    this.webhookKey = cfg.webhookKey;
     // A window is either zero/omitted (the default) or a safe integer in
     // [1, 120]; constructor validation keeps malformed values out of compares.
     this.window = configuredWindow === undefined || configuredWindow === 0 ? DEFAULT_WINDOW : configuredWindow;
@@ -801,6 +814,8 @@ export class Verifier {
       let tools: NativeTools | undefined = this.native;
       if (msg.tool === TOOL_SERVER_KEY) {
         tools = this.serverKeys;
+      } else if (msg.tool === TOOL_WEBHOOK_KEY) {
+        tools = this.webhookKey;
       } else if (!isNativeTool(msg.tool)) {
         // NO audit event: the call never reached a tool (spec 03 section 8).
         return fail(403, Code.OPERATION_DENIED, "operation is not permitted");
