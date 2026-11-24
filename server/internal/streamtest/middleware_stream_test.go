@@ -524,7 +524,7 @@ type lateSuccessorProvider struct {
 
 func (p lateSuccessorProvider) AuthorizeResponse(transport.ResponseKeyRequest) (transport.ResponseKeyAuthorization, error) {
 	return transport.ResponseKeyAuthorization{
-		Signer: p.key, Timestamp: 2000, Final: func() error { return nil },
+		Signer: p.key, Timestamp: 2000, Final: func() error { return nil }, Release: func() {},
 	}, nil
 }
 

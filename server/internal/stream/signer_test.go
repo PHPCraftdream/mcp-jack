@@ -612,7 +612,7 @@ func TestSessionEndBeforeCutoffWhenClockJumpsAcrossActivation(t *testing.T) {
 	}
 	clock.Set(cutoff)
 	if _, err := s.Write([]byte("data: physically before cutoff\n\n")); err != nil {
-		t.Fatalf("cutoff write = %v, want ErrClosed", err)
+		t.Fatal("cutoff write returned no error, want the stop signal")
 	}
 	frames := parseBody(t, buf.Bytes())
 	if len(frames) != 1 || frames[0].event != EndEvent || frames[0].jackTS != "1002" {
