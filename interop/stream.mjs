@@ -603,9 +603,9 @@ async function main() {
               const rows = readRows(requestLog);
               const restartRequest = rows.find(row => row.request_sig === firstRecord.request_sig && row.request_verified === true);
               const replayRow = rows.findIndex(row => row.event === 'replayed_nonce' && row.request_sig === firstRecord.request_sig && row.nonce === firstRecord.nonce);
-              const committedAt = rows.findIndex(row => row.event === 'nonce_committed' && row.request_sig === firstRecord.request_sig && row.nonce === firstRecord.nonce && row.nonce_committed_before_first_byte === true);
-              const openedAt = rows.findIndex(row => row.event === 'stream_open' && row.request_sig === firstRecord.request_sig);
-              if (!restartRequest || restartRequest.nonce !== scenario.nonce || restartRequest.request_body_b64u !== firstRecord.request_body_b64u || committedAt < 0 || openedAt < 0 || committedAt >= openedAt || replayRow <= openedAt) throw Error('restart replay log does not match exact captured authenticated request and ordered nonce lifecycle');
+              const restartCommittedAt = rows.findIndex(row => row.event === 'nonce_committed' && row.request_sig === firstRecord.request_sig && row.nonce === firstRecord.nonce && row.nonce_committed_before_first_byte === true);
+              const restartOpenedAt = rows.findIndex(row => row.event === 'stream_open' && row.request_sig === firstRecord.request_sig);
+              if (!restartRequest || restartRequest.nonce !== scenario.nonce || restartRequest.request_body_b64u !== firstRecord.request_body_b64u || restartCommittedAt < 0 || restartOpenedAt < 0 || restartCommittedAt >= restartOpenedAt || replayRow <= restartOpenedAt) throw Error('restart replay log does not match exact captured authenticated request and ordered nonce lifecycle');
               await stopServerClean(server); server = null;
               await stopChild(clientProcess);
             }
