@@ -1,6 +1,6 @@
 # mcp-jack interop harness
 
-**This document describes the current harness contract and test obligations.** The request, rotation and credential-transfer matrices run in CI; historical acceptance receipts for earlier baselines are recorded in [`docs/readiness.md`](../docs/readiness.md) and CHANGELOG.md. The current scenario oracle is [`scenarios.json`](scenarios.json); the independent credential-transfer oracle is `spec/fixtures/user-key-transfer.json`.
+This document describes the current harness contract and test obligations. The request, rotation and credential-transfer matrices run in CI; historical acceptance receipts for earlier baselines are recorded in [`docs/readiness.md`](../docs/readiness.md) and CHANGELOG.md. The current scenario oracle is [`scenarios.json`](scenarios.json); the independent credential-transfer oracle is `spec/fixtures/user-key-transfer.json`.
 
 Current protocol contract: authenticate the exact request, then forward authenticated ordinary MCP traffic unchanged with the immutable verified identity `{kid, name, admin}` available to the application handler. Protocol `admin` gates reserved `jack.admin.*` tools only; ordinary MCP authorization belongs to the application. Legacy user/state `kind` and `scopes` fields are rejected without migration or rewrite. There is no policy engine or policy-file input. Do not use retired policy/scopes examples as current behavior.
 
@@ -49,7 +49,7 @@ cargo build --manifest-path interop/rust/Cargo.toml --locked --release
 npm --prefix ts run build
 ```
 
-The Rust harness is a separate, unpublished crate in `interop/rust/`, not part of the product SDK crate in `rust/`; the product crate has no `interop` feature. Building the harness crate directly produces the server, client, and transfer executables at `interop/rust/target/release/interop-{server,client,transfer}`. The same server/client binaries run the rotation modes listed above. TypeScript output is built from `ts/src/interop/`. Go outputs must be placed where `targets.json` points (or the targets file adjusted). The rotation harness runs on Linux only: the rotation private-file stores in all three SDKs refuse other platforms.
+The Rust harness is a separate, unpublished crate in `interop/rust/`, not part of the product SDK crate in `rust/`; the product crate has no `interop` feature. Building the harness crate directly produces the server, client, and transfer executables at `interop/rust/target/release/interop-{server,client,transfer}`. The same server/client binaries run the rotation modes listed above. TypeScript output is built from `ts/src/interop/`. Go outputs must be placed where `targets.json` points (or the targets file adjusted). The stream runner explicitly limits only `durable-stream` to Linux; rotation-stream has no platform gate in the runner. These runner facts do not imply that any platform matrix passes.
 
 ## 3. Running
 
@@ -662,3 +662,52 @@ both are CI failures without further configuration. No new workflow file, permis
 required. The matrix is Linux-only: it needs the `openssl` CLI, the loopback alias `127.0.0.2`, and
 `SSL_CERT_FILE` for the Go sender.
 -->
+
+## 16. Signed-stream matrix (contract; implementation status)
+
+Normative source is [`spec/05-signed-streams.md`](../spec/05-signed-streams.md), especially subscriber/event rules §7 and completion §6.3; modern request requirements are [`spec/04-modern-profile.md`](../spec/04-modern-profile.md) S4/S5/S6 and `spec/tests/modern/CASES.md`. [`stream/contract.md`](stream/contract.md) pins exact process flags and JSONL/log schemas; [`stream-scenarios.json`](stream-scenarios.json) is the outcome oracle. The active `matrices.stream` contains exactly nine default cases; deferred cases are not listed, counted, or run by default. Run with Node >=20: `node interop/stream.mjs [--matrix stream|rotation-stream|durable-stream] [--targets <file>] [--servers <l,l,...>] [--clients <l,l,...>] [--scenario <id[,id...]>] [--list] [--self-test]`. CI note: stream self-test (`node interop/stream.mjs --self-test`) and default stream runner (`node interop/stream.mjs`) only. `rotation-stream` and `durable-stream` print `deferred` and exit 2. Exits 0/1/2 for pass/scenario failure/usage-contract error.
+
+| `--aud` is the `aud` value from `spec/fixtures/registry.json`, namely `https://svc.example.test`; the selected runner reads this fixture and supplies its audience to server/client argv and request signing. Server argv is `--matrix NAME --scenario ID --aud <registry.aud> --state PATH --server-seed-hex HEX --clock-file PATH --request-log PATH --port 0`, plus `--frame-max-bytes N --max-concurrent-streams N --max-stream-duration-ms N --heartbeat-ms N --rotation-store PATH --durable-dir PATH` where applicable. First nonempty stdout line is `{"ready":true,"port":N,"server_public_key":"B64U","server_kid":"kid"}`; each request-log line is JSON. Client argv is `--matrix NAME --scenario ID --url URL --aud <registry.aud> --clock-file PATH --server-public-key B64U --seed-hex HEX`, with client stream-option flags `--frame-max-bytes N --max-concurrent-streams N --max-stream-duration-ms N --heartbeat-ms N --idle-timeout-ms N` and scenario inputs `--nonce B64U --sid B64U --rotation-store PATH --durable-dir PATH` where applicable. Runner passes `--profile modern` and matrix/scenario/options to server and client. Client args include `--request-body-json`, `--jack-accept`, `--modern-version`, and `--mirror-headers-json`; scenario `idleTimeoutMs` is passed as `--idle-timeout-ms` to both roles. Client JSONL message records include raw request evidence fields `request_method`, `request_target`, `request_body_b64u`, ordered `request_headers`, `request_sig`, and `request_ts`, alongside open/frame evidence. Stderr is diagnostic. A valid protocol result exits 0, local/network failure 1, invalid invocation 2; the driver exits 0 when all selected cases pass, 1 for scenario failure, and 2 for usage/target/harness error.
+
+Each POST is modern: body `params._meta` has `io.modelcontextprotocol/protocolVersion:"2026-07-28"`, `io.modelcontextprotocol/clientCapabilities:{}`, and clientInfo; mirrors include `MCP-Protocol-Version` and `Mcp-Method`. `Mcp-Name` appears only for S6 methods with a `params.name`/`params.uri` source. Active `list-changed` uses modern opt-in `subscriptions/listen`, no `Mcp-Name`, and the `notifications` filter for `notifications/events/list_changed`; it expects acknowledgment, opted-in list_changed, matching final response and signed end. The tools/list notification-last form is deferred. `mcp_complete` is true only when signed end follows a matching final JSON-RPC response. Events stream uses name `demo`; heartbeatMs is 15000 and emitted heartbeat params include that value. v1 request/response and stream open/frame signatures are exact UTF-8 LF-joined lines without trailing LF; refusal evidence binds exact response bytes, status, request signature, server kid and timestamp.
+
+Profile defaults: frameMaxBytes 1048576 (minimum 1024), maxConcurrentStreams 4 per identity, maxStreamDurationMs 3600000, heartbeat 15000ms for 30000ms verification window, idle timeout 90000ms. The runner passes configured idle timeout to both roles. Public API boundaries are language-specific; no shared API is implied.
+
+Active matrix is exactly nine cases; `subscriptions/listen` is represented as id `list-changed`, producer `subscriptions-listen`, and the old tools/list notification-last case is deferred. Notification-last with verified end would have `mcp_complete:false`. `rotation-stream` and `durable-stream` are deferred runner names, print deferred, and exit 2. Exact oracle and reasons are in `stream-scenarios.json`.
+
+| Matrix | Exact scenario ID | Required outcome |
+|---|---|---|
+| `stream` | `progress-final` | Deliver progress notification and final response; verify signed end; `complete`, `mcp_complete:true`. |
+| `stream` | `list-changed` | Modern opt-in `subscriptions/listen`: acknowledgment, opted-in list_changed, final response and end; `mcp_complete:true`. |
+| `stream` | `events-stream` | Deliver active, event, heartbeat (`heartbeatMs:15000`), terminated; no final response; verified end; `complete`, `mcp_complete:false`. |
+| `stream` | `cancel` | Client cancels after first progress notification; request log observes handler cancellation; terminal `cancelled`, `handler_cancelled:true`. |
+| `stream` | `max-duration` | Advance shared clock through configured duration after initial `notifications/progress` `{progress:1}`; deliver matching final response and signed end; `complete`, `mcp_complete:true`. |
+| `stream` | `opt-in-required` | Without `Jack-Accept: s1`, independently signed v1 HTTP 501 `streaming_unsupported`. |
+| `stream` | `relay-drop` | Drop seq 1 after delivering seq 0 progress; detecting seq 2 yields `error` `stream_out_of_order`. |
+| `stream` | `relay-edit-data` | Edit a UTF-8 data byte without resigning; deliver no messages; `error` `stream_bad_signature`. |
+| `stream` | `relay-truncate` | Remove jack-end after progress and final response; retain those messages; `error` `stream_truncated`. |
+| Deferred matrix | Deferred scenario ID | Status/reason |
+|---|---|---|
+| `stream` | `concurrency-limit` | Deferred; not listed or run by default. |
+| `stream` | `oversize` | Deferred; not listed or run by default. |
+| `stream` | `relay-reorder` | Deferred; not listed or run by default. |
+| `stream` | `relay-splice` | Deferred; not listed or run by default. |
+| `stream` | `relay-replay` | Deferred; not listed or run by default. |
+| `stream` | `idle` | Deferred; not listed or run by default. |
+| `stream` | `list-changed-tools-list` | Superseded by active opt-in subscription case; old tools/list variant deferred. |
+| `rotation-stream` | `rotation-cutoff-reopen` | Deferred: successor reopen/key-resolver IPC unavailable. |
+| `durable-stream` | `durable-live-replay` | Durable live replay deferred; not run by default. |
+| `durable-stream` | `durable-restart-replay` | Durable restart/replay deferred; not run by default. |
+
+The runner does not implement active concurrency orchestration. Rotation is not run by default because successor reopen/key-resolver IPC is unavailable. Durable raw-replay driver support remains partial, and durable scenarios are deferred rather than lifecycle success. Self-test and CI comments refer to stream self-test and default stream runner only; fake peers are not SDK evidence. No scenarios were run for this documentation update.
+
+Targets and build commands match `targets.json`: Go `interop/bin/go-stream-server` and `interop/bin/go-stream-client`; Rust `interop/rust/target/release/interop-server --mode stream-server` and `interop-client --mode stream-client`; TypeScript `node ts/dist/interop/stream/server.js` and `node ts/dist/interop/stream/client.js`. Future Go source paths `interop/go/streamserver` and `interop/go/streamclient` and TypeScript source paths `ts/src/interop/stream/server.ts` and `ts/src/interop/stream/client.ts` are not present. Rust mode executables are produced by the harness crate build.
+
+```sh
+go build -o interop/bin/go-stream-server ./interop/go/streamserver
+go build -o interop/bin/go-stream-client ./interop/go/streamclient
+cargo build --manifest-path interop/rust/Cargo.toml --locked --release
+npm --prefix ts run build
+```
+
+<!-- CI NOTE for parent PR only; no workflow edited. Run `node interop/stream.mjs --self-test` then `node interop/stream.mjs`. Build plans above are not evidence; do not represent lifecycle jobs as passing until gaps are resolved. -->

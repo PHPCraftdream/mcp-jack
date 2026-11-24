@@ -1,0 +1,6 @@
+{
+  "fake": {
+    "stream_server": ["node", "interop/tools/fakes/stream/fake-stream-server.mjs"],
+    "stream_client": ["node", "interop/tools/fakes/stream/fake-stream-client.mjs"]
+  }
+}

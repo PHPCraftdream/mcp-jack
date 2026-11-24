@@ -8,7 +8,9 @@
     "modern_server": ["interop/bin/go-modern-server"],
     "modern_client": ["interop/bin/go-modern-client"],
     "webhook_sender": ["interop/bin/go-webhook-sender"],
-    "webhook_receiver": ["interop/bin/go-webhook-receiver"]
+    "webhook_receiver": ["interop/bin/go-webhook-receiver"],
+    "stream_server": ["interop/bin/go-stream-server"],
+    "stream_client": ["interop/bin/go-stream-client"]
   },
   "rust": {
     "server": ["interop/rust/target/release/interop-server"],
@@ -19,7 +21,9 @@
     "modern_server": ["interop/rust/target/release/interop-server", "--mode", "modern-server"],
     "modern_client": ["interop/rust/target/release/interop-client", "--mode", "modern-client"],
     "webhook_sender": ["interop/rust/target/release/interop-client", "--mode", "webhook-sender"],
-    "webhook_receiver": ["interop/rust/target/release/interop-server", "--mode", "webhook-receiver"]
+    "webhook_receiver": ["interop/rust/target/release/interop-server", "--mode", "webhook-receiver"],
+    "stream_server": ["interop/rust/target/release/interop-server", "--mode", "stream-server"],
+    "stream_client": ["interop/rust/target/release/interop-client", "--mode", "stream-client"]
   },
   "typescript": {
     "server": ["node", "ts/dist/interop/server.js"],
@@ -30,6 +34,8 @@
     "modern_server": ["node", "ts/dist/interop/modern-server.js"],
     "modern_client": ["node", "ts/dist/interop/modern-client.js"],
     "webhook_sender": ["node", "ts/dist/interop/webhook/sender.js"],
-    "webhook_receiver": ["node", "ts/dist/interop/webhook/receiver.js"]
+    "webhook_receiver": ["node", "ts/dist/interop/webhook/receiver.js"],
+    "stream_server": ["node", "ts/dist/interop/stream/server.js"],
+    "stream_client": ["node", "ts/dist/interop/stream/client.js"]
   }
 }
