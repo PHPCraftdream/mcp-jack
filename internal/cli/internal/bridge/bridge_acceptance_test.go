@@ -70,12 +70,21 @@ func signedModernStreamReply(t *testing.T, priv ed25519.PrivateKey, pub ed25519.
 	for seq, value := range data {
 		hash := jack.BodyHash([]byte(value))
 		sig := jack.EncodeBase64URL(ed25519.Sign(priv, []byte(strings.Join([]string{"mcp-jack/stream1/frame", sid, strconv.Itoa(seq), strconv.FormatInt(ts, 10), previous, hash}, "\n"))))
-		body.WriteString("event: message\ndata: " + value + "\njack: seq=" + strconv.Itoa(seq) + ",ts=" + strconv.FormatInt(ts, 10) + ",sig=" + sig + "\n\n")
+		body.WriteString("event: message\n" + sseDataLines(value) + "jack: seq=" + strconv.Itoa(seq) + ",ts=" + strconv.FormatInt(ts, 10) + ",sig=" + sig + "\n\n")
 		previous = sig
 	}
 	end := jack.EncodeBase64URL(ed25519.Sign(priv, []byte(strings.Join([]string{"mcp-jack/stream1/frame", sid, strconv.Itoa(len(data)), strconv.FormatInt(ts, 10), previous, jack.BodyHash(nil)}, "\n"))))
 	body.WriteString("event: jack-end\ndata:\njack: seq=" + strconv.Itoa(len(data)) + ",ts=" + strconv.FormatInt(ts, 10) + ",sig=" + end + "\n\n")
 	return "s1 kid=" + kid + ",ts=" + strconv.FormatInt(ts, 10) + ",sid=" + sid + ",sig=" + openSig, []byte(body.String())
+}
+
+// sseDataLines encodes a data value with embedded LF as one data field per line.
+func sseDataLines(value string) string {
+	var b strings.Builder
+	for _, line := range strings.Split(value, "\n") {
+		b.WriteString("data: " + line + "\n")
+	}
+	return b.String()
 }
 func modernBridgeHandler(t *testing.T, next http.Handler) http.Handler {
 	t.Helper()
