@@ -118,7 +118,7 @@ function frame(sid, seq, data, prev) {
   return { wire: `${lines.join('\n')}\n\n`, sig, seq, ts, data, kind: data === '' ? 'end' : 'message' };
 }
 function v1Response(res, status, requestSig, code, id) {
-  const body = Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: id ?? null, error: { code: -32603, message: code } }));
+  const body = Buffer.from(JSON.stringify({ error: { code, message: status === 501 ? 'streaming responses cannot be signed in v0.1' : 'stream limit exceeded' } }));
   const ts = now(), identity = keyAt(), sig = b64(sign(null, Buffer.from(['mcp-jack/v1/response', String(status), requestSig, identity.kid, String(ts), hash(body)].join('\n')), identity.key));
   res.writeHead(status, { 'content-type': 'application/json', 'Jack-Auth': `v1 kid=${identity.kid},ts=${ts},sig=${sig}` });
   res.end(body);
