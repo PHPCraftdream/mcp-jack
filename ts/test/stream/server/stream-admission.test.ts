@@ -93,12 +93,13 @@ test("stream server: heartbeats are granted, clamped and delivered as signed fra
   const harness = newStreamServer({ streams: { windowSeconds: 30, heartbeatMs: 60000, frameMaxBytes: 4096 } });
   let heartbeatMs: number | undefined;
   let frameMaxBytes: number | undefined;
+  let handlerSawContext = false;
   harness.setNext(async (req) => {
     const ctx = jackStream(req);
     if (ctx === undefined) throw new Error("the handler sees its stream context");
+    handlerSawContext = true;
     heartbeatMs = ctx.heartbeatMs;
     frameMaxBytes = ctx.frameMaxBytes;
-    // One signed heartbeat message and one unsigned keep-alive comment (2.12).
     return sseResponse([messageEvent(heartbeat), ": keep-alive\n"]);
   });
   const signed = signedPost({ jackAccept: "s1" });
@@ -108,6 +109,7 @@ test("stream server: heartbeats are granted, clamped and delivered as signed fra
   assert.ok(jackAuth.length > 0, "the stream carries its open Jack-Auth");
   const bytes = await readAll(response);
 
+  assert.equal(handlerSawContext, true, "the signed request traversed the wrapped handler with jackStream context");
   assert.equal(heartbeatMs, 15000, "3.5 clamps 60000 ms to floor(30 * 500)");
   assert.equal(frameMaxBytes, 4096, "the handler sees the configured 3.2 cap");
 
@@ -176,11 +178,13 @@ test("stream server: a durable-store replay is refused while the first handler s
     signalEntered = resolve;
   });
   let firstStarted = false;
+  let firstBodyUsed = false;
   harness.setNext(async (req) => {
     assert.ok(jackStream(req) !== undefined, "the first request begins a signed stream");
     firstStarted = true;
     signalEntered();
     await gate; // blocks here until the replay has been refused
+    firstBodyUsed = true;
     return sseResponse([messageEvent(MESSAGE)]);
   });
 
@@ -188,26 +192,17 @@ test("stream server: a durable-store replay is refused while the first handler s
   const firstPending = harness.handler(first.request);
   let opened: Response | undefined;
   try {
-    // Bounded wait for the handler to run; never a sleep for its own sake.
-    const timeout = new Promise<void>((resolve) => {
-      setTimeout(resolve, 1000);
-    });
-    await Promise.race([entered, timeout]);
+    await entered;
     assert.equal(firstStarted, true, "the first handler is running before the replay");
 
+    assert.equal(firstBodyUsed, false, "the blocked handler has not returned a response body or emitted a byte");
     // Byte-identical: same nonce, same signed target and body.
     const replayRequest = new Request(first.request.url, {
       method: "POST",
       headers: first.request.headers,
       body: first.body,
     });
-    // A replay that reached the blocked handler would wait for the gate: fail instead.
-    const replay = await Promise.race([
-      harness.handler(replayRequest),
-      new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error("the replay reached the handler instead of being refused")), 2000);
-      }),
-    ]);
+    const replay = await harness.handler(replayRequest);
 
     assert.equal(replay.status, 401, "the durable store refuses the replayed nonce");
     assert.equal(replay.headers.get("content-type"), "application/json", "a refusal is a v1 answer, never text/event-stream");

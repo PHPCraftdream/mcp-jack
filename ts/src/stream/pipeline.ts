@@ -65,6 +65,7 @@ export interface StreamPumpOptions {
 interface ByteController {
   enqueue(chunk: Uint8Array): void;
   close(): void;
+  readonly desiredSize: number | null;
 }
 
 /** The part of a body reader the pump uses: 3.7 only needs to cancel it. */
@@ -207,6 +208,18 @@ export class StreamPump {
     const events = new StreamEventReader({ maxEventBytes: streamEventMaxBytes(frameMaxBytes) });
     let controller: ByteController | null = null;
     let bodyReader: Cancelable | null = null;
+    let roomWaiter: (() => void) | undefined;
+    const wakeRoom = (): void => {
+      const resolve = roomWaiter;
+      roomWaiter = undefined;
+      resolve?.();
+    };
+    const waitForRoom = (): Promise<void> => {
+      if (ended || cancelled || controller === null || controller.desiredSize === null || controller.desiredSize > 0) {
+        return Promise.resolve();
+      }
+      return new Promise<void>((resolve) => { roomWaiter = resolve; });
+    };
     let durationHandle: unknown;
     let cutoffHandle: unknown;
     // The ts of the last frame written, so the end frame never goes below it (4.3 step 3).
@@ -237,6 +250,7 @@ export class StreamPump {
       }
       finished = true;
       ended = true;
+      wakeRoom();
       stopDuration();
       stopCutoff();
       if (!cancelled && controller !== null) {
@@ -281,9 +295,9 @@ export class StreamPump {
       return previousTs === undefined ? below : Math.max(previousTs, below);
     }
 
-    /** 5.1: the remaining time to the cutoff, in milliseconds, from the injected clock. */
+    /** 5.1: the final whole-second timestamp strictly before the cutoff. */
     function cutoffDelay(a: number): number {
-      return Math.max(0, (a - clock()) * 1000);
+      return Math.max(0, (a - 1 - clock()) * 1000);
     }
 
     /**
@@ -294,24 +308,32 @@ export class StreamPump {
       stopCutoff();
       const a = cutoffOf();
       if (a === undefined) {
+        // A successor may become known while this stream is open. Recheck on a
+        // bounded schedule even when the provider has no notification hook.
+        cutoffHandle = schedule(() => onCutoff(undefined), 1000);
         return;
       }
-      cutoffHandle = schedule(onCutoff, cutoffDelay(a));
+      cutoffHandle = schedule(() => onCutoff(a), cutoffDelay(a));
     }
 
-    /** 5.1: closes at the cutoff, or re-arms when the activation moved past the clock. */
-    function onCutoff(): void {
+    /** 5.1: rechecks unknown state, or handles a scheduled activation deadline. */
+    function onCutoff(scheduledActivation: number | undefined): void {
       cutoffHandle = undefined;
       const a = cutoffOf();
       if (a === undefined) {
+        cutoffHandle = schedule(() => onCutoff(undefined), 1000);
         return;
       }
-      if (clock() >= a) {
-        closeAtCutoff(a);
+      if (scheduledActivation === undefined || a !== scheduledActivation) {
+        // A periodic recheck is not the activation deadline. Likewise, if the
+        // activation moved, replace the obsolete deadline with the current one.
+        armCutoff();
         return;
       }
-      // At least 1 ms, so a stalled clock cannot spin the scheduler.
-      cutoffHandle = schedule(onCutoff, Math.max(1, cutoffDelay(a)));
+      // The scheduled cutoff deadline is authoritative even when an injected
+      // clock has not advanced to A; closeAtCutoff independently picks a legal
+      // frame timestamp strictly below A.
+      closeAtCutoff(a);
     }
 
     /** Signs and enqueues one frame; a failing signer closes the stream instead of throwing. */
@@ -354,9 +376,16 @@ export class StreamPump {
         return;
       }
       const below = a - 1;
-      // Without a legal ts below the cutoff (a - 1 < 0) the body closes with no end frame.
-      const ts = previousTs === undefined ? below : Math.max(previousTs, below);
-      if (below < 0 || !Number.isSafeInteger(ts) || ts < 0) {
+      // No legal end timestamp exists when the prior signed frame is already
+      // at or beyond the cutoff. Close without producing an invalid signature.
+      if (previousTs !== undefined && previousTs >= a) {
+        finish();
+        return;
+      }
+      const ts = previousTs === undefined
+        ? Math.min(clock(), below)
+        : Math.max(previousTs, Math.min(clock(), below));
+      if (below < 0 || !Number.isSafeInteger(ts) || ts < 0 || ts >= a) {
         finish();
         return;
       }
@@ -370,7 +399,9 @@ export class StreamPump {
         return;
       }
       const ts = endFrameTs();
-      if (!Number.isSafeInteger(ts) || ts < 0) {
+      const cutoff = cutoffOf();
+      if (!Number.isSafeInteger(ts) || ts < 0 || (cutoff !== undefined && ts >= cutoff) ||
+        (previousTs !== undefined && ts < previousTs)) {
         // No legal ts exists (a cutoff at or below zero); no end frame is better than a bad one.
         finish();
         return;
@@ -459,6 +490,11 @@ export class StreamPump {
     // The explicit annotation pins the chunk type without relying on inference
     // through the untyped globals of the underlying source.
     const out: ReadableStream<Uint8Array> = new ReadableStream({
+      // Keep exactly one signed chunk of readable-side output buffered. The
+      // producer checks desiredSize before it asks the handler reader for more.
+      pull: (): void => {
+        wakeRoom();
+      },
       start: (c: unknown): void => {
         controller = c as ByteController;
         try {
@@ -472,6 +508,8 @@ export class StreamPump {
           void (async (): Promise<void> => {
             try {
               for (;;) {
+                await waitForRoom();
+                if (ended || cancelled) return;
                 const step = await reader.read();
                 if (ended || cancelled) {
                   return;
@@ -486,9 +524,8 @@ export class StreamPump {
                   if (err instanceof StreamEventOverflow) {
                     // Completed events precede the overflowing event in the body.
                     for (const lines of err.completedEvents) {
-                      if (!forward(lines)) {
-                        return;
-                      }
+                      await waitForRoom();
+                      if (ended || cancelled || !forward(lines)) return;
                     }
                     // 2.17/3.2: an event over the cap is signalled, never forwarded.
                     signalOversize();
@@ -497,13 +534,32 @@ export class StreamPump {
                   throw err;
                 }
                 for (const lines of completed) {
-                  if (!forward(lines)) {
-                    return;
-                  }
+                  await waitForRoom();
+                  if (ended || cancelled || !forward(lines)) return;
                 }
               }
+              // Resolve a final lone CR and any event completed by EOF.
+              let trailing: StreamLine[][];
+              try {
+                trailing = events.finish();
+              } catch (err) {
+                if (err instanceof StreamEventOverflow) {
+                  for (const lines of err.completedEvents) {
+                    await waitForRoom();
+                    if (ended || cancelled || !forward(lines)) return;
+                  }
+                  signalOversize();
+                  return;
+                }
+                throw err;
+              }
+              for (const lines of trailing) {
+                await waitForRoom();
+                if (ended || cancelled || !forward(lines)) return;
+              }
               // The handler body ended without an end frame: the pump writes it.
-              endStream();
+              await waitForRoom();
+              if (!ended && !cancelled) endStream();
             } catch {
               // A read error closes like the duration: completion when valid, then the end frame.
               if (!cancelled) {

@@ -706,7 +706,7 @@ export function jackFetchHandler(config: HandlerConfig, next: (req: Request) => 
       // answered. Its stream body is discarded and the answer is the signed v1
       // 202 with no content (built BEFORE cancelling, so a slow cancel cannot
       // mask it).
-      if (kind === "notification") {
+      if (streamOptions !== undefined && kind === "notification" && acceptStream && res.era === "modern") {
         const headers = new Headers();
         headers.set("content-type", "application/json");
         const out = writeSigned(202, headers, new Uint8Array(0), res.requestSig, res.tool);

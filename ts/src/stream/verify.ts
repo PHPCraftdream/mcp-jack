@@ -100,6 +100,7 @@ export class StreamVerifier {
   private readonly options: ResolvedOptions;
   private readonly reader: StreamEventReader;
   private readonly delivered: string[] = [];
+  private readonly pendingEvents: { readonly lines: readonly StreamLine[]; readonly arrivedAtMs: number }[] = [];
   private deliveredCount = 0; // messages handed out, retained or sunk
   private latched: StreamTerminal | undefined;
   private streamSid = "";
@@ -109,6 +110,8 @@ export class StreamVerifier {
   private previousTs = -Infinity;
   private prevSig = ""; // 4.3 step 5: the chain starts at the open signature
   private lastVerifiedAtMs = 0; // 0 is the moment the open header was verified (4.5)
+  private pendingCrAtMs: number | undefined;
+  private pendingOverflow = false;
   private sawEnd = false;
 
   constructor(options: StreamVerifyOptions) {
@@ -203,8 +206,8 @@ export class StreamVerifier {
     return this.latched;
   }
 
-  /** Feeds one body chunk and returns the messages this chunk delivered (4.3). */
-  push(chunk: Uint8Array, arrivedAtMs: number): readonly string[] {
+  /** Feeds one body chunk; an optional gate lets streaming callers stop between frames. */
+  push(chunk: Uint8Array, arrivedAtMs: number, canVerify: () => boolean = () => true): readonly string[] {
     const latched = this.latched;
     if (latched !== undefined) {
       if (latched.state === "error") {
@@ -216,17 +219,47 @@ export class StreamVerifier {
       // Pushing before a verified open header is a caller bug, not a stream code.
       throw new Error("jack client: stream verifier is not open; call open() first");
     }
+    const heldCrAt = this.pendingCrAtMs;
+    const heldCrTerminatesEvent = this.reader.pendingCrTerminatesEvent;
+    const continuesCrLf = chunk.length > 0 && chunk[0] === 0x0a;
+    const heldCrEventAtMs = heldCrAt !== undefined && heldCrTerminatesEvent && chunk.length > 0 && !continuesCrLf
+      ? heldCrAt
+      : arrivedAtMs;
     try {
-      return this.verifyEvents(this.reader.push(chunk), arrivedAtMs);
+      const split = this.reader.push(chunk);
+      if (chunk.length > 0) this.pendingCrAtMs = this.reader.hasPendingCr ? arrivedAtMs : undefined;
+      for (let i = 0; i < split.length; i++) {
+        this.pendingEvents.push({ lines: split[i]!, arrivedAtMs: i === 0 ? heldCrEventAtMs : arrivedAtMs });
+      }
+      return this.drainEvents(canVerify);
     } catch (err) {
+      if (chunk.length > 0) this.pendingCrAtMs = this.reader.hasPendingCr ? arrivedAtMs : undefined;
       if (err instanceof StreamEventOverflow) {
-        this.verifyEvents(err.completedEvents, arrivedAtMs);
-        this.fail("stream_frame_too_large");
+        this.pendingEvents.push(...err.completedEvents.map((lines, i) => ({ lines, arrivedAtMs: i === 0 ? heldCrEventAtMs : arrivedAtMs })));
+        this.pendingOverflow = true;
+        return this.drainEvents(canVerify);
       }
       throw err;
     }
   }
 
+
+  get hasPendingEvents(): boolean {
+    return this.pendingEvents.length > 0;
+  }
+
+  private drainEvents(canVerify: () => boolean): string[] {
+    const delivered: string[] = [];
+    while (this.pendingEvents.length > 0 && canVerify()) {
+      const event = this.pendingEvents.shift()!;
+      delivered.push(...this.verifyEvents([event.lines], event.arrivedAtMs));
+    }
+    if (this.pendingEvents.length === 0 && this.pendingOverflow) {
+      this.pendingOverflow = false;
+      this.fail("stream_frame_too_large");
+    }
+    return delivered;
+  }
 
   /** The per-event checks of 4.3, shared by `push` and the events `end` flushes (2.14). */
   private verifyEvents(events: readonly (readonly StreamLine[])[], arrivedAtMs: number): string[] {
@@ -329,7 +362,12 @@ export class StreamVerifier {
     // 2.14: a final lone CR still closes the event the reader is holding, so it
     // is verified exactly like a pushed one. A failure latches and is returned.
     try {
-      this.verifyEvents(this.reader.finish(), arrivedAtMs);
+      const heldCrTerminatesEvent = this.reader.pendingCrTerminatesEvent;
+      const trailing = this.reader.finish();
+      const arrivedAt = heldCrTerminatesEvent ? this.pendingCrAtMs ?? arrivedAtMs : arrivedAtMs;
+      this.pendingCrAtMs = undefined;
+      this.pendingEvents.push(...trailing.map((lines) => ({ lines, arrivedAtMs: arrivedAt })));
+      this.drainEvents(() => true);
     } catch (err) {
       if (err instanceof StreamEventOverflow) {
         try {

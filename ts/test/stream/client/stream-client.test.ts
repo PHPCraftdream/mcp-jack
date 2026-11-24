@@ -142,6 +142,138 @@ test("stream client: the idle timeout runs on the injected clock", { timeout: 30
   assert.equal(idleError.framesVerified, 0);
 });
 
+test("stream client: a chunk cannot overfill the queue past the slowest active view", { timeout: 30_000 }, async () => {
+  let frames: readonly { readonly bytes: Uint8Array }[] = [];
+  let pullCount = 0;
+  let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+  let announcePull: (() => void) | undefined;
+  const pendingPulls = new Set<() => void>();
+  const releasePendingPulls = (): void => {
+    for (const release of pendingPulls) release();
+    pendingPulls.clear();
+  };
+  const firstPull = new Promise<void>((resolve) => {
+    announcePull = resolve;
+  });
+  const body = new ReadableStream<Uint8Array>(
+    {
+      start(value): void {
+        controller = value;
+      },
+      pull(): Promise<void> {
+        pullCount += 1;
+        announcePull?.();
+        return new Promise<void>((resolve) => {
+          let released = false;
+          const release = (): void => {
+            if (released) return;
+            released = true;
+            pendingPulls.delete(release);
+            resolve();
+          };
+          pendingPulls.add(release);
+        });
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  const fetchImpl = async (_input: string | Request | URL, init?: RequestInit): Promise<Response> => {
+    const authValue = new Headers(init?.headers).get("jack-auth");
+    assert.ok(authValue !== null, "the signed request carries Jack-Auth");
+    // 2.5: the stream is opened over this request own sig.
+    const signer = new StreamSigner({ key: svcSigner, requestSig: parseRequestAuth([authValue]).sig, sid: freshSid(), openerTs: fixtureNow, status: 200 });
+    frames = Array.from({ length: 20 }, (_, index) => signer.frame(`{"jsonrpc":"2.0","method":"notifications/${index}"}`, fixtureNow));
+    return new Response(body, { status: 200, headers: { "content-type": "text/event-stream", "jack-auth": signer.openAuthValue() } });
+  };
+  const session = await openSignedStream(
+    { aud: fixtureAud, signer: clientSigner, serverKey: SVC_PUBLIC_KEY, clock: (): number => fixtureNow },
+    URL_UNDER_TEST,
+    { method: "POST" },
+    fetchImpl,
+  );
+  const messages = session.messages();
+  const sseReader = session.sse().getReader();
+  const sseReads = Array.from({ length: 8 }, () => sseReader.read());
+  await firstPull;
+  assert.ok(controller !== undefined);
+  controller.enqueue(concatBytes(...frames.map((frame) => frame.bytes)));
+  releasePendingPulls();
+  const delivered = await Promise.all(sseReads);
+  assert.ok(delivered.every((read) => !read.done));
+  let ninthDelivered = false;
+  const ninthRead = sseReader.read().then((read) => {
+    ninthDelivered = !read.done;
+    return read;
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(ninthDelivered, false, "the stalled messages view keeps the shared queue at its bound");
+  assert.equal(pullCount, 1, "the pump must stop verifying frames from this chunk at the slowest view's high-water mark");
+  releasePendingPulls();
+  await session.cancel();
+  void ninthRead.catch(() => undefined);
+});
+
+test("stream client: a held CR completed by a later non-LF byte uses the CR arrival time", { timeout: 30_000 }, () => {
+  const signer = streamSigner(fixtureNow);
+  const frame = signer.frame(MESSAGE_ONE, fixtureNow);
+  const crFrame = frame.bytes.slice();
+  crFrame[crFrame.length - 2] = 0x0d;
+  crFrame[crFrame.length - 1] = 0x0d;
+  const result = verifySignedStream({
+    status: 200,
+    headers: openHeaders(signer),
+    resolveKey: pinnedSvc,
+    now: (): number => fixtureNow,
+    requestSig: REQUEST_SIG,
+    chunks: [
+      { bytes: crFrame, arrivedAtMs: 0 },
+      { bytes: new Uint8Array([0x3a]), arrivedAtMs: 90001 },
+    ],
+  });
+  assert.deepEqual(result.messages, [MESSAGE_ONE]);
+  assert.deepEqual(result.terminal, { state: "error", code: "stream_idle", framesVerified: 1 });
+
+  const lateSigner = streamSigner(fixtureNow);
+  const lateFrame = lateSigner.frame(MESSAGE_ONE, fixtureNow);
+  const lateCrFrame = lateFrame.bytes.slice();
+  lateCrFrame[lateCrFrame.length - 2] = 0x0d;
+  lateCrFrame[lateCrFrame.length - 1] = 0x0d;
+  const late = verifySignedStream({
+    status: 200,
+    headers: openHeaders(lateSigner),
+    resolveKey: pinnedSvc,
+    now: (): number => fixtureNow,
+    requestSig: REQUEST_SIG,
+    chunks: [
+      { bytes: lateCrFrame, arrivedAtMs: 90001 },
+      { bytes: new Uint8Array([0x3a]), arrivedAtMs: 90002 },
+    ],
+  });
+  assert.deepEqual(late.messages, []);
+  assert.deepEqual(late.terminal, { state: "error", code: "stream_idle", framesVerified: 0 });
+
+  // The held CR terminates the final field line, not the event. The next
+  // chunk's CRLF completion and blank line arrive after the idle deadline.
+  const fieldCrSigner = streamSigner(fixtureNow);
+  const fieldCrFrame = fieldCrSigner.frame(MESSAGE_ONE, fixtureNow);
+  const fieldCrBytes = fieldCrFrame.bytes.slice();
+  fieldCrBytes[fieldCrBytes.length - 2] = 0x0d;
+  const fieldLine = verifySignedStream({
+    status: 200,
+    headers: openHeaders(fieldCrSigner),
+    resolveKey: pinnedSvc,
+    now: (): number => fixtureNow,
+    requestSig: REQUEST_SIG,
+    chunks: [
+      { bytes: fieldCrBytes.slice(0, -1), arrivedAtMs: 0 },
+      { bytes: new Uint8Array([0x0a, 0x0a]), arrivedAtMs: 90001 },
+    ],
+  });
+  assert.deepEqual(fieldLine.messages, []);
+  assert.deepEqual(fieldLine.terminal, { state: "error", code: "stream_idle", framesVerified: 0 });
+});
+
 test("stream client: a frame at or after the known successor activation is rejected", { timeout: 30_000 }, () => {
   const activation = fixtureNow + 5;
   const base = { status: 200, resolveKey: cutAt(activation), now: (): number => fixtureNow, requestSig: REQUEST_SIG };

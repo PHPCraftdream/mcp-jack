@@ -124,6 +124,9 @@ export class StreamPump {
   private parkedMs = 0; // backpressure time in demand(): our own pause, not server silence (4.5)
   private verifiedFrames = 0;
   private reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  private pendingChunk: Uint8Array | undefined;
+  private pendingChunkOffset = 0;
+  private pendingChunkAt = 0;
   private failure: StreamVerifyError | undefined;
   private finished = false;
   private cancelled = false;
@@ -209,6 +212,38 @@ export class StreamPump {
     this.reader = reader;
     try {
       for (;;) {
+        while (this.verifier.hasPendingEvents) {
+          const parkedAt = nowMs();
+          await this.demand();
+          this.parkedMs += nowMs() - parkedAt;
+          if (this.finished) {
+            return;
+          }
+          this.processPendingEvents();
+        }
+        if (this.pendingChunk !== undefined) {
+          const parkedAt = nowMs();
+          await this.demand();
+          this.parkedMs += nowMs() - parkedAt;
+          if (this.finished) {
+            return;
+          }
+          if (this.pendingChunkOffset < this.pendingChunk.length) {
+            try {
+              this.verifier.push(this.pendingChunk.subarray(this.pendingChunkOffset, this.pendingChunkOffset + 1), this.pendingChunkAt, () => this.hasQueueCapacity());
+            } catch (err) {
+              this.stop(err, reader);
+              return;
+            }
+            this.pendingChunkOffset += 1;
+            this.processedFrameCount();
+          }
+          if (this.pendingChunkOffset >= this.pendingChunk.length) {
+            this.pendingChunk = undefined;
+            this.pendingChunkOffset = 0;
+          }
+          continue;
+        }
         // Backpressure: wait for the consumer before reading (and before the
         // idle timer arms), so an idle consumer never sees network reads.
         const parkedAt = nowMs();
@@ -241,22 +276,9 @@ export class StreamPump {
           return;
         }
         const arrived = this.elapsed();
-        let frameError: unknown;
-        try {
-          this.verifier.push(read.value, arrived);
-        } catch (err) {
-          frameError = err;
-        }
-        // 4.4: frames that verified inside this chunk already reached the queue
-        // through the sink, also when a later event of the same chunk failed.
-        if (frameError !== undefined) {
-          this.stop(frameError, reader);
-          return;
-        }
-        if (this.verifier.framesVerified !== this.verifiedFrames) {
-          this.verifiedFrames = this.verifier.framesVerified;
-          this.lastVerifiedMs = arrived; // only a verified frame restarts 4.5
-        }
+        this.pendingChunk = read.value;
+        this.pendingChunkOffset = 0;
+        this.pendingChunkAt = arrived;
       }
     } catch {
       // A read error ends the body without an end frame (4.4 truncation).
@@ -268,6 +290,27 @@ export class StreamPump {
         // The reader may still hold the abandoned read of an idle exit.
       }
     }
+  }
+
+  private processPendingEvents(): void {
+    this.verifier.push(new Uint8Array(0), this.elapsed(), () => this.hasQueueCapacity());
+    this.processedFrameCount();
+  }
+
+  private processedFrameCount(): void {
+    if (this.verifier.framesVerified !== this.verifiedFrames) {
+      this.verifiedFrames = this.verifier.framesVerified;
+      this.lastVerifiedMs = this.elapsed(); // only a verified frame restarts 4.5
+    }
+  }
+
+  private hasQueueCapacity(): boolean {
+    const active = this.messagesActive || this.sseActive;
+    return (
+      active &&
+      (!this.messagesActive || this.values.length - this.messageNext < QUEUE_HIGH_WATER_MARK) &&
+      (!this.sseActive || this.values.length - this.sseNext < QUEUE_HIGH_WATER_MARK)
+    );
   }
 
   /** Stops after the failing frame: the connection closes and no later byte is read. */
@@ -301,11 +344,11 @@ export class StreamPump {
 
   /**
    * Resolves once the body may read again: immediately while the unconsumed
-   * queue is under the high-water mark, a view is waiting, or the stream is
-   * over; otherwise it parks until a consume, a waiting view or the terminal.
+   * queue is under the high-water mark, or the stream is over; otherwise it
+   * parks until a consume or the terminal.
    */
   private demand(): Promise<void> {
-    if (this.finished || this.cancelled || this.waiters.length > 0) {
+    if (this.finished || this.cancelled) {
       return Promise.resolve();
     }
     const active = this.messagesActive || this.sseActive;
