@@ -1,0 +1,9 @@
+go test fuzz v1
+string("msg_huge")
+string("999999999999999999999999999")
+string("v1,AA==")
+string("sub_0000000000000001")
+[]byte("{}")
+uint8(0)
+string("X-Fuzz-Seed")
+string("boundary")

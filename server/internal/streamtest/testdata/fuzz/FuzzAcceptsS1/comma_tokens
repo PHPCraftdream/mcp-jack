@@ -1,0 +1,3 @@
+go test fuzz v1
+[]byte("s2, s1")
+[]byte("")

@@ -35,6 +35,12 @@ targets=(
   "durable FuzzDecodeMetadata"
   "durable FuzzDecodeRecord"
   "durable/internal/rotationstore FuzzDecodeTrustGuard"
+  "client/internal/streamtest FuzzSignedStreamFrames"
+  "client/internal/streamtest FuzzParseOpenStreamAuth"
+  "server/internal/streamtest FuzzAcceptsS1"
+  "server/internal/modern FuzzModernHeaderBoundaries"
+  "webhook/internal/vector FuzzWebhookHeaderAndWireBody"
+  "webhook/internal/receiver FuzzReceiverHandleNeverAcceptsUnauthenticatedDelivery"
 )
 
 failed=0

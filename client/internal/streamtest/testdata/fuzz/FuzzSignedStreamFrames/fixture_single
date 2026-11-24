@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("event: message\\ndata: {\\\"jsonrpc\\\":\\\"2.0\\\",\\\"method\\\":\\\"notifications/progress\\\",\\\"params\\\":{\\\"progressToken\\\":\\\"t1\\\",\\\"progress\\\":1}}\\njack: seq=0,ts=1767225600,sig=urpDfgON9LfHEO5xItbeBjl6TY1wwVZEq13zbF1Lsqwydo5GfBm6HRAY-JLkozKE4vyrtPUy9i0_q43r2tu7DA\\n\\nevent: jack-end\\ndata:\\njack: seq=1,ts=1767225601,sig=Uco3e3YKijC13IJkAbQHalmefZEb7muzlyKWR8_jcvwVRYJMk4YIfqYSZO92HBXVwcaxmtiCO0HoHLObslZjBA\\n\\n")
