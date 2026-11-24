@@ -63,8 +63,9 @@ async function relayControl(transform,framing='chunked',scenario={}){
   }finally{if(relay)await relay.close();for(const socket of sockets)socket.destroy();await new Promise(r=>upstreamServer.close(r));}
 }
 export async function selfTest(){
-  let checks=0,passed=0;
-  const report=(name,fn,core=false)=>{fn();if(core){checks++;passed++;}console.log(`self-test PASS ${name}`);};
+  let checks=0,passed=0;const failures=[];
+  const report=(name,fn,core=false)=>{if(core)checks++;try{fn();if(core)passed++;console.log(`self-test PASS ${name}`);}catch(error){failures.push(name);console.log(`self-test FAIL ${name}: ${String(error?.message??error).slice(0,8000)}`);}};
+  const attempt=async(name,fn)=>{let failure;try{await fn();}catch(error){failure=error;}report(name,()=>{if(failure)throw failure;});};
   const targetPath='interop/tools/fakes/stream/targets.json',target=JSON.parse(readFileSync(join(root,targetPath),'utf8'));
   report('fake target configuration',()=>assert.deepEqual(Object.keys(target),['fake']));
   const docs=JSON.parse(readFileSync(join(root,'interop/stream-scenarios.json'),'utf8'));
@@ -74,14 +75,15 @@ export async function selfTest(){
     report(`stream/${scenario.id}`,()=>{assert.equal(result.code,0,`stream/${scenario.id}: ${result.out}${result.err}`);assert.match(result.out,new RegExp(`PASS ${scenario.id}`));},true);
   }
   for(const matrix of ['rotation-stream','durable-stream']){const deferred=await run(['--matrix',matrix,'--list']);report(`${matrix} deferred CLI`,()=>{assert.equal(deferred.code,2,`${matrix} --list must be deferred`);assert.match(deferred.out,new RegExp(`DEFERRED matrix=${matrix}`));});}
-  for(const name of ['pass','drop','edit-data','truncate']){await relayControl(name,'chunked');report(`relay ${name} chunked`,()=>{});}
-  await relayControl('pass','length');report('relay pass content-length',()=>{});
+  for(const name of ['pass','drop','edit-data','truncate'])await attempt(`relay ${name} chunked`,()=>relayControl(name,'chunked'));
+  await attempt('relay pass content-length',()=>relayControl('pass','length'));
   const noTamper=await run(['--matrix','stream','--targets',targetPath,'--servers','fake','--clients','fake','--scenario','relay-edit-data'],{JACK_STREAM_SELFTEST_NO_TAMPER:'1'});report('no-tamper negative control',()=>{assert.notEqual(noTamper.code,0);assert.match(noTamper.out,/FAIL relay-edit-data/);});
   const baseline=await run(['--matrix','stream','--targets',targetPath,'--servers','fake','--clients','fake','--scenario','progress-final']);report('fake-client positive baseline',()=>{assert.equal(baseline.code,0,`fake-client positive baseline: ${baseline.out}${baseline.err}`);assert.match(baseline.out,/PASS progress-final/);});
   const badEvidence=await run(['--matrix','stream','--targets',targetPath,'--servers','fake','--clients','fake','--scenario','progress-final'],{JACK_STREAM_FAKE_BAD_EVIDENCE:'1'});report('fake-client evidence deviation rejected',()=>{assert.equal(badEvidence.code,1,`fake-client invalid evidence control exit: ${badEvidence.out}${badEvidence.err}`);assert.match(badEvidence.out,/FAIL progress-final/);});
   const listed=await run(['--list']);report('--list exact active scenarios',()=>{assert.equal(listed.code,0);assert.deepEqual(listed.out.trim().split(/\r?\n/),docs.matrices.stream.map(s=>s.id));});
   const invalid=await run(['--invalid-option']);report('invalid CLI option rejected',()=>assert.equal(invalid.code,2,'invalid CLI option'));
   const tmp=mkdtempSync(join(tmpdir(),'jack-stream-selftest-'));try{const badTargets=join(tmp,'bad-targets.json');writeFileSync(badTargets,JSON.stringify({fake:{server:['node','x'],client:['node','y']}}));const invalidRole=await run(['--targets',badTargets,'--servers','fake','--clients','fake']);report('invalid target roles rejected',()=>assert.equal(invalidRole.code,2,'invalid target roles'));}finally{rmSync(tmp,{recursive:true,force:true});}
-  console.log(`INTEROP-SUMMARY matrix=stream pairs=1 checks=${checks} passed=${passed} failed=${checks-passed} result=pass`);
+  console.log(`INTEROP-SUMMARY matrix=stream pairs=1 checks=${checks} passed=${passed} failed=${checks-passed} result=${failures.length?'fail':'pass'}`);
+  if(failures.length)throw Error(`self-test failures: ${failures.join(', ')}`);
 }
 if(import.meta.url===`file://${process.argv[1]}`){selfTest().catch(error=>{console.error(error);process.exitCode=1;});}

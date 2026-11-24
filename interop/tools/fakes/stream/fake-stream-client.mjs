@@ -118,7 +118,10 @@ function isSignal(data) {
   const m = /^\{"jsonrpc":"2\.0","method":"notifications\/jack\/stream_error","params":\{"code":"(stream_frame_too_large)","limit":(0|[1-9][0-9]*)\}\}$/.exec(data);
   return m && BigInt(m[2]) <= 9007199254740991n ? m[1] : null;
 }
-const requestOptions = { hostname: url.hostname, port: url.port, path: '/mcp', method: 'POST', headers: requestHeaders.flat() };
+// Object form lets Node add Host; the flat array form sends none and the server answers 400.
+const headerObject = {};
+for (const [name, value] of requestHeaders) headerObject[name] = Object.hasOwn(headerObject, name) ? [].concat(headerObject[name], value) : value;
+const requestOptions = { hostname: url.hostname, port: url.port, path: '/mcp', method: 'POST', headers: headerObject };
   const request = http.request(requestOptions, response => {
   const status = response.statusCode;
   if (status !== 200 || !/^text\/event-stream(?:\s*;|\s*$)/i.test(String(response.headers['content-type'] || ''))) {
