@@ -445,8 +445,11 @@ func TestEventsReceiveSubprocessHelper(t *testing.T) {
 		cancel()
 	}()
 	if err := Run(ctx, []string{"--config", os.Getenv("MCP_JACK_EVENTS_RECEIVER_CONFIG"), "--loopback-http-test"}, os.Stdout); err != nil {
-		t.Fatalf("eventsreceiver.Run: %v", err)
+		fmt.Fprintf(os.Stderr, "eventsreceiver.Run: %v\n", err)
+		os.Exit(1)
 	}
+	// Exit before the test binary prints its PASS line into the checked stdout.
+	os.Exit(0)
 }
 
 func TestEventsReceiveTLSSubprocessHelper(t *testing.T) {
@@ -460,6 +463,8 @@ func TestEventsReceiveTLSSubprocessHelper(t *testing.T) {
 		cancel()
 	}()
 	if err := Run(ctx, []string{"--config", os.Getenv("MCP_JACK_EVENTS_RECEIVER_CONFIG")}, os.Stdout); err != nil {
-		t.Fatalf("TLS eventsreceiver.Run: %v", err)
+		fmt.Fprintf(os.Stderr, "TLS eventsreceiver.Run: %v\n", err)
+		os.Exit(1)
 	}
+	os.Exit(0)
 }
