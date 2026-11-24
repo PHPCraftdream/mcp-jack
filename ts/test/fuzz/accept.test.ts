@@ -14,8 +14,9 @@ function specRecognizes(lines: readonly string[]): boolean {
       while (index < line.length && /[A-Za-z0-9-]/.test(line[index]!)) index++;
       if (index === start) { invalid = true; break; }
       if (line.slice(start, index) === "s1") found = true;
+      const afterToken = index;
       while (index < line.length && line[index] === " ") index++;
-      if (index === line.length) break;
+      if (index === line.length) { if (index !== afterToken) invalid = true; break; }
       if (line[index] !== ",") { invalid = true; break; }
       index++;
       while (index < line.length && line[index] === " ") index++;

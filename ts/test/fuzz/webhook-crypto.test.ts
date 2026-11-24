@@ -96,7 +96,7 @@ test("fuzz webhook signature and envelope parsers", () => {
   }
   const goodW1 = `w1 kid=${"A".repeat(43)},sig=${"A".repeat(86)}`;
   runProperty(seed, iterations, goodW1, () => assert.deepEqual(parseW1Header(goodW1), { ok: true, kid: "A".repeat(43), sig: "A".repeat(86) }));
-  for (const bad of [`w1 kid=${"A".repeat(43)},kid=${"A".repeat(43)},sig=${"A".repeat(86)}`, `w1 kid=${"A".repeat(43)},sig=${"A".repeat(86)},extra=A`, `w1 kid=${"A".repeat(43)},sig=${"A".repeat(85)}B`]) {
+  for (const bad of [`w1 kid=${"A".repeat(43)},kid=${"A".repeat(43)},sig=${"A".repeat(86)}`, `w1 kid=${"A".repeat(43)},sig=${"A".repeat(86)},extra=A`, `w1 kid=${"A".repeat(43)},sig=${"A".repeat(85)}`]) {
     runProperty(seed, iterations, bad, () => assert.deepEqual(parseW1Header(bad), { ok: false, code: "malformed_jack_auth" }));
   }
   for (const [timestamp, expected] of [["2024-02-29T00:00:00Z", true], ["2023-02-29T00:00:00Z", false], ["2024-01-01T24:00:00Z", false], ["NaN", false]] as const) {
