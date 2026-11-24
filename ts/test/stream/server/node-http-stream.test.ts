@@ -120,7 +120,7 @@ test("stream server: node adapter waits for drain before reading or writing anot
   const firstWrite = deferred<void>();
   const secondWrite = deferred<void>();
   let writes = 0;
-  const res = fakeNodeResponse(() => { writes += 1; (writes === 1 ? firstWrite : secondWrite).resolve(); return writes !== 1; });
+  const res = fakeNodeResponse(() => { writes += 1; (writes === 1 ? firstWrite : secondWrite).resolve(); return false; });
   const req = fakeNodeRequest();
   serveNode(async () => new Response(source, { headers: { "content-type": "text/event-stream" } }))(req, res);
   req.emit("end");
