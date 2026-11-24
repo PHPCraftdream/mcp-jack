@@ -32,7 +32,7 @@ const hash = bytes => createHash('sha256').update(bytes).digest('base64url');
 const now = () => { const v = Number(readFileSync(clockFile, 'utf8').trim()); if (!Number.isSafeInteger(v) || v < 0) throw Error('invalid shared clock'); return v; };
 const signText = text => b64(sign(null, Buffer.from(text, 'utf8'), keyAt().key));
 const writeLog = row => { if (requestLog) appendFileSync(requestLog, `${JSON.stringify({ scenario, matrix, ...row })}\n`); };
-const scenarioMeta = JSON.parse(readFileSync(join(root, 'interop/stream-scenarios.json'), 'utf8')).matrices[matrix]?.find(item => item.id === scenario);
+const scenarioMeta = JSON.parse(readFileSync(join(root, 'interop/stream-scenarios.json'), 'utf8')).matrices[matrix]?.find(item => item.id === scenario) || (matrix === 'stream' ? JSON.parse(readFileSync(join(root, 'interop/stream-scenarios.json'), 'utf8')).matrices.staged?.find(item => item.id === scenario) : null);
 const metadataProducer = scenarioMeta?.producer || scenario;
 const requestId = scenarioMeta?.request_id ?? 1;
 const options = scenarioMeta?.stream_options || {};
@@ -52,7 +52,8 @@ const payloads = {
   'relay-edit-data': [{ jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1 } }, { jsonrpc: '2.0', id: requestId, result: {} }],
   'relay-truncate': [{ jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1 } }, { jsonrpc: '2.0', id: requestId, result: {} }],
   'relay-reorder': [{ n: 0 }, { n: 1 }],
-  'relay-splice': [{ n: 0 }, { n: 1 }], 'relay-replay': [{ n: 0 }, { n: 1 }],
+  'relay-splice': [{ n: 0 }, { n: 1 }],
+  'relay-replay': [{ n: 0 }, { n: 1 }],
 };
 const nonceSet = new Set();
 if (durableDir) {
@@ -118,7 +119,9 @@ function frame(sid, seq, data, prev) {
   return { wire: `${lines.join('\n')}\n\n`, sig, seq, ts, data, kind: data === '' ? 'end' : 'message' };
 }
 function v1Response(res, status, requestSig, code, id) {
-  const body = Buffer.from(JSON.stringify({ error: { code, message: status === 501 ? 'streaming responses cannot be signed in v0.1' : 'stream limit exceeded' } }));
+  const body = Buffer.from(status === 501
+    ? JSON.stringify({ error: { code: 'streaming_unsupported', message: 'streaming responses cannot be signed in v0.1' } })
+    : JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32603, message: 'stream_limit_exceeded' } }));
   const ts = now(), identity = keyAt(), sig = b64(sign(null, Buffer.from(['mcp-jack/v1/response', String(status), requestSig, identity.kid, String(ts), hash(body)].join('\n')), identity.key));
   res.writeHead(status, { 'content-type': 'application/json', 'Jack-Auth': `v1 kid=${identity.kid},ts=${ts},sig=${sig}` });
   res.end(body);
@@ -195,8 +198,9 @@ const server = http.createServer((req, res) => {
       writeLog({ nonce_committed_before_first_byte: true });
       v1Response(res, 501, requestSig, 'streaming_unsupported', requestId); return;
     }
-    const admissionLimit = Number(options.maxConcurrentStreams || arg('--max-concurrent-streams') || 4);
-    if (process.env.JACK_STREAM_FAKE_IGNORE_LIMIT !== '1' && (streamAdmissions.get(match?.[1]) || 0) >= admissionLimit) {
+    const streamAdmissionKey = match?.[1];
+    const admissionLimit = Number(options.maxConcurrentStreams ?? arg('--max-concurrent-streams') ?? 4);
+    if (process.env.JACK_STREAM_FAKE_IGNORE_LIMIT !== '1' && (streamAdmissions.get(streamAdmissionKey) || 0) >= admissionLimit) {
       writeLog({ nonce_committed_before_first_byte: true });
       v1Response(res, 429, requestSig, 'stream_limit_exceeded', requestId); return;
     }
@@ -207,12 +211,12 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', 'x-accel-buffering': 'no', 'Jack-Auth': `s1 kid=${identity.kid},ts=${ts},sid=${sid},sig=${openSig}` });
       writeLog({ event: 'stream_open', nonce_committed_before_first_byte: true, sid, request_sig: requestSig, identity: alice.kid, server_kid: identity.kid });
     active.add(res);
-    if (scenario === 'concurrency-limit' || arg('--action') === 'hold') streamAdmissions.set(alice.kid, (streamAdmissions.get(alice.kid) || 0) + 1);
+    if (scenario === 'concurrency-limit' || options.maxConcurrentStreams !== undefined || arg('--action') === 'hold') streamAdmissions.set(streamAdmissionKey, (streamAdmissions.get(streamAdmissionKey) || 0) + 1);
     let prev = openSig, seq = 0, closed = false;
     const onClose = () => {
       if (closed) return;
       closed = true; active.delete(res);
-      if (scenario === 'concurrency-limit' || arg('--action') === 'hold') streamAdmissions.set(alice.kid, Math.max(0, (streamAdmissions.get(alice.kid) || 0) - 1));
+      if (scenario === 'concurrency-limit' || options.maxConcurrentStreams !== undefined || arg('--action') === 'hold') streamAdmissions.set(streamAdmissionKey, Math.max(0, (streamAdmissions.get(streamAdmissionKey) || 0) - 1));
       if (heldResponse === res) { heldResponse = null; heldStream = null; }
       if (!res.writableEnded) writeLog({ event: 'handler_cancelled', sid, request_sig: requestSig });
     };
@@ -220,7 +224,11 @@ const server = http.createServer((req, res) => {
     const send = data => { if (closed || res.destroyed) return null; const f = frame(sid, seq++, data, prev); prev = f.sig; res.write(f.wire); return f; };
     const oversized = scenario === 'oversize';
     if (oversized) {
-      send('{"jsonrpc":"2.0","method":"notifications/jack/stream_error","params":{"code":"stream_frame_too_large","limit":1024}}');
+      const oversizedValue = JSON.stringify({ jsonrpc: '2.0', method: 'notifications/progress', params: { payload: 'x'.repeat(Number(options.frameMaxBytes) + 32) } });
+      const oversizedBytes = Buffer.byteLength(oversizedValue, 'utf8');
+      if (!Number.isSafeInteger(options.frameMaxBytes) || options.frameMaxBytes < 1024 || oversizedBytes <= options.frameMaxBytes) throw Error('oversize fake producer did not exceed configured frame limit');
+      writeLog({ event: 'frame_suppressed', data_bytes: oversizedBytes, frame_max_bytes: options.frameMaxBytes });
+      send(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/jack/stream_error', params: { code: 'stream_frame_too_large', limit: options.frameMaxBytes } }));
       const end = frame(sid, seq, '', prev); res.end(end.wire); closed = true; active.delete(res); return;
     }
     if (scenario === 'max-duration') {
@@ -260,7 +268,7 @@ const server = http.createServer((req, res) => {
         }
         send(JSON.stringify(msg));
       }
-    } else if (!['idle', 'cancel', 'concurrency-limit', 'durable-live-replay', 'durable-restart-replay'].includes(scenario)) for (const item of payloads[metadataProducer] || []) send(JSON.stringify(item));
+    } else if (!['idle', 'cancel', 'concurrency-limit', 'durable-live-replay', 'durable-restart-replay', 'oversize'].includes(scenario)) for (const item of payloads[metadataProducer] || []) send(JSON.stringify(item));
     if (scenario === 'cancel') { send(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1 } })); return; }
     if (scenario === 'concurrency-limit' || scenario === 'durable-live-replay') {
       const firstMessage = scenario === 'durable-live-replay'
@@ -268,14 +276,15 @@ const server = http.createServer((req, res) => {
         : { jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1 } };
       send(JSON.stringify(firstMessage));
       heldResponse = res;
-      heldStream = { res, frame, sid, seq, prev, requestId, identity: alice.kid, released: false, cleanup: () => { if (closed) return; closed = true; active.delete(res); streamAdmissions.set(alice.kid, Math.max(0, (streamAdmissions.get(alice.kid) || 0) - 1)); } };
+      const heldStreamKey = match?.[1];
+      heldStream = { res, frame, sid, seq, prev, requestId, identity: heldStreamKey, released: false, cleanup: () => { if (closed) return; closed = true; active.delete(res); streamAdmissions.set(heldStreamKey, Math.max(0, (streamAdmissions.get(heldStreamKey) || 0) - 1)); } };
       return;
     }
     if (scenario === 'durable-restart-replay') {
       send(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1, message: 'stream:first' } }));
       const end = frame(sid, seq, '', prev); res.end(end.wire); closed = true; active.delete(res); return;
     }
-    if (scenario === 'idle') { const timer = setTimeout(() => { if (closed || res.destroyed) return; const end = frame(sid, seq, '', prev); res.end(end.wire); closed = true; active.delete(res); }, Math.max(1, Number(options.idleTimeoutMs || arg('--idle-timeout-ms') || 1000) + 25)); timer.unref(); return; }
+    if (scenario === 'idle') { const timer = setTimeout(() => { if (closed || res.destroyed) return; const message = JSON.stringify({ jsonrpc: '2.0', id: requestId, result: {} }); send(message); const end = frame(sid, seq, '', prev); res.end(end.wire); closed = true; active.delete(res); }, Math.max(1, Number(options.idleTimeoutMs || arg('--idle-timeout-ms') || 1000) + 25)); timer.unref(); return; }
     const end = frame(sid, seq, '', prev); res.end(end.wire); closed = true; active.delete(res);
   });
 });

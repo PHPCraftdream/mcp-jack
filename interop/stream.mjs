@@ -13,7 +13,7 @@ import { startRelay } from './stream/relay.mjs';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
 const MATRICES = ['stream', 'rotation-stream', 'durable-stream'];
-const USAGE = 'usage: node interop/stream.mjs [--matrix stream|rotation-stream|durable-stream] [--targets file] [--servers lang,...] [--clients lang,...] [--scenario id,...] [--list] [--self-test]';
+const USAGE = 'usage: node interop/stream.mjs [--matrix stream|rotation-stream|durable-stream] [--targets file] [--servers lang,...] [--clients lang,...] [--scenario id,...] [--include-staged|--staged-only] [--list] [--self-test]';
 let tempRoot;
 const children = new Set();
 const relays = new Set();
@@ -21,17 +21,20 @@ let cleanupPromise;
 
 function usageError(message) { throw Object.assign(new Error(message), { usage: true }); }
 function parseArgs(args) {
-  const out = { matrix: 'stream', targets: join(HERE, 'targets.json'), servers: null, clients: null, scenario: null, list: false, selfTest: false };
+  const out = { matrix: 'stream', targets: join(HERE, 'targets.json'), servers: null, clients: null, scenario: null, list: false, selfTest: false, includeStaged: false, stagedOnly: false };
   for (let i = 0; i < args.length; i++) {
     const flag = args[i];
     if (['--matrix', '--targets', '--servers', '--clients', '--scenario'].includes(flag)) {
       if (!args[i + 1] || args[i + 1].startsWith('--')) usageError(`missing value for ${flag}`);
       out[flag.slice(2)] = args[++i];
     } else if (flag === '--list') out.list = true;
+    else if (flag === '--include-staged') out.includeStaged = true;
+    else if (flag === '--staged-only') out.stagedOnly = true;
     else if (flag === '--self-test') out.selfTest = true;
     else usageError(`unknown flag ${flag}`);
   }
   if (!MATRICES.includes(out.matrix)) usageError(`unknown matrix '${out.matrix}'`);
+  if (out.includeStaged && out.stagedOnly) usageError('--include-staged and --staged-only cannot be combined');
   if (out.list && out.selfTest) usageError('--list and --self-test cannot be combined');
   return out;
 }
@@ -103,7 +106,7 @@ function makeVerifier(fixtures) {
     }
     return { count: frames.length, ended, messages: dataMessages };
   }
-  function verifyRefusal(terminal, requestSig) {
+  function verifyRefusal(terminal, requestSig, expectedRequestId) {
     const e = terminal.v1_evidence;
     if (!e || e.status !== terminal.http_status || !Number.isSafeInteger(e.status) || e.kid !== svc.kid || !Number.isSafeInteger(e.ts) || e.request_sig !== requestSig) throw Error('invalid v1 refusal evidence');
     b64(requestSig, 64, 'request signature');
@@ -112,7 +115,9 @@ function makeVerifier(fixtures) {
     if (!signed(text, e.sig)) throw Error('bad v1 refusal signature');
     let parsed;
     try { parsed = JSON.parse(body.toString('utf8')); } catch { throw Error('v1 refusal body is not JSON'); }
-    const bodyCode = parsed?.error?.code;
+    if (terminal.http_status === 429 && (parsed?.jsonrpc !== '2.0' || !Object.hasOwn(parsed, 'id') || expectedRequestId === undefined || !isDeepStrictEqual(parsed.id, expectedRequestId) || parsed?.error?.code !== -32603 || parsed?.error?.message !== 'stream_limit_exceeded')) throw Error('429 refusal body is not matching JSON-RPC stream limit error');
+    if (terminal.http_status === 501 && (parsed?.error?.code !== 'streaming_unsupported' || typeof parsed.error.message !== 'string' || Object.hasOwn(parsed, 'jsonrpc'))) throw Error('501 refusal body is not streaming_unsupported envelope');
+    const bodyCode = terminal.http_status === 501 ? parsed?.error?.code : parsed?.error?.message;
     if (terminal.http_code !== undefined && terminal.http_code !== null && bodyCode !== terminal.http_code) throw Error('v1 refusal code differs from signed body');
     if (terminal.code !== undefined && terminal.code !== null && bodyCode !== terminal.code) throw Error('terminal refusal code differs from signed body');
   }
@@ -142,11 +147,11 @@ function makeVerifier(fixtures) {
       if (typeof line.request_sig !== 'string') throw Error('refusal terminal missing request signature');
       b64(line.request_sig, 64, 'request signature');
       if (line.v1_evidence !== undefined && line.v1_evidence !== null) {
-        const refusalCode = line.http_code ?? line.code;
+        const refusalCode = line.http_status === 501 ? (line.http_code ?? line.code) : line.http_status === 429 ? (line.http_code ?? line.code) : null;
         const allowed = (line.http_status === 501 && refusalCode === 'streaming_unsupported') ||
           (line.http_status === 429 && refusalCode === 'stream_limit_exceeded');
         if (!allowed || (line.code !== undefined && line.code !== refusalCode) || (line.http_code !== undefined && line.http_code !== refusalCode)) throw Error('unsupported signed refusal terminal');
-        verifyRefusal(line, line.request_sig);
+        verifyRefusal(line, line.request_sig, expectedRequestId);
       } else {
         if (line.http_status !== 401 || (line.http_code ?? line.code) !== 'replayed_nonce') throw Error('unsupported unsigned refusal terminal');
         if (line.code !== undefined && line.code !== 'replayed_nonce') throw Error('unsigned refusal code must be replayed_nonce');
@@ -170,7 +175,7 @@ function makeVerifier(fixtures) {
       verifyOpen(line.open, line.request_sig);
       verified = verifyFrames(line.open, line.request_sig, line.frames, { allowMissing: true });
     }
-    if (line.v1_evidence !== undefined && line.v1_evidence !== null) verifyRefusal(line, line.request_sig);
+    if (line.v1_evidence !== undefined && line.v1_evidence !== null) verifyRefusal(line, line.request_sig, expectedRequestId);
     if (typeof line.mcp_complete !== 'boolean') throw Error('terminal mcp_complete must be boolean');
     if (line.outcome === 'complete') {
       if (!line.terminal_frame || line.terminal_frame.kind !== 'end') throw Error('complete terminal lacks signed end');
@@ -478,8 +483,13 @@ async function main() {
     const targetDoc = readJson(targetPath);
     const scenarioDoc = readJson(join(HERE, 'stream-scenarios.json'));
     const scenarios = scenarioDoc.matrices?.[args.matrix];
+    const staged = args.matrix === 'stream' ? scenarioDoc.matrices?.staged : [];
     if (!Array.isArray(scenarios)) usageError(`missing matrix ${args.matrix}`);
-    if (args.list) { for (const scenario of scenarios) console.log(scenario.id); return; }
+    if (args.matrix === 'stream' && !Array.isArray(scenarioDoc.matrices?.staged)) usageError('missing staged stream matrix');
+    const pool = args.stagedOnly ? staged : args.includeStaged ? [...scenarios, ...staged] : scenarios;
+    if (args.stagedOnly && args.matrix !== 'stream') usageError('staged flags are available only for matrix stream');
+    if ((args.includeStaged || args.stagedOnly) && args.matrix !== 'stream') usageError('staged flags are available only for matrix stream');
+    if (args.list) { for (const scenario of pool) console.log(scenario.id); return; }
     if (args.selfTest) { await (await import('./stream/selftest.mjs')).selfTest(); return; }
     const languages = Object.keys(targetDoc);
     const select = (input, flag) => {
@@ -494,12 +504,13 @@ async function main() {
       const target = targetDoc[language]?.[role];
       if (!Array.isArray(target) || !target.length || target.some(value => typeof value !== 'string')) usageError(`invalid target ${language}.${role}`);
     }
-    let selected = scenarios;
+    let selected = pool;
     if (args.scenario !== null) {
       const ids = args.scenario.split(',').map(value => value.trim());
       if (!ids.length || ids.some(value => !value)) usageError('empty scenario id');
-      for (const id of ids) if (!scenarios.some(scenario => scenario.id === id)) usageError(`unknown scenario '${id}'`);
-      selected = ids.map(id => scenarios.find(scenario => scenario.id === id));
+      for (const id of ids) if (!pool.some(scenario => scenario.id === id)) usageError(`unknown scenario '${id}' in selected scenario pool`);
+      selected = ids.map(id => pool.find(scenario => scenario.id === id));
+      if (new Set(ids).size !== ids.length) usageError('duplicate scenario id');
     }
     const registry = readJson(join(ROOT, 'spec/fixtures/registry.json'));
     if (!registry || registry.version !== 1 || typeof registry.aud !== 'string' || !Array.isArray(registry.keys)) usageError('invalid registry fixture');
@@ -521,22 +532,25 @@ async function main() {
       for (const scenario of selected) {
         let server, clientProcess, relay, secondClientProcess, concurrencyHeld = false, diagLog;
         try {
+          if (args.scenario !== null && args.scenario.split(',').some((id, index, ids) => ids.indexOf(id.trim()) !== index)) usageError('duplicate scenario id');
           const suffix = `${client}-${serverLanguage}-${scenario.id}-${passed + failed}`;
           const requestLog = join(tempRoot, `${suffix}.jsonl`);
           diagLog = requestLog;
           const clockFile = join(tempRoot, `${suffix}.clock`);
           const now = scenario.clock ?? (scenario.rotation ? 1767052810 : 1800000000);
+          const options = scenario.stream_options || {};
+          if (scenario.id === 'idle' && (!Number.isSafeInteger(options.idleTimeoutMs) || options.idleTimeoutMs <= 0)) throw Error('idle scenario lacks configured idleTimeoutMs');
+          if (scenario.id === 'oversize' && (!Number.isSafeInteger(options.frameMaxBytes) || options.frameMaxBytes < 1024)) throw Error('oversize scenario lacks valid frameMaxBytes');
           const activation = scenario.successor_activation ?? (scenario.rotation ? 1767225610 : undefined);
           writeFileSync(clockFile, `${now}\n`);
           const serverArgs = ['--profile', 'modern', '--matrix', args.matrix, '--scenario', scenario.id, '--aud', registry.aud, '--state', statePath, '--server-seed-hex', svc.seed_hex, '--clock-file', clockFile, '--request-log', requestLog, '--port', '0'];
+          for (const [key, flag] of [['frameMaxBytes', '--frame-max-bytes'], ['maxConcurrentStreams', '--max-concurrent-streams'], ['maxStreamDurationMs', '--max-stream-duration-ms'], ['heartbeatMs', '--heartbeat-ms'], ['idleTimeoutMs', '--idle-timeout-ms']]) {
+            if (options[key] !== undefined) serverArgs.push(flag, String(options[key]));
+          }
           const rotationSuccessor = scenario.rotation ? fixture.keys.find(key => key.name === 'erin') : null;
           if (scenario.rotation && !rotationSuccessor?.seed_hex) throw Error('rotation scenario contract gap: successor fixture erin is unavailable');
           if (scenario.rotation) serverArgs.push('--ring-seed', `ring-1=${rotationSuccessor.seed_hex}`);
           if (scenario.id === 'rotation-cutoff-reopen') serverArgs.push('--successor-activation', String(activation));
-          const options = scenario.stream_options || {};
-          for (const [key, flag] of [['frameMaxBytes', '--frame-max-bytes'], ['maxConcurrentStreams', '--max-concurrent-streams'], ['maxStreamDurationMs', '--max-stream-duration-ms'], ['heartbeatMs', '--heartbeat-ms'], ['idleTimeoutMs', '--idle-timeout-ms']]) {
-            if (options[key] !== undefined) serverArgs.push(flag, String(options[key]));
-          }
           if (scenario.durable) {
             const durableDir = join(tempRoot, `${suffix}-durable`);
             serverArgs.push('--durable-dir', durableDir);
@@ -682,7 +696,7 @@ async function main() {
             if (secondTerminals.length !== 1 || secondRecords.at(-1) !== secondTerminals[0]) throw Error('second client expected one final terminal record');
             verifyRecord(secondTerminals[0], scenario.request_id);
             const secondTerminal = secondTerminals[0];
-            if (secondTerminal.http_status !== 429 || secondTerminal.code !== 'stream_limit_exceeded' || !secondTerminal.v1_evidence) throw Error('second client did not receive signed stream-limit refusal');
+            if (secondTerminal.http_status !== 429 || secondTerminal.code !== 'stream_limit_exceeded' || !secondTerminal.v1_evidence || !Array.isArray(secondTerminal.frames) || secondTerminal.frames.length !== 0 || secondTerminal.open) throw Error('second client did not receive signed stream-limit refusal before stream bytes');
             if (secondTerminal.request_sig !== undefined) verifyRecord(secondTerminal, scenario.request_id);
             if (typeof secondTerminal.request_sig !== 'string' || !secondTerminal.v1_evidence || secondTerminal.v1_evidence.request_sig !== secondTerminal.request_sig) throw Error('second refusal lacks its actual request signature evidence');
             if (secondTerminal.v1_evidence.status !== 429 || secondTerminal.v1_evidence.request_sig !== secondTerminal.request_sig) throw Error('second 429 evidence is not bound to its actual request');
@@ -733,6 +747,8 @@ async function main() {
             if (changedAt < 0 || elapsedAt <= changedAt) throw Error('max-duration server log must prove ordered clock_changed then duration_elapsed observations');
             if (terminalCheck.terminal.outcome !== 'complete' || terminalCheck.terminal.terminal_frame?.kind !== 'end') throw Error('max-duration stream must finish with complete terminal and signed end');
           }
+          if (scenario.id === 'idle' && (messages.length !== 0 || terminalCheck.terminal.code !== 'stream_idle')) throw Error('idle scenario must time out before any message is delivered');
+          if (scenario.id === 'oversize' && (!logRows.some(row => row.event === 'frame_suppressed' && Number.isSafeInteger(row.data_bytes) && Number.isSafeInteger(row.frame_max_bytes) && row.data_bytes > row.frame_max_bytes) || messages.length !== 0)) throw Error('oversize producer did not suppress an over-limit value before delivery');
           const heartbeatPayload = 'notifications/events/heartbeat';
           const heartbeatExpected = scenario.stream_options?.heartbeatMs !== undefined || (scenario.expected?.messages || []).some(message => message?.method === heartbeatPayload);
           if (heartbeatExpected) {
