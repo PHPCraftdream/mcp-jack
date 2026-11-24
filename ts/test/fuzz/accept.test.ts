@@ -1,0 +1,23 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { jackAcceptStreams } from "../../src/stream/codes.js";
+import { corpus, mutateBytes, random, runProperty, settings } from "./helper.js";
+
+function specRecognizes(line: string): boolean {
+  if (!/^ *[A-Za-z0-9-]+(?: *, *[A-Za-z0-9-]+)*$/.test(line)) return false;
+  return line.split(",").some((token) => token.replace(/^ +| +$/g, "") === "s1");
+}
+
+test("fuzz Jack-Accept stream opt-in", () => {
+  const { seed, iterations } = settings(); const next = random(seed);
+  const boundaries = corpus("accept-boundaries.json") as { lines: string[]; whitespace: string[] };
+  const bases = ["s1", "s2", "S1", "s10", "s1,s2", "s2, s1", "s1 , s2", "", ",s1", "s1,", "s1\ts2", "s1\ns2", "s1\rs2", "s1\u0000s2", ...boundaries.lines, ...boundaries.whitespace, ...boundaries.whitespace.flatMap((space) => boundaries.lines.map((line) => `${space}${line}${space}`))];
+  const insertions = [" ", "  ", "\t", ",", "\u0000", "\r", "\n", ...boundaries.whitespace];
+  for (let i = 0; i < iterations; i++) {
+    const base = bases[Math.floor(next() * bases.length)]!;
+    const line = i % 2 === 0 ? base : new TextDecoder().decode(mutateBytes(new TextEncoder().encode(base), next));
+    const inserted = next() < 0.5 ? line : (() => { const at = Math.floor(next() * (line.length + 1)); return line.slice(0, at) + insertions[Math.floor(next() * insertions.length)]! + line.slice(at); })();
+    const changed = next() < 0.35 ? inserted.replace(/[A-Za-z]/g, (letter) => next() < 0.25 ? letter.toUpperCase() : letter) : inserted;
+    runProperty(seed, i, changed, () => assert.equal(jackAcceptStreams([changed]), specRecognizes(changed)));
+  }
+});
