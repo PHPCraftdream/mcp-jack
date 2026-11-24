@@ -278,9 +278,17 @@ func main() {
 					fmt.Fprintln(os.Stdout, mustJSON(map[string]any{"control": "released", "sid": sid}))
 				}
 			}
-		case "progress-final", "relay-drop", "relay-edit-data", "relay-truncate":
+		case "progress-final", "relay-drop", "relay-edit-data", "relay-truncate", "relay-reorder", "relay-splice", "relay-replay":
 			emit(progress)
 			emit(final)
+		case "idle":
+			<-r.Context().Done()
+			return
+		case "oversize":
+			oversized := map[string]any{"jsonrpc": "2.0", "method": "notifications/progress", "params": map[string]any{"payload": strings.Repeat("x", int(opts.FrameMaxBytes)+32)}}
+			raw, _ := json.Marshal(oversized)
+			log.put(map[string]any{"event": "frame_suppressed", "data_bytes": len(raw), "frame_max_bytes": opts.FrameMaxBytes})
+			emit(oversized)
 		case "cancel":
 			emit(progress)
 			<-r.Context().Done()

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -263,6 +264,24 @@ func main() {
 	}
 	defer stream.Close()
 	open := parseOpen(cap.responseHeader.Get("Jack-Auth"))
+	var termMu sync.Mutex
+	termDone := false
+	term := func(outcome, code string, frames []frame, failure any, count int) {
+		termMu.Lock()
+		defer termMu.Unlock()
+		if termDone {
+			return
+		}
+		termDone = true
+		emitTerminal(*scenario, outcome, code, open, frames, failure, count, capturedStatus(cap), sig, rpc, nil)
+	}
+	if *idle > 0 {
+		timer := time.AfterFunc(time.Duration(*idle)*time.Millisecond, func() {
+			_ = stream.Close()
+			term("error", "stream_idle", []frame{}, nil, stream.FramesVerified())
+		})
+		defer timer.Stop()
+	}
 	cancel := *action == "cancel"
 	for {
 		data, nextErr := stream.Next()
@@ -275,13 +294,24 @@ func main() {
 			}
 			allFrames := append([]frame(nil), verifiedFrames...)
 			verifiedFrames = verifiedFrames[:minInt(stream.FramesVerified(), len(verifiedFrames))]
+			failure := failureFrame(allFrames, verifiedFrames, code)
+			if code == "stream_frame_too_large" {
+				for i := range allFrames {
+					if isStreamSignal(allFrames[i].Data) {
+						verifiedFrames = allFrames[:i]
+						signal := allFrames[i]
+						signal.Kind = "signal"
+						failure = signal
+						break
+					}
+				}
+			}
 			outcome := "error"
 			if errors.Is(nextErr, io.EOF) {
 				outcome = "complete"
 				code = ""
 			}
-			failure := failureFrame(allFrames, verifiedFrames, code)
-			emitTerminal(*scenario, outcome, code, open, verifiedFrames, failure, stream.FramesVerified(), capturedStatus(cap), sig, rpc, nil)
+			term(outcome, code, verifiedFrames, failure, stream.FramesVerified())
 			return
 		}
 		frames := parseFrames(cap.responseBodySnapshot())
@@ -298,7 +328,7 @@ func main() {
 		if cancel {
 			_ = stream.Close()
 			waitForHandlerCancelled(*requestLog, sig)
-			emitTerminal(*scenario, "cancelled", "", open, frames, nil, stream.FramesVerified(), capturedStatus(cap), sig, rpc, nil)
+			term("cancelled", "", frames, nil, stream.FramesVerified())
 			return
 		}
 
@@ -419,6 +449,13 @@ func streamCode(err error) string {
 	}
 	return "stream_bad_frame"
 }
+
+var signalPattern = regexp.MustCompile(`^\{"jsonrpc":"2\.0","method":"notifications/jack/stream_error","params":\{"code":"stream_frame_too_large","limit":(0|[1-9][0-9]*)\}\}$`)
+
+func isStreamSignal(data string) bool {
+	return signalPattern.MatchString(data)
+}
+
 func failureFrame(all, verified []frame, code string) any {
 	if code != "stream_out_of_order" && code != "stream_bad_signature" {
 		return nil
