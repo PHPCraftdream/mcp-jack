@@ -475,7 +475,7 @@ func TestStreamLateSuccessorCutoffPollWritesEndBeforeActivation(t *testing.T) {
 	select {
 	case timer = <-timers:
 	case <-done:
-		t.Fatal("stream returned before its polling timer was armed")
+		t.Fatalf("stream returned before its polling timer was armed: status=%d body=%q", rec.Code, rec.Body.String())
 	}
 	// An early poll with no successor must rearm the timer. This is essential:
 	// without the recurring poll, a successor announced later is never observed.

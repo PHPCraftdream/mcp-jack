@@ -612,7 +612,7 @@ func TestSessionEndBeforeCutoffWhenClockJumpsAcrossActivation(t *testing.T) {
 	}
 	clock.Set(cutoff)
 	if _, err := s.Write([]byte("data: physically before cutoff\n\n")); err != nil {
-		t.Fatalf("cutoff write = %v", err)
+		t.Fatalf("cutoff write = %v, want ErrClosed", err)
 	}
 	frames := parseBody(t, buf.Bytes())
 	if len(frames) != 1 || frames[0].event != EndEvent || frames[0].jackTS != "1002" {
@@ -758,8 +758,8 @@ func TestSessionOversizeFromSplitterBudget(t *testing.T) {
 	// the events under construction can observe the size of the whole value.
 	_, errFirst := s.Write([]byte("data: " + strings.Repeat("x", 1500)))
 	_, errSecond := s.Write([]byte(strings.Repeat("x", 1500) + "\n\n"))
-	if errFirst != nil {
-		t.Fatalf("2.17: first chunk Write = %v, want nil", errFirst)
+	if errFirst == nil {
+		t.Fatal("2.17: an unterminated data value over the cap must end the stream at the first chunk")
 	}
 	if errSecond == nil {
 		t.Fatal("2.17: second chunk Write = nil error, want an error")
