@@ -29,6 +29,7 @@ use tower_service::Service;
 #[derive(Clone)]
 struct Args {
     scenario: String,
+    producer: String,
     matrix: String,
     request_log: Option<String>,
     clock_file: String,
@@ -48,6 +49,9 @@ struct Controls {
 
 type StreamBody = Channel<Bytes, Infallible>;
 type HandlerTask = tokio::task::JoinHandle<()>;
+
+// Bounds wrapper buffering; the SDK rejects bodies above its 1 MiB default.
+const WRAPPER_BODY_CAP: usize = 4 * 1024 * 1024;
 
 struct SharedService<S> {
     inner: Arc<Mutex<S>>,
@@ -107,16 +111,23 @@ where
             .extensions
             .get::<mcp_jack::server::identity::VerifiedIdentity>()
             .is_some();
-        let heartbeat_ms = parts
-            .extensions
-            .get::<StreamHeartbeat>()
-            .map(|h| h.granted_ms);
-        let bytes = body.collect();
+        let bytes = http_body_util::Limited::new(body, WRAPPER_BODY_CAP).collect();
         let inner = self.inner.clone();
         let controls = self.controls.clone();
         let args = self.args.clone();
         Box::pin(async move {
-            let bytes = bytes.await.map(|body| body.to_bytes()).unwrap_or_default();
+            let bytes = match bytes.await {
+                Ok(collected) => collected.to_bytes(),
+                Err(_) => {
+                    // Over the wrapper cap: refused unsigned; driver bodies stay below it.
+                    let (tx, body) = Channel::new(1);
+                    drop(tx);
+                    return Ok(http::Response::builder()
+                        .status(http::StatusCode::PAYLOAD_TOO_LARGE)
+                        .body(body)
+                        .expect("static status is valid"));
+                }
+            };
             let request =
                 http::Request::from_parts(parts, http_body_util::Full::new(bytes.clone()));
             let future = inner
@@ -155,7 +166,8 @@ where
                     let auth = mcp_jack::auth_header::parse_request_auth(&auth_values).ok();
                     append_log_visible(
                         &args,
-                        serde_json::json!({"event":"stream_open","sid":sid,"heartbeat_granted_ms":heartbeat_ms.unwrap_or(0),"request_sig":auth.as_ref().map(|v| v.sig.clone()),"nonce":auth.as_ref().map(|v| v.nonce.clone()),"nonce_committed_before_first_byte":verified}),
+                        // Grant and nonce-commit evidence is logged by the handler rows.
+                        serde_json::json!({"event":"stream_open","sid":sid,"request_sig":auth.as_ref().map(|v| v.sig.clone()),"nonce":auth.as_ref().map(|v| v.nonce.clone())}),
                         "stream_open",
                     );
                 }
@@ -164,7 +176,7 @@ where
                 append_log_visible(
                     &args,
                     // The SDK only refuses concurrency for verified requests.
-                    request_row(&method, &target, &headers, &bytes, true),
+                    request_row(&method, &target, &headers, &bytes, verified),
                     "request",
                 );
             }
@@ -178,6 +190,34 @@ struct Handler {
     args: Args,
     controls: Arc<Controls>,
     tasks: Arc<Mutex<Vec<HandlerTask>>>,
+}
+
+/// The driver launches with cwd = repo root; `producer` selects the handler
+/// producer exactly as the active rows do, id as fallback.
+fn lookup_producer(scenario: &str) -> String {
+    let Ok(text) = std::fs::read_to_string("interop/stream-scenarios.json") else {
+        return scenario.to_owned();
+    };
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return scenario.to_owned();
+    };
+    for matrix in ["stream", "staged"] {
+        if let Some(rows) = doc
+            .pointer(&format!("/matrices/{matrix}"))
+            .and_then(|v| v.as_array())
+        {
+            for row in rows {
+                if row.get("id").and_then(|v| v.as_str()) == Some(scenario) {
+                    return row
+                        .get("producer")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(scenario)
+                        .to_owned();
+                }
+            }
+        }
+    }
+    scenario.to_owned()
 }
 
 fn request_row(
@@ -363,10 +403,11 @@ impl Handler {
             );
         }
 
+        let scenario = self.args.scenario.as_str();
+        let producer = self.args.producer.as_str();
         let heartbeat = parts.extensions.get::<StreamHeartbeat>().copied();
         let cancellation = parts.extensions.get::<StreamCancellation>().cloned();
-        let scenario = self.args.scenario.as_str();
-        if scenario == "oversize" {
+        if producer == "oversize" {
             let pad = "x".repeat(self.args.frame_max_bytes.max(1) as usize + 16);
             let oversized = serde_json::json!({"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":1,"pad":pad}});
             let data_bytes = serde_json::to_vec(&oversized).map(|v| v.len()).unwrap_or(0);
@@ -381,12 +422,15 @@ impl Handler {
         let id = parsed.get("id").cloned().unwrap_or(serde_json::Value::Null);
         let result = serde_json::json!({"jsonrpc":"2.0","id":id,"result":{}});
         let mut messages = Vec::new();
-        match scenario {
-            "progress-final" | "relay-drop" | "relay-edit-data" | "relay-truncate" | "relay-reorder" | "relay-splice" | "relay-replay" => {
+        // The staged `idle` row names producer `progress-final` but its behaviour is
+        // a silent hold (fake-harness parity); overridden here explicitly.
+        let holds_silent = scenario == "idle";
+        match producer {
+            "progress-final" | "relay-drop" | "relay-edit-data" | "relay-truncate" | "relay-reorder" | "relay-splice" | "relay-replay" if !holds_silent => {
                 messages.push(serde_json::json!({"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":1}}));
                 messages.push(result.clone());
             }
-            "list-changed" => {
+            "subscriptions-listen" => {
                 messages.push(serde_json::json!({"jsonrpc":"2.0","method":"notifications/subscriptions/acknowledged","params":{"subscriptionId":id}}));
                 let opted_in = params.get("notifications").and_then(|v| v.as_array()).is_some_and(|values|
                     values.iter().any(|v| v == "notifications/events/list_changed"));
@@ -405,11 +449,15 @@ impl Handler {
                 append_log_visible(&self.args, serde_json::json!({"event":"heartbeat_frame","heartbeat_granted_ms":grant}), "heartbeat_frame");
             }
             "cancel" | "max-duration" | "concurrency-limit" => messages.push(serde_json::json!({"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":1}})),
-            "idle" => {}
-            "oversize" => {}
-            _ => { messages.push(result.clone()); }
+            _ if !holds_silent => { messages.push(result.clone()); }
+            _ => {}
         }
-        if scenario == "idle" {
+        for message in messages {
+            if !send(&mut sender, message, &self.controls).await {
+                return;
+            }
+        }
+        if holds_silent {
             loop {
                 if self.controls.shutdown_requested.load(Ordering::Acquire) {
                     return;
@@ -643,6 +691,7 @@ pub fn run() -> ! {
         heartbeat_ms: arg(&arguments, "--heartbeat-ms").and_then(|value| value.parse().ok()),
     };
     let args = Args {
+        producer: lookup_producer(&scenario),
         scenario,
         matrix,
         request_log: Some(required(&arguments, "--request-log")),
