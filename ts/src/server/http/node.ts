@@ -39,6 +39,7 @@ export function serveNode(
   const drainDeadlineMs = options?.streamDrainDeadlineMs ?? STREAM_DRAIN_DEADLINE_MS;
   const scheduleDrainDeadline = options?.scheduleDrainDeadline ?? ((callback: () => void, delayMs: number) => {
     const handle = setTimeout(callback, delayMs);
+    handle.unref();
     return (): void => clearTimeout(handle);
   });
 
