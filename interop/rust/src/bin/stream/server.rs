@@ -107,10 +107,6 @@ where
             .map(|v| v.as_str().to_owned())
             .unwrap_or_else(|| "/".to_owned());
         let headers = parts.headers.clone();
-        let verified = parts
-            .extensions
-            .get::<mcp_jack::server::identity::VerifiedIdentity>()
-            .is_some();
         let bytes = http_body_util::Limited::new(body, WRAPPER_BODY_CAP).collect();
         let inner = self.inner.clone();
         let controls = self.controls.clone();
@@ -173,12 +169,9 @@ where
                 }
             }
             if response.status() == http::StatusCode::TOO_MANY_REQUESTS {
-                append_log_visible(
-                    &args,
-                    // The SDK only refuses concurrency for verified requests.
-                    request_row(&method, &target, &headers, &bytes, verified),
-                    "request",
-                );
+                let mut row = request_row(&method, &target, &headers, &bytes, true);
+                row["refused"] = serde_json::json!(429);
+                append_log_visible(&args, row, "request");
             }
             Ok(response)
         })
