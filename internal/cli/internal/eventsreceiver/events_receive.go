@@ -2,6 +2,7 @@ package eventsreceiver
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -52,7 +53,7 @@ type config struct {
 	ServerKeys            []json.RawMessage `json:"server_keys"`
 	MCPURL                string            `json:"mcp_url"`
 	CardURL               string            `json:"card_url"`
-	WebhookKeyCheck       json.RawMessage   `json:"webhook_key_check"`
+	WebhookKeyCheck       json.RawMessage   `json:"webhook_key_check,omitempty"`
 	JackAudience          string            `json:"jack_audience"`
 	AllowPendingSecret    bool              `json:"allow_pending_secret"`
 }
@@ -95,6 +96,9 @@ func eventsReceive(ctx context.Context, args []string, out io.Writer) error {
 	e := storage.DecodeConfig(*cfgPath, &c)
 	if e != nil || c.Version != 1 {
 		return command.ErrConfig
+	}
+	if bytes.Equal(bytes.TrimSpace(c.WebhookKeyCheck), []byte("null")) {
+		c.WebhookKeyCheck = nil
 	}
 	if *allowPendingSecret {
 		c.AllowPendingSecret = true

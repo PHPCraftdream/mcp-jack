@@ -105,6 +105,7 @@ func TestModernBridgeProcessSubprocess(t *testing.T) {
 	}
 	_, priv, pub := modernBridgeFixture(t)
 	started := make(chan int, 4)
+	gate302 := make(chan struct{})
 	cancelled := make(chan int, 2)
 	var active, maximum atomic.Int32
 	server := httptest.NewServer(modernBridgeHandler(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -123,6 +124,11 @@ func TestModernBridgeProcessSubprocess(t *testing.T) {
 			return
 		}
 		if id == 302 {
+			select {
+			case <-gate302:
+			case <-r.Context().Done():
+				return
+			}
 			open, data := signedModernStreamReply(t, priv, pub, r.Context().Value(modernSignatureKey{}).(string), []string{"{\n}"})
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Jack-Auth", open)
@@ -158,23 +164,44 @@ func TestModernBridgeProcessSubprocess(t *testing.T) {
 	if err = cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range [][]byte{modernBridgeBody(301, "events/stream", `{"name":"one"}`), modernBridgeBody(302, "events/stream", `{"name":"two"}`), []byte(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":301}}`), modernBridgeBody(303, "tools/list", `{}`), modernBridgeBody(304, "events/stream", `{"name":"eof"}`)} {
-		if _, err = in.Write(append(f, '\n')); err != nil {
-			t.Fatal(err)
+	defer func() { _ = cmd.Process.Kill() }()
+	send := func(frames ...[]byte) {
+		t.Helper()
+		for _, f := range frames {
+			if _, werr := in.Write(append(f, '\n')); werr != nil {
+				t.Fatal(werr)
+			}
+		}
+	}
+	waitStarted := func(want ...int) {
+		t.Helper()
+		seen := make(map[int]bool, len(want))
+		for range want {
+			select {
+			case id := <-started:
+				seen[id] = true
+			case <-time.After(4 * time.Second):
+				t.Fatalf("requests did not reach server: seen %v, want %v", seen, want)
+			}
+		}
+		for _, id := range want {
+			if !seen[id] {
+				t.Fatalf("request %d did not reach server: seen %v", id, seen)
+			}
 		}
 	}
 	got := make(chan string, 1)
 	go func() { line, _ := bufio.NewReader(out).ReadString('\n'); got <- line }()
-	for i := 0; i < 4; i++ {
-		select {
-		case <-started:
-		case <-time.After(4 * time.Second):
-			t.Fatal("requests did not reach server")
-		}
-	}
+	// The cancellation must follow the server-side start of its target: sent
+	// earlier, it can abort the request before the connection exists.
+	send(modernBridgeBody(301, "events/stream", `{"name":"one"}`), modernBridgeBody(302, "events/stream", `{"name":"two"}`))
+	waitStarted(301, 302)
 	if maximum.Load() < 2 {
 		t.Fatalf("concurrent requests=%d", maximum.Load())
 	}
+	close(gate302)
+	send([]byte(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":301}}`), modernBridgeBody(303, "tools/list", `{}`), modernBridgeBody(304, "events/stream", `{"name":"eof"}`))
+	waitStarted(303, 304)
 	select {
 	case id := <-cancelled:
 		if id != 301 {
