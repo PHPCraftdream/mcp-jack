@@ -80,7 +80,9 @@ process.stdin.on('data', chunk => {
     if (command?.op === 'announce') {
       const activation = Number(arg('--successor-activation'));
       if (!erinKey || !erin || command.reference !== 'ring-1' || command.kid !== erin.kid || !Number.isSafeInteger(activation)) { console.error('invalid rotation announce command'); continue; }
-      console.log(JSON.stringify({ announced: true, ordinal: 1, head_ordinal: 1, published_at: now(), activates_at: activation, head_hash: hash(Buffer.from(`${erin.kid}:${activation}`)) }));
+      const headHash = hash(Buffer.from(`${erin.kid}:${activation}`));
+      writeLog({ event: 'rotation_announced', reference: command.reference, kid: erin.kid, published_at: now(), activates_at: activation, head_hash: headHash });
+      console.log(JSON.stringify({ announced: true, ordinal: 1, head_ordinal: 1, published_at: now(), activates_at: activation, head_hash: headHash }));
     }
     if (command?.action === 'release' && heldResponse && heldStream) {
       const stream = heldStream;
@@ -105,7 +107,7 @@ process.stdin.on('data', chunk => {
 });
 function commitNonce(nonce) {
   nonceSet.add(nonce);
-  if (durableDir) {
+  if (durableDir && process.env.JACK_STREAM_FAKE_NO_DURABLE_PERSIST !== '1') {
     const file = join(durableDir, 'committed-nonces.json'), temp = `${file}.${process.pid}.tmp`;
     writeFileSync(temp, JSON.stringify([...nonceSet]));
     renameSync(temp, file);

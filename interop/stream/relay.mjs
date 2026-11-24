@@ -79,11 +79,11 @@ function eventTransform(body, transform, scenario, sendEvent) {
       output.push(Buffer.from(scenario.relayFrame)); applied = true; return;
     }
     if (transform === 'after-cutoff' && fields.kind === 'jack-end') {
-      // Inject only caller-supplied bytes, bound to this response's SID/sequence.
+      // Inject caller-supplied bytes bound to this response's SID; the relay rewrites seq to the replaced end frame's sequence.
       const supplied = parseEvent(scenario.relayCutoffFrame);
-      if (supplied.fields.kind !== 'message' || scenario.relayCutoffSid !== scenario.activeSid || Number(supplied.fields.seq) !== fields.seq)
-        throw Error("relay transform 'after-cutoff' requires the exact pre-signed frame for the active sid and sequence");
-      output.push(Buffer.from(scenario.relayCutoffFrame)); applied = true; responseEnded = true; return;
+      if (supplied.fields.kind !== 'message' || scenario.relayCutoffSid !== scenario.activeSid)
+        throw Error("relay transform 'after-cutoff' requires the pre-signed cutoff frame for the active sid");
+      output.push(Buffer.from(supplied.text.replace(/jack: seq=\d+/, `jack: seq=${fields.seq}`))); applied = true; responseEnded = true; return;
     }
     if (transform === 'edit-data' && !applied && fields.seq !== undefined && fields.kind !== 'jack-end') { output.push(editData(bytes)); applied = true; return; }
     if (transform === 'truncate' && fields.kind === 'jack-end') { applied = true; responseEnded = true; return; }

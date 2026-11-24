@@ -9,6 +9,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { createHash, createPublicKey, verify } from 'node:crypto';
 import net from 'node:net';
 import { startRelay } from './stream/relay.mjs';
+import { runRotationScenario } from './stream/rotation.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -471,11 +472,10 @@ async function main() {
   try { args = parseArgs(process.argv.slice(2)); }
   catch (error) { console.error(`${error.message}\n${USAGE}`); process.exitCode = 2; return; }
   try {
-    // These lifecycle matrices are intentionally deferred; do not resolve targets or
-    // look up scenario rows for them until their orchestration is implemented.
-    if (args.matrix === 'rotation-stream' || args.matrix === 'durable-stream') {
-      console.log(`DEFERRED matrix=${args.matrix}: lifecycle orchestration is not active`);
-      process.exitCode = 2;
+    // Durable replay is a Linux-only matrix; other hosts skip the whole matrix without resolving targets.
+    if (args.matrix === 'durable-stream' && process.platform !== 'linux' && !args.list && !args.selfTest) {
+      console.log(`SKIP matrix=durable-stream: durable replay is a Linux-only matrix (host ${process.platform})`);
+      process.exitCode = 0;
       return;
     }
     // Resolve --targets from the repository root, never relative to the targets file itself.
@@ -570,11 +570,8 @@ async function main() {
             let announced;
             try { announced = JSON.parse(await server.nextLine(10000)); } catch { throw Error('rotation server returned invalid announce JSON'); }
             if (announced.announced !== true || announced.ordinal !== 1 || announced.head_ordinal !== 1 || announced.published_at !== now || announced.activates_at !== activation || typeof announced.head_hash !== 'string') throw Error('rotation announce differs from the fixture-bound publish/activation contract');
-            const gap = Error('rotation scenario cannot reopen with successor identity: selected client IPC exposes no successor-key resolver/configuration for stream verification; required --known-server-key kid=<kid>,public=<b64>,activation=<A> is unavailable');
-            gap.contractGap = true;
-            throw gap;
           }
-          if (scenario.relay) {
+          if (scenario.relay && !scenario.rotation) {
             relay = await startRelay({ upstreamPort: ready.port, transform: scenario.relay, scenario: { ...scenario, relayFrame: relayFixtureFrame(scenario.relay) } });
             relays.add(relay);
             ready = { ...ready, port: relay.port };
@@ -589,6 +586,11 @@ async function main() {
             if (options[key] !== undefined) clientArgs.push(flag, String(options[key]));
           }
           if (scenario.rotation) clientArgs.push('--rotation-store', join(tempRoot, `${suffix}-rotation`));
+          if (scenario.rotation) {
+            await runRotationScenario({ matrix: args.matrix, scenario, server, clockFile, requestLog, upstreamPort: ready.port, resolvedTargets, client, clientArgs, alice, svc, erin: rotationSuccessor, activation, clock: now, startRelay, launchResolved, stopChild, verifyRecord, scenarioSubset, readRows, parseJsonLines, deterministicVariant });
+            passed++; pairPassed++;
+            continue;
+          }
           clientProcess = launchResolved(resolvedTargets[`${client}:client`], clientArgs);
           if (scenario.id === 'max-duration') {
             const firstLine = await clientProcess.nextLine(10000);

@@ -19,6 +19,16 @@ const privateKey = keyFromSeed(aliceSeed), pinnedKey = publicKey(pinnedPublic);
 const b64 = bytes => Buffer.from(bytes).toString('base64url'), sha = bytes => createHash('sha256').update(bytes).digest('base64url');
 const strictB64 = (value, length) => typeof value === 'string' && /^[A-Za-z0-9_-]+$/.test(value) && Buffer.from(value, 'base64url').length === length && b64(Buffer.from(value, 'base64url')) === value;
 const now = () => { const value = Number(readFileSync(clockFile, 'utf8').trim()); if (!Number.isSafeInteger(value) || value < 0) throw Error('invalid shared clock'); return value; };
+// Successor keys arrive as repeatable --known-server-key kid=<kid>,public=<b64url>,activation=<UNIX_SECONDS> entries.
+const knownServerKeys = [];
+for (let i = 0; i < process.argv.length; i++) if (process.argv[i] === '--known-server-key') {
+  const entry = /^kid=([A-Za-z0-9_-]+),public=([A-Za-z0-9_-]+),activation=(0|[1-9][0-9]{0,11})$/.exec(process.argv[i + 1] || '');
+  if (!entry || !strictB64(entry[1], 32) || !strictB64(entry[2], 32)) throw Error('invalid --known-server-key entry');
+  knownServerKeys.push({ kid: entry[1], key: publicKey(entry[2]), activation: Number(entry[3]) });
+}
+const ignoreSuccessor = process.env.JACK_STREAM_FAKE_IGNORE_SUCCESSOR_KEY === '1';
+const verifier = { kid: svc.kid, key: pinnedKey };
+if (!ignoreSuccessor) for (const entry of knownServerKeys) if (now() >= entry.activation) { verifier.kid = entry.kid; verifier.key = entry.key; }
 const producer = scenarioMeta?.producer || scenario;
 const requestIdDefault = scenarioMeta?.request_id ?? 1;
 const requestMethod = scenarioMeta?.request_method || ({ 'progress-final': 'tools/call', 'subscriptions-listen': 'subscriptions/listen', 'list-changed': 'subscriptions/listen', 'events-stream': 'events/stream', cancel: 'tools/call', 'max-duration': 'tools/call' })[producer] || 'tools/call';
@@ -91,9 +101,9 @@ function parseOpen(value, response, expectedRequestSig) {
   if (!match) throw Error(value ? 'stream_malformed_auth' : 'stream_missing_auth');
   const [, kid, tsText, sid, sig] = match, ts = Number(tsText);
   if (!strictB64(kid, 32) || !strictB64(sid, 16) || !strictB64(sig, 64)) throw Error('stream_malformed_auth');
-  if (kid !== svc.kid) throw Error('stream_unknown_server_key');
+  if (kid !== verifier.kid) throw Error('stream_unknown_server_key');
   const openText = ['mcp-jack/stream1/open', '200', expectedRequestSig, kid, tsText, sid].join('\n');
-  if (!verify(null, Buffer.from(openText), pinnedKey, Buffer.from(sig, 'base64url'))) throw Error('stream_bad_signature');
+  if (!verify(null, Buffer.from(openText), verifier.key, Buffer.from(sig, 'base64url'))) throw Error('stream_bad_signature');
   return { sid, kid, ts, sig };
 }
 function frameFrom(block, open, previous, expectedSeq) {
@@ -141,16 +151,17 @@ const requestOptions = { hostname: url.hostname, port: url.port, path: '/mcp', m
     if (done) return;
     try {
       const rawJack = /(?:^|\n)jack: seq=(0|[1-9][0-9]{0,14}),ts=(0|[1-9][0-9]{0,11}),sig=([A-Za-z0-9_-]+)/.exec(block);
-      if (rawJack) {
-        const wireTs = Number(rawJack[2]);
-        if (Math.abs(now() - wireTs) > 30 || wireTs < previousTs) throw Error('stream_stale_frame');
-      }
       const activationArg = arg('--successor-activation');
       const activation = activationArg === null ? NaN : Number(activationArg);
-      if (Number.isSafeInteger(activation) && rawJack && Number(rawJack[2]) >= activation) {
+      const cutoffApplies = knownServerKeys.length > 0 && !ignoreSuccessor && open.kid !== knownServerKeys.at(-1).kid;
+      if (Number.isSafeInteger(activation) && cutoffApplies && rawJack && Number(rawJack[2]) >= activation) {
         const rawData = [...block.matchAll(/(?:^|\n)data: ?([^\r\n]*)/g)].map(match => match[1]).join('\n');
         const failureFrame = { kind: 'message', sid: open.sid, kid: open.kid, seq: Number(rawJack[1]), ts: Number(rawJack[2]), data: rawData, sig: rawJack[3] };
         finish('error', 'stream_after_cutoff', failureFrame); response.destroy(); return;
+      }
+      if (rawJack) {
+        const wireTs = Number(rawJack[2]);
+        if (Math.abs(now() - wireTs) > 30 || wireTs < previousTs) throw Error('stream_stale_frame');
       }
       const frame = frameFrom(block, open, previous, seq);
       const maxBytes = Number(arg('--frame-max-bytes') || scenarioMeta?.stream_options?.frameMaxBytes || 1048576);
