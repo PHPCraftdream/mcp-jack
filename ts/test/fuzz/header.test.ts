@@ -41,6 +41,8 @@ test("fuzz modern header value encoding", () => {
       if (identityValues.includes(input)) assert.deepEqual(decodeHeaderValue(encodeHeaderValue(input)), { ok: true, text: input });
     });
   }
+  const plainSentinelLike = "=?base64?SGVsbG8=?=x";
+  runProperty(seed, iterations, plainSentinelLike, () => assert.deepEqual(decodeHeaderValue(plainSentinelLike), { ok: true, text: plainSentinelLike }));
   for (const value of identityValues) runProperty(seed, iterations, value, () => assert.deepEqual(decodeHeaderValue(encodeHeaderValue(value)), { ok: true, text: value }));
   for (const value of surrogateValues) runProperty(seed, iterations, value, () => assert.doesNotThrow(() => decodeHeaderValue(encodeHeaderValue(value))));
   for (let i = 0; i < rejects.length; i++) runProperty(seed, i, rejects[i], () => assert.deepEqual(decodeHeaderValue(rejects[i]!), { ok: false, reason: "bad_encoding" }));

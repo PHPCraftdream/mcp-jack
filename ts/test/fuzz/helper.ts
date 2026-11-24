@@ -53,6 +53,14 @@ export async function runAsyncProperty(seed: number, iteration: number, input: u
   }
 }
 
+export function spliceBytes(left: Uint8Array, right: Uint8Array, at: number): Uint8Array {
+  const cut = Math.max(0, Math.min(left.length, Math.floor(at)));
+  const out = new Uint8Array(cut + right.length);
+  out.set(left.subarray(0, cut));
+  out.set(right, cut);
+  return out;
+}
+
 export function mutateBytes(source: Uint8Array, next: () => number): Uint8Array {
   const bytes = source.slice();
   const operation = Math.floor(next() * 6);

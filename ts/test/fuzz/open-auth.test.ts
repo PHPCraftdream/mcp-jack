@@ -6,13 +6,25 @@ import { corpus, mutateBytes, random, runProperty, settings } from "./helper.js"
 
 test("fuzz stream open auth grammar", () => {
   const { seed, iterations } = settings(); const next = random(seed);
-  const kid = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"; const sid = "AAAAAAAAAAAAAAAAAAAAAA"; const sig = "A".repeat(86);
+  const kid = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"; const sid = "q9nUNYuH-Xf_cgJBVu4_Dg"; const sig = "A".repeat(86);
   const valid = `s1 kid=${kid},ts=0,sid=${sid},sig=${sig}`;
   const validMax = `s1 kid=${kid},ts=999999999999,sid=${sid},sig=${sig}`;
+  const reordered = `s1 sig=${sig},sid=${sid},ts=999999999999,kid=${kid}`;
   const vectors = fixture("modern/stream-vectors.json") as { cases?: { response?: { headers?: string[][] } }[] };
   const fixtureHeaders = (vectors.cases ?? []).flatMap((entry) => entry.response?.headers ?? []).filter(([name, value]) => name?.toLowerCase() === "jack-auth" && typeof value === "string").map(([, value]) => value!);
-  const fixed = [valid, validMax, `s1 sig=${sig},sid=${sid},ts=999999999999,kid=${kid}`, `s1 kid=${kid},ts=1,sid=${sid},sig=${sig},kid=${kid}`, `s1 kid=${kid},ts=1,sid=${sid},sig=${sig},extra=A`, `s1 kid=${kid},ts=01,sid=${sid},sig=${sig}`,
-    ...["-1", "9007199254740992", "9223372036854775808", "1.5", "NaN", "Infinity"].map((ts) => `s1 kid=${kid},ts=${ts},sid=${sid},sig=${sig}`)];
+  const malformed = [
+    `s1 kid=${kid},ts=1,sid=${sid},sig=${sig},kid=${kid}`,
+    `s1 kid=${kid},ts=1,sid=${sid},sig=${sig},extra=A`,
+    `s1 kid=${kid},ts=01,sid=${sid},sig=${sig}`,
+    ...[
+      [`kid`, "A".repeat(42)], [`kid`, "A".repeat(44)], [`sid`, "A".repeat(21)], [`sid`, "A".repeat(23)], [`sig`, "A".repeat(85)], [`sig`, "A".repeat(87)],
+      [`kid`, "!" + "A".repeat(42)], [`kid`, "A".repeat(42) + "="], [`kid`, "A".repeat(42) + "B"],
+      [`sid`, "!" + "A".repeat(21)], [`sid`, "A".repeat(21) + "="], [`sid`, sid.slice(0, -1) + "h"],
+      [`sig`, "!" + "A".repeat(85)], [`sig`, "A".repeat(85) + "="], [`sig`, "A".repeat(85) + "B"],
+    ].map(([name, value]) => `s1 kid=${name === "kid" ? value : kid},ts=1,sid=${name === "sid" ? value : sid},sig=${name === "sig" ? value : sig}`),
+    ...["-1", "9007199254740992", "9223372036854775808", "1.5", "NaN", "Infinity"].map((ts) => `s1 kid=${kid},ts=${ts},sid=${sid},sig=${sig}`),
+  ];
+  const fixed = [valid, validMax, `s1 sig=${sig},sid=${sid},ts=999999999999,kid=${kid}`, ...malformed];
   const boundaries = corpus("open-auth-boundaries.json") as { values: string[] };
   const sources = [...fixed, ...fixtureHeaders, ...boundaries.values];
   for (let i = 0; i < iterations; i++) {
@@ -28,9 +40,11 @@ test("fuzz stream open auth grammar", () => {
       }
     });
   }
-  for (const input of fixed.filter((value) => value.includes("ts=-1") || value.includes("ts=9007199254740992") || value.includes("ts=9223372036854775808") || value.includes("ts=1.5") || value.includes("ts=NaN") || value.includes("ts=Infinity"))) {
-    runProperty(seed, iterations, input, () => assert.equal(parseStreamOpenAuth(input).ok, false));
-  }
-  assert.equal(parseStreamOpenAuth(valid).ok, true);
-  assert.equal(parseStreamOpenAuth(validMax).ok, true);
+  for (const input of malformed) runProperty(seed, iterations, input, () => assert.equal(parseStreamOpenAuth(input).ok, false));
+  runProperty(seed, iterations, valid, () => assert.equal(parseStreamOpenAuth(valid).ok, true));
+  runProperty(seed, iterations, reordered, () => {
+    assert.ok(parseStreamOpenAuth(reordered).ok === true);
+    const result = parseStreamOpenAuth(reordered);
+    if (result.ok) assert.deepEqual(parseStreamOpenAuth(formatStreamOpenAuth(result.value)), result);
+  });
 });

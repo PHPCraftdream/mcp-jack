@@ -1,8 +1,10 @@
+import { Buffer } from "node:buffer";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { WebhookReceiver } from "../../src/webhook/receiver/core.js";
 import { parseWhsec } from "../../src/webhook/crypto/primitives.js";
-import { checkSignatureSchemes, decodeSignatureEntries, parseSignatureHeader, v1Sign, v1Verify } from "../../src/webhook/crypto/signatures.js";
+import { checkSignatureSchemes, decodeSignatureEntries, parseSignatureHeader, v1Sign } from "../../src/webhook/crypto/signatures.js";
 import type { WebhookMessageParts } from "../../src/webhook/crypto/signatures.js";
 import { fixture } from "../support/fixtures/index.js";
 import { corpus, mutateBytes, random, runAsyncProperty, settings } from "./helper.js";
@@ -33,7 +35,9 @@ test("fuzz webhook receiver grammar and signature binding", async () => {
         assert.ok(header.ok);
         const schemes = checkSignatureSchemes(header.entries); assert.ok(schemes.ok);
         const decoded = decodeSignatureEntries(header.entries); assert.ok(decoded.ok);
-        assert.equal(v1Verify(decoded.entries, secret, { webhookId: requiredStringHeader("webhook-id"), timestamp: requiredStringHeader("webhook-timestamp"), body: raw }).ok, true);
+        const message = Buffer.concat([Buffer.from(`${requiredStringHeader("webhook-id")}.${requiredStringHeader("webhook-timestamp")}.`, "utf8"), raw]);
+        const expected = createHmac("sha256", Buffer.from(secret)).update(message).digest();
+        assert.ok(decoded.entries.some((entry) => entry.scheme === "v1" && entry.sig.length === expected.length && timingSafeEqual(entry.sig, expected)), "accepted request must pass independent R2.2 HMAC oracle");
       }
     }, raw);
     return result!;
@@ -52,21 +56,35 @@ test("fuzz webhook receiver grammar and signature binding", async () => {
     const baseline = await handle(i, { now: 1767225600, headers: signedHeaders, body: bodyBytes });
     if (i === 0) { assert.equal(baseline.status, 200); assert.equal(baseline.body.status, "accepted"); accepted = true; }
     const extra = unknownHeaders[Math.floor(next() * unknownHeaders.length)]!;
-    const unknownValue = Buffer.from(mutateBytes(new TextEncoder().encode("noise"), next)).toString("utf8");
-    const withUnknown = await handle(i, { now: 1767225600, headers: [...signedHeaders, [extra, unknownValue]], body: bodyBytes });
-    await runAsyncProperty(seed, i, { baseline: { headers: signedHeaders, body: bodyBytes.toString(), body_hex: Buffer.from(bodyBytes).toString("hex") }, with_unknown: { headers: [...signedHeaders, [extra, "noise"]], body: bodyBytes.toString(), body_hex: Buffer.from(bodyBytes).toString("hex") } }, async () => assert.deepEqual(withUnknown, baseline), bodyBytes);
-    for (const badSignature of ["v1,@@@@", signature.slice(0, -1) + (signature.endsWith("A") ? "B" : "A"), "v2a," + signature.slice(3), Buffer.from(mutateBytes(new TextEncoder().encode(signature), next)).toString("utf8")]) {
+    const unknownHeaderValue = Buffer.from(mutateBytes(new TextEncoder().encode("noise"), next)).toString("utf8");
+    const withUnknown = await handle(i, { now: 1767225600, headers: [...signedHeaders, [extra, unknownHeaderValue]], body: bodyBytes });
+    await runAsyncProperty(seed, i, { baseline: { headers: signedHeaders, body: Buffer.from(bodyBytes).toString("utf8"), body_hex: Buffer.from(bodyBytes).toString("hex") }, with_unknown: { headers: [...signedHeaders, [extra, unknownHeaderValue]], body: Buffer.from(bodyBytes).toString("utf8"), body_hex: Buffer.from(bodyBytes).toString("hex") } }, async () => assert.deepEqual(withUnknown, baseline), bodyBytes);
+    const wrongSignatureBytes = Buffer.from(signature.slice(3), "base64");
+    wrongSignatureBytes[0] = wrongSignatureBytes[0]! ^ 1;
+    const canonicalWrongSignature = `v1,${Buffer.from(wrongSignatureBytes).toString("base64")}`;
+    const badSignatureCases: readonly (readonly [string, string | null])[] = [
+      ["v1,@@@@", null],
+      [signature.slice(0, -1) + (signature.endsWith("A") ? "B" : "A"), null],
+      [canonicalWrongSignature, "bad_signature"],
+      ["v3," + signature.slice(3), "unsupported_signature_scheme"],
+    ];
+    for (const [badSignature, expectedCode] of badSignatureCases) {
       const headers = signedHeaders.map(([name, value]) => [name, name === "webhook-signature" ? badSignature : value] as const);
       const verdict = await handle(i, { now: 1767225600, headers, body: bodyBytes });
-      await runAsyncProperty(seed, i, { headers, body: bodyBytes.toString(), body_hex: Buffer.from(bodyBytes).toString("hex") }, async () => assert.ok(verdict.status < 200 || verdict.status >= 300, `mutated signature accepted: ${badSignature}`), bodyBytes);
+      await runAsyncProperty(seed, i, { headers, body: Buffer.from(bodyBytes).toString("utf8"), body_hex: Buffer.from(bodyBytes).toString("hex"), expected_code: expectedCode }, async () => {
+        if (expectedCode !== null) assert.equal(verdict.code, expectedCode);
+        else assert.ok(verdict.status < 200 || verdict.status >= 300, `mutated signature accepted: ${badSignature}`);
+      }, bodyBytes);
     }
-    const malformedDuplicate = [["webhook-id", parts.webhookId], ["webhook-id", "invalid"], ["webhook-timestamp", parts.timestamp], ["webhook-signature", "not a signature"], ["x-mcp-subscription-id", "sub_0123456789abcdef"]] as const;
-    const duplicate = await handle(i, { now: 1767225600, headers: malformedDuplicate, body: bodyBytes });
-    await runAsyncProperty(seed, i, { headers: malformedDuplicate, body: bodyBytes.toString(), body_hex: Buffer.from(bodyBytes).toString("hex") }, async () => assert.equal(duplicate.code, "duplicate_webhook_header"), bodyBytes);
+    for (const duplicateName of ["webhook-id", "webhook-timestamp", "webhook-signature", "x-mcp-subscription-id"]) {
+      const duplicateHeaders = [...signedHeaders, [duplicateName, duplicateName === "x-mcp-subscription-id" ? "sub_0123456789abcdef" : duplicateName === "webhook-id" ? parts.webhookId : duplicateName === "webhook-timestamp" ? parts.timestamp : "not a signature"]] as const;
+      const duplicate = await handle(i, { now: 1767225600, headers: duplicateHeaders, body: bodyBytes });
+      await runAsyncProperty(seed, i, { duplicate_name: duplicateName, headers: duplicateHeaders, body: Buffer.from(bodyBytes).toString("utf8"), body_hex: Buffer.from(bodyBytes).toString("hex") }, async () => assert.equal(duplicate.code, "duplicate_webhook_header"), bodyBytes);
+    }
     const headerValue = Buffer.from(mutateBytes(new TextEncoder().encode(parts.webhookId), next)).toString("utf8");
     const mutatedRequired = signedHeaders.map(([name, value]) => [name, name === "webhook-id" ? headerValue : value] as const);
     const mutatedRequiredVerdict = await handle(i, { now: 1767225600, headers: mutatedRequired, body: bodyBytes });
-    await runAsyncProperty(seed, i, { headers: mutatedRequired, body: bodyBytes.toString("utf8"), wire_hex: Buffer.from(bodyBytes).toString("hex") }, async () => {
+    await runAsyncProperty(seed, i, { headers: mutatedRequired, body: Buffer.from(bodyBytes).toString("utf8"), wire_hex: Buffer.from(bodyBytes).toString("hex") }, async () => {
       if (headerValue !== parts.webhookId) assert.ok(mutatedRequiredVerdict.status < 200 || mutatedRequiredVerdict.status >= 300);
     }, bodyBytes);
     const id = boundaries.ids[Math.floor(next() * boundaries.ids.length)]!;
@@ -81,7 +99,7 @@ test("fuzz webhook receiver grammar and signature binding", async () => {
       const signed = v1Sign(secret, { ...parts, webhookId: mutation.id, timestamp: mutation.timestamp });
       const headers = [["webhook-id", mutation.id], ["webhook-timestamp", mutation.timestamp], ["webhook-signature", signed], ["x-mcp-subscription-id", mutation.subscription]] as const;
       const verdict = await handle(i, { now: 1767225600, headers, body: bodyBytes });
-      await runAsyncProperty(seed, i, { headers, body: bodyBytes.toString(), body_hex: Buffer.from(bodyBytes).toString("hex"), expected_code: mutation.code }, async () => {
+      await runAsyncProperty(seed, i, { headers, body: Buffer.from(bodyBytes).toString("utf8"), body_hex: Buffer.from(bodyBytes).toString("hex"), expected_code: mutation.code }, async () => {
         if (mutation.code !== null) assert.equal(verdict.code, mutation.code);
         else assert.notEqual(verdict.code, "malformed_webhook_id");
       }, bodyBytes);
