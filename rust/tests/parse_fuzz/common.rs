@@ -70,7 +70,7 @@ where
         }
     }
     let random_start = iteration;
-    for n in 0..count.saturating_sub(boundaries.len()) {
+    for n in 0..count {
         state ^= state << 13;
         state ^= state >> 7;
         state ^= state << 17;

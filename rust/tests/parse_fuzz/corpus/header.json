@@ -1,1 +1,1 @@
-{"valid":["hello","~u0041","~uD83D~uDE00"],"invalid":["~uD800","~u110000","~~u"]}
+{"valid":["hello","~u0041","~uD83D~uDE00"],"invalid":["~uD800","~u110000","~~u"],"sentinel":"=?base64?Q?Zm9v?="}

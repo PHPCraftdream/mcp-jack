@@ -1,5 +1,5 @@
 #[test]
-fn open_auth_corpus_cases() {
+fn open_auth_corpus_cases_and_roundtrip_mutations() {
     let corpus: serde_json::Value = serde_json::from_slice(include_bytes!("corpus/auth.json"))
         .expect("auth JSON corpus must parse");
     let order = corpus["order"].as_str().expect("order string");
@@ -40,13 +40,11 @@ fn open_auth_corpus_cases() {
             "accepted wrong canonical size for {field}"
         );
     }
-}
-
-#[test]
-fn open_auth_roundtrip_mutations() {
-    let doc = crate::common::fixture("stream-build-vectors.json");
     let mut corpus = Vec::new();
-    crate::common::strings(&doc, &mut corpus);
+    crate::common::strings(
+        &crate::common::fixture("stream-build-vectors.json"),
+        &mut corpus,
+    );
     corpus.push(include_bytes!("corpus/auth.json").to_vec());
     let corpus: Vec<&[u8]> = corpus.iter().map(Vec::as_slice).collect();
     crate::common::assert_mutations(1, &corpus, |bytes| {

@@ -39,7 +39,24 @@ fn oracle_values(values: &[&str]) -> bool {
 fn accept_token_mutations() {
     let mut corpus = Vec::new();
     crate::common::strings(&crate::common::fixture("stream-vectors.json"), &mut corpus);
-    corpus.push(include_bytes!("corpus/accept.json").to_vec());
+    let seed_doc: serde_json::Value =
+        serde_json::from_slice(include_bytes!("corpus/accept.json")).expect("accept corpus JSON");
+    let mut seeds = Vec::new();
+    for field in ["accept", "reject"] {
+        for value in seed_doc[field]
+            .as_array()
+            .expect("accept/reject corpus array")
+        {
+            seeds.push(
+                value
+                    .as_str()
+                    .expect("accept/reject string")
+                    .as_bytes()
+                    .to_vec(),
+            );
+        }
+    }
+    corpus.extend(seeds);
     let corpus: Vec<&[u8]> = corpus.iter().map(Vec::as_slice).collect();
     crate::common::assert_mutations(2, &corpus, |bytes| {
         let Ok(text) = std::str::from_utf8(bytes) else {

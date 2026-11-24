@@ -1,131 +1,195 @@
 #[test]
 fn signed_stream_mutations() {
-    use ed25519_dalek::SigningKey;
-    use mcp_jack::stream::{
-        StaticStreamSigner, StreamBuilder, StreamVerifier, StreamVerifierConfig,
-    };
+    use mcp_jack::stream::{StreamCode, StreamVerifier, StreamVerifierConfig};
     use std::sync::Arc;
-    let key = SigningKey::from_bytes(&[7; 32]);
-    let signer = StaticStreamSigner::new(key, None);
-    let request_sig = "request-signature";
-    let (mut builder, open) = StreamBuilder::open(
+
+    let doc = crate::common::fixture("stream-vectors.json");
+    let case = doc["cases"]
+        .as_array()
+        .expect("stream cases")
+        .iter()
+        .find(|case| case["expect"]["terminal"]["state"] == "ok")
+        .expect("successful stream fixture");
+    let state = &case["state"];
+    let response = &case["response"];
+    let kid = state["pinned_server_kid"].as_str().expect("pinned kid");
+    let public_bytes = mcp_jack::encoding::decode_b64url(
+        state["pinned_server_public_key"]
+            .as_str()
+            .expect("public key"),
+    )
+    .expect("fixture public key");
+    let public_key: [u8; 32] = public_bytes.try_into().expect("32-byte public key");
+    let verifying_key = public_key;
+    let request_sig = state["request_sig"].as_str().expect("request signature");
+    let now = state["now"].as_i64().expect("deterministic fixture clock");
+    let expected: Vec<String> = case["expect"]["messages"]
+        .as_array()
+        .expect("expected messages")
+        .iter()
+        .map(|message| message.as_str().expect("message string").to_owned())
+        .collect();
+    let mut body = Vec::new();
+    for chunk in response["stream_b64u"].as_array().expect("body chunks") {
+        body.extend_from_slice(
+            &mcp_jack::encoding::decode_b64url(chunk.as_str().expect("base64url chunk"))
+                .expect("valid fixture chunk"),
+        );
+    }
+    let headers: Vec<(String, String)> = response["headers"]
+        .as_array()
+        .expect("response headers")
+        .iter()
+        .map(|pair| {
+            let pair = pair.as_array().expect("header pair");
+            (
+                pair[0].as_str().expect("header name").to_owned(),
+                pair[1].as_str().expect("header value").to_owned(),
+            )
+        })
+        .collect();
+    let status = response["status"].as_u64().expect("response status") as u16;
+    let config = || {
+        let mut config = StreamVerifierConfig::pinned(kid, verifying_key, request_sig);
+        config.now = Arc::new(move || now);
+        config
+    };
+    let mut verifier = StreamVerifier::new(config());
+    verifier
+        .open(status, &headers)
+        .expect("fixture stream open");
+    let step = verifier.push(&body, 0);
+    let mut delivered = step.messages;
+    if step.terminal.is_none() {
+        delivered.extend(verifier.finish(None).messages);
+    }
+    assert_eq!(
+        delivered, expected,
+        "valid fixture must deliver all oracle messages"
+    );
+
+    // Explicit negative control: alter a signature in the actual first frame.
+    let mut bad_signature = body.clone();
+    let sig_at = bad_signature
+        .windows(4)
+        .position(|window| window == b"sig=")
+        .expect("frame signature");
+    bad_signature[sig_at + 4] ^= 1;
+    let mut verifier = StreamVerifier::new(config());
+    verifier
+        .open(status, &headers)
+        .expect("fixture stream open");
+    let step = verifier.push(&bad_signature, 0);
+    assert!(step.messages.is_empty());
+    assert_eq!(
+        step.terminal.map(|failure| failure.code),
+        Some(StreamCode::BadSignature)
+    );
+
+    let seed_doc: serde_json::Value =
+        serde_json::from_slice(include_bytes!("corpus/stream.json")).expect("stream corpus JSON");
+    let mut seed_bytes = vec![seed_doc["wire"]
+        .as_str()
+        .expect("wire SSE frame")
+        .as_bytes()
+        .to_vec()];
+    seed_bytes.push(
+        seed_doc["open"]
+            .as_str()
+            .expect("open auth")
+            .as_bytes()
+            .to_vec(),
+    );
+    seed_bytes.push(body.clone());
+    let seed_refs: Vec<&[u8]> = seed_bytes.iter().map(Vec::as_slice).collect();
+    crate::common::assert_mutations(0, &seed_refs, |mutated| {
+        let mut verifier = StreamVerifier::new(config());
+        assert!(verifier.open(status, &headers).is_ok());
+        let step = verifier.push(mutated, 0);
+        let mut outputs = step.messages;
+        let terminal = if let Some(failure) = step.terminal {
+            Some(failure.code)
+        } else {
+            let finished = verifier.finish(None);
+            outputs.extend(finished.messages);
+            finished.terminal.map(|failure| failure.code)
+        };
+        if let Some(code) = terminal {
+            assert!(StreamCode::ALL.contains(&code));
+        }
+        assert!(
+            expected.starts_with(&outputs),
+            "messages are not an oracle prefix: {outputs:?}"
+        );
+    });
+
+    use ed25519_dalek::SigningKey;
+    use mcp_jack::stream::{StaticStreamSigner, StreamBuilder};
+    let signer = StaticStreamSigner::new(SigningKey::from_bytes(&[7; 32]), None);
+
+    // LF is preserved as message data but rejected by the stdio line consumer.
+    let (_, open) = StreamBuilder::open(
         200,
         request_sig,
         signer.kid(),
-        1000,
+        now,
         "AAAAAAAAAAAAAAAAAAAAAA",
         &signer,
     )
     .expect("static signer");
-    let open_header = open.jack_auth.clone();
-    let (_, first) = builder.frame(1000, "first", &signer).expect("frame");
-    let (_, second) = builder.frame(1001, "second", &signer).expect("frame");
-    let (_, end) = builder.end(1001, &signer).expect("end");
-    let signed_body = format!("{first}{second}{end}");
-    let mut cfg = StreamVerifierConfig::pinned(signer.kid(), signer.verifying_key(), request_sig);
-    cfg.now = Arc::new(|| 1001);
-    let mut verifier = StreamVerifier::new(cfg);
+    let mut builder = StreamBuilder::resume("AAAAAAAAAAAAAAAAAAAAAA", &open.sig);
+    let (_, frame) = builder.frame(now, "line\nnext", &signer).expect("LF frame");
+    let (_, end) = builder.end(now, &signer).expect("LF end");
+    let lf_body = format!("{frame}{end}");
+    let mut message_config =
+        StreamVerifierConfig::pinned(signer.kid(), signer.verifying_key(), request_sig);
+    message_config.now = Arc::new(move || now);
+    let mut verifier = StreamVerifier::new(message_config);
     verifier
-        .open(200, &[("Jack-Auth".into(), open_header.clone())])
-        .expect("signed open");
-    let mut result = verifier.push(signed_body.as_bytes(), 0);
-    let mut delivered = result.messages;
-    if result.terminal.is_none() {
-        result = verifier.finish(None);
-        delivered.extend(result.messages);
-    }
-    assert_eq!(delivered, ["first", "second"]);
+        .open(200, &[("Jack-Auth".into(), open.jack_auth.clone())])
+        .expect("signed open for Message");
+    let result = verifier.push(lf_body.as_bytes(), 0);
+    assert_eq!(result.messages, vec!["line\nnext"]);
+    assert!(result.terminal.is_none());
 
-    // SSE treats CR as a line terminator (spec/05 §2.14), so CR in
-    // StreamBuilder data is transformed by framing and cannot reach a verified
-    // message through the public verifier. Only assert a typed parser error.
-    let mut cr_builder = StreamBuilder::resume("AAAAAAAAAAAAAAAAAAAAAA", &open.sig);
-    let (_, cr_frame) = cr_builder
-        .frame(1002, "line\rnext", &signer)
-        .expect("CR frame");
-    let (_, cr_end) = cr_builder.end(1002, &signer).expect("CR end");
-    let cr_body = format!("{cr_frame}{cr_end}");
-    let mut cfg = StreamVerifierConfig::pinned(signer.kid(), signer.verifying_key(), request_sig);
-    cfg.now = Arc::new(|| 1002);
-    let mut verifier = StreamVerifier::new(cfg);
+    let mut stdio_config =
+        StreamVerifierConfig::pinned(signer.kid(), signer.verifying_key(), request_sig);
+    stdio_config.now = Arc::new(move || now);
+    stdio_config.consumer = mcp_jack::stream::StreamConsumer::Stdio;
+    let mut verifier = StreamVerifier::new(stdio_config);
     verifier
-        .open(200, &[("Jack-Auth".into(), open_header.clone())])
-        .expect("signed open");
-    let cr_result = verifier.push(cr_body.as_bytes(), 0);
-    assert!(cr_result.messages.is_empty());
-    assert!(cr_result
+        .open(200, &[("Jack-Auth".into(), open.jack_auth)])
+        .expect("signed open for Stdio");
+    let result = verifier.push(lf_body.as_bytes(), 0);
+    assert!(result.messages.is_empty());
+    assert!(result
         .terminal
-        .is_some_and(|failure| mcp_jack::stream::StreamCode::ALL.contains(&failure.code)));
+        .is_some_and(|failure| failure.code == StreamCode::BadFrame));
 
-    // LF is representable in a signed SSE frame: Message delivers it, while
-    // Stdio verifies/counts the frame and then aborts before delivery.
-    let mut raw_builder = StreamBuilder::resume("AAAAAAAAAAAAAAAAAAAAAA", &open.sig);
-    let (_, raw_frame) = raw_builder
-        .frame(1002, "line\nnext", &signer)
-        .expect("raw LF frame");
-    let (_, raw_end) = raw_builder.end(1002, &signer).expect("raw LF end");
-    let raw_body = format!("{raw_frame}{raw_end}");
-    for consumer in [
-        mcp_jack::stream::StreamConsumer::Message,
-        mcp_jack::stream::StreamConsumer::Stdio,
-    ] {
-        let mut cfg =
-            StreamVerifierConfig::pinned(signer.kid(), signer.verifying_key(), request_sig);
-        cfg.consumer = consumer;
-        cfg.now = Arc::new(|| 1002);
-        let mut verifier = StreamVerifier::new(cfg);
-        verifier
-            .open(200, &[("Jack-Auth".into(), open_header.clone())])
-            .expect("signed open");
-        let step = verifier.push(raw_body.as_bytes(), 0);
-        if consumer == mcp_jack::stream::StreamConsumer::Message {
-            assert_eq!(step.messages, ["line\nnext"]);
-            assert!(step.terminal.is_none());
-        } else {
-            assert_eq!(
-                step.terminal.map(|failure| failure.code),
-                Some(mcp_jack::stream::StreamCode::BadFrame)
-            );
-            assert!(step.messages.is_empty());
-        }
-    }
-    let doc = crate::common::fixture("stream-vectors.json");
-    let mut corpus = Vec::new();
-    crate::common::strings(&doc, &mut corpus);
-    corpus.push(include_bytes!("corpus/stream.json").to_vec());
-    corpus.push(signed_body.into_bytes());
-    let corpus: Vec<&[u8]> = corpus.iter().map(Vec::as_slice).collect();
-    crate::common::assert_mutations(0, &corpus, |bytes| {
-        let mut cfg =
-            StreamVerifierConfig::pinned(signer.kid(), signer.verifying_key(), request_sig);
-        cfg.now = Arc::new(|| 1001);
-        let mut verifier = StreamVerifier::new(cfg);
-        let opened = verifier.open(200, &[("Jack-Auth".into(), open_header.clone())]);
-        assert!(opened.is_ok());
-        let step = verifier.push(bytes, 0);
-        let mut outputs = step.messages;
-        let mut terminals = Vec::new();
-        if let Some(failure) = step.terminal {
-            terminals.push(failure.code);
-        } else {
-            let finished = verifier.finish(None);
-            outputs.extend(finished.messages);
-            if let Some(failure) = finished.terminal {
-                terminals.push(failure.code);
-            }
-        }
-        assert!(terminals
-            .iter()
-            .all(|code| mcp_jack::stream::StreamCode::ALL.contains(code)));
-        let known = ["first".to_string(), "second".to_string()];
-        assert!(
-            known.starts_with(&outputs),
-            "delivered outputs are not a prefix of known signed messages: {outputs:?}"
-        );
-        if let Ok(text) = std::str::from_utf8(bytes) {
-            let values = [text];
-            let _ = mcp_jack::stream::parse_open_auth(&values);
-            let _ = mcp_jack::stream::accepts_s1(&values);
-        }
-    });
+    // SSE treats CR as a line terminator and the public parser cannot preserve
+    // it as message data; retain the honest typed-error control.
+    let (_, open) = StreamBuilder::open(
+        200,
+        request_sig,
+        signer.kid(),
+        now,
+        "AAAAAAAAAAAAAAAAAAAAAA",
+        &signer,
+    )
+    .expect("static signer");
+    let mut builder = StreamBuilder::resume("AAAAAAAAAAAAAAAAAAAAAA", &open.sig);
+    let (_, frame) = builder.frame(now, "line\rnext", &signer).expect("CR frame");
+    let (_, end) = builder.end(now, &signer).expect("CR end");
+    let cr_body = format!("{frame}{end}");
+    let mut cfg = StreamVerifierConfig::pinned(signer.kid(), signer.verifying_key(), request_sig);
+    cfg.now = Arc::new(move || now);
+    let mut verifier = StreamVerifier::new(cfg);
+    verifier
+        .open(200, &[("Jack-Auth".into(), open.jack_auth)])
+        .expect("signed open");
+    let result = verifier.push(cr_body.as_bytes(), 0);
+    assert!(result.messages.is_empty());
+    assert!(result
+        .terminal
+        .is_some_and(|failure| StreamCode::ALL.contains(&failure.code)));
 }
