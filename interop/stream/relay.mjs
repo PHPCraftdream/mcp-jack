@@ -145,7 +145,7 @@ export async function startRelay({ upstreamPort, transform = 'pass', scenario } 
     if (transform === 'after-cutoff') {
       // Streaming path: forward each decoded event live so the client can verify it
       // under the clock in effect when it arrives; only the end frame is replaced.
-      let headInfo = null, bodyBuf = Buffer.alloc(0), eventBuf = Buffer.alloc(0), activeSid = null, prevSig = null, injected = false, headSent = false;
+      let headInfo = null, bodyBuf = Buffer.alloc(0), eventBuf = Buffer.alloc(0), activeSid = null, prevSig = null, injected = false, headSent = false, chunkSize = null, chunkHave = 0;
       const fail = () => { if (!downstream.destroyed) downstream.destroy(); if (!upstream.destroyed) upstream.destroy(); };
       const emit = bytes => { if (!downstream.destroyed) downstream.write(bytes); };
       const chunkOut = bytes => emit(Buffer.concat([Buffer.from(`${bytes.length.toString(16)}\r\n`, 'latin1'), bytes, Buffer.from('\r\n')]));
@@ -167,9 +167,22 @@ export async function startRelay({ upstreamPort, transform = 'pass', scenario } 
         }
         for (;;) {
           if (headInfo.chunked) {
-            let decoded; try { decoded = decodeChunks(bodyBuf, false); } catch { fail(); return; }
-            if (!decoded) break;
-            bodyBuf = bodyBuf.subarray(decoded.used); eventBuf = Buffer.concat([eventBuf, decoded.body]);
+            // Incremental: payload bytes stream into eventBuf as they arrive; a held
+            // stream must not wait for a chunk boundary to forward complete events.
+            if (chunkSize === null) {
+              const lineEnd = bodyBuf.indexOf('\r\n');
+              if (lineEnd < 0) break;
+              const sizeMatch = /^([0-9a-fA-F]+)(?:;[^\r\n]*)?$/.exec(bodyBuf.subarray(0, lineEnd).toString('latin1'));
+              if (!sizeMatch) { fail(); return; }
+              chunkSize = Number.parseInt(sizeMatch[1], 16); bodyBuf = bodyBuf.subarray(lineEnd + 2);
+              if (chunkSize === 0) { chunkSize = null; break; }
+              chunkHave = 0;
+            }
+            const avail = Math.min(chunkSize - chunkHave, bodyBuf.length);
+            if (avail > 0) { eventBuf = Buffer.concat([eventBuf, bodyBuf.subarray(0, avail)]); bodyBuf = bodyBuf.subarray(avail); chunkHave += avail; }
+            if (chunkHave < chunkSize) break;
+            if (bodyBuf.length < 2) break;
+            bodyBuf = bodyBuf.subarray(2); chunkSize = null;
           } else if (headInfo.length !== null) {
             if (bodyBuf.length < headInfo.length) break;
             eventBuf = Buffer.concat([eventBuf, bodyBuf.subarray(0, headInfo.length)]); bodyBuf = bodyBuf.subarray(headInfo.length);

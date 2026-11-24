@@ -139,7 +139,7 @@ function v1Response(res, status, requestSig, code, id) {
 const server = http.createServer((req, res) => {
   const chunks = [];
   req.on('data', chunk => chunks.push(chunk));
-  req.on('end', () => {
+  req.on('end', () => { try {
     const body = Buffer.concat(chunks), auth = String(req.headers['jack-auth'] || '');
     const match = /^v1 kid=([A-Za-z0-9_-]+),ts=(0|[1-9][0-9]{0,11}),nonce=([A-Za-z0-9_-]+),sig=([A-Za-z0-9_-]+)$/.exec(auth);
     const requestSig = match?.[4] || null, nonce = match?.[3];
@@ -308,6 +308,7 @@ const server = http.createServer((req, res) => {
     }
     if (scenario === 'idle') { res.flushHeaders(); const timer = setTimeout(() => { if (closed || res.destroyed) return; const message = JSON.stringify({ jsonrpc: '2.0', id: requestId, result: {} }); send(message); const end = frame(sid, seq, '', prev); res.end(end.wire); closed = true; active.delete(res); }, Math.max(1, Number(options.idleTimeoutMs || arg('--idle-timeout-ms') || 1000) + 25)); timer.unref(); return; }
     const end = frame(sid, seq, '', prev); res.end(end.wire); closed = true; active.delete(res);
+  } catch (error) { console.error(`fake stream server request handler failed: ${error.message}`); if (!res.headersSent) res.writeHead(500); res.end(); }
   });
 });
 server.listen(Number(arg('--port') || 0), '127.0.0.1', () => console.log(JSON.stringify({ ready: true, port: server.address().port, server_public_key: svc.public_key, server_kid: svc.kid })));

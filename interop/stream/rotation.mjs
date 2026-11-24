@@ -34,7 +34,7 @@ export async function runRotationScenario(ctx) {
     const firstRecords = [];
     for (let i = 0; i < 2; i++) {
       let record;
-      try { record = JSON.parse(await first.nextLine(10000)); } catch (error) { throw Error(`rotation old-stream record ${i + 1} is unreadable: ${error.message}`); }
+      try { record = JSON.parse(await first.nextLine(10000)); } catch (error) { throw Error(`rotation old-stream record ${i + 1} is unreadable: ${error.message}: client stderr: ${String(first.stderr).slice(-1500)}`); }
       if (record?.type !== 'message') throw Error(`rotation old-stream record ${i + 1} is ${record?.type}, expected a delivered message before the cutoff`);
       firstRecords.push(record);
     }
