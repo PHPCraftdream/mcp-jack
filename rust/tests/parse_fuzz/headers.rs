@@ -85,17 +85,18 @@ fn header_encoding_mutations() {
     }
     assert_eq!(handled, cases.len());
 
-    let malformed_cases = [
-        "=?base64?Q?bad?=",
-        "=?base64?Q?Zm9v?=",
-        "=?base64?Q?Zm9v?=\r\n",
-    ];
+    let malformed_cases = ["=?base64?Q?bad?=", "=?base64?Q?Zm9v?="];
     for value in malformed_cases {
         assert_eq!(
             mcp_jack::modern::decode_header_value(value),
             Err(mcp_jack::modern::DecodeHeaderValueError::BadEncoding)
         );
     }
+    // C4: a value that does not end with `?=` is plain text, even if it starts like a sentinel.
+    assert_eq!(
+        mcp_jack::modern::decode_header_value("=?base64?Q?Zm9v?=\r\n").expect("plain text"),
+        "=?base64?Q?Zm9v?=\r\n"
+    );
 
     let mut corpus = Vec::new();
     crate::common::strings(&encoding, &mut corpus);
