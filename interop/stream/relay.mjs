@@ -79,11 +79,11 @@ function eventTransform(body, transform, scenario, sendEvent) {
       output.push(Buffer.from(scenario.relayFrame)); applied = true; return;
     }
     if (transform === 'after-cutoff' && fields.kind === 'jack-end') {
-      // Inject only caller-supplied bytes, bound to this response's SID/sequence.
+      // Inject caller-supplied bytes bound to this response's SID; the relay rewrites seq to the replaced end frame's sequence.
       const supplied = parseEvent(scenario.relayCutoffFrame);
-      if (supplied.fields.kind !== 'message' || scenario.relayCutoffSid !== scenario.activeSid || Number(supplied.fields.seq) !== fields.seq)
-        throw Error("relay transform 'after-cutoff' requires the exact pre-signed frame for the active sid and sequence");
-      output.push(Buffer.from(scenario.relayCutoffFrame)); applied = true; responseEnded = true; return;
+      if (supplied.fields.kind !== 'message' || scenario.relayCutoffSid !== scenario.activeSid)
+        throw Error("relay transform 'after-cutoff' requires the pre-signed cutoff frame for the active sid");
+      output.push(Buffer.from(supplied.text.replace(/jack: seq=\d+/, `jack: seq=${fields.seq}`))); applied = true; responseEnded = true; return;
     }
     if (transform === 'edit-data' && !applied && fields.seq !== undefined && fields.kind !== 'jack-end') { output.push(editData(bytes)); applied = true; return; }
     if (transform === 'truncate' && fields.kind === 'jack-end') { applied = true; responseEnded = true; return; }
@@ -124,7 +124,7 @@ export async function startRelay({ upstreamPort, transform = 'pass', scenario } 
   if (!KNOWN.has(transform) && transform !== 'pass') throw Error(`unknown relay transform: ${transform}`);
   if (!Number.isInteger(upstreamPort) || upstreamPort < 1 || upstreamPort > 65535) throw Error('invalid upstream port');
   if (transform === 'splice' && !Buffer.isBuffer(scenario?.relayFrame)) throw Error("relay transform 'splice' requires a pre-signed second-stream fixture frame");
-  if (transform === 'after-cutoff' && !Buffer.isBuffer(scenario?.relayCutoffFrame)) throw Error("relay transform 'after-cutoff' requires a pre-signed cutoff frame for the active stream");
+  if (transform === 'after-cutoff' && typeof scenario?.relayCutoffSign !== 'function') throw Error("relay transform 'after-cutoff' requires a relayCutoffSign({sid,seq,prev}) callback signing the injected frame");
   const sockets = new Set(); let applied = false, closePromise;
   const track = socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); socket.on('error', () => {}); };
   const server = net.createServer(downstream => {
@@ -140,6 +140,77 @@ export async function startRelay({ upstreamPort, transform = 'pass', scenario } 
       upstream.on('data', chunk => { if (!downstream.destroyed && !downstream.write(chunk)) upstream.pause(); });
       downstream.on('drain', () => upstream.resume());
       upstream.on('end', () => { if (!downstream.destroyed) downstream.end(); });
+      return;
+    }
+    if (transform === 'after-cutoff') {
+      // Streaming path: forward each decoded event live so the client can verify it
+      // under the clock in effect when it arrives; only the end frame is replaced.
+      let headInfo = null, bodyBuf = Buffer.alloc(0), eventBuf = Buffer.alloc(0), activeSid = null, prevSig = null, injected = false, headSent = false, chunkSize = null, chunkHave = 0;
+      const fail = () => { if (!downstream.destroyed) downstream.destroy(); if (!upstream.destroyed) upstream.destroy(); };
+      const emit = bytes => { if (!downstream.destroyed) downstream.write(bytes); };
+      const chunkOut = bytes => emit(Buffer.concat([Buffer.from(`${bytes.length.toString(16)}\r\n`, 'latin1'), bytes, Buffer.from('\r\n')]));
+      const pump = () => {
+        if (injected) return;
+        if (!headInfo) {
+          const at = bodyBuf.indexOf('\r\n\r\n');
+          if (at < 0) { if (bodyBuf.length > MAX_HEAD) fail(); return; }
+          try { headInfo = splitHead(bodyBuf.subarray(0, at + 4)); } catch { fail(); return; }
+          const activeAuth = headInfo.headers.find(([name]) => name === 'jack-auth')?.[1] || '';
+          const openMatch = /^s1 kid=[A-Za-z0-9_-]+,ts=[0-9]+,sid=([A-Za-z0-9_-]+),sig=([A-Za-z0-9_-]+)$/.exec(activeAuth);
+          activeSid = openMatch?.[1] || null; prevSig = openMatch?.[2] || null;
+          bodyBuf = bodyBuf.subarray(at + 4);
+        }
+        if (!headSent) {
+          const lines = headInfo.lines.filter(line => !/^(content-length|transfer-encoding|connection)\s*:/i.test(line));
+          lines.push('Transfer-Encoding: chunked');
+          emit(Buffer.from(lines.join('\r\n') + '\r\n\r\n', 'latin1')); headSent = true;
+        }
+        for (;;) {
+          if (headInfo.chunked) {
+            // Incremental: payload bytes stream into eventBuf as they arrive; a held
+            // stream must not wait for a chunk boundary to forward complete events.
+            if (chunkSize === null) {
+              const lineEnd = bodyBuf.indexOf('\r\n');
+              if (lineEnd < 0) break;
+              const sizeMatch = /^([0-9a-fA-F]+)(?:;[^\r\n]*)?$/.exec(bodyBuf.subarray(0, lineEnd).toString('latin1'));
+              if (!sizeMatch) { fail(); return; }
+              chunkSize = Number.parseInt(sizeMatch[1], 16); bodyBuf = bodyBuf.subarray(lineEnd + 2);
+              if (chunkSize === 0) { chunkSize = null; break; }
+              chunkHave = 0;
+            }
+            const avail = Math.min(chunkSize - chunkHave, bodyBuf.length);
+            if (avail > 0) { eventBuf = Buffer.concat([eventBuf, bodyBuf.subarray(0, avail)]); bodyBuf = bodyBuf.subarray(avail); chunkHave += avail; }
+            if (chunkHave < chunkSize) break;
+            if (bodyBuf.length < 2) break;
+            bodyBuf = bodyBuf.subarray(2); chunkSize = null;
+          } else if (headInfo.length !== null) {
+            if (bodyBuf.length < headInfo.length) break;
+            eventBuf = Buffer.concat([eventBuf, bodyBuf.subarray(0, headInfo.length)]); bodyBuf = bodyBuf.subarray(headInfo.length);
+          } else break;
+        }
+        for (;;) {
+          const crlf = eventBuf.indexOf('\r\n\r\n'), lf = eventBuf.indexOf('\n\n');
+          let end, delim;
+          if (crlf >= 0 && (lf < 0 || crlf <= lf)) { end = crlf; delim = 4; }
+          else if (lf >= 0) { end = lf; delim = 2; } else break;
+          const event = eventBuf.subarray(0, end + delim); eventBuf = eventBuf.subarray(end + delim);
+          const { fields } = parseEvent(event);
+          if (fields.kind === 'jack-end') {
+            let frame;
+            try { frame = scenario.relayCutoffSign({ sid: activeSid, seq: Number(fields.seq), prev: prevSig }); } catch { fail(); return; }
+            if (!Buffer.isBuffer(frame)) { fail(); return; }
+            injected = true; applied = true;
+            chunkOut(frame); emit(Buffer.from('0\r\n\r\n', 'latin1'));
+            if (!downstream.destroyed) downstream.end();
+            if (!upstream.destroyed) upstream.destroy();
+            return;
+          }
+          chunkOut(event);
+          if (fields.sig) prevSig = fields.sig;
+        }
+      };
+      upstream.on('data', chunk => { bodyBuf = Buffer.concat([bodyBuf, chunk]); pump(); });
+      upstream.on('end', () => { if (!injected) fail(); });
       return;
     }
     const finish = eof => {

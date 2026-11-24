@@ -11,7 +11,7 @@ const scenario = arg('--scenario'), matrix = arg('--matrix') || 'stream';
 const clockFile = arg('--clock-file'), requestLog = arg('--request-log'), durableDir = arg('--durable-dir');
 const fixtures = JSON.parse(readFileSync(join(root, 'spec/fixtures/keys.json'), 'utf8')).keys;
 const svc = fixtures.find(k => k.name === 'svc'), alice = fixtures.find(k => k.name === 'alice');
-if (arg('--durable-init')) {
+if (process.argv.includes('--durable-init')) {
   if (!durableDir) throw Error('--durable-init requires --durable-dir');
   mkdirSync(durableDir, { recursive: true });
   try { writeFileSync(join(durableDir, 'committed-nonces.json'), '[]', { flag: 'wx' }); }
@@ -80,9 +80,19 @@ process.stdin.on('data', chunk => {
     if (command?.op === 'announce') {
       const activation = Number(arg('--successor-activation'));
       if (!erinKey || !erin || command.reference !== 'ring-1' || command.kid !== erin.kid || !Number.isSafeInteger(activation)) { console.error('invalid rotation announce command'); continue; }
-      console.log(JSON.stringify({ announced: true, ordinal: 1, head_ordinal: 1, published_at: now(), activates_at: activation, head_hash: hash(Buffer.from(`${erin.kid}:${activation}`)) }));
+      const headHash = hash(Buffer.from(`${erin.kid}:${activation}`));
+      writeLog({ event: 'rotation_announced', reference: command.reference, kid: erin.kid, published_at: now(), activates_at: activation, head_hash: headHash });
+      console.log(JSON.stringify({ announced: true, ordinal: 1, head_ordinal: 1, published_at: now(), activates_at: activation, head_hash: headHash }));
     }
-    if (command?.action === 'release' && heldResponse && heldStream) {
+    if (command?.action === 'release' && scenario === 'rotation-cutoff-reopen' && heldResponse && heldStream && !heldStream.released) {
+      const stream = heldStream;
+      stream.released = true;
+      const end = frame(stream.sid, stream.seq, '', stream.prev);
+      stream.res.end(end.wire); stream.cleanup();
+      heldResponse = null; heldStream = null;
+      console.log(JSON.stringify({ control: 'released', sid: stream.sid }));
+    }
+    if (command?.action === 'release' && scenario !== 'rotation-cutoff-reopen' && heldResponse && heldStream) {
       const stream = heldStream;
       if (!stream.released) {
         stream.released = true;
@@ -105,7 +115,7 @@ process.stdin.on('data', chunk => {
 });
 function commitNonce(nonce) {
   nonceSet.add(nonce);
-  if (durableDir) {
+  if (durableDir && process.env.JACK_STREAM_FAKE_NO_DURABLE_PERSIST !== '1') {
     const file = join(durableDir, 'committed-nonces.json'), temp = `${file}.${process.pid}.tmp`;
     writeFileSync(temp, JSON.stringify([...nonceSet]));
     renameSync(temp, file);
@@ -129,7 +139,7 @@ function v1Response(res, status, requestSig, code, id) {
 const server = http.createServer((req, res) => {
   const chunks = [];
   req.on('data', chunk => chunks.push(chunk));
-  req.on('end', () => {
+  req.on('end', () => { try {
     const body = Buffer.concat(chunks), auth = String(req.headers['jack-auth'] || '');
     const match = /^v1 kid=([A-Za-z0-9_-]+),ts=(0|[1-9][0-9]{0,11}),nonce=([A-Za-z0-9_-]+),sig=([A-Za-z0-9_-]+)$/.exec(auth);
     const requestSig = match?.[4] || null, nonce = match?.[3];
@@ -268,7 +278,7 @@ const server = http.createServer((req, res) => {
         }
         send(JSON.stringify(msg));
       }
-    } else if (!['idle', 'cancel', 'concurrency-limit', 'durable-live-replay', 'durable-restart-replay', 'oversize'].includes(scenario)) for (const item of payloads[metadataProducer] || []) send(JSON.stringify(item));
+    } else if (!['idle', 'cancel', 'concurrency-limit', 'durable-live-replay', 'durable-restart-replay', 'oversize', 'rotation-cutoff-reopen'].includes(scenario)) for (const item of payloads[metadataProducer] || []) send(JSON.stringify(item));
     if (scenario === 'cancel') { send(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1 } })); return; }
     if (scenario === 'concurrency-limit' || scenario === 'durable-live-replay') {
       const firstMessage = scenario === 'durable-live-replay'
@@ -286,8 +296,19 @@ const server = http.createServer((req, res) => {
       send(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1, message: 'stream:first' } }));
       const end = frame(sid, seq, '', prev); res.end(end.wire); closed = true; active.delete(res); return;
     }
+    if (scenario === 'rotation-cutoff-reopen') {
+      for (const item of payloads[metadataProducer] || []) send(JSON.stringify(item));
+      const activation = Number(arg('--successor-activation'));
+      if (Number.isSafeInteger(activation) && now() < activation && heldResponse === null) {
+        heldResponse = res;
+        heldStream = { res, frame, sid, seq, prev, requestId, released: false, cleanup: () => { if (closed) return; closed = true; active.delete(res); } };
+        return;
+      }
+      const end = frame(sid, seq, '', prev); res.end(end.wire); closed = true; active.delete(res); return;
+    }
     if (scenario === 'idle') { res.flushHeaders(); const timer = setTimeout(() => { if (closed || res.destroyed) return; const message = JSON.stringify({ jsonrpc: '2.0', id: requestId, result: {} }); send(message); const end = frame(sid, seq, '', prev); res.end(end.wire); closed = true; active.delete(res); }, Math.max(1, Number(options.idleTimeoutMs || arg('--idle-timeout-ms') || 1000) + 25)); timer.unref(); return; }
     const end = frame(sid, seq, '', prev); res.end(end.wire); closed = true; active.delete(res);
+  } catch (error) { console.error(`fake stream server request handler failed: ${error.message}`); if (!res.headersSent) res.writeHead(500); res.end(); }
   });
 });
 server.listen(Number(arg('--port') || 0), '127.0.0.1', () => console.log(JSON.stringify({ ready: true, port: server.address().port, server_public_key: svc.public_key, server_kid: svc.kid })));
