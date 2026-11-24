@@ -154,7 +154,7 @@ test("fuzz webhook signature and envelope parsers", () => {
           if (decoded.ok) {
             assert.equal(decoded.entries.length, sig.entries.length);
             for (let index = 0; index < sig.entries.length; index++) {
-              const encoded = sig.entries[index]!.value;
+              const encoded: string = String(sig.entries[index]!.value);
               assert.equal(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded), true);
               assert.equal(Buffer.from(decoded.entries[index]!.sig).toString("base64"), encoded);
             }
