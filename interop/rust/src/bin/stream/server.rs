@@ -97,21 +97,30 @@ struct Handler {
     tasks: Arc<Mutex<Vec<HandlerTask>>>,
 }
 
-fn append_log(args: &Args, mut row: serde_json::Value) {
+fn append_log(args: &Args, mut row: serde_json::Value) -> Result<(), String> {
     if let Some(path) = &args.request_log {
         row["scenario"] = args.scenario.clone().into();
         row["matrix"] = args.matrix.clone().into();
-        if let Ok(mut bytes) = serde_json::to_vec(&row) {
-            bytes.push(b'\n');
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-            {
-                let _ = file.write_all(&bytes);
-                let _ = file.flush();
-            }
-        }
+        let mut bytes = serde_json::to_vec(&row).map_err(|e| e.to_string())?;
+        bytes.push(b'\n');
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(|e| e.to_string())?;
+        file.write_all(&bytes).map_err(|e| e.to_string())?;
+        file.flush().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn log_error(context: &str, error: String) {
+    eprintln!("stream server: {context} log: {error}");
+}
+
+fn append_log_visible(args: &Args, row: serde_json::Value, context: &str) {
+    if let Err(error) = append_log(args, row) {
+        log_error(context, error);
     }
 }
 
@@ -132,8 +141,21 @@ fn event(value: &serde_json::Value) -> Bytes {
 async fn send(
     sender: &mut http_body_util::channel::Sender<Bytes, Infallible>,
     value: serde_json::Value,
+    controls: &Controls,
 ) -> bool {
-    sender.send_data(event(&value)).await.is_ok()
+    if controls.shutdown_requested.load(Ordering::Acquire) {
+        return false;
+    }
+    let shutdown = controls.shutdown.notified();
+    tokio::pin!(shutdown);
+    shutdown.as_mut().enable();
+    if controls.shutdown_requested.load(Ordering::Acquire) {
+        return false;
+    }
+    tokio::select! {
+        result = sender.send_data(event(&value)) => result.is_ok(),
+        _ = &mut shutdown => false,
+    }
 }
 
 impl Handler {
@@ -143,9 +165,18 @@ impl Handler {
         mut sender: http_body_util::channel::Sender<Bytes, Infallible>,
     ) {
         let (parts, body) = request.into_parts();
-        let bytes = match body.collect().await {
-            Ok(body) => body.to_bytes(),
-            Err(_) => Bytes::new(),
+        let body_shutdown = self.controls.shutdown.notified();
+        tokio::pin!(body_shutdown);
+        body_shutdown.as_mut().enable();
+        if self.controls.shutdown_requested.load(Ordering::Acquire) {
+            return;
+        }
+        let bytes = tokio::select! {
+            result = body.collect() => match result {
+                Ok(body) => body.to_bytes(),
+                Err(_) => Bytes::new(),
+            },
+            _ = &mut body_shutdown => return,
         };
         let parsed: serde_json::Value =
             serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
@@ -202,7 +233,7 @@ impl Handler {
             .unwrap_or("/");
         let request_sig = auth.as_ref().map(|value| value.sig.clone());
         let nonce = auth.as_ref().map(|value| value.nonce.clone());
-        append_log(
+        append_log_visible(
             &self.args,
             serde_json::json!({
                 "event":"request", "request_verified":verified, "request_sig":request_sig,
@@ -215,25 +246,28 @@ impl Handler {
                 "request_target":target, "request_headers":request_headers,
                 "nonce_committed_before_first_byte":false
             }),
+            "request",
         );
 
         // JackLayer has already atomically admitted a verified nonce before it
         // invokes the application service. Do not describe missing auth as replay.
         if verified {
-            append_log(
+            append_log_visible(
                 &self.args,
                 serde_json::json!({"event":"nonce_committed", "nonce":nonce,
                 "request_sig":request_sig, "nonce_committed_before_first_byte":true}),
+                "nonce_committed",
             );
         }
 
         let heartbeat = parts.extensions.get::<StreamHeartbeat>().copied();
         let cancellation = parts.extensions.get::<StreamCancellation>().cloned();
         if let Some(grant) = heartbeat {
-            append_log(
+            append_log_visible(
                 &self.args,
                 serde_json::json!({"event":"stream_open", "heartbeat_granted_ms":grant.granted_ms,
                 "nonce_committed_before_first_byte":verified, "request_sig":request_sig, "nonce":nonce}),
+                "stream_open",
             );
         }
         let id = parsed.get("id").cloned().unwrap_or(serde_json::Value::Null);
@@ -254,33 +288,47 @@ impl Handler {
             }
             "events-stream" => {
                 let grant = heartbeat.map(|v| v.granted_ms).unwrap_or(0);
-                append_log(&self.args, serde_json::json!({"event":"heartbeat_granted","heartbeat_granted_ms":grant}));
+                append_log_visible(&self.args, serde_json::json!({"event":"heartbeat_granted","heartbeat_granted_ms":grant}), "heartbeat_granted");
                 messages.extend([
                     serde_json::json!({"jsonrpc":"2.0","method":"notifications/events/active","params":{"state":"active"}}),
                     serde_json::json!({"jsonrpc":"2.0","method":"notifications/events/event","params":{"event":"event"}}),
                     serde_json::json!({"jsonrpc":"2.0","method":"notifications/events/heartbeat","params":{"event":"heartbeat","heartbeatMs":grant}}),
                     serde_json::json!({"jsonrpc":"2.0","method":"notifications/events/terminated","params":{"state":"terminated"}}),
                 ]);
-                append_log(&self.args, serde_json::json!({"event":"heartbeat_frame","heartbeat_granted_ms":grant}));
+                append_log_visible(&self.args, serde_json::json!({"event":"heartbeat_frame","heartbeat_granted_ms":grant}), "heartbeat_frame");
             }
             "cancel" | "max-duration" => messages.push(serde_json::json!({"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":1}})),
             _ => { messages.push(result.clone()); }
         }
         for message in messages {
-            if !send(&mut sender, message).await {
+            if !send(&mut sender, message, &self.controls).await {
                 return;
             }
         }
 
         if scenario == "cancel" {
             if let Some(cancellation) = cancellation {
-                while !cancellation.is_cancelled() {
-                    tokio::time::sleep(Duration::from_millis(5)).await;
+                while !cancellation.is_cancelled()
+                    && !self.controls.shutdown_requested.load(Ordering::Acquire)
+                {
+                    let shutdown = self.controls.shutdown.notified();
+                    tokio::pin!(shutdown);
+                    shutdown.as_mut().enable();
+                    if self.controls.shutdown_requested.load(Ordering::Acquire) {
+                        break;
+                    }
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_millis(5)) => {},
+                        _ = &mut shutdown => break,
+                    }
                 }
-                append_log(
-                    &self.args,
-                    serde_json::json!({"event":"handler_cancelled", "request_sig":request_sig}),
-                );
+                if cancellation.is_cancelled() {
+                    append_log_visible(
+                        &self.args,
+                        serde_json::json!({"event":"handler_cancelled", "request_sig":request_sig}),
+                        "handler_cancelled",
+                    );
+                }
             }
             return;
         }
@@ -302,7 +350,11 @@ impl Handler {
                             command.get("action").and_then(|v| v.as_str()) == Some("clock_advanced")
                         });
                     if cancellation.is_cancelled() && clock_changed {
-                        append_log(&self.args, serde_json::json!({"event":"duration_elapsed"}));
+                        append_log_visible(
+                            &self.args,
+                            serde_json::json!({"event":"duration_elapsed"}),
+                            "duration_elapsed",
+                        );
                         break;
                     }
                     if self.controls.shutdown_requested.load(Ordering::Acquire)
@@ -310,9 +362,18 @@ impl Handler {
                     {
                         break;
                     }
+                    let clock = self.controls.clock.notified();
+                    tokio::pin!(clock);
+                    clock.as_mut().enable();
+                    let shutdown = self.controls.shutdown.notified();
+                    tokio::pin!(shutdown);
+                    shutdown.as_mut().enable();
+                    if self.controls.shutdown_requested.load(Ordering::Acquire) {
+                        break;
+                    }
                     tokio::select! {
-                        _ = self.controls.clock.notified() => {},
-                        _ = self.controls.shutdown.notified() => break,
+                        _ = &mut clock => {},
+                        _ = &mut shutdown => break,
                         _ = tokio::time::sleep(Duration::from_millis(5)) => {},
                     }
                 }
@@ -508,11 +569,25 @@ pub fn run() -> ! {
                                 let requested = value.get("clock").and_then(serde_json::Value::as_i64);
                                 match (read_clock(&args.clock_file), requested) {
                                     (Ok(file_clock), Some(command_clock)) if file_clock == command_clock => {
-                                        append_log(&args, serde_json::json!({"event":"clock_changed","clock":file_clock,
+                                        let logged = append_log(&args, serde_json::json!({"event":"clock_changed","clock":file_clock,
                                             "start":value.get("start"),"duration_ms":value.get("duration_ms")}));
+                                        if let Err(error) = logged {
+                                            eprintln!("stream server: clock log: {error}");
+                                            continue;
+                                        }
+                                        let mut ack = match serde_json::to_vec(&serde_json::json!({"control":"clock_advanced","clock":file_clock})) {
+                                            Ok(ack) => ack,
+                                            Err(error) => {
+                                                eprintln!("stream server: clock acknowledgement: {error}");
+                                                continue;
+                                            }
+                                        };
+                                        ack.push(b'\n');
+                                        if let Err(error) = std::io::stdout().write_all(&ack).and_then(|_| std::io::stdout().flush()) {
+                                            eprintln!("stream server: clock acknowledgement: {error}");
+                                            continue;
+                                        }
                                         if let Ok(mut latest) = controls.latest_clock.lock() { *latest = Some(value.clone()); }
-                                        println!("{}", serde_json::json!({"control":"clock_advanced","clock":file_clock}));
-                                        let _ = std::io::stdout().flush();
                                         controls.clock.notify_waiters();
                                     }
                                     (Ok(file_clock), Some(command_clock)) => eprintln!("stream server: clock control mismatch (file {file_clock}, command {command_clock})"),
@@ -535,7 +610,13 @@ pub fn run() -> ! {
                 },
                 accepted = listener.accept() => {
                     let (socket, _) = accepted.map_err(|e| e.to_string())?;
-                    let permit = permits.clone().acquire_owned().await.map_err(|e| e.to_string())?;
+                    let permit = match permits.clone().try_acquire_owned() {
+                        Ok(permit) => permit,
+                        Err(_) => {
+                            drop(socket);
+                            continue;
+                        }
+                    };
                     let layer = Arc::clone(&layer);
                     let handler = handler.clone();
                     connections.push(tokio::spawn(async move {
@@ -552,14 +633,33 @@ pub fn run() -> ! {
         drop(listener);
         controls.shutdown_requested.store(true, Ordering::Release);
         controls.shutdown.notify_waiters();
-        for connection in &connections { connection.abort(); }
-        for connection in connections { let _ = connection.await; }
-        let producers = {
+        let grace = Duration::from_secs(2);
+        // A JoinHandle must not be awaited again once it completed: after the grace period the
+        // leftovers are only aborted, never joined a second time.
+        let joined = tokio::time::timeout(grace, async {
+            for connection in &mut connections {
+                let _ = connection.await;
+            }
+        })
+        .await;
+        if joined.is_err() {
+            for connection in &connections { connection.abort(); }
+        }
+        // Handlers register producers until their connection ended: snapshot after the join.
+        let mut producers = {
             let mut tasks = tasks.lock().map_err(|_| "task registry poisoned".to_owned())?;
-            tasks.drain(..).collect::<Vec<_>>()
+            std::mem::take(&mut *tasks)
         };
-        for producer in producers { let _ = producer.await; }
-        let _ = tokio::task::spawn_blocking(move || stdin_task.join()).await;
+        let joined = tokio::time::timeout(grace, async {
+            for producer in &mut producers { let _ = producer.await; }
+        })
+        .await;
+        if joined.is_err() {
+            for producer in &producers { producer.abort(); }
+        }
+        let _ = tokio::time::timeout(grace, async move {
+            let _ = tokio::task::spawn_blocking(move || stdin_task.join()).await;
+        }).await;
         Ok::<(), String>(())
     });
     if let Err(error) = result {
