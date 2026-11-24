@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -235,6 +236,30 @@ func TestOpenStreamDeliversVerifiedMessages(t *testing.T) {
 	}
 	if err := s.Close(); err != nil {
 		t.Fatalf("second Close: %v", err)
+	}
+}
+
+func TestOpenStreamDeliversMessageBeforeLoneCRTruncation(t *testing.T) {
+	signer, priv := newTestSigner(t)
+	served := &servedBody{}
+	srv, _, _ := newStreamServer(t, served.get, false)
+	defer srv.Close()
+	req := newStreamRequest(t, srv)
+	requestSig := requestSignature(signer, priv, req)
+	value, openSig := openHeader(priv, signer.KID(), requestSig)
+	openAuth = value
+	frame, _ := messageFrame(priv, openSig, testMessage, testMessage)
+	served.set([]byte(strings.TrimSuffix(frame, "\n") + "\r"))
+
+	s, _, err := newTestTransport(signer).OpenStream(req)
+	if err != nil {
+		t.Fatalf("OpenStream: %v", err)
+	}
+	if got, err := s.Next(); err != nil || got != testMessage {
+		t.Fatalf("Next() = %q, %v; want verified message", got, err)
+	}
+	if _, err := s.Next(); err == nil || !strings.Contains(err.Error(), "stream_truncated") {
+		t.Fatalf("terminal Next() error = %v, want stream_truncated", err)
 	}
 }
 

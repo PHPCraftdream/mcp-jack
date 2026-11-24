@@ -65,6 +65,9 @@ type HandlerConfig struct {
 	// request that opted in with `Jack-Accept: s1` and whose handler answers
 	// text/event-stream is signed as a stream; every other answer is unchanged.
 	Streams *StreamOptions
+	// TimerNow and TimerAfterFunc are injectable stream-timer dependencies.
+	TimerNow       func() time.Time
+	TimerAfterFunc func(time.Duration, func()) StreamTimer
 }
 
 type handler struct {
@@ -82,8 +85,10 @@ type handler struct {
 	// streams holds the normalized signed-stream options (spec 05 section 3).
 	streams stream.Options
 	// limiter bounds concurrent streams per authenticated identity (3.3).
-	limiter *stream.Limiter
-	next    http.Handler
+	limiter        *stream.Limiter
+	next           http.Handler
+	timerNow       func() time.Time
+	timerAfterFunc streamAfterFunc
 }
 
 // NewHandler wraps next, an unmodified MCP server, so that only authenticated
@@ -181,7 +186,12 @@ func NewHandler(cfg HandlerConfig, next http.Handler) (http.Handler, error) {
 		opts = *cfg.Streams
 	}
 	opts = opts.Normalize(time.Duration(verify.Window(cfg.Verifier)) * time.Second)
-	return &handler{v: cfg.Verifier, key: cfg.ServerKey, signer: cfg.ResponseSigner, keys: cfg.ResponseKeys, public: public, kid: kid, limit: limit, respLimit: respLimit, profile: profile, streams: opts, limiter: stream.NewLimiter(opts.MaxConcurrentStreams), next: next}, nil
+	return &handler{v: cfg.Verifier, key: cfg.ServerKey, signer: cfg.ResponseSigner, keys: cfg.ResponseKeys, public: public, kid: kid, limit: limit, respLimit: respLimit, profile: profile, streams: opts, limiter: stream.NewLimiter(opts.MaxConcurrentStreams), next: next, timerNow: cfg.TimerNow, timerAfterFunc: func(d time.Duration, f func()) StreamTimer {
+		if cfg.TimerAfterFunc != nil {
+			return cfg.TimerAfterFunc(d, f)
+		}
+		return time.AfterFunc(d, f)
+	}}, nil
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -492,8 +502,15 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, body []byte, r
 		}
 	}
 	hook := &streamHook{handler: h, result: res, body: body, w: w, cancel: cancel,
-		identity: streamIdentity(res), enabled: admissible, notRequest: optIn && !admissible}
+		identity: streamIdentity(res), enabled: admissible, notRequest: optIn && !admissible,
+		timerNow: h.timerNow, timerAfterFunc: h.timerAfterFunc}
 	defer hook.finish()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			hook.finish()
+			panic(recovered)
+		}
+	}()
 	if optIn {
 		// 3.5: the wrapped handler emits heartbeats as plain signed frames, so
 		// it needs the granted interval.

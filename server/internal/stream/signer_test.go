@@ -395,6 +395,231 @@ func TestOpenSessionRefusesRetiredKeyAndBadInput(t *testing.T) {
 	}
 }
 
+func TestSessionCloseAfterRecoveredHandlerPanic(t *testing.T) {
+	_, key := testKey(t, 21)
+	finalCalls, stopCalls := 0, 0
+	var buf bytes.Buffer
+	s, err := OpenSession(&buf, SessionConfig{
+		Key: key, RequestSig: jack.EncodeBase64URL(bytes.Repeat([]byte{21}, 64)), SID: testSID(), Now: fixedClock(1000),
+		Final: func() error { finalCalls++; return nil }, Stop: func() { stopCalls++ },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("handler panic was not propagated")
+			}
+			if closeErr := s.Close(); closeErr != nil {
+				t.Fatalf("cleanup Close: %v", closeErr)
+			}
+		}()
+		panic("handler")
+	}()
+	if finalCalls != 1 || stopCalls != 1 || !s.Closed() {
+		t.Fatalf("panic cleanup final=%d stop=%d closed=%v", finalCalls, stopCalls, s.Closed())
+	}
+}
+
+func TestSessionDefaultFrameLimitBoundary(t *testing.T) {
+	_, key := testKey(t, 24)
+	const limit = DefaultFrameMaxBytes
+	for _, over := range []bool{false, true} {
+		var buf bytes.Buffer
+		finalCalls := 0
+		s, err := OpenSession(&buf, SessionConfig{Key: key, RequestSig: jack.EncodeBase64URL(bytes.Repeat([]byte{24}, 64)), SID: testSID(), Now: fixedClock(1000), Final: func() error { finalCalls++; return nil }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantLen := limit
+		if over {
+			wantLen++
+		}
+		if over {
+			if _, err := s.Write([]byte("data: ")); err != nil {
+				t.Fatalf("over-limit data prefix Write: %v", err)
+			}
+			remaining := wantLen
+			for remaining > 0 {
+				chunkLen := int64(4096)
+				if remaining < chunkLen {
+					chunkLen = remaining
+				}
+				_, err := s.Write([]byte(strings.Repeat("x", int(chunkLen))))
+				remaining -= chunkLen
+				if remaining == 0 {
+					if !errors.Is(err, ErrClosed) {
+						t.Fatalf("unterminated max+1 Write error = %v, want ErrClosed", err)
+					}
+				} else if err != nil {
+					t.Fatalf("over-limit data chunk Write: %v", err)
+				}
+			}
+		} else if _, err := s.Write([]byte(": ignored comment\ndata: " + strings.Repeat("x", int(wantLen)) + "\n\n")); err != nil {
+			t.Fatalf("exact limit Write: %v", err)
+		}
+		frames := parseBody(t, buf.Bytes())
+		if over {
+			if len(frames) != 2 || frames[0].data != SignalValue(SignalFrameTooLarge, limit) || frames[1].event != EndEvent {
+				t.Fatalf("over-limit frames = %+v, want signal and end", frames)
+			}
+		} else if len(frames) != 1 || frames[0].data != strings.Repeat("x", int(limit)) {
+			t.Fatalf("exact-limit frames = %d; want accepted 1 MiB event", len(frames))
+		}
+		if bytes.Contains(buf.Bytes(), []byte(": ignored comment")) {
+			t.Fatal("comments accumulated in signed output")
+		}
+		if over && finalCalls != 1 {
+			t.Fatalf("oversize Final calls=%d, want 1", finalCalls)
+		}
+	}
+}
+
+func TestSessionTimeoutBlockedWriterAbortsAndReleases(t *testing.T) {
+	_, key := testKey(t, 22)
+	writer := &blockingWriter{started: make(chan struct{}, 1), release: make(chan struct{}), interrupt: make(chan struct{})}
+	stopped, interrupted := make(chan struct{}), make(chan struct{})
+	clock := &mutableClock{ts: 1000}
+	s, err := OpenSession(writer, SessionConfig{
+		Key: key, RequestSig: jack.EncodeBase64URL(bytes.Repeat([]byte{22}, 64)), SID: testSID(), Now: clock.Now,
+		Stop: func() { close(stopped) }, Interrupt: func() { close(interrupted); close(writer.interrupt) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := s.Write([]byte("data: blocked\n\n"))
+		writeDone <- err
+	}()
+	select {
+	case <-writer.started:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("writer did not block at the controllable gate")
+	}
+	if err := s.Timeout(nil); err != nil {
+		t.Fatalf("Timeout: %v", err)
+	}
+	select {
+	case <-interrupted:
+	default:
+		t.Fatal("Timeout did not invoke the transport interrupt")
+	}
+	select {
+	case <-stopped:
+	default:
+		t.Fatal("Timeout did not stop the handler")
+	}
+	if !s.Closed() {
+		t.Fatal("timed-out session remains open")
+	}
+	close(writer.release)
+	select {
+	case <-writeDone:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("released writer did not finish")
+	}
+	if len(writer.Bytes()) != 0 {
+		t.Fatal("interrupted writer emitted a physical frame")
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("write failed") }
+
+func TestSessionWriteFailureRunsFinalOnce(t *testing.T) {
+	_, key := testKey(t, 25)
+	finalCalls := 0
+	s, err := OpenSession(failingWriter{}, SessionConfig{Key: key, RequestSig: jack.EncodeBase64URL(bytes.Repeat([]byte{25}, 64)), SID: testSID(), Now: fixedClock(1000), Final: func() error { finalCalls++; return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Write([]byte("data: fail\n\n")); err == nil {
+		t.Fatal("Write succeeded with failing writer")
+	}
+	if finalCalls != 1 {
+		t.Fatalf("Final calls=%d after write failure, want 1", finalCalls)
+	}
+	s.Abort()
+	if finalCalls != 1 {
+		t.Fatalf("Final calls=%d after Abort, want once", finalCalls)
+	}
+}
+
+func TestSessionEndTimestampNeverRegresses(t *testing.T) {
+	clock := &mutableClock{ts: 1000}
+	_, key := testKey(t, 19)
+	var buf bytes.Buffer
+	s, err := OpenSession(&buf, SessionConfig{Key: key, RequestSig: jack.EncodeBase64URL(bytes.Repeat([]byte{19}, 64)), SID: testSID(), Now: clock.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock.Set(999)
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	frames := parseBody(t, buf.Bytes())
+	if got, want := frames[0].jackTS, "1000"; got != want {
+		t.Fatalf("quiet end timestamp = %s, want open timestamp %s", got, want)
+	}
+}
+
+func TestSessionFinalFailureSuppressesEndAndPanicsCloseSafely(t *testing.T) {
+	_, key := testKey(t, 20)
+	for _, panicFinal := range []bool{false, true} {
+		var buf bytes.Buffer
+		finalCalls := 0
+		final := func() error {
+			finalCalls++
+			if panicFinal {
+				panic("final")
+			}
+			return errors.New("refused")
+		}
+		s, err := OpenSession(&buf, SessionConfig{Key: key, RequestSig: jack.EncodeBase64URL(bytes.Repeat([]byte{20}, 64)), SID: testSID(), Now: fixedClock(1000), Final: final})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Close(); err == nil {
+			t.Fatal("Close succeeded after Final rejected end authorization")
+		}
+		if finalCalls != 1 {
+			t.Fatalf("Final calls = %d, want 1", finalCalls)
+		}
+		if bytes.Contains(buf.Bytes(), []byte("event: jack-end")) {
+			t.Fatal("failed Final wrote an end frame")
+		}
+		if _, err := s.Write([]byte("data: late\n\n")); !errors.Is(err, ErrClosed) {
+			t.Fatalf("write after Final failure = %v", err)
+		}
+		if finalCalls != 1 {
+			t.Fatalf("failed close retried Final: %d calls", finalCalls)
+		}
+	}
+}
+
+func TestSessionEndBeforeCutoffWhenClockJumpsAcrossActivation(t *testing.T) {
+	cutoff := int64(1003)
+	clock := &mutableClock{ts: 1000}
+	_, key := testKey(t, 23)
+	key.Cutoff = &cutoff
+	var buf bytes.Buffer
+	s, err := OpenSession(&buf, SessionConfig{Key: key, RequestSig: jack.EncodeBase64URL(bytes.Repeat([]byte{23}, 64)), SID: testSID(), Now: clock.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock.Set(cutoff)
+	if _, err := s.Write([]byte("data: physically before cutoff\n\n")); err != nil {
+		t.Fatalf("cutoff write = %v", err)
+	}
+	frames := parseBody(t, buf.Bytes())
+	if len(frames) != 1 || frames[0].event != EndEvent || frames[0].jackTS != "1002" {
+		t.Fatalf("frames = %+v; want one end timestamped immediately before cutoff", frames)
+	}
+}
+
 // TestSessionEndFrameWithoutMessages covers 2.16 and 5.1: a stream the handler
 // closes without writing an event still carries exactly one frame, the end
 // frame, signed from the open value with its own fresh timestamp.
@@ -522,9 +747,9 @@ func TestSessionOversizeFromSplitterBudget(t *testing.T) {
 	_, key := testKey(t, 11)
 	sid := testSID()
 	requestSig := jack.EncodeBase64URL(bytes.Repeat([]byte{17}, 64))
-
 	var buf bytes.Buffer
-	s, err := OpenSession(&buf, SessionConfig{Options: Options{FrameMaxBytes: limit}, Key: key, RequestSig: requestSig, SID: sid, Now: fixedClock(1000)})
+	finalCalls := 0
+	s, err := OpenSession(&buf, SessionConfig{Options: Options{FrameMaxBytes: limit}, Key: key, RequestSig: requestSig, SID: sid, Now: fixedClock(1000), Final: func() error { finalCalls++; return nil }})
 	if err != nil {
 		t.Fatalf("OpenSession: %v", err)
 	}
@@ -558,6 +783,9 @@ func TestSessionOversizeFromSplitterBudget(t *testing.T) {
 		t.Fatalf("2.17: second frame event = %q, want %q", end.event, EndEvent)
 	}
 	verifyFrame(t, key, end, sid, sig)
+	if finalCalls != 1 {
+		t.Fatalf("2.17: oversize stream invoked Final %d times, want exactly once", finalCalls)
+	}
 
 	if _, err := s.Write([]byte("data: later\n\n")); !errors.Is(err, ErrClosed) {
 		t.Fatalf("2.18: Write after the signal frame = %v, want ErrClosed", err)
@@ -567,19 +795,30 @@ func TestSessionOversizeFromSplitterBudget(t *testing.T) {
 // blockingWriter is a writer that reports the first Write attempt and then
 // blocks every Write until release is closed, so a test can hold the wire busy.
 type blockingWriter struct {
-	mu      sync.Mutex
-	buf     bytes.Buffer
-	started chan struct{}
-	release chan struct{}
+	mu        sync.Mutex
+	buf       bytes.Buffer
+	started   chan struct{}
+	release   chan struct{}
+	interrupt chan struct{}
 }
 
-// Write signals started once and waits for release before taking the bytes.
+// Write signals started once and waits for release; interruption prevents a
+// later physical frame emission even if the caller subsequently releases it.
 func (b *blockingWriter) Write(p []byte) (int, error) {
 	select {
 	case b.started <- struct{}{}:
 	default:
 	}
-	<-b.release
+	select {
+	case <-b.interrupt:
+		return 0, errors.New("writer interrupted")
+	case <-b.release:
+	}
+	select {
+	case <-b.interrupt:
+		return 0, errors.New("writer interrupted")
+	default:
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.Write(p)
@@ -600,16 +839,28 @@ func TestSessionTimeoutWhileWriteBlocked(t *testing.T) {
 	sid := testSID()
 	requestSig := jack.EncodeBase64URL(bytes.Repeat([]byte{18}, 64))
 
-	w := &blockingWriter{started: make(chan struct{}, 1), release: make(chan struct{})}
+	w := &blockingWriter{started: make(chan struct{}, 1), release: make(chan struct{}), interrupt: make(chan struct{})}
 	stopped := make(chan struct{})
 	var stopOnce sync.Once
+	finalCalls := 0
+	var s *Session
 	s, err := OpenSession(w, SessionConfig{
 		Options:    Options{},
 		Key:        key,
 		RequestSig: requestSig,
 		SID:        sid,
 		Now:        fixedClock(1000),
-		Stop:       func() { stopOnce.Do(func() { close(stopped) }) },
+		Final: func() error {
+			finalCalls++
+			select {
+			case <-s.Done():
+				t.Error("Final ran after Done closed")
+			default:
+			}
+			return nil
+		},
+		Stop:      func() { stopOnce.Do(func() { close(stopped) }) },
+		Interrupt: func() { close(w.interrupt) },
 	})
 	if err != nil {
 		t.Fatalf("OpenSession: %v", err)
@@ -627,7 +878,8 @@ func TestSessionTimeoutWhileWriteBlocked(t *testing.T) {
 		t.Fatal("the blocked Write never reached the writer")
 	}
 
-	// 3.4: Timeout must not wait for the blocked write.
+	// Timeout must return without waiting for the blocked writer, and Final
+	// must have completed before Done closes.
 	done := make(chan struct{})
 	go func() {
 		_ = s.Timeout(nil)
@@ -637,6 +889,15 @@ func TestSessionTimeoutWhileWriteBlocked(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("3.4: Timeout waited for the blocked write instead of returning")
+	}
+
+	select {
+	case <-s.Done():
+	default:
+		t.Fatal("Done was not closed when Timeout returned")
+	}
+	if finalCalls != 1 {
+		t.Fatalf("Timeout invoked Final %d times, want exactly once", finalCalls)
 	}
 
 	// 3.7: the handler request context is cancelled.
@@ -655,12 +916,14 @@ func TestSessionTimeoutWhileWriteBlocked(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-
-	body := w.Bytes()
-	if !bytes.HasSuffix(body, []byte("\n\n")) {
-		t.Fatalf("3.7: body does not end with a blank line: %q", body)
+	s.Abort()
+	if finalCalls != 1 {
+		t.Fatalf("Abort invoked Final again: %d calls, want exactly once", finalCalls)
 	}
-	if !bytes.Contains(body, []byte("event: "+EndEvent)) {
-		t.Fatalf("3.7: body carries no %q frame: %q", EndEvent, body)
+
+	// The interrupted in-flight write must not produce a physical frame after
+	// release; Abort does not claim an end frame when the writer was interrupted.
+	if len(w.Bytes()) != 0 {
+		t.Fatalf("3.4: interrupted blocked writer emitted a frame: %q", w.Bytes())
 	}
 }

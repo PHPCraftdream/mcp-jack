@@ -16,12 +16,15 @@ var errEventTooLarge = errors.New("stream: handler event exceeds the frame cap")
 // joins the data lines of one event with a single LF and therefore normalises
 // a raw CR or CRLF inside the data to LF (2.10).
 type splitter struct {
-	line    []byte
-	skipLF  bool
-	data    []string
-	hasData bool
-	size    int64
-	limit   int64
+	line          []byte
+	skipLF        bool
+	data          []string
+	hasData       bool
+	size          int64
+	limit         int64
+	lineIsData    bool
+	lineIsComment bool
+	lineValueSize int64
 	// exceeded is set once limit was passed, so the caller stops retaining.
 	exceeded bool
 }
@@ -37,7 +40,7 @@ func (s *splitter) feed(chunk []byte, limit int64, emit func(data string) error)
 		if s.skipLF {
 			s.skipLF = false
 			if b == '\n' {
-				continue // the LF of a CRLF pair
+				continue
 			}
 		}
 		if b == '\n' || b == '\r' {
@@ -47,10 +50,35 @@ func (s *splitter) feed(chunk []byte, limit int64, emit func(data string) error)
 			}
 			continue
 		}
+		if s.lineIsComment {
+			continue
+		}
+		if len(s.line) == 0 && b == ':' {
+			s.lineIsComment = true
+			continue
+		}
 		s.line = append(s.line, b)
-		s.size++
-		if s.overLimit() {
-			return errEventTooLarge
+		if s.lineIsData {
+			if len(s.line) == 6 && b == ' ' {
+				continue
+			}
+			if len(s.line) >= 6 {
+				s.lineValueSize++
+				if s.hasData {
+					if s.overLimit(s.size + 1 + s.lineValueSize) {
+						return errEventTooLarge
+					}
+				} else if s.overLimit(s.lineValueSize) {
+					return errEventTooLarge
+				}
+			}
+			continue
+		}
+		if len(s.line) <= len("data:") && string(s.line) == "data:"[:len(s.line)] {
+			if string(s.line) == "data:" {
+				s.lineIsData = true
+			}
+			continue
 		}
 	}
 	return nil
@@ -59,19 +87,22 @@ func (s *splitter) feed(chunk []byte, limit int64, emit func(data string) error)
 // endLine finishes the current line and closes the event on a blank line.
 func (s *splitter) endLine(emit func(data string) error) error {
 	line := s.line
+	isData, isComment := s.lineIsData, s.lineIsComment
 	s.line = nil
-	if len(line) == 0 {
+	s.lineIsData = false
+	s.lineIsComment = false
+	s.lineValueSize = 0
+	if len(line) == 0 && !isComment {
 		if !s.hasData {
+			s.resetEvent()
 			return nil
 		}
 		data := strings.Join(s.data, "\n")
-		s.data = nil
-		s.hasData = false
-		s.size = 0 // the event left: the budget starts over
+		s.resetEvent()
 		return emit(data)
 	}
-	if line[0] == ':' {
-		return nil // 2.12: a comment belongs to no event
+	if isComment || (len(line) > 0 && line[0] == ':') {
+		return nil
 	}
 	name := line
 	value := ""
@@ -79,22 +110,30 @@ func (s *splitter) endLine(emit func(data string) error) error {
 		name = line[:i]
 		value = strings.TrimPrefix(string(line[i+1:]), " ") // one leading SP only
 	}
-	if string(name) == "data" {
+	if isData || string(name) == "data" {
+		if s.hasData {
+			s.size++
+		}
 		s.data = append(s.data, value)
 		s.hasData = true
-		s.size += int64(len(value) + 1) // the value and its LF joiner
-		if s.overLimit() {
+		s.size += int64(len(value))
+		if s.overLimit(s.size) {
 			return errEventTooLarge
 		}
 	}
-	// 2.11 and 2.13: every other field is dropped.
 	return nil
+}
+
+func (s *splitter) resetEvent() {
+	s.data = nil
+	s.hasData = false
+	s.size = 0
 }
 
 // overLimit reports whether the event outgrew the budget and drops what was
 // retained of it.
-func (s *splitter) overLimit() bool {
-	if s.limit <= 0 || s.size <= s.limit {
+func (s *splitter) overLimit(size int64) bool {
+	if s.limit <= 0 || size <= s.limit {
 		return false
 	}
 	s.exceeded = true
@@ -112,5 +151,8 @@ func (s *splitter) reset() {
 	s.hasData = false
 	s.size = 0
 	s.limit = 0
+	s.lineIsData = false
+	s.lineIsComment = false
+	s.lineValueSize = 0
 	s.exceeded = false
 }

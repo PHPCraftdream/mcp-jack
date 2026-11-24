@@ -14,6 +14,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +26,7 @@ import (
 
 	jack "github.com/PHPCraftdream/mcp-jack"
 	clientstream "github.com/PHPCraftdream/mcp-jack/client/stream"
+	durable "github.com/PHPCraftdream/mcp-jack/durable"
 	"github.com/PHPCraftdream/mcp-jack/server/internal/modern"
 	nonceimpl "github.com/PHPCraftdream/mcp-jack/server/internal/nonce"
 	"github.com/PHPCraftdream/mcp-jack/server/internal/testfixture"
@@ -162,64 +165,8 @@ func newResponseKeysHarness(t *testing.T, profile modern.Profile, provider trans
 	return h, clk
 }
 
-// durableDeployment is the deployment identity the durable double writes into
-// every receipt.
+// durableDeployment binds the actual owner-backed replay test to an isolated store.
 const durableDeployment = "streamtest-durable-deployment"
-
-// durableNonces is a minimal durable admission double: it records the committed
-// (kid, nonce) pairs and refuses a duplicate, like the real store does.
-type durableNonces struct {
-	mu     sync.Mutex
-	seen   map[string]bool
-	fenced bool
-}
-
-// Reserve commits the (kid, nonce) pair and returns the confirmed receipt and
-// the serving lease of it, or the 401 replayed_nonce refusal of a duplicate
-// and of every reservation after Fence.
-func (d *durableNonces) Reserve(a verify.NonceAdmission) (verify.NonceReceipt, verify.NonceLease, *jack.Error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.seen == nil {
-		d.seen = make(map[string]bool)
-	}
-	key := a.KID + "\x00" + a.Nonce
-	if d.fenced || d.seen[key] {
-		return verify.NonceReceipt{}, nil, &jack.Error{HTTPStatus: http.StatusUnauthorized, Code: jack.CodeReplayedNonce}
-	}
-	d.seen[key] = true
-	receipt := verify.NonceReceipt{
-		Version: 1, DeploymentID: durableDeployment, StoreGeneration: 1, OwnerGeneration: 1,
-		KID: a.KID, Nonce: a.Nonce, Signature: a.Signature,
-		RequestHash: jack.BodyHash([]byte(a.SigningBytes)),
-		Timestamp:   a.Timestamp, RetainUntil: a.Timestamp + a.Window, HighWater: a.Timestamp,
-	}
-	receipt.OperationID[0] = 1
-	intent, err := verify.NonceIntentID(receipt.DeploymentID, a, receipt.OperationID)
-	if err != nil {
-		return verify.NonceReceipt{}, nil, &jack.Error{
-			HTTPStatus: http.StatusServiceUnavailable,
-			Code:       "durability_unavailable",
-			Message:    "durable admission is unavailable",
-		}
-	}
-	receipt.IntentID = intent
-	return receipt, durableLease{}, nil
-}
-
-// Fence closes admission for good.
-func (d *durableNonces) Fence() {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.fenced = true
-}
-
-// durableLease is the no-op serving lease of the double: the double keeps the
-// reservation, so the lease is always valid and releasing it does nothing.
-type durableLease struct{}
-
-func (durableLease) Valid() bool { return true }
-func (durableLease) Release()    {}
 
 // newDurableHarness is newHarness over a verifier whose nonce admission is the
 // durable store instead of the volatile one. The fixture registry implements
@@ -799,9 +746,82 @@ func replayWhileStreaming(t *testing.T, h *harness, clk *clock, body []byte, non
 	return recFirst, recReplay, sig
 }
 
+func TestDurableNonceReplayRefusedBeforeFirstStreamByte(t *testing.T) {
+	clk := &clock{ts: testfixture.Now}
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "nonce.db")
+	options := durable.Options{DeploymentID: durableDeployment, Window: 30, Now: clk.Now}
+	if err := durable.InitializeUnused(path, options); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := durable.Open(path, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := durable.Open(path, options); err == nil {
+		_ = owner.Close()
+		t.Fatal("second durable owner was admitted")
+	}
+	defer func() {
+		if err := owner.Close(); err != nil {
+			t.Errorf("close durable owner: %v", err)
+		}
+	}()
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	var enteredOnce sync.Once
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		enteredOnce.Do(func() { close(entered) })
+		<-release
+		_, _ = w.Write([]byte(progressFrame))
+	})
+	h, _ := newDurableHarness(t, owner, next)
+	alice := testfixture.PrivateKey(t, "alice")
+	body := modernStreamBody(8)
+	first, sig := signedPost(t, clk, alice, "/mcp", body, 42, "s1")
+	modernMirrors(first, "email.received")
+	replay, _ := signedPost(t, clk, alice, "/mcp", body, 42, "s1")
+	modernMirrors(replay, "email.received")
+
+	firstRec := httptest.NewRecorder()
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		h.handler.ServeHTTP(firstRec, first)
+	}()
+	waitClosed(t, entered, "blocked durable handler entry")
+	select {
+	case <-firstDone:
+		t.Fatal("first handler returned before its first stream byte was released")
+	default:
+	}
+
+	replayRec := httptest.NewRecorder()
+	h.handler.ServeHTTP(replayRec, replay)
+	if replayRec.Code != http.StatusUnauthorized || errorCode(t, replayRec) != jack.CodeReplayedNonce {
+		t.Fatalf("durable replay = %d %s, want unsigned replayed_nonce", replayRec.Code, replayRec.Body.String())
+	}
+	if replayRec.Header().Get("Jack-Auth") != "" || strings.Contains(replayRec.Body.String(), "event: ") {
+		t.Fatalf("durable replay emitted signed/stream response: %q", replayRec.Body.String())
+	}
+	close(release)
+	waitClosed(t, firstDone, "first durable stream")
+	frames := parseFrames(t, firstRec.Body.Bytes())
+	if firstRec.Code != http.StatusOK || len(frames) != 2 || frames[0].event != "message" || frames[0].data != progressEvent || frames[1].event != "jack-end" {
+		t.Fatalf("first stream frames = %+v, status %d", frames, firstRec.Code)
+	}
+	if !verifyStream(t, firstRec, clk, sig, h.server.Public().(ed25519.PublicKey), 0).Complete {
+		t.Fatal("first durable stream did not verify complete")
+	}
+}
+
 // TestStreamNonceBeforeFirstByteAndReplayRefused covers spec 05 3.6: the nonce
-// is committed before the first stream byte, so the same signed request is a
-// replayed_nonce refusal while the first stream is still running.
+// is committed before the first stream byte, so replay is refused while the
+// first handler is held before it can write that byte.
 func TestStreamNonceBeforeFirstByteAndReplayRefused(t *testing.T) {
 	// gate is the handler of both sub-tests: it writes one event, reports it
 	// and blocks until the test releases it.
@@ -844,33 +864,4 @@ func TestStreamNonceBeforeFirstByteAndReplayRefused(t *testing.T) {
 		}
 	})
 
-	t.Run("durable nonce store", func(t *testing.T) {
-		started, release := make(chan struct{}), make(chan struct{})
-		store := &durableNonces{}
-		h, clk := newDurableHarness(t, store, gate(started, release))
-		recFirst, recReplay, _ := replayWhileStreaming(t, h, clk, modernStreamBody(5), 31, started, release)
-
-		for _, want := range []string{"event: message", "event: jack-end"} {
-			if !strings.Contains(recFirst.Body.String(), want) {
-				t.Fatalf("first response carried no stream bytes (%q missing): %q", want, recFirst.Body.String())
-			}
-		}
-		if recReplay.Code != http.StatusUnauthorized {
-			t.Fatalf("replay status = %d, body %s", recReplay.Code, recReplay.Body.String())
-		}
-		if code := errorCode(t, recReplay); code != jack.CodeReplayedNonce {
-			t.Fatalf("replay code = %q, want %q", code, jack.CodeReplayedNonce)
-		}
-		// The attempted duplicate is refused before a receipt is created, so
-		// NonceRecorded is false and the refusal is intentionally unsigned.
-		if len(recReplay.Header().Values("Jack-Auth")) != 0 {
-			t.Fatalf("durable replay has Jack-Auth headers: %q", recReplay.Header().Values("Jack-Auth"))
-		}
-		if strings.Contains(recReplay.Body.String(), "event: ") {
-			t.Fatalf("replay answered with a stream: %q", recReplay.Body.String())
-		}
-		if store.fenced {
-			t.Fatal("a definite replayed_nonce refusal must not fence the durable store")
-		}
-	})
 }
