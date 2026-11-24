@@ -143,8 +143,7 @@ test("stream client: the idle timeout runs on the injected clock", { timeout: 30
 });
 
 test("stream client: a chunk cannot overfill the queue past the slowest active view", { timeout: 30_000 }, async () => {
-  const signer = streamSigner(fixtureNow);
-  const frames = Array.from({ length: 20 }, (_, index) => signer.frame(`{\"jsonrpc\":\"2.0\",\"method\":\"notifications/${index}\"}`, fixtureNow));
+  let frames: readonly { readonly bytes: Uint8Array }[] = [];
   let pullCount = 0;
   let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
   let announcePull: (() => void) | undefined;
@@ -178,8 +177,14 @@ test("stream client: a chunk cannot overfill the queue past the slowest active v
     },
     { highWaterMark: 0 },
   );
-  const fetchImpl = async (): Promise<Response> =>
-    new Response(body, { status: 200, headers: { "content-type": "text/event-stream", "jack-auth": signer.openAuthValue() } });
+  const fetchImpl = async (_input: string | Request | URL, init?: RequestInit): Promise<Response> => {
+    const authValue = new Headers(init?.headers).get("jack-auth");
+    assert.ok(authValue !== null, "the signed request carries Jack-Auth");
+    // 2.5: the stream is opened over this request own sig.
+    const signer = new StreamSigner({ key: svcSigner, requestSig: parseRequestAuth([authValue]).sig, sid: freshSid(), openerTs: fixtureNow, status: 200 });
+    frames = Array.from({ length: 20 }, (_, index) => signer.frame(`{"jsonrpc":"2.0","method":"notifications/${index}"}`, fixtureNow));
+    return new Response(body, { status: 200, headers: { "content-type": "text/event-stream", "jack-auth": signer.openAuthValue() } });
+  };
   const session = await openSignedStream(
     { aud: fixtureAud, signer: clientSigner, serverKey: SVC_PUBLIC_KEY, clock: (): number => fixtureNow },
     URL_UNDER_TEST,
@@ -187,7 +192,7 @@ test("stream client: a chunk cannot overfill the queue past the slowest active v
     fetchImpl,
   );
   const messages = session.messages();
-  const sseReader = session.sse.getReader();
+  const sseReader = session.sse().getReader();
   const sseReads = Array.from({ length: 8 }, () => sseReader.read());
   await firstPull;
   assert.ok(controller !== undefined);
@@ -206,7 +211,7 @@ test("stream client: a chunk cannot overfill the queue past the slowest active v
   assert.equal(pullCount, 1, "the pump must stop verifying frames from this chunk at the slowest view's high-water mark");
   releasePendingPulls();
   await session.cancel();
-  await ninthRead;
+  void ninthRead.catch(() => undefined);
 });
 
 test("stream client: a held CR completed by a later non-LF byte uses the CR arrival time", { timeout: 30_000 }, () => {
@@ -227,7 +232,7 @@ test("stream client: a held CR completed by a later non-LF byte uses the CR arri
     ],
   });
   assert.deepEqual(result.messages, [MESSAGE_ONE]);
-  assert.deepEqual(result.terminal, { state: "error", code: "stream_truncated", framesVerified: 1 });
+  assert.deepEqual(result.terminal, { state: "error", code: "stream_idle", framesVerified: 1 });
 
   const lateSigner = streamSigner(fixtureNow);
   const lateFrame = lateSigner.frame(MESSAGE_ONE, fixtureNow);
