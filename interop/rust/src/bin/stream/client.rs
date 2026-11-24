@@ -123,10 +123,18 @@ fn run_inner(request_sig_out: &mut Option<String>) -> Result<(), String> {
         let payload = read_body_bounded(&mut reader, &response_headers, 2 * 1024 * 1024)?;
         let parsed: serde_json::Value =
             serde_json::from_slice(&payload).unwrap_or(serde_json::Value::Null);
-        let actual = parsed
-            .pointer("/error/code")
-            .and_then(|x| x.as_str())
-            .unwrap_or("http_error");
+        let actual = if status == 429 {
+            // The 3.3 refusal body is JSON-RPC; its semantic code is error.message.
+            parsed
+                .pointer("/error/message")
+                .and_then(|x| x.as_str())
+                .unwrap_or("http_error")
+        } else {
+            parsed
+                .pointer("/error/code")
+                .and_then(|x| x.as_str())
+                .unwrap_or("http_error")
+        };
         let auth = response_headers
             .get("jack-auth")
             .cloned()
@@ -192,6 +200,7 @@ fn run_inner(request_sig_out: &mut Option<String>) -> Result<(), String> {
     let mut terminal: Option<mcp_jack::stream::StreamFailure> = None;
     let cancel = flag(&a, "--action").unwrap_or_else(|| scenario.clone()) == "cancel";
     let opened_at = Instant::now();
+    let mut last_byte_at: Option<Instant> = None;
     let loop_deadline_ms = max_stream_duration_ms
         .saturating_add(5_000)
         .min(idle_timeout_ms)
@@ -201,10 +210,22 @@ fn run_inner(request_sig_out: &mut Option<String>) -> Result<(), String> {
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            terminal = Some(mcp_jack::stream::StreamFailure::new(
-                mcp_jack::stream::StreamCode::Truncated,
-                verifier.frames_verified(),
-            ));
+            // 4.5: silence runs from the last byte (or the verified open when no byte
+            // arrived) and must be strictly greater than the idle limit.
+            let base = last_byte_at.unwrap_or(opened_at);
+            let mut silent = base.elapsed().as_millis().min(i64::MAX as u128) as i64;
+            if silent <= idle_timeout_ms.min(i64::MAX as u64) as i64 {
+                let wait = idle_timeout_ms.min(i64::MAX as u64) as i64 - silent + 2;
+                std::thread::sleep(Duration::from_millis(wait.max(2) as u64));
+                silent = base.elapsed().as_millis().min(i64::MAX as u128) as i64;
+            }
+            let step = verifier.finish(Some(silent));
+            terminal = Some(step.terminal.unwrap_or_else(|| {
+                mcp_jack::stream::StreamFailure::new(
+                    mcp_jack::stream::StreamCode::Truncated,
+                    verifier.frames_verified(),
+                )
+            }));
             break;
         }
         if reader.sock.set_read_timeout(Some(remaining)).is_err() {
@@ -217,6 +238,30 @@ fn run_inner(request_sig_out: &mut Option<String>) -> Result<(), String> {
         let n = match reader.read_body(&mut chunk, &response_headers) {
             Ok(n) => n,
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => 0,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                // 4.5: silence runs from the last byte (or the verified open when no byte
+                // arrived) and must be strictly greater than the idle limit.
+                let base = last_byte_at.unwrap_or(opened_at);
+                let mut silent = base.elapsed().as_millis().min(i64::MAX as u128) as i64;
+                if silent <= idle_timeout_ms.min(i64::MAX as u64) as i64 {
+                    let wait = idle_timeout_ms.min(i64::MAX as u64) as i64 - silent + 2;
+                    std::thread::sleep(Duration::from_millis(wait.max(2) as u64));
+                    silent = base.elapsed().as_millis().min(i64::MAX as u128) as i64;
+                }
+                let step = verifier.finish(Some(silent));
+                terminal = Some(step.terminal.unwrap_or_else(|| {
+                    mcp_jack::stream::StreamFailure::new(
+                        mcp_jack::stream::StreamCode::Truncated,
+                        verifier.frames_verified(),
+                    )
+                }));
+                break;
+            }
             Err(e) => {
                 terminal = Some(mcp_jack::stream::StreamFailure::new(
                     mcp_jack::stream::StreamCode::Truncated,
@@ -229,6 +274,7 @@ fn run_inner(request_sig_out: &mut Option<String>) -> Result<(), String> {
         if n == 0 {
             break;
         }
+        last_byte_at = Some(Instant::now());
         let before = verifier.frames_verified();
         let arrived_at_ms = opened_at.elapsed().as_millis().min(i64::MAX as u128) as i64;
         let events = sse.push(&chunk[..n], arrived_at_ms);
@@ -297,6 +343,17 @@ fn run_inner(request_sig_out: &mut Option<String>) -> Result<(), String> {
     if (!cancel || delivered == 0) && terminal.is_none() {
         let step = verifier.finish(None);
         terminal = step.terminal;
+    }
+    if terminal
+        .as_ref()
+        .is_some_and(|f| f.code == mcp_jack::stream::StreamCode::FrameTooLarge)
+    {
+        if let Some(last) = frames.last() {
+            if mcp_jack::stream::parse_signal(&last.data).is_some() {
+                failure_frame = frame_json_kind(last, &open, "signal");
+                frames.pop();
+            }
+        }
     }
     let fs: Vec<_> = frames.iter().map(|f| frame_json(f, &open)).collect();
     let end = frames
@@ -553,7 +610,22 @@ fn frame_json(
     f: &mcp_jack::stream::JackFrame,
     o: &mcp_jack::stream::OpenAuth,
 ) -> serde_json::Value {
-    serde_json::json!({"kind":if f.kind==mcp_jack::stream::FrameKind::End{"end"}else{"message"},"sid":o.sid,"kid":o.kid,"seq":f.seq,"ts":f.ts,"data":f.data,"sig":f.sig})
+    frame_json_kind(
+        f,
+        o,
+        if f.kind == mcp_jack::stream::FrameKind::End {
+            "end"
+        } else {
+            "message"
+        },
+    )
+}
+fn frame_json_kind(
+    f: &mcp_jack::stream::JackFrame,
+    o: &mcp_jack::stream::OpenAuth,
+    kind: &str,
+) -> serde_json::Value {
+    serde_json::json!({"kind":kind,"sid":o.sid,"kid":o.kid,"seq":f.seq,"ts":f.ts,"data":f.data,"sig":f.sig})
 }
 fn response_auth_evidence(
     status: u16,
