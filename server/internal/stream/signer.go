@@ -37,8 +37,11 @@ type SessionConfig struct {
 	Cutoff func() (int64, bool)
 	// Flush, when set, is called after every frame.
 	Flush func()
-	// Stop cancels the handler request context when the server ends the stream.
-	Stop func()
+	Stop  func()
+	// Interrupt asks the transport to unblock a writer when Timeout wins.
+	Interrupt func()
+	// Final authorizes the key immediately before the end frame.
+	Final func() error
 }
 
 // Session is one signed response stream: the open header of 2.1-2.5 and the
@@ -52,12 +55,13 @@ type Session struct {
 	parserMu sync.Mutex
 	writeMu  sync.Mutex
 
-	w        io.Writer
-	flush    func()
-	stop     func()
-	stopOnce sync.Once
-	key      Key
-	opts     Options
+	w         io.Writer
+	flush     func()
+	stop      func()
+	interrupt func()
+	stopOnce  sync.Once
+	key       Key
+	opts      Options
 
 	requestSig string
 	sid        string
@@ -65,6 +69,9 @@ type Session struct {
 	openTS     int64
 	now        func() int64
 	cutoffFn   func() (int64, bool)
+	final      func() error
+	finalOnce  sync.Once
+	finalErr   error
 
 	parser splitter
 	seq    uint64
@@ -75,6 +82,9 @@ type Session struct {
 	lastMessage string
 	frames      int
 	closed      bool
+	stopping    bool
+	done        chan struct{}
+	doneOnce    sync.Once
 }
 
 // OpenSession signs the open header and returns the session. The caller writes
@@ -127,6 +137,7 @@ func OpenSession(w io.Writer, cfg SessionConfig) (*Session, error) {
 		w:          w,
 		flush:      cfg.Flush,
 		stop:       cfg.Stop,
+		interrupt:  cfg.Interrupt,
 		key:        key,
 		opts:       opts,
 		requestSig: cfg.RequestSig,
@@ -135,6 +146,8 @@ func OpenSession(w io.Writer, cfg SessionConfig) (*Session, error) {
 		openTS:     openTS,
 		now:        now,
 		cutoffFn:   cfg.Cutoff,
+		final:      cfg.Final,
+		done:       make(chan struct{}),
 	}
 	s.prev = s.openSig
 	s.seq = 0
@@ -168,31 +181,58 @@ func (s *Session) OpenTimestamp() int64 { return s.openTS }
 // message frame. The returned error tells the handler to stop; the stream has
 // then been closed with its end frame.
 func (s *Session) Write(p []byte) (int, error) {
-	s.parserMu.Lock()
-	defer s.parserMu.Unlock()
 	s.mu.Lock()
-	if s.closed {
+	if s.closed || s.stopping {
 		s.mu.Unlock()
 		return 0, ErrClosed
 	}
 	if cutoff, known := s.cutoffLocked(); known && s.now() >= cutoff-cutoffGuardSeconds {
+		s.stopping = true
 		s.mu.Unlock()
+		s.stopLocked()
 		s.writeMu.Lock()
 		s.endHeld()
 		s.writeMu.Unlock()
 		return 0, ErrClosed
 	}
 	s.mu.Unlock()
-	err := s.parser.feed(p, s.opts.FrameMaxBytes+1024, s.emit)
-	if errors.Is(err, errEventTooLarge) {
-		// 2.17, 2.18, 3.2: the signal frame is the last message of the stream.
-		s.writeMu.Lock()
-		_ = s.writeFrameHeld(MessageEvent, SignalValue(SignalFrameTooLarge, s.opts.FrameMaxBytes))
-		s.endHeld()
-		s.writeMu.Unlock()
+	s.parserMu.Lock()
+	defer s.parserMu.Unlock()
+	s.mu.Lock()
+	if s.closed || s.stopping {
+		s.mu.Unlock()
 		return 0, ErrClosed
 	}
-	if err != nil {
+	if cutoff, known := s.cutoffLocked(); known && s.now() >= cutoff-cutoffGuardSeconds {
+		s.stopping = true
+		s.mu.Unlock()
+		s.stopLocked()
+		s.endHeld()
+		return 0, ErrClosed
+	}
+	s.mu.Unlock()
+	if err := s.parser.feed(p, s.opts.FrameMaxBytes, s.emit); errors.Is(err, errEventTooLarge) {
+		// 2.17, 2.18 and 3.2: the splitter already discarded the event. Mark
+		// stopping before waiting for the wire, then emit only the signal/end.
+		s.mu.Lock()
+		if s.closed || s.stopping {
+			s.mu.Unlock()
+			return 0, ErrClosed
+		}
+		s.stopping = true
+		s.mu.Unlock()
+		s.stopLocked()
+		s.writeMu.Lock()
+		signalErr := s.writeFrameHeld(MessageEvent, SignalValue(SignalFrameTooLarge, s.opts.FrameMaxBytes))
+		if signalErr == nil {
+			_ = s.endHeld()
+		}
+		s.writeMu.Unlock()
+		if signalErr != nil {
+			return 0, signalErr
+		}
+		return 0, ErrClosed
+	} else if err != nil {
 		return 0, err
 	}
 	return len(p), nil
@@ -201,30 +241,43 @@ func (s *Session) Write(p []byte) (int, error) {
 // emit signs one completed handler event as one message frame.
 func (s *Session) emit(data string) error {
 	s.mu.Lock()
-	if s.closed {
+	if s.closed || s.stopping {
 		s.mu.Unlock()
 		return ErrClosed
 	}
 	if data == "" {
 		s.mu.Unlock()
-		return nil // 2.9: a message frame always carries data
+		return nil
+	}
+	if int64(len(data)) > s.opts.FrameMaxBytes {
+		s.mu.Unlock()
+		s.mu.Lock()
+		s.stopping = true
+		s.mu.Unlock()
+		s.stopLocked()
+		s.writeMu.Lock()
+		err := s.writeFrameHeld(MessageEvent, SignalValue(SignalFrameTooLarge, s.opts.FrameMaxBytes))
+		if err == nil {
+			_ = s.endHeld()
+		}
+		s.writeMu.Unlock()
+		if err != nil {
+			return err
+		}
+		return ErrClosed
 	}
 	if !utf8.ValidString(data) {
 		s.mu.Unlock()
+		s.mu.Lock()
+		s.stopping = true
+		s.mu.Unlock()
+		s.stopLocked()
 		s.writeMu.Lock()
 		s.endHeld()
 		s.writeMu.Unlock()
 		return ErrHandlerData
 	}
 	s.mu.Unlock()
-	if int64(len(data)) > s.opts.FrameMaxBytes { // 2.17, 3.2
-		// The signal frame is the last message: nothing follows it but the end.
-		_ = s.writeFrame(MessageEvent, SignalValue(SignalFrameTooLarge, s.opts.FrameMaxBytes))
-		s.writeMu.Lock()
-		s.endHeld()
-		s.writeMu.Unlock()
-		return ErrClosed
-	}
 	if err := s.writeFrame(MessageEvent, data); err != nil {
 		return err
 	}
@@ -251,23 +304,22 @@ func (s *Session) writeFrameHeld(kind, data string) error {
 		return ErrClosed
 	}
 	ts, ok := s.frameTSLocked(kind == EndEvent)
+	s.mu.Unlock()
 	if !ok {
-		s.mu.Unlock()
-		return ErrKeyRetired
+		return s.failFrame(ErrKeyRetired)
 	}
 	seq, prev := s.seq, s.prev
-	s.mu.Unlock()
 
 	signing := FrameSigningString(s.sid, seq, ts, prev, DataHash([]byte(data)))
 	raw, err := s.key.Sign([]byte(signing))
 	if err != nil {
-		return err
+		return s.failFrame(err)
 	}
 	if len(raw) != 64 {
-		return errors.New("stream: key did not return a 64-byte signature")
+		return s.failFrame(errors.New("stream: key did not return a 64-byte signature"))
 	}
 	if !jack.Verify(s.key.PublicKey, []byte(signing), raw) {
-		return errors.New("stream: frame signature does not verify under the key")
+		return s.failFrame(errors.New("stream: frame signature does not verify under the key"))
 	}
 	sig := jack.EncodeBase64URL(raw)
 	if _, err := s.w.Write(EncodeFrame(kind, data, seq, ts, sig)); err != nil {
@@ -275,6 +327,8 @@ func (s *Session) writeFrameHeld(kind, data string) error {
 		s.closed = true
 		s.mu.Unlock()
 		s.stopLocked()
+		s.runFinal()
+		s.complete()
 		return err
 	}
 	if s.flush != nil {
@@ -283,15 +337,22 @@ func (s *Session) writeFrameHeld(kind, data string) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return ErrClosed
-	}
 	s.prev = sig
 	s.lastTS = ts
 	s.haveTS = true
 	s.seq++
 	s.frames++
 	return nil
+}
+
+func (s *Session) failFrame(err error) error {
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+	s.stopLocked()
+	s.runFinal()
+	s.complete()
+	return err
 }
 
 // frameTSLocked returns the timestamp of the next frame: fresh, never below
@@ -304,11 +365,19 @@ func (s *Session) frameTSLocked(end bool) (int64, bool) {
 		return 0, false
 	}
 	ts := now
+	if ts < s.openTS {
+		ts = s.openTS
+	}
 	if s.haveTS && ts < s.lastTS {
 		ts = s.lastTS
 	}
 	if known && ts >= cutoff {
-		ts = cutoff - 1
+		if end {
+			ts = cutoff - 1
+		}
+		if ts >= cutoff || (s.haveTS && ts < s.lastTS) {
+			return 0, false
+		}
 	}
 	if s.haveTS && ts < s.lastTS {
 		return 0, false
@@ -324,22 +393,49 @@ func (s *Session) cutoffLocked() (int64, bool) {
 // endHeld writes the end frame once and closes the stream (2.16); the caller
 // holds writeMu. The end frame is always attempted, even before any message
 // frame, so the stream carries the close 5.1 requires.
-func (s *Session) endHeld() {
+func (s *Session) endHeld() (result error) {
+	defer s.complete()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
-		return
+		return ErrClosed
 	}
 	s.mu.Unlock()
-	if err := s.writeFrameHeld(EndEvent, ""); errors.Is(err, ErrKeyRetired) {
-		// There is no legal timestamp left for an end frame.
-		s.stopLocked()
-		return
+	if err := s.runFinal(); err != nil {
+		s.Abort()
+		return err
+	}
+	if err := s.writeFrameHeld(EndEvent, ""); err != nil {
+		s.Abort()
+		return err
 	}
 	s.mu.Lock()
 	s.closed = true
 	s.mu.Unlock()
 	s.stopLocked()
+	return nil
+}
+
+func (s *Session) runFinal() error {
+	s.finalOnce.Do(func() {
+		if s.final != nil {
+			s.finalErr = callFinal(s.final)
+		}
+	})
+	return s.finalErr
+}
+
+func callFinal(final func() error) (err error) {
+	defer func() {
+		if recover() != nil {
+			err = errors.New("stream: final authorization panicked")
+		}
+	}()
+	return final()
+}
+
+func (s *Session) complete() {
+	s.doneOnce.Do(func() { close(s.done) })
 }
 
 // stopLocked cancels the handler request context at most once.
@@ -351,52 +447,122 @@ func (s *Session) stopLocked() {
 	})
 }
 
+// Abort closes the session without writing more frames, for a failed final
+// authorization gate or an unusable connection.
+func (s *Session) Abort() {
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+	s.stopLocked()
+	s.runFinal()
+	s.complete()
+}
+
 // Close ends the stream the handler finished: it writes the end frame unless
 // the stream already ended.
-func (s *Session) Close() error {
+func (s *Session) Close() (result error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			s.Abort()
+			result = errors.New("stream: close panicked")
+		}
+	}()
+	s.mu.Lock()
+	if s.closed {
+		done := s.done
+		s.mu.Unlock()
+		<-done
+		return nil
+	}
+	if s.stopping {
+		done := s.done
+		s.mu.Unlock()
+		<-done
+		return nil
+	}
+	s.stopping = true
+	s.mu.Unlock()
 	s.parserMu.Lock()
 	defer s.parserMu.Unlock()
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	s.endHeld()
-	return nil
+	return s.endHeld()
 }
 
 // Timeout ends a stream that reached its maximum duration or its key cutoff:
 // it writes the final response of the opening request when final returns a
 // non-empty data value, then the end frame. final may be nil.
-func (s *Session) Timeout(final func(lastMessage string) string) error {
-	if !s.parserMu.TryLock() {
-		s.stopLocked()
-		return nil
-	}
-	defer s.parserMu.Unlock()
+func (s *Session) Timeout(final func(lastMessage string) string) (result error) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
 		return nil
 	}
+	if s.stopping {
+		// Close may be waiting for a handler write while holding the terminal
+		// transition. A timeout must still interrupt that write; otherwise the
+		// timer cannot release the identity lease. Abort is idempotent and
+		// runFinal is guarded, so it is safe alongside Close's eventual end.
+		s.mu.Unlock()
+		s.stopLocked()
+		if s.interrupt != nil {
+			s.interrupt()
+		}
+		s.Abort()
+		return nil
+	}
+	s.stopping = true
+	s.mu.Unlock()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			s.Abort()
+			result = errors.New("stream: timeout panicked")
+		}
+	}()
+	s.stopLocked()
+	if !s.parserMu.TryLock() {
+		if s.interrupt != nil {
+			s.interrupt()
+		}
+		s.Abort()
+		return nil
+	}
+	defer s.parserMu.Unlock()
+	s.mu.Lock()
 	last := s.lastMessage
 	guardBlocked := false
 	if cutoff, known := s.cutoffLocked(); known && s.now() >= cutoff-cutoffGuardSeconds {
 		guardBlocked = true
 	}
 	s.mu.Unlock()
-
 	if !s.writeMu.TryLock() {
-		// The wire is busy: cancel the handler, but leave the state open so the
-		// in-flight write can commit and the caller's deferred Close can end it.
-		s.stopLocked()
+		if s.interrupt != nil {
+			s.interrupt()
+		}
+		s.Abort()
 		return nil
 	}
 	defer s.writeMu.Unlock()
-	if final != nil && !guardBlocked { // 6.3
+	if final != nil && !guardBlocked {
 		if data := final(last); data != "" && data != last {
-			_ = s.writeFrameHeld(MessageEvent, data)
+			if err := s.writeFrameHeld(MessageEvent, data); err != nil {
+				s.Abort()
+				return err
+			}
 		}
 	}
-	s.endHeld()
-	return nil
+	return s.endHeld()
+}
+
+// Done returns a channel closed when terminal frame writing or an interrupted
+// terminal attempt has resolved.
+func (s *Session) Done() <-chan struct{} { return s.done }
+
+// Terminating reports whether a terminal action is underway or complete.
+func (s *Session) Terminating() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed || s.stopping
 }
 
 // Closed reports whether the stream already ended.

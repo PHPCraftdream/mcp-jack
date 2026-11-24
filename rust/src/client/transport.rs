@@ -117,7 +117,7 @@ impl HttpResponse {
 ///
 /// | response | outcome |
 /// |---|---|
-/// | Any comma-separated member of the Content-Type lines has media type `text/event-stream` (case-insensitive, up to the first `;`) | `Streaming` — refused before verification |
+/// | Any comma-separated member of the Content-Type lines has media type `text/event-stream` (case-insensitive, up to the first `;`) | `Streaming` in `round_trip_as`; `open_stream_as` buffers and verifies it as v1 unless it is status 200 |
 /// | body larger than MAX_BODY_BYTES | `Client("...response body exceeds...")` — refused before verification |
 /// | the inner transport errors | passed through unchanged |
 /// | verification fails with `missing_auth` AND status 401 (unsigned answer) | `Unauthenticated` — HTTP status only; the body is never parsed (spec 01 section 5) |
@@ -204,8 +204,14 @@ pub trait Transport: Send + Sync {
     fn round_trip(&self, req: HttpRequest) -> Result<HttpResponse, TransportError>;
 }
 
-/// Lets an owned trait object (Arc<dyn Transport>, as held by Config) act as
-/// the inner transport of SigningTransport.
+/// Result of routing one `open_stream` response (spec 05 section 1.4).
+pub enum OpenStreamResult {
+    /// A verified signed stream.
+    Stream(Box<VerifiedStream>),
+    /// A verified buffered v1 response, including status and exact body bytes.
+    Response(HttpResponse),
+}
+
 impl<T: Transport + ?Sized> Transport for Arc<T> {
     fn round_trip(&self, req: HttpRequest) -> Result<HttpResponse, TransportError> {
         (**self).round_trip(req)
@@ -317,34 +323,29 @@ impl<T: Transport> SigningTransport<T> {
             return Err(TransportError::Streaming);
         }
 
-        // Body cap BEFORE verification (Go reads with a LimitReader and
-        // refuses larger bodies the same way).
+        self.verify_v1_response(resp, &signed.auth.sig)
+    }
+    fn verify_v1_response(
+        &self,
+        resp: HttpResponse,
+        request_sig: &str,
+    ) -> Result<HttpResponse, TransportError> {
         if resp.body.len() > MAX_BODY_BYTES {
             return Err(TransportError::Client(format!(
                 "jack client: response body exceeds {MAX_BODY_BYTES} bytes"
             )));
         }
-
-        // Response freshness against a FRESH clock sample taken after the
-        // round trip (Go samples now() again for VerifyResponse); a pinned
-        // request ts must not freeze this check.
         let now = (self.now)();
-
-        // Go: VerifyResponse (the spec-wins remap of parser 401 -> 0 is
-        // inside crate::signing::verify_response).
         let header_values = resp.header_values("Jack-Auth");
         if let Err(err) = crate::signing::verify_response(
             &self.server_key,
             resp.status as i64,
             &header_values,
-            &signed.auth.sig,
+            request_sig,
             &resp.body,
             now,
             self.window_seconds,
         ) {
-            // Spec 01 section 5: an unsigned answer is acted on only up to its
-            // status — the body is never parsed (Go also surfaces the
-            // untrusted body code/message: reported Go/spec divergence).
             if err.code == crate::error::codes::MISSING_AUTH && resp.status == 401 {
                 return Err(TransportError::Unauthenticated(
                     UnauthenticatedResponseError {
@@ -360,8 +361,8 @@ impl<T: Transport> SigningTransport<T> {
 
 impl<T: Transport + crate::client::stream::StreamSource> SigningTransport<T> {
     /// Sends the request with `Jack-Accept: s1` (spec 05 section 1.1) and returns the verified
-    /// stream (section 4). Rotation-aware callers use `VerifiedStream::from_response` directly.
-    pub fn open_stream(&self, req: HttpRequest) -> Result<VerifiedStream, TransportError> {
+    /// stream (section 4), or a verified buffered v1 response (section 1.4).
+    pub fn open_stream(&self, req: HttpRequest) -> Result<OpenStreamResult, TransportError> {
         self.open_stream_as(self.signer.as_ref(), req)
     }
 
@@ -371,7 +372,7 @@ impl<T: Transport + crate::client::stream::StreamSource> SigningTransport<T> {
         &self,
         signer: &dyn Signer,
         req: HttpRequest,
-    ) -> Result<VerifiedStream, TransportError> {
+    ) -> Result<OpenStreamResult, TransportError> {
         let (mut wire_req, signed) = self.sign_wire_request(signer, None, req)?;
         // 1.1: the SDK owns the opt-in header on this call; every caller value is replaced.
         set_header(&mut wire_req.headers, "Jack-Accept", "s1");
@@ -380,6 +381,52 @@ impl<T: Transport + crate::client::stream::StreamSource> SigningTransport<T> {
         // The same no-follow guard as `round_trip_as` (spec 05 section 1.4).
         if is_redirect_status(response.status) {
             return Err(redirect_refusal(response.status));
+        }
+
+        // Spec 05 section 1.4: only 200 text/event-stream uses the stream verifier.
+        if response.status != 200
+            || !is_event_stream(
+                response
+                    .headers
+                    .iter()
+                    .filter(|(n, _)| n.eq_ignore_ascii_case("Content-Type"))
+                    .map(|(_, v)| v.as_str()),
+            )
+        {
+            let response_status = response.status;
+            let response_headers = response.headers;
+            let mut body = Vec::new();
+            let deadline = std::time::Instant::now()
+                .checked_add(std::time::Duration::from_secs(5))
+                .ok_or_else(|| {
+                    TransportError::Client("jack client: response deadline overflow".into())
+                })?;
+            let mut stream_body = response.body;
+            loop {
+                match stream_body.next_chunk(deadline)? {
+                    crate::client::stream::ChunkRead::Data(bytes) => {
+                        if bytes.len() > MAX_BODY_BYTES.saturating_sub(body.len()) {
+                            return Err(TransportError::Client(format!(
+                                "jack client: response body exceeds {MAX_BODY_BYTES} bytes"
+                            )));
+                        }
+                        body.extend_from_slice(&bytes);
+                    }
+                    crate::client::stream::ChunkRead::End => break,
+                    crate::client::stream::ChunkRead::Timeout => {
+                        return Err(TransportError::Transport(
+                            "jack client: response body read timed out".to_string(),
+                        ));
+                    }
+                }
+            }
+            let response = HttpResponse {
+                status: response_status,
+                headers: response_headers,
+                body,
+            };
+            let verified = self.verify_v1_response(response, &signed.auth.sig)?;
+            return Ok(OpenStreamResult::Response(verified));
         }
 
         // The pinned server key is the only trusted stream key; the transport clock is reused.
@@ -391,6 +438,7 @@ impl<T: Transport + crate::client::stream::StreamSource> SigningTransport<T> {
         config.window_seconds = self.window_seconds;
         config.now = self.now.clone();
         VerifiedStream::from_response(response, config)
+            .map(|stream| OpenStreamResult::Stream(Box::new(stream)))
     }
 }
 

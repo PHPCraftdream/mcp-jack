@@ -324,6 +324,18 @@ func (s *Stream) read() {
 				s.err = ErrClosed
 			default:
 				s.err = s.v.Finish()
+				for {
+					msg, ok := s.v.Next()
+					if !ok {
+						break
+					}
+					select {
+					case s.messages <- msg:
+					case <-s.closed:
+						s.err = ErrClosed
+						return
+					}
+				}
 			}
 			return
 		}

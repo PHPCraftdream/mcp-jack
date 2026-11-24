@@ -164,6 +164,36 @@ func (s fixedSigner) Sign(message []byte) ([]byte, error) {
 	return ed25519.Sign(s.key, message), nil
 }
 
+func TestStreamHandlerPanicRunsFinalAndReleasesLease(t *testing.T) {
+	finals, releases := atomic.Int32{}, atomic.Int32{}
+	key := testfixture.PrivateKey(t, "svc")
+	provider := responseKeysFunc(func(transport.ResponseKeyRequest) (transport.ResponseKeyAuthorization, error) {
+		return transport.ResponseKeyAuthorization{
+			Signer: fixedSigner{key: key}, Timestamp: testfixture.Now,
+			Final:   func() error { finals.Add(1); return nil },
+			Release: func() { releases.Add(1) },
+		}, nil
+	})
+	h, clk := newResponseKeysHarness(t, modern.ProfileModern, provider, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(progressFrame))
+		panic("handler panic")
+	}))
+	req, _ := signedPost(t, clk, testfixture.PrivateKey(t, "alice"), "/mcp", modernStreamBody(12), 59, "s1")
+	modernMirrors(req, "email.received")
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		h.handler.ServeHTTP(httptest.NewRecorder(), req)
+	}()
+	if recovered != "handler panic" {
+		t.Fatalf("handler panic = %v", recovered)
+	}
+	if finals.Load() != 1 || releases.Load() != 1 {
+		t.Fatalf("Final calls=%d lease releases=%d, want one each", finals.Load(), releases.Load())
+	}
+}
+
 // TestStreamRotationCutoffEndsBeforeActivation covers spec 05 5.1: once the
 // clock reaches the guard before the successor activation no further frame is
 // legal, so the stream closes strictly before the activation. Every frame ts
@@ -246,6 +276,270 @@ func TestStreamRotationCutoffEndsBeforeActivation(t *testing.T) {
 		t.Fatalf("body at release carried no end frame: %q", rec.Body.String())
 	}
 }
+
+// TestStreamTimeoutInterruptsBlockedWriteReleasesIdentity proves a timer can
+// interrupt a physical response write and release its identity lease even
+// while the wrapped handler ignores cancellation.
+func TestStreamTimeoutInterruptsBlockedWriteReleasesIdentity(t *testing.T) {
+	var clockMu sync.Mutex
+	timerClock := time.Unix(testfixture.Now, 0)
+	timers := make(chan *controlledStreamTimer, 4)
+	firstWriteEntered := make(chan struct{})
+	writeInterrupted := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	firstHandlerReturned := make(chan struct{})
+	var requestCount atomic.Int32
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requestCount.Add(1) == 1 {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte(progressFrame))
+			close(firstHandlerReturned)
+			<-releaseHandler // deliberately ignore request cancellation
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(progressFrame))
+	})
+	handler, err := transport.NewHandler(transport.HandlerConfig{
+		Verifier:  fixtureVerifier(t, &clock{ts: testfixture.Now}),
+		ServerKey: testfixture.PrivateKey(t, "svc"),
+		Profile:   modern.ProfileModern,
+		Streams:   &transport.StreamOptions{MaxStreamDuration: time.Second},
+		TimerNow:  func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return timerClock },
+		TimerAfterFunc: func(_ time.Duration, callback func()) transport.StreamTimer {
+			timer := &controlledStreamTimer{callback: callback}
+			timers <- timer
+			return timer
+		},
+	}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { next.ServeHTTP(w, r) }))
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	writer := &blockedResponseWriter{header: make(http.Header), entered: firstWriteEntered, interrupted: writeInterrupted}
+	first, _ := signedPost(t, &clock{ts: testfixture.Now}, testfixture.PrivateKey(t, "alice"), "/mcp", modernStreamBody(21), 71, "s1")
+	modernMirrors(first, "email.received")
+	firstDone := make(chan struct{})
+	go func() { defer close(firstDone); handler.ServeHTTP(writer, first) }()
+	cleanup := func() {
+		select {
+		case <-releaseHandler:
+		default:
+			close(releaseHandler)
+		}
+		writer.unblock()
+	}
+	t.Cleanup(cleanup)
+	select {
+	case <-firstWriteEntered:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("first physical stream write did not block")
+	}
+	var timer *controlledStreamTimer
+	select {
+	case timer = <-timers:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("stream timer was not armed")
+	}
+	clockMu.Lock()
+	timerClock = timerClock.Add(2 * time.Second)
+	clockMu.Unlock()
+	timer.callback()
+	select {
+	case <-writeInterrupted:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("timeout did not interrupt the blocked physical write")
+	}
+	select {
+	case <-firstHandlerReturned:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("handler did not return from its failed write")
+	}
+	second, _ := signedPost(t, &clock{ts: testfixture.Now}, testfixture.PrivateKey(t, "alice"), "/mcp", modernStreamBody(22), 72, "s1")
+	modernMirrors(second, "email.received")
+	secondWriter := &blockedResponseWriter{header: make(http.Header)}
+	secondDone := make(chan struct{})
+	go func() { defer close(secondDone); handler.ServeHTTP(secondWriter, second) }()
+	select {
+	case <-secondDone:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("second same-identity stream did not complete")
+	}
+	if secondWriter.status != http.StatusOK {
+		t.Fatalf("second stream status = %d, want admitted 200 (not 429)", secondWriter.status)
+	}
+	select {
+	case <-firstDone:
+		t.Fatal("first handler returned before explicit release")
+	default:
+	}
+	cleanup()
+	select {
+	case <-firstDone:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("first handler did not finish after release")
+	}
+	if bytes.Contains(writer.body.Bytes(), []byte(progressEvent)) {
+		t.Fatal("a post-timeout message frame reached the response writer")
+	}
+}
+
+type blockedResponseWriter struct {
+	mu          sync.Mutex
+	header      http.Header
+	status      int
+	body        bytes.Buffer
+	entered     chan struct{}
+	interrupted chan struct{}
+	blocked     bool
+	unblockOnce sync.Once
+}
+
+func (w *blockedResponseWriter) Header() http.Header    { return w.header }
+func (w *blockedResponseWriter) WriteHeader(status int) { w.status = status }
+func (w *blockedResponseWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	block := w.entered != nil && !w.blocked
+	if block {
+		w.blocked = true
+	}
+	w.mu.Unlock()
+	if block {
+		close(w.entered)
+		<-w.interrupted
+		return 0, io.ErrClosedPipe
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.body.Write(p)
+}
+func (w *blockedResponseWriter) SetWriteDeadline(time.Time) error {
+	if w.interrupted != nil {
+		w.unblock()
+	}
+	return nil
+}
+func (w *blockedResponseWriter) unblock() {
+	if w.interrupted != nil {
+		w.unblockOnce.Do(func() { close(w.interrupted) })
+	}
+}
+
+// TestStreamLateSuccessorCutoffPollWritesEndBeforeActivation covers a successor
+// otherwise idle stream before the activation.
+func TestStreamLateSuccessorCutoffPollWritesEndBeforeActivation(t *testing.T) {
+	const (
+		openTS     = int64(2000)
+		activation = int64(3000)
+	)
+	clk := &clock{ts: openTS}
+	var successorKnown atomic.Bool
+	provider := lateSuccessorProvider{
+		key:    fixedSigner{key: testfixture.PrivateKey(t, "svc")},
+		known:  &successorKnown,
+		cutoff: activation,
+	}
+	timerClock := time.Unix(openTS, 0)
+	timers := make(chan *controlledStreamTimer, 4)
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		<-r.Context().Done()
+	})
+	handler, err := transport.NewHandler(transport.HandlerConfig{
+		Verifier:     fixtureVerifier(t, clk),
+		ResponseKeys: provider,
+		Profile:      modern.ProfileModern,
+		Streams:      &transport.StreamOptions{MaxStreamDuration: time.Hour},
+		TimerNow:     func() time.Time { return timerClock },
+		TimerAfterFunc: func(_ time.Duration, callback func()) transport.StreamTimer {
+			timer := &controlledStreamTimer{callback: callback}
+			timers <- timer
+			return timer
+		},
+	}, next)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	req, _ := signedPost(t, clk, testfixture.PrivateKey(t, "alice"), "/mcp", modernStreamBody(14), 61, "s1")
+	modernMirrors(req, "email.received")
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handler.ServeHTTP(rec, req)
+	}()
+
+	var timer *controlledStreamTimer
+	select {
+	case timer = <-timers:
+	case <-done:
+		t.Fatalf("stream returned before its polling timer was armed: status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	// An early poll with no successor must rearm the timer. This is essential:
+	// without the recurring poll, a successor announced later is never observed.
+	timer.callback()
+	select {
+	case timer = <-timers:
+	default:
+		t.Fatal("timer callback did not rearm polling while no successor was known")
+	}
+	if !successorKnown.CompareAndSwap(false, true) {
+		t.Fatal("successor was known before the stream opened")
+	}
+	// The stream opened without a cutoff; make the provider announce one only
+	// after the first poll, then drive both injected clocks to the last legal second.
+	clk.Set(activation - 1)
+	timerClock = time.Unix(activation-1, 0)
+	if timer.callback == nil {
+		t.Fatal("polling timer has no callback")
+	}
+	timer.callback()
+	<-done
+
+	frames := parseFrames(t, rec.Body.Bytes())
+	if len(frames) != 1 || frames[0].event != "jack-end" {
+		t.Fatalf("frames = %+v, want exactly one jack-end and no handler message", frames)
+	}
+	if frames[0].ts < openTS {
+		t.Fatalf("quiet-stream end timestamp = %d, want at least open timestamp %d", frames[0].ts, openTS)
+	}
+	if clk.Now() >= activation {
+		t.Fatalf("injected verifier clock = %d, want below cutoff %d", clk.Now(), activation)
+	}
+	if frames[0].ts >= activation {
+		t.Fatalf("end frame ts = %d, want below cutoff %d", frames[0].ts, activation)
+	}
+	if rec.Code != http.StatusOK || !bytes.Contains(rec.Body.Bytes(), []byte("event: jack-end")) {
+		t.Fatalf("response did not physically write the end frame after open: status=%d body=%q", rec.Code, rec.Body.String())
+	}
+}
+
+type lateSuccessorProvider struct {
+	key    fixedSigner
+	known  *atomic.Bool
+	cutoff int64
+}
+
+func (p lateSuccessorProvider) AuthorizeResponse(transport.ResponseKeyRequest) (transport.ResponseKeyAuthorization, error) {
+	return transport.ResponseKeyAuthorization{
+		Signer: p.key, Timestamp: 2000, Final: func() error { return nil }, Release: func() {},
+	}, nil
+}
+
+func (p lateSuccessorProvider) StreamCutoff(string) (int64, bool, error) {
+	if !p.known.Load() {
+		return 0, false, nil
+	}
+	return p.cutoff, true, nil
+}
+
+type controlledStreamTimer struct {
+	callback func()
+}
+
+func (t *controlledStreamTimer) Stop() bool { return true }
 
 // ptr returns a pointer to v.
 func ptr(v int64) *int64 { return &v }

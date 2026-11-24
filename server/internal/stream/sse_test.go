@@ -3,6 +3,7 @@ package stream
 import (
 	"math/rand"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -101,6 +102,67 @@ func record(t *testing.T, c struct {
 	t.Helper()
 	if got := collect(t, 0, chunks...); !slices.Equal(got, c.want) {
 		t.Fatalf("%s (%s): got %q, want %q", c.name, strategy, got, c.want)
+	}
+}
+
+func TestSplitterFrameMaxCountsDataOnlyAndResets(t *testing.T) {
+	const limit = int64(3)
+	var sp splitter
+	var got []string
+	emit := func(data string) error { got = append(got, data); return nil }
+	if err := sp.feed([]byte(": "+strings.Repeat("c", 20)+"\n"+"event: "+strings.Repeat("e", 20)+"\n"+"data: abc\n\n"), limit, emit); err != nil {
+		t.Fatalf("exact cap and comment/field bytes rejected: %v", err)
+	}
+	if len(got) != 1 || got[0] != "abc" {
+		t.Fatalf("events = %q, want [abc]", got)
+	}
+	if err := sp.feed([]byte("data: abcd\n\n"), limit, emit); err != errEventTooLarge {
+		t.Fatalf("over-limit event = %v, want errEventTooLarge", err)
+	}
+}
+
+func TestSplitterRejectsUnterminatedDataAsSoonAsOverCap(t *testing.T) {
+	const limit = int64(3)
+	for _, chunks := range [][]string{{"data: abcd"}, {"data: a", "bc", "d"}} {
+		var sp splitter
+		for i, chunk := range chunks {
+			err := sp.feed([]byte(chunk), limit, func(string) error { return nil })
+			if i == len(chunks)-1 && err != errEventTooLarge {
+				t.Fatalf("chunks %q: final feed error = %v, want errEventTooLarge before newline", chunks, err)
+			}
+			if i < len(chunks)-1 && err != nil {
+				t.Fatalf("chunks %q: feed %d error = %v", chunks, i, err)
+			}
+		}
+	}
+}
+
+func TestSplitterCountsOnlyDataValuesIncrementally(t *testing.T) {
+	const limit = int64(3)
+	var sp splitter
+	if err := sp.feed([]byte(":"+strings.Repeat("c", 100)+"\nevent: "+strings.Repeat("e", 100)+"\ndata:"), limit, func(string) error { return nil }); err != nil {
+		t.Fatalf("comments and field bytes rejected: %v", err)
+	}
+	if err := sp.feed([]byte(" abc\n\n"), limit, func(value string) error {
+		if value != "abc" {
+			t.Fatalf("data = %q, want abc", value)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("exact data cap rejected: %v", err)
+	}
+}
+
+func TestSplitterCommentsDoNotAccumulateAcrossCompletions(t *testing.T) {
+	var sp splitter
+	for i := 0; i < 8; i++ {
+		body := []byte(": " + strings.Repeat("x", 64) + "\n\ndata: a\n\n")
+		if err := sp.feed(body, 1, func(string) error { return nil }); err != nil {
+			t.Fatalf("comment-only completion %d: %v", i, err)
+		}
+		if sp.size != 0 {
+			t.Fatalf("comment-only completion %d retained %d bytes", i, sp.size)
+		}
 	}
 }
 
