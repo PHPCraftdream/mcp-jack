@@ -519,10 +519,11 @@ async function main() {
       let pairPassed = 0;
       console.log(`== pair client=${client} server=${serverLanguage} matrix=${args.matrix} ==`);
       for (const scenario of selected) {
-        let server, clientProcess, relay, secondClientProcess, concurrencyHeld = false;
+        let server, clientProcess, relay, secondClientProcess, concurrencyHeld = false, diagLog;
         try {
           const suffix = `${client}-${serverLanguage}-${scenario.id}-${passed + failed}`;
           const requestLog = join(tempRoot, `${suffix}.jsonl`);
+          diagLog = requestLog;
           const clockFile = join(tempRoot, `${suffix}.clock`);
           const now = scenario.clock ?? (scenario.rotation ? 1767052810 : 1800000000);
           const activation = scenario.successor_activation ?? (scenario.rotation ? 1767225610 : undefined);
@@ -706,6 +707,7 @@ async function main() {
             concurrencyAggregate = { terminal: secondTerminal, firstTerminal, secondRecords, secondRequestSig: secondTerminal.request_sig };
           }
           const result = await clientProcess.done;
+          clientProcess.lastResult = result;
           if (result.code !== 0) throw Error(`client exit ${result.code}${result.signal ? ` (${result.signal})` : ''}: ${result.stderr}`);
           const records = concurrencyRecords ?? parseJsonLines(result.stdout);
           const terminalRecords = records.filter(record => record?.type === 'terminal');
@@ -802,6 +804,9 @@ async function main() {
           if (error.contractGap) { console.error(`CONTRACT GAP ${scenario.id}: ${error.message}`); process.exitCode = 2; throw error; }
           failed++;
           console.log(`FAIL ${scenario.id}: ${error.message}`);
+          const last = clientProcess?.lastResult;
+          if (last) console.log(`  client stdout: ${String(last.stdout).slice(0, 3000)}\n  client stderr: ${String(last.stderr).slice(0, 1000)}`);
+          if (diagLog && existsSync(diagLog)) console.log(`  request log: ${readFileSync(diagLog, 'utf8').slice(0, 3000)}`);
         } finally {
           if (concurrencyHeld && server) server.write(`${JSON.stringify({ action: 'release' })}\n`);
           if (secondClientProcess) await stopChild(secondClientProcess);
