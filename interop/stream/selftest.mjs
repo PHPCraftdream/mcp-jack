@@ -75,13 +75,25 @@ export async function selfTest(){
     const result=await run(['--matrix','stream','--targets',targetPath,'--servers','fake','--clients','fake','--scenario',scenario.id]);
     report(`stream/${scenario.id}`,()=>{assert.equal(result.code,0,`stream/${scenario.id}: ${result.out}${result.err}`);assert.match(result.out,new RegExp(`PASS ${scenario.id}`));},true);
   }
+  report('staged matrix is exactly six known scenarios',()=>assert.deepEqual(docs.matrices.staged.map(s=>s.id),['relay-reorder','relay-splice','relay-replay','oversize','idle','concurrency-limit']),true);
+  for(const scenario of docs.matrices.staged){
+    const result=await run(['--matrix','stream','--targets',targetPath,'--servers','fake','--clients','fake','--scenario',scenario.id,'--staged-only']);
+    report(`staged/${scenario.id}`,()=>{assert.equal(result.code,0,`staged/${scenario.id}: ${result.out}${result.err}`);assert.match(result.out,new RegExp(`PASS ${scenario.id}`));},true);
+  }
   for(const matrix of ['rotation-stream','durable-stream']){const deferred=await run(['--matrix',matrix,'--list']);report(`${matrix} deferred CLI`,()=>{assert.equal(deferred.code,2,`${matrix} --list must be deferred`);assert.match(deferred.out,new RegExp(`DEFERRED matrix=${matrix}`));});}
   for(const name of ['pass','drop','edit-data','truncate'])await attempt(`relay ${name} chunked`,()=>relayControl(name,'chunked'));
   await attempt('relay pass content-length',()=>relayControl('pass','length'));
   const noTamper=await run(['--matrix','stream','--targets',targetPath,'--servers','fake','--clients','fake','--scenario','relay-edit-data'],{JACK_STREAM_SELFTEST_NO_TAMPER:'1'});report('no-tamper negative control',()=>{assert.notEqual(noTamper.code,0);assert.match(noTamper.out,/FAIL relay-edit-data/);});
+  for(const scenario of docs.matrices.staged.filter(item=>item.relay)){
+    const noTamper=await run(['--matrix','stream','--targets',targetPath,'--servers','fake','--clients','fake','--scenario',scenario.id,'--staged-only'],{JACK_STREAM_SELFTEST_NO_TAMPER:'1'});
+    report(`no-tamper ${scenario.id} negative control`,()=>{assert.notEqual(noTamper.code,0);assert.match(noTamper.out,new RegExp(`FAIL ${scenario.id}`));});
+  }
+  const ignoredLimit=await run(['--matrix','stream','--targets',targetPath,'--servers','fake','--clients','fake','--scenario','concurrency-limit','--staged-only'],{JACK_STREAM_FAKE_IGNORE_LIMIT:'1'});report('ignored concurrency limit negative control',()=>{assert.notEqual(ignoredLimit.code,0);assert.match(ignoredLimit.out,/FAIL concurrency-limit/);});
   const baseline=await run(['--matrix','stream','--targets',targetPath,'--servers','fake','--clients','fake','--scenario','progress-final']);report('fake-client positive baseline',()=>{assert.equal(baseline.code,0,`fake-client positive baseline: ${baseline.out}${baseline.err}`);assert.match(baseline.out,/PASS progress-final/);});
   const badEvidence=await run(['--matrix','stream','--targets',targetPath,'--servers','fake','--clients','fake','--scenario','progress-final'],{JACK_STREAM_FAKE_BAD_EVIDENCE:'1'});report('fake-client evidence deviation rejected',()=>{assert.equal(badEvidence.code,1,`fake-client invalid evidence control exit: ${badEvidence.out}${badEvidence.err}`);assert.match(badEvidence.out,/FAIL progress-final/);});
   const listed=await run(['--list']);report('--list exact active scenarios',()=>{assert.equal(listed.code,0);assert.deepEqual(listed.out.trim().split(/\r?\n/),docs.matrices.stream.map(s=>s.id));});
+  const stagedList=await run(['--list','--include-staged']);report('--include-staged list',()=>{assert.equal(stagedList.code,0);assert.deepEqual(stagedList.out.trim().split(/\r?\n/),[...docs.matrices.stream,...docs.matrices.staged].map(s=>s.id));});
+  const stagedOnlyList=await run(['--list','--staged-only']);report('--staged-only list',()=>{assert.equal(stagedOnlyList.code,0);assert.deepEqual(stagedOnlyList.out.trim().split(/\r?\n/),docs.matrices.staged.map(s=>s.id));});
   const invalid=await run(['--invalid-option']);report('invalid CLI option rejected',()=>assert.equal(invalid.code,2,'invalid CLI option'));
   const tmp=mkdtempSync(join(tmpdir(),'jack-stream-selftest-'));try{const badTargets=join(tmp,'bad-targets.json');writeFileSync(badTargets,JSON.stringify({fake:{server:['node','x'],client:['node','y']}}));const invalidRole=await run(['--targets',badTargets,'--servers','fake','--clients','fake']);report('invalid target roles rejected',()=>assert.equal(invalidRole.code,2,'invalid target roles'));}finally{rmSync(tmp,{recursive:true,force:true});}
   console.log(`INTEROP-SUMMARY matrix=stream pairs=1 checks=${checks} passed=${passed} failed=${checks-passed} result=${failures.length?'fail':'pass'}`);

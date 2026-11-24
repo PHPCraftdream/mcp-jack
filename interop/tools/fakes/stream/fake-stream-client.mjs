@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import http from 'node:http';
 import { readFileSync } from 'node:fs';
+import { isDeepStrictEqual } from 'node:util';
 import { createPrivateKey, createPublicKey, sign, verify, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, join } from 'node:path';
@@ -8,7 +9,7 @@ import { dirname, resolve, join } from 'node:path';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../');
 const arg = name => { const i = process.argv.indexOf(name); return i < 0 ? null : process.argv[i + 1]; };
 const scenario = arg('--scenario') || '', matrix = arg('--matrix') || 'stream', url = new URL(arg('--url') || 'http://127.0.0.1:1');
-const scenarioMeta = JSON.parse(readFileSync(join(root, 'interop/stream-scenarios.json'), 'utf8')).matrices[matrix]?.find(item => item.id === scenario);
+const scenarioMeta = JSON.parse(readFileSync(join(root, 'interop/stream-scenarios.json'), 'utf8')).matrices[matrix]?.find(item => item.id === scenario) || (matrix === 'stream' ? JSON.parse(readFileSync(join(root, 'interop/stream-scenarios.json'), 'utf8')).matrices.staged?.find(item => item.id === scenario) : null);
 const clockFile = arg('--clock-file'), aliceSeed = arg('--seed-hex') || '', pinnedPublic = arg('--server-public-key') || '';
 const keys = JSON.parse(readFileSync(join(root, 'spec/fixtures/keys.json'), 'utf8')).keys;
 const alice = keys.find(key => key.name === 'alice'), svc = keys.find(key => key.name === 'svc');
@@ -76,7 +77,9 @@ function refusal(res, raw) {
   if (valid) {
     try {
       const parsed = JSON.parse(raw.toString('utf8'));
-      valid = parsed?.error?.code === (status === 501 ? 'streaming_unsupported' : 'stream_limit_exceeded') && typeof parsed.error.message === 'string' && !('jsonrpc' in parsed);
+      valid = status === 501
+        ? parsed?.error?.code === 'streaming_unsupported' && typeof parsed.error.message === 'string' && !('jsonrpc' in parsed)
+        : parsed?.jsonrpc === '2.0' && requestId !== undefined && isDeepStrictEqual(parsed.id, requestId) && parsed?.error?.code === -32603 && parsed?.error?.message === 'stream_limit_exceeded';
     } catch { valid = false; }
   }
   terminal(valid ? 'refused' : 'error', valid ? (status === 501 ? 'streaming_unsupported' : 'stream_limit_exceeded') : 'stream_bad_signature', status, valid ? evidence : null, null, [], 0);
@@ -129,8 +132,9 @@ const requestOptions = { hostname: url.hostname, port: url.port, path: '/mcp', m
     response.on('end', () => refusal(response, Buffer.concat(chunks))); return;
   }
   let open, buffer = '', previous, previousTs = -Infinity, seq = 0, frames = [], ended = false, done = false;
+  let finish;
   const idleTimer = scenario === 'idle' ? setTimeout(() => { if (!done) { finish('error', 'stream_idle'); response.destroy(); } }, Number(arg('--idle-timeout-ms') || scenarioMeta?.stream_options?.idleTimeoutMs || 90000)) : null;
-  const finish = (outcome, code, failureFrame = null, verifiedCount = frames.length) => { if (done) return; done = true; if (idleTimer) clearTimeout(idleTimer); terminal(outcome, code, status, null, open, frames, verifiedCount, failureFrame); };
+  finish = (outcome, code, failureFrame = null, verifiedCount = frames.length) => { if (done) return; done = true; if (idleTimer) clearTimeout(idleTimer); terminal(outcome, code, status, null, open, frames, verifiedCount, failureFrame); };
   try { open = parseOpen(response.headers['jack-auth'], response, requestSig); previous = open.sig; }
   catch (error) { response.destroy(); finish('error', error.message); return; }
   const onBlock = block => {
