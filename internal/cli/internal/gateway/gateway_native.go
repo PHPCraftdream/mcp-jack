@@ -10,6 +10,7 @@ type gatewayNative struct {
 	serverKID    string
 	serverKIDs   map[string]bool
 	serverKeys   server.NativeTools
+	webhookKeys  server.NativeTools
 	adminEnabled bool
 }
 
@@ -22,6 +23,9 @@ func (n gatewayNative) Call(c *server.NativeCall) (server.NativeResult, *jack.Er
 	}
 	if c.Tool == server.ToolServerKey && n.serverKeys != nil {
 		return n.serverKeys.Call(c)
+	}
+	if c.Tool == server.ToolWebhookKey && n.webhookKeys != nil {
+		return n.webhookKeys.Call(c)
 	}
 	if c.Tool == server.ToolEnroll {
 		return n.native.Call(c)

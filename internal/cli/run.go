@@ -1,14 +1,17 @@
+// Package cli provides the command-line interface.
 package cli
 
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 
 	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/admin"
 	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/bridge"
 	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/command"
+	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/eventsreceiver"
 	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/gateway"
 	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/keys"
 	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/nonce"
@@ -20,8 +23,9 @@ import (
 const usage = `jack keygen server|user --secret FILE --public FILE
 jack bootstrap --state FILE --invite-file FILE
 jack enroll --config FILE --invite-file FILE --name NAME
-jack gateway --config FILE
+jack gateway --config FILE [--profile legacy|modern|both]
 jack bridge --config FILE
+jack events receive --config FILE
 jack nonce-init-unused --config FILE --confirm-unused-deployment ID
 jack nonce-inspect --config FILE
 jack nonce-reconcile-terminal --config FILE --expected-hash HASH --receipt-file FILE --confirm-no-redelivery INTENT_ID
@@ -117,6 +121,11 @@ func run(ctx context.Context, args []string, streams IO) error {
 		return runUserCommand(ctx, args, streams)
 	case "enroll":
 		return runEnroll(ctx, args)
+	case "events":
+		if len(args) < 2 || args[1] != "receive" {
+			return command.ErrConfig
+		}
+		return eventsreceiver.Run(ctx, args[2:], streams.Out)
 	case "gateway", "bridge":
 		return runGatewayOrBridge(ctx, args, streams)
 	}
@@ -242,12 +251,28 @@ func runEnroll(ctx context.Context, args []string) error {
 
 // runGatewayOrBridge handles "jack gateway" and "jack bridge".
 func runGatewayOrBridge(ctx context.Context, args []string, streams IO) error {
+	if args[0] == "gateway" {
+		f := flag.NewFlagSet("gateway", flag.ContinueOnError)
+		f.SetOutput(io.Discard)
+		config := f.String("config", "", "")
+		profile := f.String("profile", "", "")
+		if f.Parse(args[1:]) != nil || f.NArg() != 0 || *config == "" {
+			return command.ErrConfig
+		}
+		profileSet := false
+		f.Visit(func(value *flag.Flag) {
+			if value.Name == "profile" {
+				profileSet = true
+			}
+		})
+		if profileSet && *profile == "" {
+			return command.ErrConfig
+		}
+		return gateway.RunWithProfile(ctx, *config, *profile, streams.Err)
+	}
 	f, err := command.Flags(args[0], args[1:], "config")
 	if err != nil {
 		return err
-	}
-	if args[0] == "gateway" {
-		return gateway.Run(ctx, f["config"], streams.Err)
 	}
 	return bridge.Run(ctx, f["config"], stdio.IO{In: streams.In, Out: streams.Out, Err: streams.Err})
 }

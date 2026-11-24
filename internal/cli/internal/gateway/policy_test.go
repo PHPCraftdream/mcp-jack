@@ -1,15 +1,19 @@
 package gateway
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
 	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/command"
 	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/gatewayconfig"
+	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/wire"
 	"github.com/PHPCraftdream/mcp-jack/server"
 )
 
@@ -36,6 +40,39 @@ func TestGatewayNativeAdminFlagRequiresExplicitBoolean(t *testing.T) {
 		if json.Unmarshal([]byte(`{"native_admin":`+value+`}`), &config) == nil {
 			t.Fatal("non-boolean native admin policy accepted")
 		}
+	}
+}
+
+func TestGatewayWebhookKeyUsesExplicitSDKChannel(t *testing.T) {
+	private := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+	public := private.Public().(ed25519.PublicKey)
+	key := server.WebhookKey{KID: jack.KeyID(public), PublicKey: jack.EncodeBase64URL(public)}
+	tool, err := server.NewWebhookKeyTool(server.WebhookKeyConfig{Keys: []server.WebhookKey{key}, EgressIPRanges: []string{"192.0.2.0/24"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := gatewayNative{native: server.NewNativeTools(server.NativeOptions{}), serverKID: "server", webhookKeys: tool}
+	call := &server.NativeCall{Tool: server.ToolWebhookKey, Kid: "caller", Caller: &server.RegistryEntry{Kid: "caller"}}
+	result, refusal := policy.Call(call)
+	if refusal != nil || result.Structured == nil {
+		t.Fatalf("configured webhook tool refused: result=%+v error=%v", result, refusal)
+	}
+	if _, refusal = policy.Call(&server.NativeCall{Tool: server.ToolWebhookKey, Kid: "server", Caller: call.Caller}); refusal == nil || refusal.Code != jack.CodeOperationDenied {
+		t.Fatal("server identity admitted on webhook-key route")
+	}
+	if _, refusal = policy.native.Call(call); refusal == nil || refusal.Code != jack.CodeOperationDenied {
+		t.Fatal("webhook-key tool leaked into default native tools")
+	}
+	policy.webhookKeys = nil
+	if _, refusal = policy.Call(call); refusal == nil || refusal.Code != jack.CodeOperationDenied {
+		t.Fatal("webhook-key tool available without operator configuration")
+	}
+}
+
+func TestGatewayWebhookKeyConfigIsOperatorSupplied(t *testing.T) {
+	var config gatewayconfig.Config
+	if err := json.Unmarshal([]byte(`{"webhook_keys":[{"kid":"kid","public_key":"key"}],"webhook_egress_ip_ranges":["192.0.2.0/24"]}`), &config); err != nil || len(config.WebhookKeys) != 1 || len(config.WebhookEgressIPRanges) != 1 {
+		t.Fatalf("webhook configuration not decoded: %+v, %v", config, err)
 	}
 }
 
@@ -214,5 +251,60 @@ func TestBoundedGatewayStateCountsInvitesAfterPurge(t *testing.T) {
 	}
 	if got := len(state.View().Invites); got != 1 {
 		t.Fatalf("stored invites = %d, want 1: the expired invites must be purged before the cap counts", got)
+	}
+}
+
+func TestGatewayLegacyProtocolValidationRemainsExact(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  bool
+	}{
+		{"", true},
+		{wire.ProtocolVersion, true},
+		{"2025-06-18", false},
+		{"2026-07-28", false},
+		{wire.ProtocolVersion + ", " + wire.ProtocolVersion, false},
+	} {
+		h := make(http.Header)
+		if tc.value != "" {
+			h.Add("MCP-Protocol-Version", tc.value)
+		}
+		if got := validGatewayProtocolVersion(h, ""); got != tc.want {
+			t.Errorf("legacy protocol %q = %v, want %v", tc.value, got, tc.want)
+		}
+	}
+}
+
+func TestGatewayStreamProfileConfigurationValidation(t *testing.T) {
+	valid := &gatewayconfig.StreamConfig{FrameMaxBytes: 1024, MaxConcurrentStreams: 4, MaxStreamDurationMS: int64(time.Hour / time.Millisecond), HeartbeatMS: 15000}
+	if err := validateGatewayStreams(valid); err != nil {
+		t.Fatalf("valid stream config rejected: %v", err)
+	}
+	for _, invalid := range []*gatewayconfig.StreamConfig{
+		{FrameMaxBytes: -1}, {FrameMaxBytes: wire.MaxBody + 1}, {FrameMaxBytes: 1023},
+		{MaxConcurrentStreams: -1}, {MaxConcurrentStreams: 65},
+		{MaxStreamDurationMS: int64(^uint64(0) >> 1)}, {HeartbeatMS: int64(^uint64(0) >> 1)},
+	} {
+		if err := validateGatewayStreams(invalid); err == nil {
+			t.Errorf("invalid stream config accepted: %#v", invalid)
+		}
+	}
+}
+
+func TestGatewayAcceptsS1ExactTokenGrammar(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  bool
+	}{
+		{"s1", true},
+		{"legacy, s1", true},
+		{"s10", false},
+		{"s1;param=x", false},
+		{"s1,", false},
+		{"s1\t", false},
+	} {
+		if got := acceptsS1([]string{tc.value}); got != tc.want {
+			t.Errorf("acceptsS1(%q) = %v, want %v", tc.value, got, tc.want)
+		}
 	}
 }

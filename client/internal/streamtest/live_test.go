@@ -199,6 +199,53 @@ func endFrame(priv ed25519.PrivateKey, prevSig string) string {
 		strconv.FormatInt(testTS, 10) + ",sig=" + sig + "\n\n"
 }
 
+func TestOpenStreamConsumerSelectionAndStdioFrameRejection(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		consumer clientstream.Consumer
+		wantErr  bool
+	}{
+		{name: "default MCP"},
+		{name: "stdio rejects LF", consumer: clientstream.ConsumerStdio, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			signer, priv := newTestSigner(t)
+			served := &servedBody{}
+			srv, _, _ := newStreamServer(t, served.get, false)
+			defer srv.Close()
+			req := newStreamRequest(t, srv)
+			requestSig := requestSignature(signer, priv, req)
+			value, openSig := openHeader(priv, signer.KID(), requestSig)
+			openAuth = value
+			data := testMessage
+			wire := data
+			if tc.name == "stdio rejects LF" {
+				data, wire = "a\nb", "a\ndata: b"
+			}
+			frame, msgSig := messageFrame(priv, openSig, data, wire)
+			served.set([]byte(frame + endFrame(priv, msgSig)))
+			tr := newTestTransport(signer)
+			if tc.consumer != "" {
+				tr.Stream = &clientstream.ClientConfig{Consumer: tc.consumer}
+			}
+			s, _, err := tr.OpenStream(req)
+			if err != nil {
+				t.Fatalf("OpenStream: %v", err)
+			}
+			defer s.Close()
+			msg, err := s.Next()
+			var streamErr *clientstream.Error
+			if tc.wantErr {
+				if msg != "" || !errors.As(err, &streamErr) || streamErr.Code != clientstream.BadFrame {
+					t.Fatalf("Next() = %q, %v; want BadFrame", msg, err)
+				}
+			} else if err != nil || msg != testMessage {
+				t.Fatalf("Next() = %q, %v; want default MCP message", msg, err)
+			}
+		})
+	}
+}
+
 // TestOpenStreamDeliversVerifiedMessages verifies the happy path: the open
 // header, one message frame and the end frame all verify, the unsigned
 // Jack-Accept opt-in arrives once, Next ends with io.EOF and Close is

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"io"
 	"mime"
 	"net"
@@ -13,6 +14,8 @@ import (
 
 	jack "github.com/PHPCraftdream/mcp-jack"
 	"github.com/PHPCraftdream/mcp-jack/client"
+	"github.com/PHPCraftdream/mcp-jack/client/modern"
+	clientstream "github.com/PHPCraftdream/mcp-jack/client/stream"
 	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/command"
 	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/storage"
 	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/wire"
@@ -28,6 +31,7 @@ type Config struct {
 	KeyFile         string `json:"key_file"`
 	KeyFormat       string `json:"key_format"`
 	CallTimeoutMS   int    `json:"call_timeout_ms"`
+	Era             string `json:"era,omitempty"`
 }
 
 type Connection struct {
@@ -36,11 +40,12 @@ type Connection struct {
 	Pin      []byte
 	Signer   *userkey.ClientKey
 	Timeout  time.Duration
+	Era      string
 }
 
 func LoadConnection(path string) (*Connection, error) {
 	var c Config
-	if storage.DecodeConfig(path, &c) != nil || c.Version != 1 {
+	if storage.DecodeConfig(path, &c) != nil || c.Version != 1 || (c.Era != "" && c.Era != "legacy" && c.Era != "modern" && c.Era != "auto") {
 		return nil, command.ErrConfig
 	}
 	timeout, err := command.CallDuration(c.CallTimeoutMS)
@@ -80,7 +85,7 @@ func LoadConnection(path string) (*Connection, error) {
 	if _, err := client.NewClient(client.Config{BaseURL: c.Endpoint, Aud: c.Aud, Signer: signer, ServerKey: pub}); err != nil {
 		return nil, command.ErrConfig
 	}
-	return &Connection{c.Endpoint, c.Aud, pub, signer, timeout}, nil
+	return &Connection{Endpoint: c.Endpoint, Aud: c.Aud, Pin: pub, Signer: signer, Timeout: timeout, Era: c.Era}, nil
 }
 
 func DirectTransport(timeout time.Duration) *http.Transport {
@@ -114,6 +119,69 @@ func (o OneShot) RoundTrip(r *http.Request) (*http.Response, error) {
 	return o.base.RoundTrip(clone)
 }
 
+func (c *Connection) OpenStream(ctx context.Context, body []byte) (*clientstream.Stream, *clientstream.VerifiedResponse, error) {
+	base := DirectTransport(c.Timeout)
+	t := client.NewTransport(OneShot{base}, c.Aud, c.Signer, c.Pin)
+	t.Stream = &clientstream.ClientConfig{Consumer: clientstream.ConsumerStdio}
+	defer base.CloseIdleConnections()
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, nil, command.ErrConfig
+	}
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Accept", "application/json, text/event-stream")
+	r.Header.Set("MCP-Protocol-Version", c.protocolVersion())
+	if err := c.setModernMirrors(r.Header, body); err != nil {
+		return nil, nil, err
+	}
+	s, reply, err := t.OpenStream(r)
+	if err != nil {
+		return nil, nil, command.ErrRemote
+	}
+	return s, reply, nil
+}
+
+func (c *Connection) protocolVersion() string {
+	if c.Era == "modern" {
+		return "2026-07-28"
+	}
+	return wire.ProtocolVersion
+}
+
+func (c *Connection) setModernMirrors(header http.Header, body []byte) error {
+	if c.Era != "modern" {
+		return nil
+	}
+	message, err := wire.Object(body)
+	if err != nil {
+		return command.ErrProtocol
+	}
+	method := wire.Text(message["method"])
+	if method == "" {
+		return command.ErrProtocol
+	}
+	paramsRaw, exists := message["params"]
+	if !exists {
+		return command.ErrProtocol
+	}
+	var params map[string]any
+	if err := json.Unmarshal(paramsRaw, &params); err != nil || params == nil {
+		return command.ErrProtocol
+	}
+	meta, ok := params["_meta"].(map[string]any)
+	if !ok || meta[modern.MetaVersionKey] != modern.ModernMin {
+		return command.ErrProtocol
+	}
+	mirrors, err := modern.BuildRequestMirrors(modern.ModernMin, method, params, nil)
+	if err != nil {
+		return command.ErrProtocol
+	}
+	for _, item := range mirrors.Headers {
+		header.Set(item.Name, item.Value)
+	}
+	return nil
+}
+
 func (c *Connection) Post(ctx context.Context, body []byte) ([]byte, int, error) {
 	if len(body) > wire.MaxBody {
 		return nil, 0, command.ErrProtocol
@@ -127,7 +195,10 @@ func (c *Connection) Post(ctx context.Context, body []byte) ([]byte, int, error)
 	}
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Accept", "application/json, text/event-stream")
-	r.Header.Set("MCP-Protocol-Version", wire.ProtocolVersion)
+	r.Header.Set("MCP-Protocol-Version", c.protocolVersion())
+	if err := c.setModernMirrors(r.Header, body); err != nil {
+		return nil, 0, err
+	}
 	resp, err := client.NewHTTPClient(t).Do(r)
 	if err != nil {
 		return nil, 0, command.ErrRemote
@@ -136,10 +207,10 @@ func (c *Connection) Post(ctx context.Context, body []byte) ([]byte, int, error)
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		return nil, resp.StatusCode, &VerifiedStatusError{Status: resp.StatusCode}
 	}
-	if UnsupportedMetadata(resp.Header) || len(resp.Header.Values("Content-Encoding")) != 0 {
+	if (c.Era != "modern" && UnsupportedMetadata(resp.Header)) || len(resp.Header.Values("Content-Encoding")) != 0 {
 		return nil, 0, command.ErrProtocol
 	}
-	if vs := resp.Header.Values("MCP-Protocol-Version"); len(vs) > 1 || (len(vs) == 1 && vs[0] != wire.ProtocolVersion) {
+	if vs := resp.Header.Values("MCP-Protocol-Version"); len(vs) > 1 || (len(vs) == 1 && ((c.Era == "modern" && vs[0] != "2026-07-28") || (c.Era != "modern" && vs[0] != wire.ProtocolVersion))) {
 		return nil, 0, command.ErrProtocol
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, wire.MaxBody+1))

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
@@ -650,4 +651,161 @@ func (c *Client) CallModernEvent(ctx context.Context, method, event string, argu
 		return err
 	}
 	return decodeVerifiedCall(status, raw, out)
+}
+
+// Call sends one signed arbitrary JSON-RPC request using the configured era.
+// It returns the exact verified response body as json.RawMessage. Modern
+// requests add mandatory _meta and mirror headers without tool schema projection.
+// The method must be non-empty and contain no control characters; params must
+// be JSON-marshalable. EraAuto applies the existing C9 probe/fallback/retry.
+func (c *Client) Call(ctx context.Context, method string, params map[string]any) (json.RawMessage, error) {
+	if method == "" || strings.IndexFunc(method, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+		return nil, fmt.Errorf("jack client: invalid JSON-RPC method")
+	}
+	if params == nil {
+		params = map[string]any{}
+	}
+	// Marshal now to fail closed on unsupported values, before any probe or
+	// request is sent. The verified response itself is never re-marshaled.
+	if _, err := json.Marshal(params); err != nil {
+		return nil, fmt.Errorf("jack client: marshal params: %w", err)
+	}
+	switch c.currentEra() {
+	case EraLegacy:
+		return c.rawLegacyCall(ctx, nil, method, params)
+	case EraModern:
+		_, raw, err := c.rawModernCall(ctx, nil, modern.ModernMin, method, params)
+		if err != nil {
+			return nil, err
+		}
+		return json.RawMessage(raw), nil
+	default:
+		return c.rawCallAuto(ctx, nil, method, params)
+	}
+}
+
+func (c *Client) rawModernCall(ctx context.Context, signer Signer, version, method string, params map[string]any) (int, []byte, error) {
+	mirrors, err := modern.BuildRequestMirrors(version, method, params, modernClientInfo())
+	if err != nil {
+		return 0, nil, err
+	}
+	wireParams := make(map[string]any, len(params)+1)
+	for k, v := range params {
+		wireParams[k] = v
+	}
+	wireParams["_meta"] = mirrors.Meta
+	body, err := marshalModernWireRequest(c.nextRequestID(), method, wireParams)
+	if err != nil {
+		return 0, nil, err
+	}
+	headers := append([]modern.Header(nil), mirrors.Headers...)
+	if field, ok := modern.NameSource(method); ok {
+		value, valid := params[field].(string)
+		if !valid {
+			return 0, nil, fmt.Errorf("jack client: %s requires a string params.%s", method, field)
+		}
+		headers = append(headers, modern.Header{Name: "Mcp-Name", Value: modern.EncodeHeaderValue(value)})
+	}
+	status, _, raw, err := c.roundTrip(ctx, signer, body, headers)
+	return status, raw, err
+}
+
+func (c *Client) rawLegacyCall(ctx context.Context, signer Signer, method string, params map[string]any) (json.RawMessage, error) {
+	body, err := marshalModernWireRequest(c.nextRequestID(), method, params)
+	if err != nil {
+		return nil, err
+	}
+	version, session := c.legacyState()
+	status, _, raw, err := c.roundTrip(ctx, signer, body, legacySessionHeaders(version, session))
+	if err != nil {
+		return nil, err
+	}
+	if status == http.StatusNotFound && session != "" {
+		v := version
+		if v == "" {
+			v = legacyProtocolVersion
+		}
+		if err := c.recoverLegacySession(ctx, signer, session, v); err != nil {
+			return nil, fmt.Errorf("jack client: legacy session recovery: %w", err)
+		}
+	}
+	return json.RawMessage(raw), nil
+}
+
+func (c *Client) rawCallAuto(ctx context.Context, signer Signer, method string, params map[string]any) (json.RawMessage, error) {
+	status, raw, err := c.probeEra(ctx, signer, modern.ModernMin)
+	if err != nil {
+		return nil, err
+	}
+	return c.finishAutoRaw(ctx, signer, modern.ModernMin, status, raw, method, params)
+}
+
+func (c *Client) finishAutoRaw(ctx context.Context, signer Signer, attempted string, status int, raw []byte, method string, params map[string]any) (json.RawMessage, error) {
+	if status >= 200 && status <= 299 {
+		c.setEra(EraModern)
+		if method == "server/discover" {
+			// The discover response is itself the caller's requested raw result
+			// and the deterministic C9 probe; do not send it twice.
+			return json.RawMessage(raw), nil
+		}
+		return c.runRawModern(ctx, signer, attempted, method, params)
+	}
+	decision := modern.DetectEraAttempt(status, true, raw, c.implementedVersions(), attempted)
+	switch decision.Action {
+	case modern.ActionStayModern:
+		c.setEra(EraModern)
+		if method == "server/discover" {
+			return json.RawMessage(raw), nil
+		}
+		return c.runRawModern(ctx, signer, attempted, method, params)
+	case modern.ActionFallbackInitialize:
+		if err := c.legacyHandshake(ctx, signer, legacyProtocolVersion); err != nil {
+			return nil, err
+		}
+		c.setEra(EraLegacy)
+		if method == "server/discover" {
+			return json.RawMessage(raw), nil
+		}
+		return c.rawLegacyCall(ctx, signer, method, params)
+	case modern.ActionRetryWithSupported:
+		if len(decision.Supported) > 0 {
+			v := decision.Supported[0]
+			if v == modern.ModernMin {
+				status, raw, err := c.probeEra(ctx, signer, v)
+				if err != nil {
+					return nil, err
+				}
+				retry := modern.DetectEraAttempt(status, true, raw, c.implementedVersions(), v)
+				if status >= 200 && status <= 299 || retry.Action == modern.ActionStayModern {
+					c.setEra(EraModern)
+					return c.runRawModern(ctx, signer, v, method, params)
+				}
+				if retry.Action == modern.ActionFallbackInitialize {
+					if err := c.legacyHandshake(ctx, signer, legacyProtocolVersion); err != nil {
+						return nil, err
+					}
+					c.setEra(EraLegacy)
+					return c.rawLegacyCall(ctx, signer, method, params)
+				}
+				return json.RawMessage(raw), decodeVerifiedCall(status, raw, nil)
+			}
+			if err := c.legacyHandshake(ctx, signer, v); err != nil {
+				return nil, err
+			}
+			c.setEra(EraLegacy)
+			if method == "server/discover" {
+				return json.RawMessage(raw), nil
+			}
+			return c.rawLegacyCall(ctx, signer, method, params)
+		}
+	}
+	return json.RawMessage(raw), decodeVerifiedCall(status, raw, nil)
+}
+
+func (c *Client) runRawModern(ctx context.Context, signer Signer, version, method string, params map[string]any) (json.RawMessage, error) {
+	_, raw, err := c.rawModernCall(ctx, signer, version, method, params)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(raw), nil
 }

@@ -26,10 +26,17 @@ func (r *Receiver) Route(ids []string) {
 func (r *Receiver) State() State {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	accepted := make(map[string]struct{}, len(r.accepted)+len(r.persisted))
+	for id := range r.accepted {
+		accepted[id] = struct{}{}
+	}
+	for id := range r.persisted {
+		accepted[id] = struct{}{}
+	}
 	state := State{
 		Routed:     sortedKeys(r.routed),
 		Terminated: sortedKeys(r.terminated),
-		Accepted:   sortedKeys(r.accepted),
+		Accepted:   sortedKeys(accepted),
 		Secrets:    make([]SecretState, len(r.cfg.Secrets)),
 	}
 	for i, entry := range r.cfg.Secrets {

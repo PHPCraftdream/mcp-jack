@@ -122,9 +122,10 @@ type Transport struct {
 	Nonce NonceSource
 	// Window is the response timestamp tolerance; <= 0 means DefaultWindow.
 	Window time.Duration
-	// Stream configures the signed-stream (s1) opt-in used by OpenStream: the
-	// idle timeout, the frame cap and the rotation-known server keys. A nil
-	// value uses the defaults of spec 05.
+	// Stream configures the signed-stream (s1) opt-in used by OpenStream:
+	// frame limits, rotation-known keys and the verified-frame Consumer. Nil
+	// or an empty Consumer defaults to ConsumerMCP; ConsumerStdio rejects raw
+	// CR/LF in message data.
 	Stream *clientstream.ClientConfig
 }
 

@@ -29,6 +29,9 @@ type ClientConfig struct {
 	// PinnedSuccessorActivation is the known successor activation of the
 	// pinned transport key; nil means unknown.
 	PinnedSuccessorActivation *int64
+	// Consumer selects the verified frame delivery grammar. The zero value
+	// uses ConsumerMCP; ConsumerStdio rejects data containing raw CR or LF.
+	Consumer Consumer
 }
 
 // Signer is the signing capability Open needs; client.Signer satisfies it.
@@ -224,7 +227,7 @@ func Open(req *http.Request, cfg OpenConfig) (*Stream, *http.Response, string, e
 		RequestSig:    auth.Sig,
 		FrameMaxBytes: cc.FrameMaxBytes,
 		StreamIdle:    cc.Idle,
-		Consumer:      ConsumerMCP,
+		Consumer:      cc.Consumer,
 	})
 	if err != nil {
 		_ = resp.Body.Close()

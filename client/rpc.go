@@ -14,12 +14,15 @@
 // structuredContent is still an error). structuredContent is the only result
 // model, and there is no streaming support.
 //
-// Config.Era selects the request era of CallTool (spec 04 section 6): the
+// Config.Era selects the request era of CallTool and Call (spec 04 section 6): the
 // EraLegacy zero value sends the 0.1.x bytes through the legacy single-request
 // helper, EraModern uses the same tools/list + x-mcp-header projection and C10
 // resync as CallModernTool, and EraAuto probes the modern era first, runs the
 // legacy initialize handshake once on a verified legacy signal and falls back
 // to the legacy request, and settles the client era from the verified answer.
+// Call sends a raw arbitrary JSON-RPC method with object params and returns the
+// exact verified response bytes, adding modern mirrors/_meta without tool schema
+// projection.
 // The era is cached per client (one origin); only a verified response selects
 // it, and ResetEra re-probes.
 //
@@ -27,7 +30,8 @@
 //		OK bool `json:"ok"`
 //	}
 //	err := c.CallTool(ctx, "svc.restart", map[string]any{"name": "web"}, &res)
-//	// errors: *client.HTTPError, *client.RPCError, *client.ToolError, ...
+//	// raw, err := c.Call(ctx, "resources/read", map[string]any{"uri": "file://x"})
+//	// raw contains the exact verified JSON-RPC response body.
 //
 // # Destination policy
 //
@@ -145,7 +149,7 @@ type Config struct {
 	// Window overrides the response timestamp tolerance; <= 0 inherits, then
 	// DefaultWindow.
 	Window time.Duration
-	// Era is the request era of CallTool (spec 04 section 6). The zero value
+	// The era is the request era of CallTool and Call (spec 04 section 6). The zero value
 	// ("" and EraLegacy) sends legacy-era requests, EraModern sends
 	// 2026-07-28 requests with params._meta and the mirror headers, and
 	// EraAuto probes modern first and settles per C9. No other value is
@@ -425,6 +429,10 @@ func (c *Client) currentEra() Era {
 	return c.mode
 }
 
+// CurrentEra reports the era selected by a verified response, or the configured
+// mode while an EraAuto client has not settled yet. It is safe for concurrent use.
+func (c *Client) CurrentEra() Era { return c.currentEra() }
+
 // setEra records the era a verified response selected. It is the only way the
 // settled era changes.
 func (c *Client) setEra(era Era) {
@@ -685,7 +693,7 @@ func (c *Client) finishAuto(ctx context.Context, signer Signer, attempted string
 	case modern.ActionRetryWithSupported:
 		if len(decision.Supported) > 0 {
 			v := decision.Supported[0]
-			if v >= modern.ModernMin {
+			if v == modern.ModernMin {
 				// Probe the mutually implemented modern version once: only
 				// that verified answer may select (or unselect) the era.
 				status, raw, err := c.probeEra(ctx, signer, v)
