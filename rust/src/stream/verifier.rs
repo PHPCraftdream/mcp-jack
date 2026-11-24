@@ -161,7 +161,7 @@ impl StreamVerifier {
         };
         StreamVerifier {
             config,
-            reader: SseReader::new(),
+            reader: SseReader::with_max_pending_bytes(frame_max_bytes),
             window_seconds,
             idle_ms,
             frame_max_bytes,
@@ -281,6 +281,16 @@ impl StreamVerifier {
         let events = self.reader.push(chunk, arrived_at_ms);
         let mut messages = Vec::new();
         let terminal = self.consume(&events, &mut messages);
+        let terminal = terminal.or_else(|| {
+            if self.reader.too_large() {
+                Some(self.fail(StreamCode::FrameTooLarge))
+            } else {
+                None
+            }
+        });
+        if let Some(failure) = terminal {
+            self.terminal = Some(failure);
+        }
         StreamStep { messages, terminal }
     }
 
@@ -385,7 +395,7 @@ impl StreamVerifier {
     ) -> Option<StreamFailure> {
         // 4.5 first: an event completes at its blank line, so that byte's
         // arrival is the time that is late or not.
-        let arrived_at = self.reader.arrival_at(event.end - 1);
+        let arrived_at = event.arrived_at_ms;
         if arrived_at - self.last_verified_ms > self.idle_ms {
             return Some(self.fail(StreamCode::Idle));
         }

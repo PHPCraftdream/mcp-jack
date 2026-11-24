@@ -170,13 +170,14 @@ impl Iterator for VerifiedStream {
             let deadline = Instant::now() + Duration::from_millis(remaining as u64);
             match self.body.next_chunk(deadline) {
                 Ok(ChunkRead::Data(bytes)) => {
-                    let step = self.verifier.push(&bytes, self.arrived(now_ms));
-                    self.absorb(step, now_ms);
+                    // 4.5 arrival time is sampled when the chunk is actually returned, not
+                    // before a potentially blocking read.
+                    let arrived_ms = (self.millis)();
+                    let step = self.verifier.push(&bytes, self.arrived(arrived_ms));
+                    self.absorb(step, arrived_ms);
                 }
                 Ok(ChunkRead::Timeout) => {
-                    // 4.5: a live timeout is not an end-of-body flush. Keep the verifier's
-                    // incremental SSE state intact; only the local idle deadline is terminal.
-                    let timeout_ms = now_ms;
+                    let timeout_ms = (self.millis)();
                     if timeout_ms - self.last_verified_ms > self.idle_ms {
                         self.terminal = Some(StreamFailure::new(
                             StreamCode::Idle,

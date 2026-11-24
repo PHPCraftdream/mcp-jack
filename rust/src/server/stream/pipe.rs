@@ -83,7 +83,7 @@ impl StreamPipe {
         let builder = StreamBuilder::resume(&config.sid, &config.open_sig);
         StreamPipe {
             builder,
-            reader: SseReader::new(),
+            reader: SseReader::with_max_pending_bytes(config.limits.frame_max_bytes),
             limits: config.limits,
             request_id: config.request_id,
             method: config.method,
@@ -116,7 +116,23 @@ impl StreamPipe {
                 break;
             }
         }
+        // Size applies to the joined data value, so permit framing metadata plus
+        // a finite number of data-line prefixes while rejecting a huge line early.
+        if self.reader.too_large() && self.running() {
+            self.close_oversize(now_ms, out);
+        }
         self.running()
+    }
+
+    /// Bytes retained by the framing reader plus arrival metadata, for cap accounting.
+    pub fn reader_memory_bytes(&self) -> usize {
+        self.reader
+            .buffered_bytes()
+            .saturating_add(self.reader.arrival_metadata_bytes())
+    }
+
+    pub fn update_cutoff(&mut self, cutoff: Option<i64>) {
+        self.cutoff = cutoff;
     }
 
     /// Advances the clock without handler bytes (3.4 duration); may close the
@@ -127,6 +143,11 @@ impl StreamPipe {
         }
         if self.duration_reached(now_ms) {
             self.close_duration(now_ms, out);
+        } else if self
+            .cutoff
+            .is_some_and(|activation| self.next_ts(now_ms).saturating_add(1) >= activation)
+        {
+            self.close_cutoff(out);
         }
         self.running()
     }

@@ -8,12 +8,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::auth_header::parse_request_auth;
+use crate::auth_header::{format_response_auth, ResponseAuth};
 use crate::client::signer::{InMemorySigner, Signer};
 use crate::client::stream::{ChunkRead, StreamBody, StreamResponse, StreamSource};
 use crate::client::transport::{
-    Clock, HttpRequest, HttpResponse, NonceSource, SigningTransport, Transport, TransportError,
+    Clock, HttpRequest, HttpResponse, NonceSource, OpenStreamResult, SigningTransport, Transport,
+    TransportError,
 };
+use crate::encoding::{encode_b64url, key_id};
+use crate::signing::response_signing_string;
 use crate::stream::StreamBuilder;
+use ed25519_dalek::{Signer as DalekSigner, SigningKey};
 
 use super::{
     frame_bytes, hex_seed, svc_signer, ALICE_SEED_HEX, AUD, MSG_A, MSG_B, OPEN_TS, ROOT_SEED_HEX,
@@ -208,7 +213,10 @@ fn open_stream_carries_one_auth_header_and_the_sdk_opt_in() {
         .push(("jack-auth".to_string(), "v1 stale".to_string()));
     req.headers
         .push(("Jack-Accept".to_string(), "s1, s2".to_string()));
-    let stream = transport.open_stream(req).expect("a clean stream opens");
+    let stream = match transport.open_stream(req).expect("a clean stream opens") {
+        OpenStreamResult::Stream(stream) => *stream,
+        OpenStreamResult::Response(_) => panic!("expected a signed stream"),
+    };
 
     let requests = transport.transport.requests();
     let sent = requests.first().expect("exactly one open_stream call");
@@ -245,9 +253,13 @@ fn open_stream_as_signs_with_the_explicit_signer() {
         client_signer(ALICE_SEED_HEX),
     );
     let root = client_signer(ROOT_SEED_HEX);
-    let stream = transport
+    let stream = match transport
         .open_stream_as(root.as_ref(), request())
-        .expect("a clean stream opens");
+        .expect("a clean stream opens")
+    {
+        OpenStreamResult::Stream(stream) => *stream,
+        OpenStreamResult::Response(_) => panic!("expected a signed stream"),
+    };
     let requests = transport.transport.requests();
     let raw = requests
         .first()
@@ -281,7 +293,9 @@ fn open_stream_refuses_a_redirect() {
         });
         let transport = signing(FakeTransport::new(responder), client_signer(ALICE_SEED_HEX));
         let error = match transport.open_stream(request()) {
-            Ok(_) => panic!("a redirect must be refused, not opened (status {status})"),
+            Ok(OpenStreamResult::Stream(_)) | Ok(OpenStreamResult::Response(_)) => {
+                panic!("a redirect must be refused, not opened (status {status})")
+            }
             Err(error) => error,
         };
         match error {
@@ -309,40 +323,71 @@ fn open_stream_refuses_a_redirect() {
 }
 
 #[test]
-fn open_stream_refuses_a_non_stream_response() {
-    let (dropped, log) = state();
-    let inner_dropped = Arc::clone(&dropped);
-    let inner_log = Arc::clone(&log);
-    let responder: Responder = Box::new(move |_req: &HttpRequest| {
+fn open_stream_routes_signed_501_to_verified_response() {
+    let body = br#"{"error":{"code":"streaming_unsupported","message":"no"}}"#;
+    let server = SigningKey::from_bytes(&hex_seed(super::SVC_SEED_HEX));
+    let responder: Responder = Box::new(move |req: &HttpRequest| {
+        let auth = parse_request_auth(&[req.header("Jack-Auth").expect("signed request")])
+            .expect("request auth");
+        let kid = key_id(server.verifying_key().as_bytes());
+        let sig =
+            server.sign(response_signing_string(501, &auth.sig, &kid, OPEN_TS, body).as_bytes());
+        let header = format_response_auth(&ResponseAuth {
+            kid,
+            ts: OPEN_TS,
+            sig: encode_b64url(&sig.to_bytes()),
+        });
         stream_response(
-            200,
-            vec![("Content-Type".to_string(), "application/json".to_string())],
-            vec![Script::Data(br#"{"ok":true}"#.to_vec())],
-            Arc::clone(&inner_log),
-            Arc::clone(&inner_dropped),
+            501,
+            vec![
+                ("Content-Type".into(), "application/json".into()),
+                ("Jack-Auth".into(), header),
+            ],
+            vec![Script::Data(body.to_vec()), Script::End],
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(AtomicBool::new(false)),
         )
     });
     let transport = signing(FakeTransport::new(responder), client_signer(ALICE_SEED_HEX));
-    let error = match transport.open_stream(request()) {
-        Ok(_) => panic!("a non-stream response belongs to the v1 path"),
-        Err(error) => error,
+    let response = match transport
+        .open_stream(request())
+        .expect("signed refusal verifies")
+    {
+        OpenStreamResult::Response(response) => response,
+        OpenStreamResult::Stream(_) => panic!("501 is not an s1 stream"),
     };
-    match error {
-        TransportError::Client(message) => {
-            assert!(message.contains("spec 05 section 1.4"), "{message}");
-        }
-        other => panic!("expected Client, got {other:?}"),
-    }
-    assert!(
-        dropped.load(Ordering::SeqCst),
-        "the refused body must be dropped"
+    assert_eq!(response.status, 501);
+    assert_eq!(response.body, body);
+    assert_eq!(
+        transport.transport.requests().len(),
+        1,
+        "exactly one request"
     );
-    assert!(
-        log.lock()
-            .expect("log lock")
-            .iter()
-            .all(|entry| entry == "drop"),
-        "no byte may be read from a refused response"
+}
+
+#[test]
+fn open_stream_routes_unsigned_501_to_v1_error() {
+    let responder: Responder = Box::new(|_req: &HttpRequest| {
+        stream_response(
+            501,
+            vec![("Content-Type".into(), "application/json".into())],
+            vec![
+                Script::Data(br#"{"error":{"code":"streaming_unsupported"}}"#.to_vec()),
+                Script::End,
+            ],
+            Arc::new(Mutex::new(Vec::new())),
+            Arc::new(AtomicBool::new(false)),
+        )
+    });
+    let transport = signing(FakeTransport::new(responder), client_signer(ALICE_SEED_HEX));
+    assert!(matches!(
+        transport.open_stream(request()),
+        Err(TransportError::Protocol(ref error)) if error.code == crate::error::codes::MISSING_AUTH
+    ));
+    assert_eq!(
+        transport.transport.requests().len(),
+        1,
+        "exactly one request"
     );
 }
 
@@ -353,9 +398,13 @@ fn open_stream_delivers_the_verified_messages() {
         FakeTransport::new(clean_responder(Arc::clone(&dropped), Arc::clone(&log))),
         client_signer(ALICE_SEED_HEX),
     );
-    let mut stream = transport
+    let mut stream = match transport
         .open_stream(request())
-        .expect("a clean stream opens");
+        .expect("a clean stream opens")
+    {
+        OpenStreamResult::Stream(stream) => *stream,
+        OpenStreamResult::Response(_) => panic!("expected a signed stream"),
+    };
     assert_eq!(stream.sid(), SID);
     assert_eq!(stream.open_auth().kid, SVC_KID);
     let outcomes: Vec<_> = stream.by_ref().collect();
