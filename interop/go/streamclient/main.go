@@ -139,6 +139,9 @@ func main() {
 	_ = flag.String("durable-dir", "", "")
 	flag.Parse()
 	fail := func(err error) {
+		if *scenario != "" {
+			emit(map[string]any{"type": "terminal", "scenario": *scenario, "outcome": "error", "code": "stream_bad_frame", "http_status": nil, "http_code": nil, "frames_verified": 0, "request_id": nil, "mcp_complete": false, "terminal_frame": nil, "request_sig": nil, "v1_evidence": nil, "open": nil, "frames": []frame{}, "failure_frame": nil, "successor_activation": nil})
+		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -217,7 +220,7 @@ func main() {
 	sig = signatureFromCaptured(cap)
 	if e != nil {
 		if verified != nil {
-			code := responseErrorCode(verified.Body)
+			code := refusalCode(verified.Status, verified.Body)
 			if (verified.Status == http.StatusNotImplemented && code == "streaming_unsupported") || (verified.Status == http.StatusTooManyRequests && code == "stream_limit_exceeded") {
 				emitRefusal(*scenario, verified.Status, verified.Header, verified.Body, sig, rpc["id"], cap)
 			} else {
@@ -241,7 +244,7 @@ func main() {
 		return
 	}
 	if verified != nil {
-		code := responseErrorCode(verified.Body)
+		code := refusalCode(verified.Status, verified.Body)
 		if verified.Status == http.StatusUnauthorized && code == "replayed_nonce" {
 			emit(map[string]any{
 				"type": "terminal", "scenario": *scenario, "outcome": "refused", "code": code,
@@ -266,22 +269,49 @@ func main() {
 	open := parseOpen(cap.responseHeader.Get("Jack-Auth"))
 	var termMu sync.Mutex
 	termDone := false
-	term := func(outcome, code string, frames []frame, failure any, count int) {
+	term := func(outcome, code string, frames []frame, failure any, count int) bool {
 		termMu.Lock()
 		defer termMu.Unlock()
 		if termDone {
-			return
+			return false
 		}
 		termDone = true
 		emitTerminal(*scenario, outcome, code, open, frames, failure, count, capturedStatus(cap), sig, rpc, nil)
+		return true
 	}
-	if *idle > 0 {
-		timer := time.AfterFunc(time.Duration(*idle)*time.Millisecond, func() {
+	var idleMu sync.Mutex
+	idleGen := 0
+	var idleTimer *time.Timer
+	armIdle := func() {
+		if *idle <= 0 {
+			return
+		}
+		idleMu.Lock()
+		defer idleMu.Unlock()
+		idleGen++
+		gen := idleGen
+		idleTimer = time.AfterFunc(time.Duration(*idle)*time.Millisecond, func() {
+			idleMu.Lock()
+			fired := gen == idleGen
+			idleMu.Unlock()
+			if !fired || !term("error", "stream_idle", []frame{}, nil, stream.FramesVerified()) {
+				return
+			}
 			_ = stream.Close()
-			term("error", "stream_idle", []frame{}, nil, stream.FramesVerified())
 		})
-		defer timer.Stop()
 	}
+	resetIdle := func() {
+		if *idle <= 0 {
+			return
+		}
+		idleMu.Lock()
+		defer idleMu.Unlock()
+		idleGen++
+		if idleTimer != nil {
+			idleTimer.Reset(time.Duration(*idle) * time.Millisecond)
+		}
+	}
+	armIdle()
 	cancel := *action == "cancel"
 	for {
 		data, nextErr := stream.Next()
@@ -325,6 +355,7 @@ func main() {
 		evidence := requestEvidence(cap, sig, now(), *nonceText)
 		record := map[string]any{"type": "message", "scenario": *scenario, "stream_index": 0, "request_method": evidence.Method, "request_target": evidence.Target, "request_body_b64u": evidence.Body, "request_headers": evidence.Headers, "request_sig": sig, "request_ts": requestTimestamp(cap), "nonce": *nonceText, "open": open, "frames": frames, "data": data, "message": msg}
 		emit(record)
+		resetIdle()
 		if cancel {
 			_ = stream.Close()
 			waitForHandlerCancelled(*requestLog, sig)
@@ -495,15 +526,7 @@ func emitRefusal(scenario string, status int, h http.Header, body []byte, sig st
 		ev["ts"], _ = strconv.ParseInt(strings.TrimPrefix(p[1], "ts="), 10, 64)
 		ev["sig"] = strings.TrimPrefix(p[2], "sig=")
 	}
-	code := ""
-	var payload struct {
-		Error struct {
-			Code string `json:"code"`
-		} `json:"error"`
-	}
-	if json.Unmarshal(body, &payload) == nil {
-		code = payload.Error.Code
-	}
+	code := refusalCode(status, body)
 	emit(map[string]any{"type": "terminal", "scenario": scenario, "outcome": "refused", "code": code, "http_status": status, "http_code": code, "frames_verified": 0, "request_id": requestID, "mcp_complete": false, "terminal_frame": nil, "request_sig": sig, "v1_evidence": ev, "open": nil, "frames": []frame{}, "failure_frame": nil, "successor_activation": nil})
 }
 func emitUnsignedReplayedNonce(scenario string, status int, body []byte, sig string, requestID any) bool {
@@ -548,6 +571,21 @@ func openKID(o *openEvidence) string {
 		return ""
 	}
 	return o.KID
+}
+func refusalCode(status int, body []byte) string {
+	if status == http.StatusTooManyRequests {
+		return responseErrorMessage(body)
+	}
+	return responseErrorCode(body)
+}
+func responseErrorMessage(body []byte) string {
+	var payload struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(body, &payload)
+	return payload.Error.Message
 }
 func responseErrorCode(body []byte) string {
 	var payload struct {

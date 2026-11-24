@@ -53,6 +53,35 @@ type rpcRequest struct {
 	Method  string         `json:"method"`
 	Params  map[string]any `json:"params"`
 }
+type scenarioRow struct {
+	ID       string `json:"id"`
+	Producer string `json:"producer"`
+}
+
+func scenarioProducer(id string) string {
+	b, err := os.ReadFile("interop/stream-scenarios.json")
+	if err != nil {
+		return ""
+	}
+	var doc struct {
+		Matrices struct {
+			Stream []scenarioRow `json:"stream"`
+			Staged []scenarioRow `json:"staged"`
+		} `json:"matrices"`
+	}
+	if json.Unmarshal(b, &doc) != nil {
+		return ""
+	}
+	for _, pool := range [][]scenarioRow{doc.Matrices.Stream, doc.Matrices.Staged} {
+		for _, row := range pool {
+			if row.ID == id && row.Producer != "" {
+				return row.Producer
+			}
+		}
+	}
+	return ""
+}
+
 type control struct {
 	Action     string `json:"action"`
 	Clock      int64  `json:"clock"`
@@ -151,6 +180,10 @@ func main() {
 	_ = flag.String("durable-dir", "", "")
 	seedHex := flag.Lookup("server-seed-hex")
 	flag.Parse()
+	producer := scenarioProducer(*scenario)
+	if *scenario == "idle" || producer == "" {
+		producer = *scenario
+	}
 	fail := func(err error) { fmt.Fprintln(os.Stderr, err); os.Exit(1) }
 	seed, err := hex.DecodeString(seedHex.Value.String())
 	if err != nil || len(seed) != ed25519.SeedSize {
@@ -251,7 +284,7 @@ func main() {
 			if flusher != nil {
 				flusher.Flush()
 			}
-			if e == nil && *scenario == "events-stream" {
+			if e == nil && producer == "events-stream" {
 				if msg, ok := m.(map[string]any); ok && msg["method"] == "notifications/events/heartbeat" {
 					log.put(map[string]any{"event": "heartbeat_frame", "request_sig": sig, "heartbeat_granted_ms": grant.Heartbeat.Milliseconds(), "ts": clock.Now()})
 				}
@@ -260,7 +293,7 @@ func main() {
 		}
 		progress := map[string]any{"jsonrpc": "2.0", "method": "notifications/progress", "params": map[string]any{"progress": 1}}
 		final := map[string]any{"jsonrpc": "2.0", "id": in.ID, "result": map[string]any{}}
-		switch *scenario {
+		switch producer {
 		case "concurrency-limit", "durable-live-replay", "durable-restart-replay":
 			emit(progress)
 			if release != nil {
@@ -282,6 +315,9 @@ func main() {
 			emit(progress)
 			emit(final)
 		case "idle":
+			if flusher != nil {
+				flusher.Flush()
+			}
 			<-r.Context().Done()
 			return
 		case "oversize":
@@ -318,7 +354,7 @@ func main() {
 				}
 			}
 			log.put(map[string]any{"event": "duration_elapsed", "start": advanced.Start, "duration_ms": advanced.DurationMS, "clock": clock.Now(), "request_sig": sig})
-		case "list-changed":
+		case "list-changed", "subscriptions-listen":
 			emit(map[string]any{"jsonrpc": "2.0", "method": "notifications/subscriptions/acknowledged", "params": map[string]any{"subscriptionId": 3}})
 			if hasListChangedNotification(in.Params) {
 				emit(map[string]any{"jsonrpc": "2.0", "method": "notifications/events/list_changed", "params": map[string]any{}})
@@ -340,7 +376,7 @@ func main() {
 	wrapped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		state := &releaseState{release: releaseControls}
 		ctx := context.WithValue(r.Context(), releaseContextKey{}, state)
-		outer := &streamOpenWriter{ResponseWriter: w, log: log, request: r, scenario: *scenario, serverKID: serverKID, heartbeat: opts.Heartbeat.Milliseconds(), release: state}
+		outer := &streamOpenWriter{ResponseWriter: w, log: log, request: r, scenario: producer, serverKID: serverKID, heartbeat: opts.Heartbeat.Milliseconds(), release: state}
 		handler.ServeHTTP(outer, r.WithContext(ctx))
 		if outer.status == http.StatusUnauthorized {
 			var refusal struct {
