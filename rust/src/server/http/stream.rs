@@ -272,13 +272,18 @@ fn block_on_until_or_cancelled<F: Future>(
     }
 }
 
-/// Polls the final end send once. The slot must be released even if the receiver has stopped
-/// draining, so the terminal frame is best-effort rather than another bounded wait.
-fn try_send_data(tx: &mut Sender<Bytes, std::convert::Infallible>, chunk: Bytes) {
-    let waker = Waker::from(Arc::new(ThreadWaker(std::thread::current())));
-    let mut cx = Context::from_waker(&waker);
-    let mut send = Box::pin(tx.send_data(chunk));
-    let _ = send.as_mut().poll(&mut cx);
+/// Time a stalled reader gets to take the end frame; the slot is freed after it.
+const FINAL_END_GRACE: Duration = Duration::from_secs(5);
+
+/// Sends the final end frame, waiting for a live reader up to the grace; a reader that stopped
+/// draining or a cancelled stream must not hold the slot, so the wait is bounded.
+fn send_final_end(
+    tx: &mut Sender<Bytes, std::convert::Infallible>,
+    chunk: Bytes,
+    grace: Duration,
+    cancellation: &AtomicBool,
+) {
+    let _ = block_on_until_or_cancelled(tx.send_data(chunk), Instant::now() + grace, cancellation);
 }
 
 /// A deadline-free wait: the signalled future always completes.
@@ -626,7 +631,8 @@ fn pump(work: StreamWork, mut tx: Sender<Bytes, std::convert::Infallible>) {
     pipe.finish(now_ms, &mut out);
     if !out.is_empty() {
         let chunk = Bytes::from(std::mem::take(&mut out));
-        try_send_data(&mut tx, chunk);
+        let grace = FINAL_END_GRACE.min(Duration::from_millis(limits.max_stream_duration_ms));
+        send_final_end(&mut tx, chunk, grace, &cancellation);
     }
     // 3.7: the handler observes the cancelled request context when its body is dropped below.
     cancellation.store(true, Ordering::SeqCst);
@@ -744,13 +750,23 @@ mod tests {
         assert_eq!(registry.active("identity"), 0);
     }
     #[test]
-    fn final_end_send_is_best_effort_and_slot_releases_with_full_channel() {
+    fn final_end_send_is_bounded_and_slot_releases_with_full_channel() {
         let registry = Arc::new(StreamRegistry::new());
         let slot = registry.try_acquire("identity", 1).expect("slot");
         let (mut tx, _body) = Channel::<Bytes, std::convert::Infallible>::new(1);
         block_on(tx.send_data(Bytes::from_static(b"occupies capacity"))).expect("first frame fits");
 
-        try_send_data(&mut tx, Bytes::from_static(b"final end"));
+        let started = Instant::now();
+        send_final_end(
+            &mut tx,
+            Bytes::from_static(b"final end"),
+            Duration::from_millis(30),
+            &AtomicBool::new(false),
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the wait is bounded by the grace"
+        );
         drop(slot);
         assert_eq!(registry.active("identity"), 0);
     }
