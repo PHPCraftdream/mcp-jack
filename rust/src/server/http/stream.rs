@@ -631,7 +631,8 @@ fn pump(work: StreamWork, mut tx: Sender<Bytes, std::convert::Infallible>) {
     pipe.finish(now_ms, &mut out);
     if !out.is_empty() {
         let chunk = Bytes::from(std::mem::take(&mut out));
-        send_final_end(&mut tx, chunk, FINAL_END_GRACE, &cancellation);
+        let grace = FINAL_END_GRACE.min(Duration::from_millis(limits.max_stream_duration_ms));
+        send_final_end(&mut tx, chunk, grace, &cancellation);
     }
     // 3.7: the handler observes the cancelled request context when its body is dropped below.
     cancellation.store(true, Ordering::SeqCst);
