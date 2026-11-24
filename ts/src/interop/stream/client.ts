@@ -333,7 +333,7 @@ async function main(): Promise<void> {
       jsonl({
         type: "message", scenario: id, stream_index: 0,
         request_method: capture.method, request_target: capture.target,
-        request_body_b64u: encodeBase64URL(body), request_headers,
+        request_body_b64u: encodeBase64URL(body), request_headers: requestHeaders,
         request_sig: requestAuth.sig, request_ts: requestAuth.ts,
         nonce: requestAuth.nonce,
         open: { sid: open.sid, kid: open.kid, ts: open.ts, sig: open.sig },
