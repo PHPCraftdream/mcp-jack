@@ -428,9 +428,6 @@ jobs:
           npm run build
       - name: Run the stream matrix
         run: node interop/stream.mjs
-      - name: Run the staged stream scenarios (report only)
-        continue-on-error: true
-        run: node interop/stream.mjs --include-staged
 
   durable-interop:
     name: durable nonce interop matrix (3x3, linux)

@@ -486,6 +486,7 @@ async function main() {
     const staged = args.matrix === 'stream' ? scenarioDoc.matrices?.staged : [];
     if (!Array.isArray(scenarios)) usageError(`missing matrix ${args.matrix}`);
     if (args.matrix === 'stream' && !Array.isArray(scenarioDoc.matrices?.staged)) usageError('missing staged stream matrix');
+    if (args.stagedOnly && args.matrix === 'stream' && staged.length === 0) usageError('no scenario is staged for matrix stream');
     const pool = args.stagedOnly ? staged : args.includeStaged ? [...scenarios, ...staged] : scenarios;
     if (args.stagedOnly && args.matrix !== 'stream') usageError('staged flags are available only for matrix stream');
     if ((args.includeStaged || args.stagedOnly) && args.matrix !== 'stream') usageError('staged flags are available only for matrix stream');
