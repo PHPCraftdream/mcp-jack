@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -747,6 +748,9 @@ func replayWhileStreaming(t *testing.T, h *harness, clk *clock, body []byte, non
 }
 
 func TestDurableNonceReplayRefusedBeforeFirstStreamByte(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("durable nonce stores are Linux-only")
+	}
 	clk := &clock{ts: testfixture.Now}
 	directory := t.TempDir()
 	if err := os.Chmod(directory, 0700); err != nil {
