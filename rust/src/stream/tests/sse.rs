@@ -58,6 +58,17 @@ fn expected_body_events() -> Vec<SseEvent> {
     ]
 }
 
+fn event_structure(events: &[SseEvent]) -> Vec<(Vec<SseField>, usize)> {
+    events
+        .iter()
+        .map(|event| (event.lines.clone(), event.end))
+        .collect()
+}
+
+fn completion_arrivals(events: &[SseEvent]) -> Vec<i64> {
+    events.iter().map(|event| event.arrived_at_ms).collect()
+}
+
 #[test]
 fn whole_body() {
     assert_eq!(whole(BODY), expected_body_events());
@@ -65,7 +76,9 @@ fn whole_body() {
 
 #[test]
 fn byte_at_a_time_matches_whole() {
-    assert_eq!(one_byte_at_a_time(BODY), whole(BODY));
+    let events = one_byte_at_a_time(BODY);
+    assert_eq!(event_structure(&events), event_structure(&whole(BODY)));
+    assert_eq!(completion_arrivals(&events), vec![10, 26]);
 }
 
 #[test]
@@ -80,7 +93,9 @@ fn split_between_cr_and_lf_matches_whole() {
         (&b"\n: ping\ndata: b\n"[..], 3),
         (&b"\n"[..], 4),
     ];
-    assert_eq!(from_chunks(&chunks), whole(BODY));
+    let events = from_chunks(&chunks);
+    assert_eq!(event_structure(&events), event_structure(&whole(BODY)));
+    assert_eq!(completion_arrivals(&events), vec![3, 4]);
 }
 
 #[test]
@@ -109,6 +124,7 @@ fn bom_is_ignored_across_chunks() {
     // `end` stays in original coordinates: shifted by the three BOM bytes.
     assert_eq!(bom_whole[0].end, 14);
     assert_eq!(bom_whole[1].end, 30);
+    assert_eq!(completion_arrivals(&bom_whole), vec![0, 0]);
     // The field values are the same as without a BOM.
     let plain: Vec<Vec<SseField>> = expected_body_events()
         .into_iter()
@@ -129,10 +145,17 @@ fn bom_is_ignored_across_chunks() {
         (&bodied[2..3], 2),
         (&bodied[3..], 3),
     ];
-    assert_eq!(from_chunks(&chunks), from_whole);
+    let bom_chunked = from_chunks(&chunks);
+    assert_eq!(event_structure(&bom_chunked), event_structure(&from_whole));
+    assert_eq!(completion_arrivals(&bom_chunked), vec![3, 3]);
 
     let chunks: Vec<(&[u8], i64)> = vec![(&bodied[..3], 0), (&bodied[3..], 1)];
-    assert_eq!(from_chunks(&chunks), from_whole);
+    let bom_split_after_prefix = from_chunks(&chunks);
+    assert_eq!(
+        event_structure(&bom_split_after_prefix),
+        event_structure(&from_whole)
+    );
+    assert_eq!(completion_arrivals(&bom_split_after_prefix), vec![1, 1]);
 }
 
 #[test]
@@ -271,7 +294,7 @@ fn arrival_at_includes_the_bom() {
 }
 
 #[test]
-fn capped_reader_bounds_one_byte_chunks_and_aborts_unterminated_line() {
+fn capped_reader_bounds_one_byte_chunks_and_rejects_unterminated_oversized_data_value() {
     const CAP: usize = 1024 * 1024;
     let mut reader = SseReader::with_max_pending_bytes(CAP);
     let mut event = b"data: ".to_vec();
@@ -287,16 +310,13 @@ fn capped_reader_bounds_one_byte_chunks_and_aborts_unterminated_line() {
     assert_eq!(final_event.len(), 1);
     assert_eq!(final_event[0].arrived_at_ms, (event.len() - 1) as i64);
 
-    let mut oversized = SseReader::with_max_pending_bytes(CAP + 4096);
-    for _ in 0..(CAP + 4097) {
-        let _ = oversized.push(b"x", 1);
-        if oversized.too_large() {
-            break;
-        }
-    }
+    let mut oversized = SseReader::with_max_pending_bytes(CAP);
+    let mut data_line = b"data: ".to_vec();
+    data_line.extend_from_slice(&vec![b'x'; CAP + 1]);
+    assert!(oversized.push(&data_line, 1).is_empty());
     assert!(
         oversized.too_large(),
-        "unterminated oversized line must fail immediately"
+        "an unterminated data value over the cap must fail immediately"
     );
     assert_eq!(oversized.buffered_bytes(), 0);
 }
@@ -325,12 +345,17 @@ fn capped_reader_counts_partial_data_prefixes_and_join_separators() {
     assert!(!reader.too_large());
     assert!(reader.push(b"c", 3).is_empty());
     assert!(!reader.too_large());
-    assert!(reader.push(b"\ndata:", 4).is_empty());
+    assert!(reader.push(b"\n", 4).is_empty());
     assert!(!reader.too_large());
-    assert!(reader.push(b" x", 5).is_empty());
+    assert!(reader.push(b"data", 5).is_empty());
+    assert!(
+        !reader.too_large(),
+        "an incomplete field-name prefix is not yet a data value"
+    );
+    assert!(reader.push(b":", 6).is_empty());
     assert!(
         reader.too_large(),
-        "joined values include their LF separator"
+        "the second data field's LF join separator exceeds the cap"
     );
     assert_eq!(reader.buffered_bytes(), 0);
 }
@@ -355,15 +380,26 @@ fn capped_reader_attributes_split_crlf_to_later_lf() {
 
 #[test]
 fn capped_reader_ignores_non_data_fields_and_comments() {
-    let mut reader = SseReader::with_max_pending_bytes(3);
-    let event = reader.push(
-        b": lengthy comment ignored\nx-unknown: lengthy metadata\ndata: abc\n\n",
-        9,
-    );
-    assert!(!reader.too_large());
+    let mut exact = SseReader::with_max_pending_bytes(3);
+    assert!(exact
+        .push(
+            b": lengthy comment ignored\nx-unknown: lengthy metadata\ndata: abc",
+            1
+        )
+        .is_empty());
+    assert!(!exact.too_large());
+    assert!(exact.push(b"\n", 2).is_empty());
+    assert!(!exact.too_large());
+    let event = exact.push(b"\n", 3);
+    assert!(!exact.too_large());
     assert_eq!(event.len(), 1);
-    assert_eq!(event[0].arrived_at_ms, 9);
+    assert_eq!(event[0].arrived_at_ms, 3);
     assert_eq!(event[0].lines.last().expect("data").value, b"abc");
+    assert!(exact.push(b"data: abcd", 4).is_empty());
+    assert!(
+        exact.too_large(),
+        "cap+1 data value fails before line terminator"
+    );
 }
 
 #[test]

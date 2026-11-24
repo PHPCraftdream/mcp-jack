@@ -251,7 +251,7 @@ fn idle_silence_ends_a_live_stream() {
     let (mut stream, _dropped, _log) = stream(
         vec![Script::Data(first), Script::Timeout],
         config(&[OPEN_TS]),
-        &[0, 0, 90_001],
+        &[0, 0, 0, 90_001],
     );
     let outcomes: Vec<_> = stream.by_ref().collect();
     assert_eq!(
