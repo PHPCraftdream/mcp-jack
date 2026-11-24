@@ -60,17 +60,33 @@ func (c *DurableConfig) Validate(maxConcurrent int) error {
 	return nil
 }
 
+type StreamConfig struct {
+	FrameMaxBytes        int64 `json:"frame_max_bytes,omitempty"`
+	MaxConcurrentStreams int   `json:"max_concurrent_streams,omitempty"`
+	MaxStreamDurationMS  int64 `json:"max_stream_duration_ms,omitempty"`
+	HeartbeatMS          int64 `json:"heartbeat_ms,omitempty"`
+}
+
+type WebhookKey struct {
+	KID       string `json:"kid"`
+	PublicKey string `json:"public_key"`
+}
+
 type Config struct {
-	Version            int                 `json:"version"`
-	Aud                string              `json:"aud"`
-	ServerSeedFile     string              `json:"server_seed_file"`
-	ServerRotationFile RotationProfilePath `json:"server_rotation_file,omitempty"`
-	StateFile          string              `json:"state_file"`
-	Listen             string              `json:"listen"`
-	UpstreamSocket     string              `json:"upstream_socket"`
-	UpstreamURL        string              `json:"upstream_url"`
-	CallTimeoutMS      int                 `json:"call_timeout_ms"`
-	MaxConcurrent      int                 `json:"max_concurrent"`
-	DurableNonces      *DurableConfig      `json:"durable_nonces,omitempty"`
-	NativeAdmin        NativeAdminFlag     `json:"native_admin,omitempty"`
+	Version               int                 `json:"version"`
+	Aud                   string              `json:"aud"`
+	ServerSeedFile        string              `json:"server_seed_file"`
+	ServerRotationFile    RotationProfilePath `json:"server_rotation_file,omitempty"`
+	StateFile             string              `json:"state_file"`
+	Listen                string              `json:"listen"`
+	UpstreamSocket        string              `json:"upstream_socket"`
+	UpstreamURL           string              `json:"upstream_url"`
+	CallTimeoutMS         int                 `json:"call_timeout_ms"`
+	MaxConcurrent         int                 `json:"max_concurrent"`
+	DurableNonces         *DurableConfig      `json:"durable_nonces,omitempty"`
+	NativeAdmin           NativeAdminFlag     `json:"native_admin,omitempty"`
+	WebhookKeys           []WebhookKey        `json:"webhook_keys,omitempty"`
+	WebhookEgressIPRanges []string            `json:"webhook_egress_ip_ranges,omitempty"`
+	Profile               string              `json:"profile,omitempty"`
+	Streams               *StreamConfig       `json:"streams,omitempty"`
 }

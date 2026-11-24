@@ -21,8 +21,9 @@ Commands:
 - `jack keygen user --secret FILE --public FILE`
 - `jack bootstrap --state FILE --invite-file FILE`
 - `jack enroll --config FILE --invite-file FILE --name NAME`
-- `jack gateway --config FILE`
+- `jack gateway --config FILE [--profile legacy|modern|both]`
 - `jack bridge --config FILE`
+- `jack events receive --config FILE [--listen ADDRESS] [--tls-cert FILE --tls-key FILE] [--callback-path PATH] [--subscription ID ...] [--loopback-http-test]`
 - `jack nonce-reconcile-terminal --config FILE --expected-hash HASH --receipt-file FILE --confirm-no-redelivery INTENT_ID`
 - `jack server-key-init-unused --config FILE --confirm-unused-endpoint URL --confirm-unused-aud AUD`
 - `jack server-key-status --config FILE`
@@ -69,7 +70,11 @@ contains only the public invite ID and expiry. A failed or unknown operation
 leaves the reservation file in place; it is not reset or retried automatically.
 Filesystem output and remote state are not a cross-file transaction.
 
-## Custody and file contract
+## Webhook event receiver
+
+`jack events receive --config FILE [--listen ADDRESS] [--tls-cert FILE --tls-key FILE] [--callback-path PATH] [--subscription ID ...] [--jack-audience AUD] [--mcp-server-kid KID --mcp-server-public-key KEY] [--server-keys FILE] [--mcp-url URL --card-url URL] [--webhook-key-check FILE] [--loopback-http-test] [--allow-pending-secret]` requires a private 0600 configuration in an owner-controlled private directory. Version 1 JSON includes `listen`, `callback_path`, `state_file`, `subscriptions` (`id`, `secret`, optional `callback_url`), and optional Server Card fields: `enforce_server_identity`, `mcp_server_kid`, `mcp_server_public_key`, `server_keys` (JWK objects), `mcp_url`, `card_url`, `webhook_key_check`, and `jack_audience`. Subscription secrets are supplied only in the private configuration; repeat `--subscription ID` to select one or more configured IDs without placing secrets on the command line. A pending subscription uses an empty ID, nonempty secret and callback URL, and requires `allow_pending_secret: true` in config or the explicit `--allow-pending-secret` flag; its ID is not added to the routed-subscription list. Other flags override matching config values. Normal service requires TLS certificate and key (loaded with `tls.LoadX509KeyPair`). Plain HTTP requires explicit `--loopback-http-test` and a literal IP loopback listen host; hostname aliases are refused.
+
+Only the exact callback path is mounted to the public receiver handler; unmatched routes are 404 and non-POST methods are refused. The receiver SDK authenticates and validates deliveries before the CLI sees their IDs. Under an owner lock acquired before state-file creation, the CLI loads a strict newline-delimited JSON receipt log (16 MiB maximum), fails closed on malformed, truncated, duplicate, invalid, or oversized records, and appends/syncs newly accepted records to the same private 0600 file. Previously logged IDs suppress repeat stdout and append operations only after SDK authentication and Enqueue. The CLI restores persisted accepted IDs and terminated subscriptions into the SDK receiver on startup, so an authenticated replay of a persisted accepted ID receives the SDK's `duplicate` acknowledgment and terminated subscriptions remain terminated after restart. Only accepted event occurrences produce stdout, one JSON object per line with `subscription_id` and an `event` field containing the exact EventOccurrence object; verification, gap, and terminated controls produce no stdout. Errors use the generic secret-free CLI diagnostic. Server Card keys are refreshed in the background at a bounded interval.
 
 On Linux, macOS and the listed BSD targets, secret/config/state files must be
 regular owner-owned files with mode exactly 0600 in an owner-owned directory with
@@ -147,10 +152,11 @@ certificate verification remains enabled; no environment HTTP proxy is used.
 
 Calls advertise `Accept: application/json, text/event-stream`, JSON Content-Type,
 and `MCP-Protocol-Version: 2025-11-25`. Version/session/routing headers are unsigned
-metadata: validated, never described as signature-protected. Session, resumption,
-and modern routing metadata are rejected, not silently ignored. The outer gateway
-checks duplicate/incompatible protocol-version headers before SDK dispatch,
-including Native enrollment; those pre-auth refusals cannot consume an invite.
+metadata: validated, never described as signature-protected. In the legacy profile,
+session/resumption and modern routing metadata are rejected, not silently ignored.
+The outer gateway checks duplicate/incompatible protocol-version headers before
+SDK dispatch, including Native enrollment; those pre-auth refusals cannot consume
+an invite.
 
 ## Local first-admin bootstrap and enrollment
 
@@ -182,7 +188,7 @@ power-loss, replay-across-restart, or multi-instance guarantee.
 
 ## Fixed Unix-socket gateway
 
-Gateway configuration (shown fields required; `native_admin` is optional and defaults to `false`):
+Gateway configuration (shown fields required; `native_admin` is optional and defaults to `false`; `profile` defaults to `legacy`):
 
 ```json
 {
@@ -194,12 +200,25 @@ Gateway configuration (shown fields required; `native_admin` is optional and def
   "upstream_socket": "<absolute owner-controlled Unix socket>",
   "upstream_url": "http://upstream/mcp",
   "call_timeout_ms": 10000,
-  "max_concurrent": 8
+  "max_concurrent": 4,
+  "native_admin": false,
+  "webhook_keys": [
+    {"kid": "<base64url SHA-256 key ID>", "public_key": "<base64url Ed25519 public key>"}
+  ],
+  "webhook_egress_ip_ranges": ["192.0.2.0/24"],
+  "profile": "modern",
+  "streams": {
+    "frame_max_bytes": 1048576,
+    "max_concurrent_streams": 4,
+    "max_stream_duration_ms": 3600000,
+    "heartbeat_ms": 15000
+  }
 }
 ```
 
-Only literal loopback listen addresses with a nonzero port are accepted. TLS
-termination for remote clients is an external, trusted reverse-proxy deployment;
+`native_admin` enables only the fixed user/invite administrative native-tool allowlist and defaults to `false`. `webhook_keys` and `webhook_egress_ip_ranges` are optional operator-only inputs for `jack.server.webhook_key`; the tool is disabled unless at least one webhook key is configured. Each key supplies a base64url Ed25519 `public_key` and its matching `kid`; SDK validation enforces the key and range limits. These configured keys must be a subset of those published in the Server Card; the CLI has no card-publication API and does not publish or establish that subset itself. Caller request fields never provide these trusted values. This explicit webhook route is separate from the default native allowlist and from `jack.server.key`. `--profile` overrides it after strict config validation. `modern` applies modern MCP rules to every request; `both` classifies each authenticated request using the modern spec's header/body signals. `streams` is accepted only with `modern` or `both` and all values are range-checked before conversion; omitted values use s1 defaults (1 MiB frame cap, 4 streams per identity, one-hour duration, and a heartbeat bounded by half the signature window). The gateway forwards `Jack-Accept` and modern mirror metadata without changing signed request bytes. Upstream event-stream bodies are relayed through SDK middleware only when the profile is modern-capable and `Jack-Accept` includes valid `s1`; the middleware signs the downstream stream. Legacy behavior continues to refuse event streams.
+
+Termination for remote clients is an external, trusted reverse-proxy deployment;
 configure it to preserve the signed origin-form target and exact body bytes.
 No public plaintext listener or automatic TLS provisioning is supplied.
 
@@ -247,10 +266,7 @@ verification (at most one in-flight concurrency allowance can overshoot); this
 also fails closed if clock movement prevents timely expiry. Registry/invite
 loading is bounded to 1 MiB/1024 records, with enrollment key count capped at 1024.
 
-Call timeouts are required (100..30000 ms). Inbound read/header/write/idle/connection
-deadlines, context deadlines and upstream dial/header/TLS bounds are installed.
-These bound network operations, not arbitrary local filesystem operations. Byte
-caps alone are not time bounds. Shutdown closes the server and joins accepted
+Call timeouts are required (100..30000 ms). Inbound header/body reads and non-stream requests retain the configured call timeout; opted-in stream requests use the configured maximum stream duration plus the call timeout for bounded setup/termination, while `ReadTimeout` and `ReadHeaderTimeout` stay bounded by the call timeout. Upstream dial/header/TLS bounds remain in force. These bound network operations, not arbitrary local filesystem operations. Byte caps alone are not time bounds. Shutdown closes the server and joins accepted
 connections before releasing ownership; that join has the persistence limitation
 below. No handler or persistence operation is detached to pretend it completed.
 
@@ -288,20 +304,23 @@ separate contract/recovery question. Acceptance of option 1 changes the supporte
 
 ## Bounded stdio bridge profile
 
-This is a deliberately restricted **legacy 2025-11-25, no-session, terminal JSON
-response** profile. Configure upstream handlers so no required progress,
-server-initiated request, notification, subscription, or SSE output is dropped.
-This is neither full legacy transport conformance nor support for modern MCP.
-There is no official SDK dependency or official SDK test claim.
+The legacy bridge preserves legacy `Post` bytes when `era` is omitted or `legacy`.
+The modern bridge (`era: "modern"`) enables modern request mirrors and verified s1
+streams; the auto bridge (`era: "auto"`) probes signed `server/discover` with the
+SDK's arbitrary-call API and uses `CurrentEra()` to resolve verified C9 negotiation
+before selecting the legacy or modern bridge path. This additive getter exposes
+the configured era or the verified-selected era and is concurrency-safe.
 
 - One newline-delimited UTF-8 JSON object per input; no batches, duplicate member
   names, truncated final frames, or silently truncated oversize messages.
 - Remove only the delimiter LF before signing. Preserve every other byte,
   including spaces or CR whitespace. Never remarshal requests.
-- Relay the caller's sole initialize request, validate its version/capabilities/
-  clientInfo, validate the exact correlated initialize result/version/capabilities/
-  serverInfo, then require caller `notifications/initialized`. No hidden or second
-  handshake, capability rewrite, automatic GET, DELETE, or reinitialization.
+- **Legacy bridge only:** relay the caller's sole initialize request, validate its
+  version/capabilities/clientInfo, validate the exact correlated initialize
+  result/version/capabilities/serverInfo, then require caller
+  `notifications/initialized`. No hidden or second handshake, capability rewrite,
+  automatic GET, DELETE, or reinitialization. These legacy handshake constraints
+  do not describe the modern bridge path.
 - Request IDs must be strings or int64 integer literals; response IDs must match.
   Terminal JSON-RPC error objects are relayed only after shape and ID validation.
 - Notifications require **202 empty** and produce no stdout. 204 is not accepted.
@@ -314,37 +333,28 @@ There is no official SDK dependency or official SDK test claim.
   cannot be remarshal-transformed without losing the exact signed byte contract.
   Escaped `\\n` within JSON strings is fine. A verified single-line body gets only
   a framing LF appended.
-- Session/resumption and incompatible version metadata fail closed. Response
-  headers are not authenticated by Jack signatures; TLS/hop trust still matters.
+- **Legacy bridge only:** session/resumption and incompatible version metadata
+  fail closed. Response headers are not authenticated by Jack signatures;
+  TLS/hop trust still matters.
 
-One HTTP call/output operation runs at a time. There is at most one pending frame
-plus one bounded reader frame. When the pending slot is full, the main loop sets
-its ordinary input receive channel to nil: real channel backpressure replaces
-pipeline rejection, without growing a queue or dropping/reordering frames. Worker
-completion, context cancellation, the unchanged whole-call timer and terminal
-input remain serviceable. Only main owns admission; each worker exclusively owns
-the protocol state until its completion is received before the next launch.
+A cancellation notification for a live request cancels that request's transport context and stream; unknown IDs are ignored. A repeated active request ID is a protocol error. Calls are limited to eight active requests and eight queued requests. Stdout writes are serialized as complete frames. The reader runs separately so EOF and cancellation remain observable while a stream is live; EOF cancels accepted work, closes the output to release blocked writes, and joins reader/workers. Non-stream work uses the configured call timeout; event streams have a bounded one-hour lifetime unless canceled.
 
 The reader uses separate unbuffered ordinary and terminal channels and the same
-`maxBody+1` bufio capacity. EOF, framing/read errors, malformed JSON objects and
-unsupported cancellation are routed to a single terminal event before any normal
-send; the reader then exits. Such controls immediately behind the accepted
-pending frame remain observable even while stdout is held. This is not arbitrary
-look-through: if the reader is blocked holding another ordinary frame, a later
-EOF/error/cancellation remains unread until capacity returns (or context/timeout
-closes owned IO). Nothing is silently dropped. Context cancellation releases a
-blocked channel send; owned IO close interrupts Read/Write, and cleanup joins the
-reader and worker.
+`maxBody+1` bufio capacity. EOF, framing/read errors and malformed JSON objects
+are routed to a single terminal event before any normal send; the reader then
+exits. Cancellation notifications are ordinary frames so they can cancel a
+matching active request. Nothing is silently dropped. Context cancellation
+releases a blocked channel send; owned IO close interrupts Read/Write, and
+cleanup joins the reader and workers.
 
-A complete response that has already finished writing may win a concurrent EOF
-race and complete successfully only if there is no accepted pending frame. EOF
-with a pending frame always fails, even if the current worker completes with nil;
-it cannot silently discard that frame and return success. EOF before a complete
-reply fails and cancels the call. Idle EOF succeeds. Input inactivity, slow
-framing, blocked stdout and HTTP reads are subject to the configured timeout;
-synchronous filesystem setup remains excluded as described above. A bridge
-with no input does not wait forever once setup has completed.
+A request that has already finished writing may win a concurrent EOF race. EOF
+cancels any still-active calls and waits for worker cleanup before returning
+success; idle EOF also succeeds. Input inactivity, slow framing, blocked stdout
+and HTTP reads are subject to the configured timeout; synchronous filesystem
+setup remains excluded as described above. A bridge with no input does not wait
+forever once setup has completed.
 
+The modern/auto bridge implementation has focused concurrent-stream, cancellation-by-ID, and legacy-preservation test sources. The receiver persists verified receipt IDs and terminated-subscription controls; on restart it seeds the SDK receiver with previously accepted IDs and terminated subscriptions. After authentication, a replay of a persisted accepted ID is acknowledged as `duplicate`, and restored termination state remains effective. This documents persisted duplicate acknowledgment and termination restoration, not a general durable protocol-level replay-prevention guarantee.
 The executable and child-test entry use `RunProcess`/`ProcessIO`, which prepare
 stdio **only for bridge**. On supported Unix systems, both descriptors must be
 pipes/FIFOs or UNIX-domain sockets (Node's `child_process`, and therefore
@@ -367,9 +377,10 @@ promise flag restoration on failure, and no such restoration is attempted.
 
 `Run` takes ownership of bridge In/Out. Their Close must unblock concurrent
 Read/Write. On EOF, broken pipe, deadline, cancellation or protocol failure, it
-cancels HTTP, closes owned stdio and joins its reader/worker before returning.
-Arbitrary injected blocking Go readers/writers whose Close cannot unblock
-operations are unsupported. Stderr is a caller-owned diagnostic sink and must
+cancels HTTP, closes owned stdio and joins its reader/workers before returning.
+Clean EOF with no active calls succeeds; EOF with active calls cancels them and
+waits for worker cleanup. Arbitrary injected blocking Go readers/writers whose
+Close cannot unblock operations are unsupported. Stderr is a caller-owned diagnostic sink and must
 not block indefinitely. The production pipe preparation has focused
 blocking-inherited-descriptor/deadline/close regression sources; the current
 follow-up edits are unrun. The actual `os.File.Read` deadline control is separate

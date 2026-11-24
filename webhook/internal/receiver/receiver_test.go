@@ -48,6 +48,22 @@ func receiverConfig() receiver.Config {
 	}
 }
 
+func TestPersistedReceiptIsDuplicateOnlyAfterAuthentication(t *testing.T) {
+	cfg := receiverConfig()
+	cfg.PreviouslyAccepted = []string{idA}
+	r := newReceiver(t, cfg)
+	d := signedDelivery(idA, subA, eventBody, hmacKey, clock)
+	checkOK(t, r.Handle(d), duplicate, false)
+	d.Headers[2][1] = "v1," + base64.StdEncoding.EncodeToString(make([]byte, sha256.Size))
+	if got := r.Handle(d); got.Code != "bad_signature" {
+		t.Fatalf("unauthenticated persisted receipt = %+v, want bad_signature", got)
+	}
+	state := r.State()
+	if !slices.Contains(state.Accepted, idA) || !slices.Contains(state.Routed, subA) || slices.Contains(state.Terminated, subA) {
+		t.Fatalf("restored state changed unexpectedly: %+v", state)
+	}
+}
+
 func TestReceiverCoreRequiresEnqueue(t *testing.T) {
 	cfg := receiverConfig() // A nil key source must not mask the error.
 	cfg.Enqueue = nil

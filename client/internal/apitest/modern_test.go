@@ -71,6 +71,7 @@ func modernInitializeAnswer(id int64, version string) string {
 // the interesting header values, captured before the answer is written.
 type modernRequestRecord struct {
 	Method  string
+	Params  json.RawMessage
 	Headers map[string][]string
 }
 
@@ -142,7 +143,7 @@ func newModernSignedServer(t *testing.T, priv ed25519.PrivateKey, pub ed25519.Pu
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		rec := modernRequestRecord{Method: wire.Method, Headers: map[string][]string{}}
+		rec := modernRequestRecord{Method: wire.Method, Params: append(json.RawMessage(nil), wire.Params...), Headers: map[string][]string{}}
 		for _, name := range modernRecordedHeaders {
 			if values := r.Header.Values(name); len(values) > 0 {
 				rec.Headers[name] = append([]string(nil), values...)
@@ -500,6 +501,73 @@ const (
 // a -32020 refusal for an events method the client refetches events/list,
 // re-projects and retries exactly once, and a method outside the four events
 // methods fails locally without any HTTP request.
+func TestClientCallRawJSONRPC(t *testing.T) {
+	t.Run("modern exact response and mirrors without schema projection", func(t *testing.T) {
+		const response = ` { "jsonrpc":"2.0", "id":1, "result":{"x": 1} } `
+		c, log := newModernHarness(t, []modernScriptAnswer{{status: http.StatusOK, body: response}})
+		got, err := c.Call(context.Background(), "custom/read", map[string]any{"key": "v"})
+		if err != nil {
+			t.Fatalf("Call: %v", err)
+		}
+		if string(got) != response {
+			t.Fatalf("response = %q, want exact %q", got, response)
+		}
+		recs := log.snapshot()
+		wantModernMethodOrder(t, recs, "custom/read")
+		wantModernHeader(t, recs[0], "MCP-Protocol-Version", modernProtocolVersion)
+		wantModernHeader(t, recs[0], "Mcp-Method", "custom/read")
+		var params map[string]json.RawMessage
+		if err := json.Unmarshal(recs[0].Params, &params); err != nil {
+			t.Fatal(err)
+		}
+		if string(params["key"]) != `"v"` || len(params["_meta"]) == 0 {
+			t.Fatalf("params = %s; want key and mandatory _meta", recs[0].Params)
+		}
+	})
+	t.Run("legacy unchanged", func(t *testing.T) {
+		const response = `{"jsonrpc":"2.0","id":1,"result":{}}`
+		c, log := newModernHarnessWithEra(t, client.EraLegacy, []modernScriptAnswer{{status: http.StatusOK, body: response}})
+		got, err := c.Call(context.Background(), "custom/read", map[string]any{"key": "v"})
+		if err != nil || string(got) != response {
+			t.Fatalf("Call = %q, %v", got, err)
+		}
+		recs := log.snapshot()
+		wantModernMethodOrder(t, recs, "custom/read")
+		wantModernNoHeader(t, recs[0], "Mcp-Method")
+		var params map[string]json.RawMessage
+		if err := json.Unmarshal(recs[0].Params, &params); err != nil {
+			t.Fatal(err)
+		}
+		if len(params["_meta"]) != 0 {
+			t.Fatalf("legacy params carry _meta: %s", recs[0].Params)
+		}
+	})
+	t.Run("auto supported legacy-version fallback", func(t *testing.T) {
+		c, log := newModernHarnessWithEra(t, client.EraAuto, []modernScriptAnswer{
+			{status: http.StatusBadRequest, body: modernDiscoverUnsupportedLegacy},
+			{status: http.StatusOK, body: modernInitializeOK},
+			{status: http.StatusOK, body: modernInitializedOK},
+			{status: http.StatusOK, body: `{"jsonrpc":"2.0","id":3,"result":{}}`},
+		})
+		if _, err := c.Call(context.Background(), "custom/read", map[string]any{}); err != nil {
+			t.Fatalf("Call: %v", err)
+		}
+		wantModernMethodOrder(t, log.snapshot(), "server/discover", "initialize", "notifications/initialized", "custom/read")
+	})
+	t.Run("auto supported legacy-version fallback/retry", func(t *testing.T) {
+		c, log := newModernHarnessWithEra(t, client.EraAuto, []modernScriptAnswer{
+			{status: http.StatusBadRequest, body: modernDiscoverUnsupportedLegacy},
+			{status: http.StatusOK, body: modernInitializeOK},
+			{status: http.StatusOK, body: modernInitializedOK},
+			{status: http.StatusOK, body: `{"jsonrpc":"2.0","id":4,"result":{}}`},
+		})
+		if _, err := c.Call(context.Background(), "custom/read", map[string]any{}); err != nil {
+			t.Fatalf("Call: %v", err)
+		}
+		wantModernMethodOrder(t, log.snapshot(), "server/discover", "initialize", "notifications/initialized", "custom/read")
+	})
+}
+
 func TestModernExemptRulesClientEventsResync(t *testing.T) {
 	t.Run("client_events_resync", func(t *testing.T) {
 		c, log := newModernHarness(t, []modernScriptAnswer{

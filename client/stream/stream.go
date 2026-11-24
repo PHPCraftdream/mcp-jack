@@ -89,7 +89,9 @@ func Verify(exp Expectation, status int, headers []Header, chunks [][]byte) (Res
 	return impl.Verify(exp, status, headers, chunks)
 }
 
-// ClientConfig is the caller's signed-stream configuration.
+// ClientConfig is the caller's signed-stream configuration. Set Consumer to
+// ConsumerStdio to reject verified message data containing raw CR or LF; the
+// zero value selects ConsumerMCP.
 type ClientConfig = impl.ClientConfig
 
 // Stream is one open, verified s1 stream.

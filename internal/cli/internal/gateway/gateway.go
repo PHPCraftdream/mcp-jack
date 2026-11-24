@@ -56,13 +56,26 @@ func socketOK(path string) error {
 }
 
 func loadGateway(path string) (gatewayconfig.Config, time.Duration, error) {
+	return loadGatewayWithProfile(path, "")
+}
+
+func loadGatewayWithProfile(path, override string) (gatewayconfig.Config, time.Duration, error) {
+	if override != "" && override != "legacy" && override != "modern" && override != "both" {
+		return gatewayconfig.Config{}, 0, command.ErrConfig
+	}
 	var c gatewayconfig.Config
-	if storage.DecodeConfig(path, &c) != nil || c.Version != 1 || c.Aud == "" || c.MaxConcurrent < 1 || c.MaxConcurrent > 64 || c.DurableNonces.Validate(c.MaxConcurrent) != nil {
+	if storage.DecodeConfig(path, &c) != nil || c.Version != 1 || c.Aud == "" || c.MaxConcurrent < 1 || c.MaxConcurrent > 64 || c.DurableNonces.Validate(c.MaxConcurrent) != nil || (c.Profile != "" && c.Profile != "legacy" && c.Profile != "modern" && c.Profile != "both") {
 		return c, 0, command.ErrConfig
 	}
 	d, err := command.CallDuration(c.CallTimeoutMS)
 	if err != nil {
 		return c, 0, err
+	}
+	if override != "" {
+		c.Profile = override
+	}
+	if err := validateGatewayStreams(c.Streams); err != nil || (c.Streams != nil && c.Profile != "modern" && c.Profile != "both") {
+		return c, 0, command.ErrConfig
 	}
 	host, port, err := net.SplitHostPort(c.Listen)
 	ip := net.ParseIP(host)
@@ -80,16 +93,36 @@ func loadGateway(path string) (gatewayconfig.Config, time.Duration, error) {
 	return c, d, nil
 }
 
-// Run loads and validates config, acquires resources in a fixed order,
-// serves until done, and releases in reverse order; the deferred releases may
-// overwrite the named result error only when it is still nil.
+func validateGatewayStreams(stream *gatewayconfig.StreamConfig) error {
+	if stream == nil {
+		return nil
+	}
+	const maxStreamDurationMS = int64(time.Hour / time.Millisecond)
+	if stream.FrameMaxBytes < 0 || stream.FrameMaxBytes > wire.MaxBody || (stream.FrameMaxBytes != 0 && stream.FrameMaxBytes < 1024) || stream.MaxConcurrentStreams < 0 || stream.MaxConcurrentStreams > 64 || stream.MaxStreamDurationMS < 0 || stream.MaxStreamDurationMS > maxStreamDurationMS || stream.HeartbeatMS < 0 || stream.HeartbeatMS > maxStreamDurationMS {
+		return command.ErrConfig
+	}
+	return nil
+}
+
+// Run loads and validates config, acquires resources in a fixed order, serves until done, and releases in reverse order; deferred releases only replace a nil result.
 func Run(ctx context.Context, path string, audit io.Writer) (result error) {
+	return RunWithProfile(ctx, path, "", audit)
+}
+
+// RunWithProfile applies a validated CLI profile override after strict config decoding.
+func RunWithProfile(ctx context.Context, path, profile string, audit io.Writer) (result error) {
+	if profile != "" && profile != "legacy" && profile != "modern" && profile != "both" {
+		return command.ErrConfig
+	}
 	if audit == nil {
 		audit = io.Discard
 	}
-	c, timeout, err := loadGateway(path)
+	c, timeout, err := loadGatewayWithProfile(path, profile)
 	if err != nil {
 		return err
+	}
+	if profile != "" && profile == "legacy" && c.Streams != nil {
+		return command.ErrConfig
 	}
 	signing, err := selectGatewaySigning(c)
 	if err != nil {
@@ -156,13 +189,31 @@ func dialGatewayTransport(c gatewayconfig.Config, timeout time.Duration) *http.T
 
 // buildGatewayHandler assembles native policy, verifier, and MCP handler. It
 // returns the active nonce store, its release function, and the handler.
+func ptrStreamOptions(options server.StreamOptions) *server.StreamOptions { return &options }
+
 func buildGatewayHandler(c gatewayconfig.Config, signing *gatewaySigning, state *server.FileState, timeout time.Duration, base *http.Transport, audit io.Writer) (*server.NonceStore, func() error, http.Handler, error) {
 	policy := gatewayNative{
 		native: server.NewNativeTools(server.NativeOptions{}), serverKID: signing.anchorKID,
 		serverKIDs: signing.serverKIDs, adminEnabled: bool(c.NativeAdmin),
 	}
+	if len(c.WebhookKeys) != 0 || len(c.WebhookEgressIPRanges) != 0 {
+		keys := make([]server.WebhookKey, len(c.WebhookKeys))
+		for i, key := range c.WebhookKeys {
+			keys[i] = server.WebhookKey{KID: key.KID, PublicKey: key.PublicKey}
+		}
+		webhookKeys, err := server.NewWebhookKeyTool(server.WebhookKeyConfig{
+			Keys: keys, EgressIPRanges: append([]string(nil), c.WebhookEgressIPRanges...),
+		})
+		if err != nil {
+			return nil, nil, nil, command.ErrConfig
+		}
+		policy.webhookKeys = webhookKeys
+	}
 	// Audit events are written as JSON lines to the process stderr; write errors are ignored.
 	verification := server.Config{Aud: c.Aud, State: boundedState{state}, Native: policy, Audit: server.NewJSONLAuditSink(audit)}
+	if policy.webhookKeys != nil {
+		verification.WebhookKeys = policy
+	}
 	if signing.provider != nil {
 		policy.serverKeys = signing.provider
 		verification.Native = policy
@@ -183,6 +234,26 @@ func buildGatewayHandler(c gatewayconfig.Config, signing *gatewaySigning, state 
 		return fail()
 	}
 	handlerConfig := server.HandlerConfig{Verifier: v, ServerKey: signing.key, MaxBodyBytes: wire.MaxBody, MaxResponseBytes: wire.MaxBody}
+	if c.Profile == "modern" || c.Profile == "both" {
+		switch c.Profile {
+		case "modern":
+			handlerConfig.Profile = server.ProfileModern
+		case "both":
+			handlerConfig.Profile = server.ProfileBoth
+		}
+		stream := c.Streams
+		if stream != nil {
+			handlerConfig.Streams = &server.StreamOptions{
+				FrameMaxBytes: stream.FrameMaxBytes, MaxConcurrentStreams: stream.MaxConcurrentStreams,
+				MaxStreamDuration: time.Duration(stream.MaxStreamDurationMS) * time.Millisecond,
+				Heartbeat:         time.Duration(stream.HeartbeatMS) * time.Millisecond,
+			}
+		} else {
+			handlerConfig.Streams = ptrStreamOptions(server.DefaultStreamOptions())
+		}
+	} else if c.Streams != nil {
+		return fail()
+	}
 	if signing.provider != nil {
 		handlerConfig.ServerKey = nil
 		handlerConfig.ResponseKeys = signing.provider
@@ -229,12 +300,18 @@ func gatewayAdmissionHandler(c gatewayconfig.Config, timeout time.Duration, nonc
 				return
 			}
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		requestTimeout := timeout
+		streamRequest := (c.Profile == "modern" || c.Profile == "both") && acceptsS1(r.Header.Values("Jack-Accept"))
+		if streamRequest {
+			streamTimeout := gatewayStreamDuration(c.Streams)
+			requestTimeout = streamTimeout + timeout
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), requestTimeout)
 		defer cancel()
 		controller := http.NewResponseController(w)
 		_ = controller.SetReadDeadline(time.Now().Add(timeout))
-		_ = controller.SetWriteDeadline(time.Now().Add(timeout))
-		if !validProtocolVersion(r.Header) || transport.UnsupportedMetadata(r.Header) || len(r.Header.Values("Content-Encoding")) != 0 {
+		_ = controller.SetWriteDeadline(time.Now().Add(requestTimeout))
+		if (c.Profile != "modern" && c.Profile != "both" && !validGatewayProtocolVersion(r.Header, c.Profile)) || (c.Profile != "modern" && c.Profile != "both" && transport.UnsupportedMetadata(r.Header)) || len(r.Header.Values("Content-Encoding")) != 0 {
 			http.Error(w, "unsupported metadata", 400)
 			return
 		}
@@ -251,9 +328,13 @@ func serveGateway(ctx context.Context, c gatewayconfig.Config, timeout time.Dura
 	if err != nil {
 		return command.ErrConfig
 	}
-	limited := &boundedListener{Listener: listener, slots: make(chan struct{}, c.MaxConcurrent*2), timeout: timeout}
+	maxRequestLifetime := timeout
+	if c.Profile == "modern" || c.Profile == "both" {
+		maxRequestLifetime += gatewayStreamDuration(c.Streams)
+	}
+	limited := &boundedListener{Listener: listener, slots: make(chan struct{}, c.MaxConcurrent*2), timeout: maxRequestLifetime}
 	srv := &http.Server{
-		Handler: outer, ReadHeaderTimeout: timeout, ReadTimeout: timeout, WriteTimeout: timeout,
+		Handler: outer, ReadHeaderTimeout: timeout, ReadTimeout: timeout, WriteTimeout: maxRequestLifetime,
 		IdleTimeout: timeout, MaxHeaderBytes: 16384, ErrorLog: log.New(io.Discard, "", 0),
 		BaseContext: func(net.Listener) context.Context { return ctx },
 		ConnState: func(_ net.Conn, state http.ConnState) {
@@ -287,9 +368,114 @@ func serveGateway(ctx context.Context, c gatewayconfig.Config, timeout time.Dura
 	}
 }
 
+func acceptsS1(values []string) bool {
+	for _, line := range values {
+		tokens, valid := parseAcceptLine(line)
+		if !valid {
+			continue
+		}
+		for _, token := range tokens {
+			if token == "s1" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func parseAcceptLine(line string) ([]string, bool) {
+	line = strings.Trim(line, " ")
+	if line == "" {
+		return nil, false
+	}
+	parts := strings.Split(line, ",")
+	for i, part := range parts {
+		token := strings.Trim(part, " ")
+		if token == "" {
+			return nil, false
+		}
+		for _, r := range token {
+			if !(r == '-' || r >= '0' && r <= '9' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z') {
+				return nil, false
+			}
+		}
+		parts[i] = token
+	}
+	return parts, true
+}
+
+func gatewayStreamDuration(stream *gatewayconfig.StreamConfig) time.Duration {
+	if stream == nil || stream.MaxStreamDurationMS == 0 {
+		return time.Hour
+	}
+	return time.Duration(stream.MaxStreamDurationMS) * time.Millisecond
+}
+
+func validGatewayProtocolVersion(h http.Header, profile string) bool {
+	if profile == "" || profile == "legacy" {
+		values := h.Values("MCP-Protocol-Version")
+		return len(values) == 0 || (len(values) == 1 && values[0] == wire.ProtocolVersion)
+	}
+	return validProtocolVersion(h)
+}
+
+// validUpstreamProtocolVersion checks an optional response version without
+// widening legacy's historical exact-version contract. Modern profiles accept
+// the modern date range; both also allow the two supported legacy versions.
+func validUpstreamProtocolVersion(values []string, profile string) bool {
+	if len(values) == 0 {
+		return true
+	}
+	if len(values) != 1 {
+		return false
+	}
+	value := values[0]
+	if profile == "" || profile == "legacy" {
+		return value == wire.ProtocolVersion
+	}
+	if profile == "both" && (value == wire.ProtocolVersion || value == "2025-06-18") {
+		return true
+	}
+	return validModernVersion(value)
+}
+
 func validProtocolVersion(h http.Header) bool {
 	values := h.Values("MCP-Protocol-Version")
-	return len(values) == 0 || (len(values) == 1 && values[0] == wire.ProtocolVersion)
+	if len(values) == 0 {
+		return true
+	}
+	if len(values) != 1 {
+		return false
+	}
+	value := values[0]
+	if value == wire.ProtocolVersion || value == "2025-06-18" {
+		return true
+	}
+	return validModernVersion(value)
+}
+
+func validModernVersion(value string) bool {
+	if len(value) != 10 || value[4] != '-' || value[7] != '-' {
+		return false
+	}
+	parsed, err := time.Parse("2006-01-02", value)
+	if err != nil || parsed.Format("2006-01-02") != value {
+		return false
+	}
+	return value >= "2026-07-28"
+}
+
+func validHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if !(c >= '0' && c <= '9' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || strings.ContainsRune("!#$%&'*+-.^_`|~", rune(c))) {
+			return false
+		}
+	}
+	return true
 }
 
 func upstreamHandler(c gatewayconfig.Config, base *http.Transport) http.Handler {
@@ -311,7 +497,7 @@ func upstreamHandler(c gatewayconfig.Config, base *http.Transport) http.Handler 
 			w.WriteHeader(400)
 			return
 		}
-		if !validProtocolVersion(r.Header) {
+		if !validGatewayProtocolVersion(r.Header, c.Profile) {
 			w.WriteHeader(400)
 			return
 		}
@@ -323,6 +509,21 @@ func upstreamHandler(c gatewayconfig.Config, base *http.Transport) http.Handler 
 		for _, name := range []string{"Accept", "Content-Type", "MCP-Protocol-Version"} {
 			if values := r.Header.Values(name); len(values) != 0 {
 				u.Header[http.CanonicalHeaderKey(name)] = append([]string(nil), values...)
+			}
+		}
+		if c.Profile == "modern" || c.Profile == "both" {
+			for _, name := range []string{"Jack-Accept", "Mcp-Method", "Mcp-Name"} {
+				if values := r.Header.Values(name); len(values) != 0 {
+					u.Header[http.CanonicalHeaderKey(name)] = append([]string(nil), values...)
+				}
+			}
+			const paramPrefix = "Mcp-Param-"
+			for name, values := range r.Header {
+				if len(name) <= len(paramPrefix) || !strings.EqualFold(name[:len(paramPrefix)], paramPrefix) || !validHeaderName(name) {
+					continue
+				}
+				canonicalName := http.CanonicalHeaderKey(name)
+				u.Header[canonicalName] = append(u.Header[canonicalName], values...)
 			}
 		}
 		u.Header.Set("X-Jack-Kid", id.Kid())
@@ -340,8 +541,14 @@ func upstreamHandler(c gatewayconfig.Config, base *http.Transport) http.Handler 
 		}
 		ct := resp.Header.Get("Content-Type")
 		if strings.EqualFold(strings.TrimSpace(strings.SplitN(ct, ";", 2)[0]), "text/event-stream") {
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.WriteHeader(200)
+			if c.Profile != "modern" && c.Profile != "both" || !acceptsS1(r.Header.Values("Jack-Accept")) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(200)
+				return
+			}
+			w.Header().Set("Content-Type", ct)
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.Copy(w, resp.Body)
 			return
 		}
 		if len(resp.Header.Values("Content-Type")) > 1 {
@@ -357,7 +564,7 @@ func upstreamHandler(c gatewayconfig.Config, base *http.Transport) http.Handler 
 			w.Header().Set("Content-Type", ct)
 		}
 		if values := resp.Header.Values("MCP-Protocol-Version"); len(values) != 0 {
-			if len(values) != 1 || values[0] != wire.ProtocolVersion {
+			if !validUpstreamProtocolVersion(values, c.Profile) {
 				w.WriteHeader(502)
 				return
 			}

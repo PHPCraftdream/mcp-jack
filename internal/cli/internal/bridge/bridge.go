@@ -197,6 +197,14 @@ func RunWithObserver(ctx context.Context, configPath string, streams stdio.IO, o
 	if err != nil {
 		return err
 	}
+	if conn.Era == "auto" {
+		if err := probeBridgeEra(ctx, conn); err != nil {
+			return err
+		}
+	}
+	if conn.Era == "modern" {
+		return runModernBridge(ctx, conn, streams)
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	r := &bridgeRuntime{ctx: ctx, cancel: cancel, conn: conn, streams: streams, completed: make(chan error, 1), timer: time.NewTimer(conn.Timeout)}
 	defer func() {

@@ -56,6 +56,11 @@ type Config struct {
 	Jack                             *JackConfig
 	WebhookKey                       WebhookKeyCheck
 	Enqueue                          EnqueueFunc
+	// PreviouslyAccepted seeds authenticated duplicate detection from durable
+	// receipts. These IDs are acknowledged as duplicates after verification.
+	PreviouslyAccepted []string
+	// PreviouslyTerminated restores subscriptions terminated by durable receipts.
+	PreviouslyTerminated []string
 }
 
 // Delivery holds the raw request and the current time in Unix seconds. Each
@@ -91,6 +96,7 @@ type Receiver struct {
 	routed     map[string]struct{}
 	terminated map[string]struct{}
 	accepted   map[string]int64
+	persisted  map[string]struct{}
 }
 
 // New initializes a receiver and copies mutable configuration, retaining the
@@ -132,9 +138,25 @@ func New(cfg Config) (*Receiver, error) {
 		routed[id] = struct{}{}
 	}
 	cfg.Routed = nil
+	accepted := make(map[string]int64)
+	persisted := make(map[string]struct{}, len(cfg.PreviouslyAccepted))
+	for _, id := range cfg.PreviouslyAccepted {
+		if id != "" {
+			persisted[id] = struct{}{}
+		}
+	}
+	terminated := make(map[string]struct{}, len(cfg.PreviouslyTerminated))
+	for _, id := range cfg.PreviouslyTerminated {
+		if id != "" {
+			terminated[id] = struct{}{}
+			delete(routed, id)
+		}
+	}
+	cfg.PreviouslyAccepted = nil
+	cfg.PreviouslyTerminated = nil
 	return &Receiver{
 		cfg: cfg, serverKID: serverKID, routed: routed,
-		terminated: make(map[string]struct{}), accepted: make(map[string]int64),
+		terminated: terminated, accepted: accepted, persisted: persisted,
 	}, nil
 }
 
@@ -335,6 +357,9 @@ func (r *Receiver) Handle(d Delivery) Result {
 		}
 	}
 
+	if _, seen := r.persisted[id]; seen {
+		return Result{Status: 200, Body: []byte(`{"status":"duplicate"}`)}
+	}
 	if at, seen := r.accepted[id]; seen && !differenceExceeds(d.Now, at, r.cfg.DedupRetention) {
 		return Result{Status: 200, Body: []byte(`{"status":"duplicate"}`)}
 	}
