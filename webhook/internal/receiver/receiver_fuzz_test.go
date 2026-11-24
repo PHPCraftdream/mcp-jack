@@ -1,13 +1,14 @@
 package receiver_test
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"os"
 	"strings"
 	"testing"
 
-	"github.com/PHPCraftdream/mcp-jack/webhook/internal/dsig"
 	"github.com/PHPCraftdream/mcp-jack/webhook/internal/receiver"
 )
 
@@ -88,7 +89,7 @@ func FuzzReceiverHandleNeverAcceptsUnauthenticatedDelivery(f *testing.F) {
 	validID := "msg_fuzz_valid_delivery"
 	validTimestamp := "1767225600"
 	validBody := vectorBodies[0]
-	validSignature := dsig.V1Sign([]byte(fuzzSecret), validID, validTimestamp, validBody)
+	validSignature := independentV1Sign([]byte(fuzzSecret), validID, validTimestamp, validBody)
 	f.Add(validID, validTimestamp, validSignature+" "+validSignature, fuzzSub, validBody, uint8(0), "X-Vector-Extra", "ignored")
 
 	// Hand boundaries: empty, syntax/control bytes, malformed UTF-8, body limit,
@@ -125,9 +126,12 @@ func FuzzReceiverHandleNeverAcceptsUnauthenticatedDelivery(f *testing.F) {
 			{"webhook-signature", signature}, {"x-mcp-subscription-id", sub},
 		}
 		requiredNames := [...]string{"webhook-id", "webhook-timestamp", "webhook-signature", "x-mcp-subscription-id"}
-		if duplicate%5 != 0 {
-			index := int(duplicate%5) - 1
+		mode := duplicate % 6
+		if mode != 0 && mode != 5 {
+			index := int(mode) - 1
 			headers = append(headers, [2]string{requiredNames[index], "duplicate-value"})
+		} else if mode == 5 {
+			headers = headers[:2] // omit signature; missing headers precede invalid values
 		}
 		// Prefixing prevents attacker-controlled name text from becoming a
 		// required header; the same unknown pair is the metamorphic variant.
@@ -145,32 +149,101 @@ func FuzzReceiverHandleNeverAcceptsUnauthenticatedDelivery(f *testing.F) {
 			t.Fatalf("unknown header changed verdict: base=(%d,%q) changed=(%d,%q) independent=(%d,%q)", base.Status, base.Code, changed.Status, changed.Code, independent.Status, independent.Code)
 		}
 
-		verifiedV1 := false
-		entries, code := dsig.ParseHeader(signature)
-		if code == "" && dsig.CheckSchemes(entries) == "" {
-			decoded, decodeCode := dsig.DecodeValues(entries)
-			if decodeCode == "" {
-				_, verifiedV1 = dsig.VerifyV1(decoded, [][]byte{[]byte(fuzzSecret)}, id, timestamp, body)
-			}
-		}
+		verifiedV1 := independentV1Matches(signature, []byte(fuzzSecret), id, timestamp, body)
 		if base.Status/100 == 2 && !verifiedV1 {
 			t.Fatalf("unauthenticated 2xx verdict: status=%d code=%q", base.Status, base.Code)
 		}
-		if duplicate%5 != 0 && base.Code != "duplicate_webhook_header" {
-			t.Fatalf("duplicate required header did not precede signature parsing: code=%q", base.Code)
+		if mode == 5 && base.Code != "missing_webhook_header" {
+			t.Fatalf("missing required header precedence: code=%q", base.Code)
+		}
+
+		// Exercise duplicate precedence with otherwise valid routing fields and
+		// malformed signature text. This observes API-stage ordering only; it
+		// makes no claim that cryptographic work occurred.
+		duplicateEnqueues := 0
+		dupReceiver := fuzzHandleWithEnqueue(t, func(receiver.Message) error { duplicateEnqueues++; return nil })
+		dup := receiver.Delivery{Now: fuzzNow, Body: []byte(`{}`), Headers: [][2]string{
+			{"webhook-id", "msg_duplicate_precedence"},
+			{"webhook-timestamp", "1767225600"},
+			{"webhook-signature", "malformed"},
+			{"x-mcp-subscription-id", fuzzSub},
+			{"webhook-id", "msg_duplicate_precedence"},
+		}}
+		dupResult := dupReceiver.Handle(dup)
+		if dupResult.Code != "duplicate_webhook_header" || duplicateEnqueues != 0 {
+			t.Fatalf("duplicate precedence: code=%q enqueues=%d", dupResult.Code, duplicateEnqueues)
 		}
 	})
 }
 
+func independentV1Sign(secret []byte, id, timestamp string, body []byte) string {
+	mac := hmac.New(sha256.New, secret)
+	_, _ = mac.Write([]byte(id + "." + timestamp + "."))
+	_, _ = mac.Write(body)
+	return "v1," + base64.StdEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// independentV1Matches deliberately implements only the header grammar and
+// v1 authentication needed by this property; it does not call production dsig.
+func independentV1Matches(header string, secret []byte, id, timestamp string, body []byte) bool {
+	if header == "" || strings.TrimSpace(header) != header {
+		return false
+	}
+	parts := strings.Split(header, " ")
+	var signatures [][]byte
+	for _, part := range parts {
+		if part == "" || strings.IndexFunc(part, func(r rune) bool {
+			return r == '\t' || r == '\n' || r == '\r' || r == '\v' || r == '\f'
+		}) >= 0 {
+			return false
+		}
+		comma := strings.IndexByte(part, ',')
+		if comma <= 0 || comma == len(part)-1 || strings.IndexByte(part[comma+1:], ',') >= 0 {
+			return false
+		}
+		scheme, value := part[:comma], part[comma+1:]
+		for _, c := range scheme {
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+				return false
+			}
+		}
+		if strings.ContainsAny(value, " \t\n\r\v\f") {
+			return false
+		}
+		if scheme != "v1" {
+			continue
+		}
+		decoded, err := base64.StdEncoding.DecodeString(value)
+		if err != nil || len(decoded) != sha256.Size || base64.StdEncoding.EncodeToString(decoded) != value {
+			return false
+		}
+		signatures = append(signatures, decoded)
+	}
+	mac := hmac.New(sha256.New, secret)
+	_, _ = mac.Write([]byte(id + "." + timestamp + "."))
+	_, _ = mac.Write(body)
+	want := mac.Sum(nil)
+	for _, signature := range signatures {
+		if hmac.Equal(signature, want) {
+			return true
+		}
+	}
+	return false
+}
+
 func fuzzHandle(t *testing.T, d receiver.Delivery) receiver.Result {
+	return fuzzHandleWithEnqueue(t, func(receiver.Message) error { return nil }).Handle(d)
+}
+
+func fuzzHandleWithEnqueue(t *testing.T, enqueue receiver.EnqueueFunc) *receiver.Receiver {
 	t.Helper()
 	r, err := receiver.New(receiver.Config{
 		Secrets: []receiver.Secret{{Key: []byte(fuzzSecret), SubscriptionID: fuzzSub}},
 		Routed:  []string{fuzzSub}, MaxBody: 4096,
-		Enqueue: func(receiver.Message) error { return nil },
+		Enqueue: enqueue,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return r.Handle(d)
+	return r
 }

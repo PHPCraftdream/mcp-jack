@@ -1,6 +1,7 @@
 package modern
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -138,31 +139,46 @@ func FuzzModernHeaderBoundaries(f *testing.F) {
 			},
 		})
 		args, _ := json.Marshal(map[string]any{"value": text})
-		if clientmodern.ValidateAnnotations(schema).Valid {
-			_, _ = clientmodern.ProjectArguments(schema, args)
+		if utf8.Valid(input) && clientmodern.ValidateAnnotations(schema).Valid {
+			projected, err := clientmodern.ProjectArguments(schema, args)
+			if err != nil {
+				t.Fatalf("project valid fuzzed string: %v", err)
+			}
+			if len(projected) != 1 || projected[0].Name != "Mcp-Param-X-Fuzz" {
+				t.Fatalf("projected headers = %#v, want one Mcp-Param-X-Fuzz header", projected)
+			}
+			value, valid := clientmodern.DecodeHeaderValue(projected[0].Value)
+			if !valid || value != text {
+				t.Fatalf("projected value = %q (valid=%v), want decoded %q", value, valid, text)
+			}
 		}
 
-		// A valid modern request with an intentionally mismatched mirror must
-		// never be forwarded. The mismatching value is derived from fuzz input.
+		// A valid modern request with each mirror independently mismatched must
+		// reach its specific refusal path. Version stays syntactically valid;
+		// method and name values are safe, fuzz-derived strings.
 		body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"right","_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`)
 		mirrors := []Header{
 			{Name: "MCP-Protocol-Version", Value: "2026-07-28"},
 			{Name: "Mcp-Method", Value: "tools/call"},
 			{Name: "Mcp-Name", Value: "right"},
 		}
+		wantReasons := []string{
+			"Header mismatch: MCP-Protocol-Version does not match params._meta protocolVersion",
+			"Header mismatch: Mcp-Method does not match the body method",
+			"Header mismatch: Mcp-Name does not match the body value",
+		}
+		mismatches := []string{"2026-07-29", "fuzz-method-" + hex.EncodeToString(input), "fuzz-name-" + hex.EncodeToString(input)}
 		for i := range mirrors {
-			mismatched := mirrors[i]
-			mismatched.Value = "mismatch-" + text
 			hs := append([]Header(nil), mirrors...)
-			hs[i] = mismatched
+			hs[i].Value = mismatches[i]
 			out := Classify(ProfileModern, Request{
 				Method:  "POST",
 				Target:  "/mcp",
 				Headers: hs,
 				Body:    body,
 			})
-			if out.Kind == KindForward {
-				t.Fatalf("mirror mismatch forwarded: %s=%q", mismatched.Name, mismatched.Value)
+			if out.Kind != KindRefuse || out.Error.Message != wantReasons[i] {
+				t.Fatalf("%s mismatch outcome = kind %v, error %q; want KindRefuse with %q", mirrors[i].Name, out.Kind, out.Error.Message, wantReasons[i])
 			}
 		}
 	})
