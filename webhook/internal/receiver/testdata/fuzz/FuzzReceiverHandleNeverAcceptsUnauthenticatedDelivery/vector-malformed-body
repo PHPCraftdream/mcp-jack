@@ -1,0 +1,9 @@
+go test fuzz v1
+string("msg_7Qk2mZ4rT9xV1bN6pL3sD8wY5cJ0hG2f")
+string("1767225600")
+string("v1,Bt7vsCONxET/3czQb/iQTyNMinnzGL2DglV13p/vKpk=")
+string("sub_0000000000000001")
+[]byte("{\"type\":\"gap\"}")
+uint8(0)
+string("X-Vector-Extra")
+string("ignored")
