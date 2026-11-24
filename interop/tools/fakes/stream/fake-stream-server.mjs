@@ -275,6 +275,8 @@ const server = http.createServer((req, res) => {
         ? { jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1, message: 'stream:first' } }
         : { jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1 } };
       send(JSON.stringify(firstMessage));
+      const shouldHold = scenario === 'durable-live-replay' || heldResponse === null;
+      if (!shouldHold) { const end = frame(sid, seq, '', prev); res.end(end.wire); closed = true; active.delete(res); return; }
       heldResponse = res;
       const heldStreamKey = match?.[1];
       heldStream = { res, frame, sid, seq, prev, requestId, identity: heldStreamKey, released: false, cleanup: () => { if (closed) return; closed = true; active.delete(res); streamAdmissions.set(heldStreamKey, Math.max(0, (streamAdmissions.get(heldStreamKey) || 0) - 1)); } };
@@ -284,7 +286,7 @@ const server = http.createServer((req, res) => {
       send(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1, message: 'stream:first' } }));
       const end = frame(sid, seq, '', prev); res.end(end.wire); closed = true; active.delete(res); return;
     }
-    if (scenario === 'idle') { const timer = setTimeout(() => { if (closed || res.destroyed) return; const message = JSON.stringify({ jsonrpc: '2.0', id: requestId, result: {} }); send(message); const end = frame(sid, seq, '', prev); res.end(end.wire); closed = true; active.delete(res); }, Math.max(1, Number(options.idleTimeoutMs || arg('--idle-timeout-ms') || 1000) + 25)); timer.unref(); return; }
+    if (scenario === 'idle') { res.flushHeaders(); const timer = setTimeout(() => { if (closed || res.destroyed) return; const message = JSON.stringify({ jsonrpc: '2.0', id: requestId, result: {} }); send(message); const end = frame(sid, seq, '', prev); res.end(end.wire); closed = true; active.delete(res); }, Math.max(1, Number(options.idleTimeoutMs || arg('--idle-timeout-ms') || 1000) + 25)); timer.unref(); return; }
     const end = frame(sid, seq, '', prev); res.end(end.wire); closed = true; active.delete(res);
   });
 });

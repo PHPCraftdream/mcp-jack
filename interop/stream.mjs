@@ -115,7 +115,7 @@ function makeVerifier(fixtures) {
     if (!signed(text, e.sig)) throw Error('bad v1 refusal signature');
     let parsed;
     try { parsed = JSON.parse(body.toString('utf8')); } catch { throw Error('v1 refusal body is not JSON'); }
-    if (terminal.http_status === 429 && (parsed?.jsonrpc !== '2.0' || !Object.hasOwn(parsed, 'id') || expectedRequestId === undefined || !isDeepStrictEqual(parsed.id, expectedRequestId) || parsed?.error?.code !== -32603 || parsed?.error?.message !== 'stream_limit_exceeded')) throw Error('429 refusal body is not matching JSON-RPC stream limit error');
+    if (terminal.http_status === 429 && body.toString('utf8') !== JSON.stringify({ jsonrpc: '2.0', id: expectedRequestId, error: { code: -32603, message: 'stream_limit_exceeded' } })) throw Error('429 refusal body is not the exact JSON-RPC stream limit envelope');
     if (terminal.http_status === 501 && (parsed?.error?.code !== 'streaming_unsupported' || typeof parsed.error.message !== 'string' || Object.hasOwn(parsed, 'jsonrpc'))) throw Error('501 refusal body is not streaming_unsupported envelope');
     const bodyCode = terminal.http_status === 501 ? parsed?.error?.code : parsed?.error?.message;
     if (terminal.http_code !== undefined && terminal.http_code !== null && bodyCode !== terminal.http_code) throw Error('v1 refusal code differs from signed body');
@@ -532,7 +532,6 @@ async function main() {
       for (const scenario of selected) {
         let server, clientProcess, relay, secondClientProcess, concurrencyHeld = false, diagLog;
         try {
-          if (args.scenario !== null && args.scenario.split(',').some((id, index, ids) => ids.indexOf(id.trim()) !== index)) usageError('duplicate scenario id');
           const suffix = `${client}-${serverLanguage}-${scenario.id}-${passed + failed}`;
           const requestLog = join(tempRoot, `${suffix}.jsonl`);
           diagLog = requestLog;
@@ -694,13 +693,14 @@ async function main() {
             const secondRecords = parseJsonLines(secondResult.stdout);
             const secondTerminals = secondRecords.filter(record => record?.type === 'terminal');
             if (secondTerminals.length !== 1 || secondRecords.at(-1) !== secondTerminals[0]) throw Error('second client expected one final terminal record');
+            if (secondRecords.length !== 1) throw Error('second client emitted records beyond its refusal terminal');
             verifyRecord(secondTerminals[0], scenario.request_id);
             const secondTerminal = secondTerminals[0];
-            if (secondTerminal.http_status !== 429 || secondTerminal.code !== 'stream_limit_exceeded' || !secondTerminal.v1_evidence || !Array.isArray(secondTerminal.frames) || secondTerminal.frames.length !== 0 || secondTerminal.open) throw Error('second client did not receive signed stream-limit refusal before stream bytes');
+            if (secondTerminal.http_status !== 429 || secondTerminal.code !== 'stream_limit_exceeded' || !secondTerminal.v1_evidence || (secondTerminal.frames !== undefined && (!Array.isArray(secondTerminal.frames) || secondTerminal.frames.length !== 0)) || secondTerminal.open) throw Error('second client did not receive signed stream-limit refusal before stream bytes');
             if (secondTerminal.request_sig !== undefined) verifyRecord(secondTerminal, scenario.request_id);
             if (typeof secondTerminal.request_sig !== 'string' || !secondTerminal.v1_evidence || secondTerminal.v1_evidence.request_sig !== secondTerminal.request_sig) throw Error('second refusal lacks its actual request signature evidence');
             if (secondTerminal.v1_evidence.status !== 429 || secondTerminal.v1_evidence.request_sig !== secondTerminal.request_sig) throw Error('second 429 evidence is not bound to its actual request');
-            const noBytes = (secondTerminal.frames_verified ?? 0) === 0 && (!Array.isArray(secondTerminal.frames) || secondTerminal.frames.length === 0) && !secondTerminal.open;
+            const noBytes = (secondTerminal.frames_verified ?? 0) === 0 && (secondTerminal.frames === undefined || (Array.isArray(secondTerminal.frames) && secondTerminal.frames.length === 0)) && !secondTerminal.open;
             if (!noBytes) throw Error('second 429 refusal unexpectedly includes stream bytes');
             const secondLog = readRows(requestLog).find(row => row.request_sig === secondTerminal.request_sig);
             if (!secondLog || secondLog.nonce !== secondNonce || secondLog.request_verified !== true || secondLog.request_sig !== secondTerminal.request_sig) throw Error('second 429 request log does not prove the expected independent signed nonce request');
@@ -718,6 +718,10 @@ async function main() {
             if (concurrencyRecords.slice(0, -1).some(record => record?.type !== 'message')) throw Error('released held stream contains a non-message before terminal');
             const firstTerminal = firstTerminals[0];
             if (firstTerminal.outcome !== 'complete') throw Error('released first stream did not complete');
+            if (firstTerminal.mcp_complete !== true) throw Error('released first stream did not complete its MCP request');
+            const finalRecord = concurrencyRecords.at(-2);
+            const finalMessage = typeof finalRecord.data === 'string' ? JSON.parse(finalRecord.data) : finalRecord.message;
+            if (finalMessage?.jsonrpc !== '2.0' || finalMessage?.id !== scenario.request_id || !Object.hasOwn(finalMessage, 'result') || Object.hasOwn(finalMessage, 'method')) throw Error('released first stream lacked its matching final JSON-RPC response');
             concurrencyAggregate = { terminal: secondTerminal, firstTerminal, secondRecords, secondRequestSig: secondTerminal.request_sig };
           }
           const result = await clientProcess.done;
@@ -748,7 +752,8 @@ async function main() {
             if (terminalCheck.terminal.outcome !== 'complete' || terminalCheck.terminal.terminal_frame?.kind !== 'end') throw Error('max-duration stream must finish with complete terminal and signed end');
           }
           if (scenario.id === 'idle' && (messages.length !== 0 || terminalCheck.terminal.code !== 'stream_idle')) throw Error('idle scenario must time out before any message is delivered');
-          if (scenario.id === 'oversize' && (!logRows.some(row => row.event === 'frame_suppressed' && Number.isSafeInteger(row.data_bytes) && Number.isSafeInteger(row.frame_max_bytes) && row.data_bytes > row.frame_max_bytes) || messages.length !== 0)) throw Error('oversize producer did not suppress an over-limit value before delivery');
+          if (scenario.id === 'oversize' && (!logRows.some(row => row.event === 'frame_suppressed' && Number.isSafeInteger(row.data_bytes) && row.data_bytes > row.frame_max_bytes && Number(row.frame_max_bytes) === options.frameMaxBytes) || messages.length !== 0)) throw Error('oversize producer did not suppress an over-limit value before delivery');
+          if (scenario.id === 'oversize' && Number((/limit":(\d+)\}\}$/.exec(terminalCheck.terminal.failure_frame?.data || '') || [])[1]) !== options.frameMaxBytes) throw Error('oversize signal advertises a limit other than the configured frameMaxBytes');
           const heartbeatPayload = 'notifications/events/heartbeat';
           const heartbeatExpected = scenario.stream_options?.heartbeatMs !== undefined || (scenario.expected?.messages || []).some(message => message?.method === heartbeatPayload);
           if (heartbeatExpected) {

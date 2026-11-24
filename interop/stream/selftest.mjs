@@ -75,6 +75,7 @@ export async function selfTest(){
     const result=await run(['--matrix','stream','--targets',targetPath,'--servers','fake','--clients','fake','--scenario',scenario.id]);
     report(`stream/${scenario.id}`,()=>{assert.equal(result.code,0,`stream/${scenario.id}: ${result.out}${result.err}`);assert.match(result.out,new RegExp(`PASS ${scenario.id}`));},true);
   }
+  report('staged matrix is exactly six known scenarios',()=>assert.deepEqual(docs.matrices.staged.map(s=>s.id),['relay-reorder','relay-splice','relay-replay','oversize','idle','concurrency-limit']),true);
   for(const scenario of docs.matrices.staged){
     const result=await run(['--matrix','stream','--targets',targetPath,'--servers','fake','--clients','fake','--scenario',scenario.id,'--staged-only']);
     report(`staged/${scenario.id}`,()=>{assert.equal(result.code,0,`staged/${scenario.id}: ${result.out}${result.err}`);assert.match(result.out,new RegExp(`PASS ${scenario.id}`));},true);
