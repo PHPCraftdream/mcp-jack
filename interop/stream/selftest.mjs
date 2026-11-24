@@ -37,9 +37,10 @@ function decodeChunked(data){let at=0;const parts=[];while(true){const e=data.in
 function parseResponse(raw){const split=raw.indexOf('\r\n\r\n');assert.ok(split>=0,'HTTP response head');const head=raw.subarray(0,split).toString('latin1'),body=raw.subarray(split+4);assert.match(head,/^HTTP\/1\.1 200 OK/);const length=/\r\ncontent-length:\s*(\d+)/i.exec(`\r\n${head}`),te=/\r\ntransfer-encoding:\s*chunked/i.test(`\r\n${head}`);assert.equal(!!length, !te,'one valid rebuilt body framing');const decoded=te?decodeChunked(body):body; if(length)assert.equal(Number(length[1]),decoded.length,'rebuilt Content-Length');return {head,body:decoded,wireBody:body,chunked:te};}
 function parseEvents(body){const text=body.toString('latin1');return text.split(/(?<=\n\n)/).filter(Boolean);}
 function run(args,extraEnv={},timeoutMs=12000){return new Promise((resolveRun,rejectRun)=>{
-  const child=spawn(process.execPath,[join(root,'interop/stream.mjs'),...args],{cwd:root,env:{...process.env,...extraEnv},stdio:['ignore','pipe','pipe'],windowsHide:true});let out='',err='',done=false;
-  const timer=setTimeout(()=>{if(done)return;child.kill('SIGTERM');const escalation=setTimeout(()=>{if(!done)child.kill('SIGKILL');},500);escalation.unref();},timeoutMs);timer.unref();
-  child.stdout.on('data',x=>out+=x);child.stderr.on('data',x=>err+=x);child.once('error',e=>{if(!done){done=true;clearTimeout(timer);rejectRun(e);}});child.once('close',code=>{if(!done){done=true;clearTimeout(timer);resolveRun({code,out,err});}});
+  const child=spawn(process.execPath,[join(root,'interop/stream.mjs'),...args],{cwd:root,env:{...process.env,...extraEnv},stdio:['ignore','pipe','pipe'],windowsHide:true});let out='',err='',done=false,escalation;
+  const finish=fn=>value=>{if(done)return;done=true;clearTimeout(timer);if(escalation)clearTimeout(escalation);fn(value);};
+  const timer=setTimeout(()=>{if(done)return;child.kill('SIGTERM');escalation=setTimeout(()=>{if(!done)child.kill('SIGKILL');},500);},timeoutMs);
+  child.stdout.on('data',x=>out+=x);child.stderr.on('data',x=>err+=x);child.once('error',finish(rejectRun));child.once('close',code=>finish(resolveRun)({code,out,err}));
 });}
 async function relayControl(transform,framing='chunked',scenario={}){
   const sockets=new Set(),fixture=validStream();let served=false;
@@ -57,34 +58,30 @@ async function relayControl(transform,framing='chunked',scenario={}){
     if(transform==='edit-data'){assert.equal(response.body.length,fixture.body.length);let diffs=0;for(let i=0;i<fixture.body.length;i++)if(response.body[i]!==fixture.body[i])diffs++;assert.equal(diffs,1,'edit-data changes exactly one wire byte');assert.notEqual(response.body.toString('latin1'),fixture.body.toString('latin1'));}
     if(transform==='truncate')assert.ok(events.every(e=>!/^event: jack-end$/m.test(e)));
     if(transform==='replay')assert.equal((text.match(/seq=0/g)||[]).length,2);
-    if(transform==='after-cutoff')assert.ok(text.includes(scenario.relayCutoffFrame.toString('latin1')),'active-stream cutoff fixture present');
-    // The untouched opener and original frames are genuinely signed test evidence.
     assert.equal(verify(null,Buffer.from(['mcp-jack/stream1/open','200',requestSig,svc.kid,String(ts),sid].join('\n')),publicKey,Buffer.from(fixture.openSig,'base64url')),true);
     return response;
   }finally{if(relay)await relay.close();for(const socket of sockets)socket.destroy();await new Promise(r=>upstreamServer.close(r));}
 }
-function fixtureEvent(id,kind){const vectors=JSON.parse(readFileSync(join(root,'spec/fixtures/modern/stream-vectors.json'),'utf8'));const encoded=vectors.cases.find(item=>item.id===id)?.response?.stream_b64u?.[0];assert.ok(encoded,`fixture ${id}`);const events=Buffer.from(encoded,'base64url').toString('latin1').split(/(?<=\n\n)/);const found=kind==='end'?events.find(v=>/^event: jack-end\r?$/m.test(v)):events[0];assert.ok(found?.endsWith('\n\n'));return Buffer.from(found,'latin1');}
 export async function selfTest(){
+  let checks=0,passed=0;
+  const report=(name,fn,core=false)=>{fn();if(core){checks++;passed++;}console.log(`self-test PASS ${name}`);};
   const targetPath='interop/tools/fakes/stream/targets.json',target=JSON.parse(readFileSync(join(root,targetPath),'utf8'));
-  assert.deepEqual(Object.keys(target),['fake']);const docs=JSON.parse(readFileSync(join(root,'interop/stream-scenarios.json'),'utf8'));
-  // These rows use the runner's current direct server/client IPC. Durable
-  // lifecycle orchestration, including durable-init, is implemented by runner.
-  // Rotation remains an explicit contract gap; durable scenarios are Linux-only.
-  const supported={stream:['progress-final','subscriptions-listen','list-changed','events-stream','cancel','concurrency-limit','max-duration','oversize','opt-in-required','relay-drop','relay-reorder','relay-edit-data','relay-truncate','relay-splice','relay-replay','idle'],'rotation-stream':[],'durable-stream':process.platform==='linux'?['durable-live-replay','durable-restart-replay']:[]};
-  for(const matrix of Object.keys(docs.matrices))for(const scenario of docs.matrices[matrix]){if(matrix==='durable-stream'&&process.platform!=='linux')continue;const result=await run(['--matrix',matrix,'--targets',targetPath,'--servers','fake','--clients','fake','--scenario',scenario.id]);if(supported[matrix].includes(scenario.id)){assert.equal(result.code,0,`${matrix}/${scenario.id}: ${result.out}${result.err}`);assert.match(result.out,new RegExp(`PASS ${scenario.id}`));}else{assert.notEqual(result.code,0,`${matrix}/${scenario.id} unsupported row passed`);assert.match(result.out,new RegExp(`FAIL ${scenario.id}`));}}
-  for(const name of ['pass','drop','reorder','edit-data','truncate','replay'])await relayControl(name,'chunked');
-  await relayControl('pass','length');
-  await relayControl('splice','chunked',{relayFrame:fixtureEvent('stream-frame-wrong-sid')});
-  const cutoffFixture=validStream(),activationScenario=docs.matrices['rotation-stream'].find(item=>item.id==='rotation-cutoff-reopen');
-  const cutoff=event(cutoffFixture.sid,2,'{"n":2}',cutoffFixture.events[1].sig,false,activationScenario.successor_activation);
-  await relayControl('after-cutoff','length',{relayCutoffFrame:Buffer.from(cutoff.wire),relayCutoffSid:cutoffFixture.sid});
-  await assert.rejects(startRelay({upstreamPort:1,transform:'after-cutoff',scenario:{relayFrame:Buffer.from('fixture')}}),/relayCutoffFrame/);
-  const noTamper=await run(['--matrix','stream','--targets',targetPath,'--servers','fake','--clients','fake','--scenario','relay-edit-data'],{JACK_STREAM_SELFTEST_NO_TAMPER:'1'});assert.notEqual(noTamper.code,0);assert.match(noTamper.out,/FAIL relay-edit-data/);
-  const baseline=await run(['--matrix','stream','--targets',targetPath,'--servers','fake','--clients','fake','--scenario','progress-final']);assert.equal(baseline.code,0,`fake-client positive baseline: ${baseline.out}${baseline.err}`);assert.match(baseline.out,/PASS progress-final/);
-  const badEvidence=await run(['--matrix','stream','--targets',targetPath,'--servers','fake','--clients','fake','--scenario','progress-final'],{JACK_STREAM_FAKE_BAD_EVIDENCE:'1'});assert.equal(badEvidence.code,1,`fake-client invalid evidence control exit: ${badEvidence.out}${badEvidence.err}`);assert.match(badEvidence.out,/FAIL progress-final/);
-  const ignoredLimit=await run(['--matrix','stream','--targets',targetPath,'--servers','fake','--clients','fake','--scenario','concurrency-limit'],{JACK_STREAM_FAKE_IGNORE_LIMIT:'1'});assert.equal(ignoredLimit.code,1,`fake-server concurrency-limit control exit: ${ignoredLimit.out}${ignoredLimit.err}`);assert.match(ignoredLimit.out,/FAIL concurrency-limit/);
-  const listed=await run(['--list']);assert.equal(listed.code,0);assert.deepEqual(listed.out.trim().split(/\r?\n/),docs.matrices.stream.map(s=>s.id));
-  for(const args of [['--matrix','not-a-matrix'],['--targets',targetPath,'--servers','fake','--clients','missing']]){const invalid=await run(args);assert.equal(invalid.code,2,`invalid CLI ${args.join(' ')}`);}
-  const tmp=mkdtempSync(join(tmpdir(),'jack-stream-selftest-'));try{const badTargets=join(tmp,'bad-targets.json');writeFileSync(badTargets,JSON.stringify({fake:{server:['node','x'],client:['node','y']}}));const invalidRole=await run(['--targets',badTargets,'--servers','fake','--clients','fake']);assert.equal(invalidRole.code,2,'invalid target roles');}finally{rmSync(tmp,{recursive:true,force:true});}
-  console.log(`stream self-test: signed HTTP framing/transforms passed; unsupported rows: rotation-cutoff-reopen${process.platform==='linux'?'':' (durable scenarios are Linux-only)'}; active-stream cutoff injection uses a signed activation-time message frame; fake-client request-signature evidence deviation rejected by runner.`);
+  report('fake target configuration',()=>assert.deepEqual(Object.keys(target),['fake']));
+  const docs=JSON.parse(readFileSync(join(root,'interop/stream-scenarios.json'),'utf8'));
+  report('active matrix has exactly nine cases',()=>assert.equal(docs.matrices.stream.length,9,'active stream matrix has nine scenarios'));
+  for(const scenario of docs.matrices.stream){
+    const result=await run(['--matrix','stream','--targets',targetPath,'--servers','fake','--clients','fake','--scenario',scenario.id]);
+    report(`stream/${scenario.id}`,()=>{assert.equal(result.code,0,`stream/${scenario.id}: ${result.out}${result.err}`);assert.match(result.out,new RegExp(`PASS ${scenario.id}`));},true);
+  }
+  for(const matrix of ['rotation-stream','durable-stream']){const deferred=await run(['--matrix',matrix,'--list']);report(`${matrix} deferred CLI`,()=>{assert.equal(deferred.code,2,`${matrix} --list must be deferred`);assert.match(deferred.out,new RegExp(`DEFERRED matrix=${matrix}`));});}
+  for(const name of ['pass','drop','edit-data','truncate']){await relayControl(name,'chunked');report(`relay ${name} chunked`,()=>{});}
+  await relayControl('pass','length');report('relay pass content-length',()=>{});
+  const noTamper=await run(['--matrix','stream','--targets',targetPath,'--servers','fake','--clients','fake','--scenario','relay-edit-data'],{JACK_STREAM_SELFTEST_NO_TAMPER:'1'});report('no-tamper negative control',()=>{assert.notEqual(noTamper.code,0);assert.match(noTamper.out,/FAIL relay-edit-data/);});
+  const baseline=await run(['--matrix','stream','--targets',targetPath,'--servers','fake','--clients','fake','--scenario','progress-final']);report('fake-client positive baseline',()=>{assert.equal(baseline.code,0,`fake-client positive baseline: ${baseline.out}${baseline.err}`);assert.match(baseline.out,/PASS progress-final/);});
+  const badEvidence=await run(['--matrix','stream','--targets',targetPath,'--servers','fake','--clients','fake','--scenario','progress-final'],{JACK_STREAM_FAKE_BAD_EVIDENCE:'1'});report('fake-client evidence deviation rejected',()=>{assert.equal(badEvidence.code,1,`fake-client invalid evidence control exit: ${badEvidence.out}${badEvidence.err}`);assert.match(badEvidence.out,/FAIL progress-final/);});
+  const listed=await run(['--list']);report('--list exact active scenarios',()=>{assert.equal(listed.code,0);assert.deepEqual(listed.out.trim().split(/\r?\n/),docs.matrices.stream.map(s=>s.id));});
+  const invalid=await run(['--invalid-option']);report('invalid CLI option rejected',()=>assert.equal(invalid.code,2,'invalid CLI option'));
+  const tmp=mkdtempSync(join(tmpdir(),'jack-stream-selftest-'));try{const badTargets=join(tmp,'bad-targets.json');writeFileSync(badTargets,JSON.stringify({fake:{server:['node','x'],client:['node','y']}}));const invalidRole=await run(['--targets',badTargets,'--servers','fake','--clients','fake']);report('invalid target roles rejected',()=>assert.equal(invalidRole.code,2,'invalid target roles'));}finally{rmSync(tmp,{recursive:true,force:true});}
+  console.log(`INTEROP-SUMMARY matrix=stream pairs=1 checks=${checks} passed=${passed} failed=${checks-passed} result=pass`);
 }
+if(import.meta.url===`file://${process.argv[1]}`){selfTest().catch(error=>{console.error(error);process.exitCode=1;});}

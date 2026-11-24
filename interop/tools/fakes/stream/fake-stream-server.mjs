@@ -39,17 +39,19 @@ const options = scenarioMeta?.stream_options || {};
 const payloads = {
   'progress-final': [{ jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1 } }, { jsonrpc: '2.0', id: requestId, result: {} }],
   'subscriptions-listen': [{ jsonrpc: '2.0', method: 'notifications/subscriptions/acknowledged', params: { subscriptionId: requestId } }, ...(scenarioMeta?.request_params?.notifications?.includes('notifications/events/list_changed') ? [{ jsonrpc: '2.0', method: 'notifications/events/list_changed', params: {} }] : []), { jsonrpc: '2.0', id: requestId, result: {} }],
-  'list-changed': [{ jsonrpc: '2.0', id: requestId, result: { tools: [] } }, { jsonrpc: '2.0', method: 'notifications/tools/list_changed' }],
+  'list-changed': [{ jsonrpc: '2.0', method: 'notifications/subscriptions/acknowledged', params: { subscriptionId: requestId } }, { jsonrpc: '2.0', method: 'notifications/events/list_changed', params: {} }, { jsonrpc: '2.0', id: requestId, result: {} }],
     'events-stream': [
     { jsonrpc: '2.0', method: 'notifications/events/active', params: { state: 'active' } },
     { jsonrpc: '2.0', method: 'notifications/events/event', params: { event: 'event' } },
     { jsonrpc: '2.0', method: 'notifications/events/heartbeat', params: { event: 'heartbeat' } },
     { jsonrpc: '2.0', method: 'notifications/events/terminated', params: { state: 'terminated' } },
   ],
-  cancel: [{ jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1 } }],
+  cancel: [],
   'max-duration': [{ jsonrpc: '2.0', id: requestId, result: {} }],
-  'relay-drop': [{ n: 0 }, { n: 1 }], 'relay-reorder': [{ n: 0 }, { n: 1 }],
-  'relay-edit-data': [{ n: 0 }, { n: 1 }], 'relay-truncate': [{ n: 0 }, { n: 1 }],
+  'relay-drop': [{ jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1 } }, { jsonrpc: '2.0', id: requestId, result: {} }],
+  'relay-edit-data': [{ jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1 } }, { jsonrpc: '2.0', id: requestId, result: {} }],
+  'relay-truncate': [{ jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1 } }, { jsonrpc: '2.0', id: requestId, result: {} }],
+  'relay-reorder': [{ n: 0 }, { n: 1 }],
   'relay-splice': [{ n: 0 }, { n: 1 }], 'relay-replay': [{ n: 0 }, { n: 1 }],
 };
 const nonceSet = new Set();
@@ -153,13 +155,14 @@ const server = http.createServer((req, res) => {
     valid &&= actualMeta !== null && typeof actualMeta === 'object' && !Array.isArray(actualMeta) &&
       Object.keys(actualMeta).length === Object.keys(expectedMeta).length &&
       Object.entries(expectedMeta).every(([key, value]) => JSON.stringify(actualMeta[key]) === JSON.stringify(value));
+    const expectedMethod = scenarioMeta?.request_method || method;
     const expectedParams = method === 'subscriptions/listen'
       ? { notifications: scenarioMeta?.request_params?.notifications || [] }
       : (scenarioMeta?.request_params || {});
     const actualParams = { ...requestParams };
     delete actualParams._meta;
     const expectedParamKeys = Object.keys(expectedParams);
-    valid &&= parsed?.id === (scenarioMeta?.request_id ?? 1) && method === (scenarioMeta?.request_method || method) && expectedParamKeys.length === Object.keys(actualParams).length && expectedParamKeys.every(key => JSON.stringify(actualParams[key]) === JSON.stringify(expectedParams[key]));
+    valid &&= parsed?.id === (scenarioMeta?.request_id ?? 1) && method === expectedMethod && expectedParamKeys.length === Object.keys(actualParams).length && expectedParamKeys.every(key => JSON.stringify(actualParams[key]) === JSON.stringify(expectedParams[key]));
     const expectedMirrorParams = scenarioMeta?.mirror_params || {};
     const actualMirrorParams = requestHeaders.filter(([name]) => /^mcp-param-/i.test(name));
     const expectedMirrorRows = [
@@ -167,6 +170,7 @@ const server = http.createServer((req, res) => {
       ...(nameField && typeof expectedName === 'string' ? [['Mcp-Name', expectedName]] : []),
       ...Object.entries(expectedMirrorParams).map(([name, value]) => [`Mcp-Param-${name}`, String(value)]),
     ];
+    if (scenario === 'list-changed') expectedMirrorRows[1] = ['Mcp-Method', 'subscriptions/listen'];
     const actualMirrorRows = requestHeaders.filter(([name]) => /^(mcp-protocol-version|mcp-method|mcp-name|mcp-param-)/i.test(name));
     const unmatchedMirrors = [...actualMirrorRows];
     valid &&= actualMirrorRows.length === expectedMirrorRows.length && expectedMirrorRows.every(([name, value]) => {

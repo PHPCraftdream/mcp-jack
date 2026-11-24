@@ -20,8 +20,9 @@ const strictB64 = (value, length) => typeof value === 'string' && /^[A-Za-z0-9_-
 const now = () => { const value = Number(readFileSync(clockFile, 'utf8').trim()); if (!Number.isSafeInteger(value) || value < 0) throw Error('invalid shared clock'); return value; };
 const producer = scenarioMeta?.producer || scenario;
 const requestIdDefault = scenarioMeta?.request_id ?? 1;
-const requestMethod = scenarioMeta?.request_method || ({ 'progress-final': 'tools/call', 'subscriptions-listen': 'subscriptions/listen', 'list-changed': 'tools/list', 'events-stream': 'events/stream', cancel: 'tools/call', 'max-duration': 'tools/call', oversize: 'tools/call' })[producer] || 'tools/call';
-const requestBody = Buffer.from(arg('--request-body-json') || JSON.stringify({ jsonrpc: '2.0', id: requestIdDefault, method: requestMethod, params: { ...(scenarioMeta?.request_params || {}), _meta: { 'io.modelcontextprotocol/protocolVersion': arg('--modern-version') || '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {}, 'io.modelcontextprotocol/clientInfo': { name: 'mcp-jack-interop-stream-client', version: '1.0.0' } } } }));
+const requestMethod = scenarioMeta?.request_method || ({ 'progress-final': 'tools/call', 'subscriptions-listen': 'subscriptions/listen', 'list-changed': 'subscriptions/listen', 'events-stream': 'events/stream', cancel: 'tools/call', 'max-duration': 'tools/call' })[producer] || 'tools/call';
+const requestParams = scenario === 'list-changed' ? { notifications: ['notifications/events/list_changed'] } : (scenarioMeta?.request_params || {});
+const requestBody = Buffer.from(arg('--request-body-json') || JSON.stringify({ jsonrpc: '2.0', id: requestIdDefault, method: requestMethod, params: { ...requestParams, _meta: { 'io.modelcontextprotocol/protocolVersion': arg('--modern-version') || '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {}, 'io.modelcontextprotocol/clientInfo': { name: 'mcp-jack-interop-stream-client', version: '1.0.0' } } } }));
 let requestObject;
 try { requestObject = JSON.parse(requestBody.toString('utf8')); } catch { throw Error('invalid request body JSON'); }
 const requestId = Object.hasOwn(requestObject || {}, 'id') ? requestObject.id : null;
@@ -55,8 +56,8 @@ function terminal(outcome, code, status, evidence, open, frames, verifiedCount =
   console.log(JSON.stringify({ type: 'terminal', scenario, outcome, code: code || null, http_status: status ?? null,
     http_code: status === 501 ? 'streaming_unsupported' : status === 429 ? 'stream_limit_exceeded' : null,
     frames_verified: verifiedCount, request_id: requestId, mcp_complete: mcpComplete,
-    terminal_frame: terminalFrame, request_sig: requestSig, v1_evidence: evidence || null, open: open || undefined, frames: frames || undefined,
-    ...(failureFrame ? { failure_frame: failureFrame } : {}), ...(arg('--successor-activation') ? { successor_activation: Number(arg('--successor-activation')) } : {}) }));
+    terminal_frame: terminalFrame, request_sig: requestSig, v1_evidence: evidence || null, open: open ?? null, frames: frames ?? [],
+    failure_frame: failureFrame ?? null, successor_activation: arg('--successor-activation') ? Number(arg('--successor-activation')) : null }));
 }
 function refusal(res, raw) {
   const status = res.statusCode;

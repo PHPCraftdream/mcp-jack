@@ -134,7 +134,36 @@ function makeVerifier(fixtures) {
       return { messages: line.message !== undefined ? [line.message] : [JSON.parse(data)], frames: verified.count };
     }
     if (line.type !== 'terminal') throw Error(`unknown JSONL record type '${line.type}'`);
-    if (line.request_sig !== undefined) b64(line.request_sig, 64, 'request signature');
+    if (line.outcome === 'refused') {
+      if (line.mcp_complete !== false) throw Error('refusal terminal mcp_complete must be false');
+      if (line.open !== undefined && line.open !== null) throw Error('refusal terminal must not include stream open evidence');
+      if (line.frames !== undefined && (!Array.isArray(line.frames) || line.frames.length !== 0)) throw Error('refusal terminal frames must be omitted or empty');
+      for (const key of ['terminal_frame', 'failure_frame', 'successor_activation']) if (line[key] !== undefined && line[key] !== null) throw Error(`refusal terminal ${key} must be null or omitted`);
+      if (typeof line.request_sig !== 'string') throw Error('refusal terminal missing request signature');
+      b64(line.request_sig, 64, 'request signature');
+      if (line.v1_evidence !== undefined && line.v1_evidence !== null) {
+        const refusalCode = line.http_code ?? line.code;
+        const allowed = (line.http_status === 501 && refusalCode === 'streaming_unsupported') ||
+          (line.http_status === 429 && refusalCode === 'stream_limit_exceeded');
+        if (!allowed || (line.code !== undefined && line.code !== refusalCode) || (line.http_code !== undefined && line.http_code !== refusalCode)) throw Error('unsupported signed refusal terminal');
+        verifyRefusal(line, line.request_sig);
+      } else {
+        if (line.http_status !== 401 || (line.http_code ?? line.code) !== 'replayed_nonce') throw Error('unsupported unsigned refusal terminal');
+        if (line.code !== undefined && line.code !== 'replayed_nonce') throw Error('unsigned refusal code must be replayed_nonce');
+        if (line.http_code !== undefined && line.http_code !== 'replayed_nonce') throw Error('unsigned refusal http_code must be replayed_nonce');
+        if (line.http_body_b64u !== undefined) {
+          const body = b64(line.http_body_b64u, undefined, 'refusal body');
+          let parsed;
+          try { parsed = JSON.parse(body.toString('utf8')); } catch { throw Error('unsigned refusal body is not JSON'); }
+          if ((parsed?.error?.code ?? parsed?.error?.message) !== 'replayed_nonce') throw Error('unsigned refusal body is not replayed_nonce');
+        }
+      }
+      return { terminal: line, evidenceMessages: [], frames: 0 };
+    }
+    if (line.outcome === 'complete' || line.outcome === 'error') {
+      if (!line.open || typeof line.request_sig !== 'string' || !Array.isArray(line.frames)) throw Error('stream terminal requires open, request signature, and frame array');
+    }
+    if (line.request_sig !== undefined && line.request_sig !== null) b64(line.request_sig, 64, 'request signature');
     let verified = { count: 0, ended: false, messages: [] };
     if (line.open !== undefined || line.frames !== undefined) {
       if (!line.open || typeof line.request_sig !== 'string') throw Error('terminal evidence lacks open or request signature');
@@ -213,7 +242,10 @@ function scenarioRequest(scenario) {
 function targetCommand(target) {
   if (!Array.isArray(target) || !target.length || target.some(x => typeof x !== 'string')) usageError('invalid target argv');
   const [first, ...rest] = target;
-  if (first === 'node') return [process.execPath, rest.map(value => resolve(ROOT, value))];
+  if (first === 'node') {
+    if (!rest.length) usageError('node target requires a script path');
+    return [process.execPath, [resolve(ROOT, rest[0]), ...rest.slice(1)]];
+  }
   const path = resolve(ROOT, first);
   if (existsSync(path)) return [path, rest];
   if (process.platform === 'win32' && existsSync(`${path}.exe`)) return [`${path}.exe`, rest];
@@ -434,7 +466,13 @@ async function main() {
   try { args = parseArgs(process.argv.slice(2)); }
   catch (error) { console.error(`${error.message}\n${USAGE}`); process.exitCode = 2; return; }
   try {
-    if (args.matrix === 'durable-stream' && process.platform !== 'linux') usageError('durable-stream is Linux only');
+    // These lifecycle matrices are intentionally deferred; do not resolve targets or
+    // look up scenario rows for them until their orchestration is implemented.
+    if (args.matrix === 'rotation-stream' || args.matrix === 'durable-stream') {
+      console.log(`DEFERRED matrix=${args.matrix}: lifecycle orchestration is not active`);
+      process.exitCode = 2;
+      return;
+    }
     // Resolve --targets from the repository root, never relative to the targets file itself.
     const targetPath = resolve(ROOT, args.targets);
     const targetDoc = readJson(targetPath);
@@ -738,12 +776,14 @@ async function main() {
             const expectedMirrorParams = Object.fromEntries(expectedMirrors.filter(([name]) => name.startsWith('Mcp-Param-')));
             if (Object.entries(expectedMirrorParams).some(([name, value]) => row[`mirror_param_${name.slice('Mcp-Param-'.length).toLowerCase()}`] !== undefined && String(row[`mirror_param_${name.slice('Mcp-Param-'.length).toLowerCase()}`]) !== value)) throw Error('server request log Mcp-Param mirrors mismatch');
             if (expectedMirrors.some(([name]) => name === 'Mcp-Name') && row.mirror_name !== expectedMirrors.find(([name]) => name === 'Mcp-Name')[1]) throw Error('server request log Mcp-Name mirror mismatch');
-            const firstRequestRow = logRows.find(row => row.request_sig === concurrencyRecords[0]?.request_sig && row.request_verified === true);
-            const firstOpenRow = logRows.find(row => row.event === 'stream_open' && row.request_sig === concurrencyRecords[0]?.request_sig);
-            const secondRequestRow = logRows.find(row => row.request_sig === concurrencyAggregate.secondRequestSig && row.request_verified === true);
-            if (!firstRequestRow || firstRequestRow.nonce !== scenario.nonce || firstRequestRow.request_method !== 'POST' || firstRequestRow.request_mcp_method !== scenario.request_method || firstRequestRow.body !== expectedBody || !isDeepStrictEqual(firstRequestRow.request_params?._meta, expectedJson.params._meta) || !firstOpenRow || firstOpenRow.sid !== concurrencyRecords[0]?.open?.sid) throw Error('first concurrency success log entry does not match its exact nonce/signature/sid');
-            if (!secondRequestRow || secondRequestRow.nonce !== deterministicVariant(scenario.nonce, 'second') || secondRequestRow.request_method !== 'POST' || secondRequestRow.request_mcp_method !== scenario.request_method || secondRequestRow.body !== expectedBody || !isDeepStrictEqual(secondRequestRow.request_params?._meta, expectedJson.params._meta)) throw Error('second concurrency request log does not match its exact nonce and shared request body');
-            if (firstRequestRow.nonce === secondRequestRow.nonce) throw Error('concurrency requests must use distinct nonces');
+            if (scenario.id === 'concurrency-limit') {
+              const firstRequestRow = logRows.find(row => row.request_sig === concurrencyRecords[0]?.request_sig && row.request_verified === true);
+              const firstOpenRow = logRows.find(row => row.event === 'stream_open' && row.request_sig === concurrencyRecords[0]?.request_sig);
+              const secondRequestRow = logRows.find(row => row.request_sig === concurrencyAggregate.secondRequestSig && row.request_verified === true);
+              if (!firstRequestRow || firstRequestRow.nonce !== scenario.nonce || firstRequestRow.request_method !== 'POST' || firstRequestRow.request_mcp_method !== scenario.request_method || firstRequestRow.body !== expectedBody || !isDeepStrictEqual(firstRequestRow.request_params?._meta, expectedJson.params._meta) || !firstOpenRow || firstOpenRow.sid !== concurrencyRecords[0]?.open?.sid) throw Error('first concurrency success log entry does not match its exact nonce/signature/sid');
+              if (!secondRequestRow || secondRequestRow.nonce !== deterministicVariant(scenario.nonce, 'second') || secondRequestRow.request_method !== 'POST' || secondRequestRow.request_mcp_method !== scenario.request_method || secondRequestRow.body !== expectedBody || !isDeepStrictEqual(secondRequestRow.request_params?._meta, expectedJson.params._meta)) throw Error('second concurrency request log does not match its exact nonce and shared request body');
+              if (firstRequestRow.nonce === secondRequestRow.nonce) throw Error('concurrency requests must use distinct nonces');
+            }
           }
           if (scenario.id === 'cancel' && !logRows.some(row => row.event === 'handler_cancelled' || row.event === 'request_cancelled' || row.handler_cancelled === true)) throw Error('request log lacks observed handler cancellation');
           if (scenario.id === 'cancel' && !terminalRecords[0]?.outcome?.includes('cancel')) throw Error('client did not report cancellation terminal after its first message');
