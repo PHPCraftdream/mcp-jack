@@ -162,6 +162,45 @@ func verificationSigningConfig() sender.Config {
 	return cfg
 }
 
+func TestSenderRequestHeaderMapKeys(t *testing.T) {
+	// Assert the request Header map keys, not captured wire bytes.
+	cfg := verificationSigningConfig()
+	msg := profileSenderMessage()
+	s := newProfileSender(t, cfg)
+	called := false
+	sender.UseDeliveryForTest(s, func(req *http.Request, _ int64) (*delivery.Response, *delivery.Error) {
+		called = true
+		want := []string{
+			"Content-Type",
+			"webhook-id",
+			"webhook-timestamp",
+			"webhook-signature",
+			"X-MCP-Subscription-Id",
+			"Jack-Webhook-Auth",
+		}
+		if len(req.Header) != len(want) {
+			t.Errorf("request Header map has %d keys, want %d: %v", len(req.Header), len(want), req.Header)
+		}
+		for _, key := range want {
+			if _, ok := req.Header[key]; !ok {
+				t.Errorf("request Header map is missing exact key %q: %v", key, req.Header)
+			}
+		}
+		for key := range req.Header {
+			if !slices.Contains(want, key) {
+				t.Errorf("unexpected request Header map key %q", key)
+			}
+		}
+		return &delivery.Response{Status: http.StatusOK}, nil
+	})
+	if got := s.Attempt(t.Context(), msg); got.Status != http.StatusOK || got.Code != "" {
+		t.Errorf("Attempt = %+v, want status 200 and no refusal code", got)
+	}
+	if !called {
+		t.Fatal("fake client was not called")
+	}
+}
+
 func TestSenderVerifiesBeforeEvent(t *testing.T) {
 	msg := profileSenderMessage()
 	msg.CallbackURL += "?channel=%2fA" // w1 must retain the exact stored URL.
