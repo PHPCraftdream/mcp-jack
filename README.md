@@ -155,6 +155,7 @@ See also [docs/operations.md](docs/operations.md) and [docs/threat-model.md](doc
 | Document | Contents |
 |---|---|
 | [docs/operations.md](docs/operations.md) | operator guide, recovery runbook, rotation runbook |
+| [docs/compatibility.md](docs/compatibility.md) | supported MCP revisions, modern profile and interop evidence scope |
 | [docs/threat-model.md](docs/threat-model.md) | threat model |
 | [docs/security-review-package.md](docs/security-review-package.md) | internal pre-review findings, SDK divergences and questions for an external reviewer |
 | [docs/independent-review.md](docs/independent-review.md) | result of the independent AI review: findings, coverage, dispositions |
@@ -168,6 +169,10 @@ See also [docs/operations.md](docs/operations.md) and [docs/threat-model.md](doc
 | [tools/mcp-e2e/README.md](tools/mcp-e2e/README.md) | official MCP SDK end-to-end job |
 | [ts/README.md](ts/README.md) | TypeScript SDK |
 | [rust/README.md](rust/README.md) | Rust SDK |
+
+## Modern profile
+
+The MCP 2026-07-28 modern profile adds validated metadata mirrors, optional signed streams, and Events webhooks while preserving the existing v1 request/JSON-response bytes. See [compatibility and profile scope](docs/compatibility.md).
 
 ## Checks
 

@@ -25,18 +25,18 @@ How to read it:
 | Area | Read fully | Read partly | Not reached |
 |---|---|---|---|
 | Specification | `spec/01`, `spec/02`, `spec/03`, `spec/candidate/durable-nonces.md`, `spec/candidate/server-key-rotation.md`, `docs/protocol-transition.md`, `docs/threat-model.md`, `SECURITY.md` | `spec/candidate/README.md` | `docs/design/server-key-rotation.md`, `docs/design/durable-nonce-backend.md` |
-| Go root, `server/`, `rotation/`, `durable/`, `client/`, `client/rotation/` | almost all (not `durable/layout.go`) | `client/rpc.go` (start) | `client/{tools,profile,errors}.go`, rest of `client/rpc.go`, `userkey/{key,transfer}.go` bodies |
+| Go root, `server/`, `rotation/`, `durable/`, `client/`, `client/rotation/` | almost all (not `durable/layout.go`) | `client/rpc.go` (start) | `client/tools.go`, remainder of `client/rpc.go`, `userkey/key.go`, `userkey/transfer.go` bodies |
 | Go `internal/cli/` | gateway, storage, connection, bridge, run, keys, nonce and server-key commands, admin RPC and invite file | `docs/design/cli.md` | most `admin*.go` |
-| Rust | `rotation/{record,result,json_object,mod,private_file,store}.rs`, most of `rotation/server_provider.rs` | `server/verify.rs`, `server/http.rs`, `server/nonce.rs`, `auth_header.rs`, `ed25519.rs`, start of `rotation/server_key.rs` | `server/{native,state,state_file}`, `client/*`, `rotation/{chain,page,controller,trust*,server_state*,server_store*,store_format,sign}`, `user_key.rs` |
-| TypeScript | none in full | `ed25519.ts`, `auth-header.ts`, `json-raw.ts`, `server/{verify,fetch,node}.ts`, `rotation-file.ts`, `server/server-key-tool.ts` | `client/*`, other `rotation-*`, `server/{native,state,state-file,nonce}`, `user-key*` |
+| Rust | `rust/src/rotation/wire/record.rs`, `rust/src/rotation/wire/result.rs`, `rust/src/rotation/wire/json_object.rs`, `rust/src/rotation/wire/mod.rs`, `rust/src/rotation/trust_store/private_file.rs`, `rust/src/rotation/trust_store/store.rs`, most of `rust/src/rotation/server_side/server_provider.rs` | `rust/src/server/verify/`, `rust/src/server/http/`, `rust/src/server/registry/nonce.rs`, `rust/src/auth_header.rs`, `rust/src/ed25519.rs`, start of `rust/src/rotation/snapshot/server_key.rs` | `rust/src/server/native/`, `rust/src/server/registry/state.rs`, `rust/src/server/registry/state_file.rs`, `rust/src/client/`, `rust/src/rotation/wire/chain.rs`, `rust/src/rotation/wire/page.rs`, `rust/src/rotation/trust_client/`, `rust/src/rotation/trust_store/`, `rust/src/rotation/server_side/server_store.rs`, `rust/src/rotation/server_side/server_store_format.rs`, `rust/src/rotation/snapshot/server_state.rs`, `rust/src/rotation/snapshot/server_state_json.rs`, `rust/src/user_key/` |
+| TypeScript | none in full | `ts/src/core/ed25519.ts`, `ts/src/core/auth-header.ts`, `ts/src/core/json-raw.ts`, `ts/src/server/{verify.ts,http/fetch.ts,http/node.ts}`, `ts/src/rotation/trust-store/file.ts`, `ts/src/server/server-key-tool.ts` | `ts/src/client/`, `ts/src/rotation/` (except `ts/src/rotation/trust-store/file.ts`), `ts/src/server/native.ts`, `ts/src/server/registry/state.ts`, `ts/src/server/registry/state-file.ts`, `ts/src/server/registry/nonce.ts`, `ts/src/user-key/` |
 | Tests, fixtures, tooling | none | list of CI jobs only | all tests, `spec/fixtures/**`, `spec/tests/**`, `interop/**`, `tools/**`, CI results |
 
 An external review should cover at least everything in the "not reached" column
 and the Rust and TypeScript rotation controllers and store formats, which the
 pre-review did not read against the Go reference. The Rust server durable-nonce
-sources (`rust/src/server/durable/durable_store.rs`, `durable_format.rs`,
-`durable_recovery.rs`, `durable_admission.rs`) and the TypeScript counterparts
-(`ts/src/server/durable/store.ts`, `durable-format.ts`, `durable-admission.ts`)
+sources (`rust/src/server/durable/durable_store.rs`, `rust/src/server/durable/durable_format.rs`,
+`rust/src/server/durable/durable_recovery.rs`, `rust/src/server/durable/durable_admission.rs`) and the TypeScript counterparts
+(`ts/src/server/durable/store.ts`, `ts/src/server/durable/format.ts`, `ts/src/server/durable/admission.ts`)
 landed after the reviewed commit and were re-read in this tree; the reviewed
 commit `1822634` predates them.
 
@@ -51,7 +51,7 @@ prepared receipt against the pre-transaction high water, rejecting every
 admission whose clock had moved since the last durable high-water write (fixed
 in `ts/src/server/durable/store.ts`).
 
-Serving-open in all three SDKs refuses dirty/unsafe state, unresolved intents or 64 tombstones; Rust uses canonical binary bytes and TypeScript canonical JSON. Recovery binds deployment and window; TypeScript additionally uses exclusive ownership, private-file, no-follow and bounded-read checks ([operations](operations.md); [cross-language conformance](cross-language-conformance.md)). Go and Rust drain leases outside the mutex; fenced close reports `RecoveryRequired` and releases the backend owner unless I/O fails. TypeScript leased close throws while remaining retryable after caller stop-ingress/drain; a fenced close reports recovery-required and releases its marker, as in Go and Rust. Rust fences when a poisoned lock is next acquired (`rust/src/server/durable/durable_store.rs:704-711`); TypeScript fences on unexpected non-`JackError` reserve failure (`ts/src/server/durable/store.ts:430-446`). These current-source notes are separate from the historical pre-review; no builds or tests were run for this cleanup.
+Serving-open in all three SDKs refuses dirty/unsafe state, unresolved intents or 64 tombstones; Rust uses canonical binary bytes and TypeScript canonical JSON. Recovery binds deployment and window; TypeScript additionally uses exclusive ownership, private-file, no-follow and bounded-read checks ([operations](operations.md); [cross-language conformance](cross-language-conformance.md)). Go and Rust drain leases outside the mutex; fenced close reports `RecoveryRequired` and releases the backend owner unless I/O fails. TypeScript leased close throws while remaining retryable after caller stop-ingress/drain; a fenced close reports recovery-required and releases its marker, as in Go and Rust. Rust fences when a poisoned lock is next acquired (`rust/src/server/durable/durable_store.rs`, `poison_for_test`/reservation path); TypeScript fences on unexpected non-`JackError` reserve failure (`ts/src/server/durable/store.ts`, `reserve`). These current-source notes are separate from the historical pre-review; no builds or tests were run for this cleanup.
 
 ## 2. Findings and disposition
 

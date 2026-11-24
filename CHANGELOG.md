@@ -2,6 +2,18 @@
 
 This file records repository history. The `0.1.0 (unreleased)` section describes what ships in the upcoming release. No release has been made, nothing is published, and entries here are not release authorization.
 
+## 0.2.0 (unreleased)
+
+- Adds the MCP 2026-07-28 modern profile alongside the supported 2025-06-18 and 2025-11-25 legacy profiles, with modern header-mirror validation and verified-reply era negotiation.
+- Adds opt-in `s1` signed streams and Events transport support, plus webhook sender/receiver support with Standard Webhooks signatures, dedicated `w1` signing, endpoint verification, and SSRF controls.
+- Adds `jack.server.webhook_key` as the dedicated webhook-key publication and discovery mechanism.
+- Adds same-origin Server Card discovery for dedicated webhook signing keys, with an optional cross-check against `jack.server.webhook_key`.
+- Adds `CacheableResult` with a private-only cache boundary (no shared HTTP cache).
+- Adds `notifications/events/list_changed` delivery on opted-in `subscriptions/listen` subscriptions.
+- Adds configurable signed-stream server options `frameMaxBytes`, `maxConcurrentStreams`, `maxStreamDurationMs`, and `heartbeatMs` (spec 05), and webhook destination `allowedRanges` configuration (spec 06). These are configuration APIs, not Go CLI flags.
+- Keeps existing `mcp-jack/v1` request and JSON-response wire bytes unchanged; modern streams and webhooks use new identifiers.
+- See [modern compatibility](docs/compatibility.md), [operations](docs/operations.md), and [threat model](docs/threat-model.md). Interop and vector documents describe scope; this entry does not claim matrices passed.
+
 ## 0.1.0 (unreleased)
 
 - Removed the panicking `HttpTransport` default and moved the Rust interop harness outside the SDK crate into its own unpublished crate.

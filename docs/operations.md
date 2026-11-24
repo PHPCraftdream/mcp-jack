@@ -1,16 +1,16 @@
 # Operating mcp-jack
 
-This guide is the operator runbook for the v0.1.0 Go CLI (`jack`) that runs the mcp-jack gateway and stdio bridge with durable nonce admission and server-key rotation. The release is unreleased and Linux-first. For the project overview see [../README.md](../README.md); for the historical design reference see [design/cli.md](design/cli.md), which this guide must agree with and does not replace as a design record.
+This guide is the operator runbook for the v0.1.0 Go CLI (`jack`); its checked-in gateway and stdio bridge are legacy-only today. The release is unreleased and Linux-first. The modern-profile sections below additionally describe SDK behavior and planned CLI M4 work; they do not establish modern CLI support. For the project overview see [../README.md](../README.md); for the historical design reference see [design/cli.md](design/cli.md), which this guide must agree with and does not replace as a design record.
 
 ## Deployment shape
 
-The production chain is:
+The production chain below describes only the checked-in legacy Go CLI gateway and bridge; it is not the planned modern-profile architecture:
 
 ```
 MCP client (stdio)
-  -> jack bridge        (local stdio entry; pipes / FIFOs / UNIX-domain sockets only)
+  -> jack bridge        (checked-in legacy-only local stdio entry; pipes / FIFOs / UNIX-domain sockets only)
   -> [TLS-terminating reverse proxy in front, if the gateway is reached remotely]
-  -> jack gateway       (authenticated loopback HTTP listener)
+  -> jack gateway       (checked-in legacy-only authenticated loopback HTTP listener)
   -> fixed Unix-socket hop (mode 0600, owner-controlled 0700 directory)
   -> upstream MCP application
 ```
@@ -49,13 +49,13 @@ Key and document formats:
 
 | Capability | Linux | macOS | Windows |
 | --- | --- | --- | --- |
-| CLI binary (`jack`) | Qualified | Qualified (darwin/arm64: help, keygen, bootstrap, enroll, static gateway, bridge) | Fails closed on private-file operations (help works) |
-| Static gateway + bridge | Yes | Yes | No (private-file operations fail closed) |
+| CLI binary (`jack`) | Qualified | Qualified (darwin/arm64: help, keygen, bootstrap, enroll, static legacy gateway, legacy bridge) | Fails closed on private-file operations (help works) |
+| Static legacy gateway + legacy bridge | Yes | Yes | No (private-file operations fail closed) |
 | Durable nonce store (optional, Linux-only, in all three SDKs) | Qualified | Not qualified | Not qualified |
 | Rotation store (private-file backend) | Qualified (Linux-only) | Not qualified | Not qualified |
 | Go/Rust/TypeScript SDKs | Tested | Tested | Tested (CI) |
 
-Bridge stdio requires pipes, FIFOs or UNIX-domain sockets; regular files and terminals are rejected, and non-Unix stdio is unsupported.
+Checked-in legacy bridge stdio requires pipes, FIFOs or UNIX-domain sockets; regular files and terminals are rejected, and non-Unix stdio is unsupported. This is separate from the planned modern-profile bridge, which is not implemented.
 
 ## First deployment
 
@@ -67,7 +67,7 @@ jack gateway --config /etc/jack/gateway.json
 jack enroll --config /etc/jack/client.json --invite-file /var/lib/jack/invite.first --name ops-client
 ```
 
-The operator provisions `/etc/jack`, `/var/lib/jack` (mode 0700) and the client config first; the CLI never creates directories. `jack enroll` signs a `jack.enroll` call against the endpoint in the client config — that endpoint is the running gateway, so the gateway must already be up before enroll runs.
+The checked-in `jack gateway` in the first-deployment procedure is the legacy gateway only; it does not provide a modern gateway profile. The operator provisions `/etc/jack`, `/var/lib/jack` (mode 0700) and the client config first; the CLI never creates directories. `jack enroll` signs a `jack.enroll` call against the endpoint in the client config — that endpoint is the running legacy gateway, so it must already be up before enroll runs.
 
 Gateway config (`/etc/jack/gateway.json`, minimal):
 
@@ -179,6 +179,33 @@ Retired seeds may be removed from the inventory once no longer required; retaine
 `jack server-key-status --config FILE` is offline inspection under the same exclusive owner (a concurrently serving owner blocks it). It prints public store, owner, clock, state, head and count/flag metadata only; it never clears dirty/unsafe flags and does not authorize a restart.
 
 Clients refresh explicitly: an SDK rotation client requests one `jack.server.key` page (single page, at most 16 records) and commits it. Ordinary traffic never triggers a refresh. There is no auto-refresh, no hidden retry, no fallback, and no TOFU.
+
+## Modern profile deployment
+
+The modern profile implements MCP 2026-07-28 alongside the legacy profile. SDKs support the modern profile; the checked-in Go CLI does not. The modern CLI gateway profile and request-era selection described here are planned, not available: server deployments are intended to select `legacy`, `modern`, or `both`; `both` would select request era after authentication using either the protocol-version header or signed body `_meta`, then require the mirrors to agree. SDK clients use verified replies for era detection and fallback; an unverified, malformed, or unsigned reply is not a negotiation signal (spec 04 §§3,6 C9). The compatibility promise is `2025-06-18` and `2025-11-25` for legacy; see [compatibility](compatibility.md). An SDK client may opt into `s1` streams per request with `Jack-Accept: s1`; without opt-in an event stream is refused with signed 501 (spec 05 §1).
+
+The modern-profile behavior described above—requests, poll and signed streams, with a bridge that never listens—is a design plan in [design/mcp-2026-07-28.md](design/mcp-2026-07-28.md) §9 decision 5 and is being implemented by CLI M4, which is in progress; it is not present in the checked-in program. The checked-in bridge requires legacy `initialize` (`internal/cli/internal/bridge/bridge.go`) and sends one buffered POST result per relayed request (`internal/cli/internal/transport/connection.go`). No modern gateway profile option is present in the checked-in CLI. SDK building blocks exist, but do not establish CLI support. `jack events receive` is proposed by the design and planned for M4; it is absent from the checked-in CLI. The planned M4 modern-profile gateway/bridge behavior would support requests, poll and verified signed streams, with the bridge never listening; this is not implemented in the checked-in program. Webhook callbacks still require a separately deployed receiver (`WebhookReceiver`) with a public HTTPS URL reachable by the sender (spec 06 §1).
+
+### Signed-stream operations
+
+The following controls are configured through SDK stream options (not the Go CLI). Checked-in Go CLI bridge and gateway are legacy-only and do not implement signed streams; the planned M4 modern-profile gateway/bridge would support requests, poll and signed streams, with the bridge never listening, but M4 is in progress and is not implemented in the checked-in program (design [§9 decision 5](design/mcp-2026-07-28.md)). `frameMaxBytes` defaults to 1,048,576 bytes of SSE **data value** (minimum 1,024), not the full wire event including field lines and framing; oversize data ends with a signed transport signal and end frame. `maxConcurrentStreams` defaults to 4 **per authenticated identity**, not globally. `maxStreamDurationMs` defaults to 3,600,000 and limits total stream lifetime; client `streamIdleMs` defaults to 90,000 and bounds silence between verified frames. These address different cases. The server heartbeat grant is at most `floor(W * 500)` ms, where W is the response verification window in seconds (15,000 ms at default W=30s). Exact options differ by SDK; see spec 05 §§3.2-3.5, 4.5 and API names in [compatibility](compatibility.md).
+
+Size/concurrency/duration settings are per connection or identity as specified, not a cross-identity or cross-instance egress cap. Operators must estimate aggregate load across identities and instances and enforce any overall budget at deployment infrastructure. Increase frame/duration/concurrency limits only after accounting for buffering, memory and proxy limits. Instrument active streams, duration-driven closes, oversize signals, idle/truncated outcomes and cancellation; ensure reverse proxies do not buffer SSE and permit flushes. A stream uses its opener key and must end before its successor activation cutoff; reopen with stored MCP cursor rather than switching keys (spec 05 §5).
+
+### Webhook sender and receiver operations
+
+Jack SDKs provide webhook building blocks, not a subscription store or `events/subscribe`/unsubscribe endpoint (Go `webhook/doc.go`, Rust `rust/src/webhook/mod.rs`, TypeScript `ts/src/webhook/index.ts`). The checked-in Go CLI has no modern gateway profile setting; its gateway and bridge are legacy-only. The planned M4 modern-profile gateway/bridge would support requests, poll and signed streams, with the bridge never listening, but M4 is in progress and this behavior is not implemented in the checked-in program (design [§9 decision 5](design/mcp-2026-07-28.md)). The wrapped application owns subscription lifecycle and persistence, event/cursor semantics, and webhook listener deployment. Treat a subscription as bound to verified principal name, canonical callback URL, event name and canonical arguments. Repeating that key refreshes/upserts the application-side subscription; refresh with a new secret retains the previous secret for 300 seconds. Default TTL is 3,600,000 ms; finite TTL is 60,000–86,400,000 ms; `null` means no expiry. Re-authorize the principal at delivery/refresh and stop delivery when revoked (spec 06 §§8.1-8.6, 8.8). The SDK supplies lifecycle helpers but no subscription database or authenticated subscribe/unsubscribe endpoint.
+
+Receiver state and dedup may be in-memory depending on SDK: for example TypeScript `WebhookReceiver` keeps routing, termination and accepted-id maps in memory, while Go exposes receiver state snapshots. Do not assume state survives restart. Persist/restore application dedup and routing state as needed to meet deployment guarantees; this is operator guidance, not an additional normative protocol requirement. Spec 06 requires durable enqueue before 2xx and specifies accepted-ID retention, but does not make arbitrary SDK receiver state durable (spec 06 §§1.10,3).
+
+
+Delivery retries are four attempts at t0, +30, +270 and +870 seconds. Retryable `Retry-After` delays may postpone the next try but never beyond t0+900 seconds; HTTP-date form is ignored. `410` and `413` are final for that message; other outcomes follow spec 06 R1.7 (spec 06 §§1.7-1.9). Keep Standard Webhooks secret material unique per subscription. TLS protects it in transit; the body containing it travels in a signed Jack request, and neither it nor credentials should be logged. `w1` uses a dedicated webhook signing key, distinct from the MCP server response key (spec 06 §§2,4,9).
+
+Configure sender `allowedRanges` only when intentionally permitting an otherwise blocked network range. The list allows up to 64 CIDRs, is evaluated after registry address classification, and a match overrides that classification; it does not override HTTPS, host-form validation, or redirect refusal. Treat every override as an explicit SSRF exposure (spec 06 §6.11). Endpoint verification must succeed before event, gap, or terminated deliveries: cache/allowlist/application hook/well-known/challenge paths are bound to principal and URL, and verification fetch/challenge traffic uses the same hardened resolver/address/redirect policy (spec 06 §§5-6). Server Card keys are discovered from same-origin HTTPS metadata, strictly validated and cached up to 300 seconds (shorter max-age applies); keep old keys published through retry and Jack signing windows during rotation (spec 06 §7).
+
+A receiver must acknowledge only after durable enqueue. Deduplicate `webhook-id` only after 2xx and retain it for at least 1,200 seconds; event `eventId` dedup is per subscription. Persist/enqueue before returning 2xx, and return retryable 503 on enqueue failure without recording the ID. Pending-secret configuration pairs the secret with its expected callback URL so a signed verification challenge can be answered before the subscription id is routed (spec 06 §§1.10,3,5.6,8.9). SDK `WebhookReceiver` provides the receiver logic; `jack events receive` is proposed/planned for CLI M4 (in progress), not implemented in the checked-in program.
+
+Monitor delivery outcomes by the fixed `lastError` categories (`connection_refused`, `timeout`, `tls_error`, `http_4xx`, `http_5xx`, `challenge_failed`), retry/throttle state, response status, endpoint verification failures, blocked-address/rebinding decisions, receiver `subscription_not_routed`, `unknown_subscription`, signature/freshness failures, dedup results and `enqueue_failed` (spec 06 §§1.7-1.9, 3). Log categories and operational identifiers only; never log webhook secrets, raw bodies, challenge contents, or raw response headers/bodies. The spec explicitly prohibits exposing raw endpoint content through `lastError` (spec 06 §§1.9,3).
 
 ## Durable nonce store across SDKs
 
