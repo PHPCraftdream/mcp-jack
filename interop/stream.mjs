@@ -271,7 +271,6 @@ async function stopChild(info) {
   if (info.child.exitCode === null && info.child.signalCode === null) info.child.kill('SIGKILL');
   await info.done.catch(() => {});
 }
-function deterministicVariant(value, label) { return createHash('sha256').update(`${value}\n${label}`).digest().subarray(0, 16).toString('base64url'); }
 function readRows(path) {
   const text = existsSync(path) ? readFileSync(path, 'utf8') : '';
   return text.split(/\r?\n/).filter(Boolean).map((line, index) => { try { return JSON.parse(line); } catch { throw Error(`request log line ${index + 1} is invalid JSON`); } });
