@@ -204,8 +204,13 @@ func StreamFromContext(ctx context.Context) (StreamGrant, bool) {
 	return grant, ok
 }
 
-// streamHook starts and writes the signed response stream of spec 05 when the
-// wrapped handler commits a text/event-stream answer to a request that opted in
+type StreamTimer interface {
+	Stop() bool
+}
+
+type streamAfterFunc func(time.Duration, func()) StreamTimer
+
+// streamHook starts and writes a text/event-stream answer to a request that opted in
 // with Jack-Accept: s1.
 type streamHook struct {
 	handler *handler
@@ -227,9 +232,15 @@ type streamHook struct {
 	// the signed 202 of 3.8 instead of a stream.
 	notRequest bool
 	// finishOnce makes finish idempotent and safe to defer.
-	finishOnce sync.Once
-	session    *stream.Session
-	timer      *time.Timer
+	finishOnce     sync.Once
+	releaseOnce    sync.Once
+	session        *stream.Session
+	timer          StreamTimer
+	timerMu        sync.Mutex
+	timerStopped   bool
+	durationAt     time.Time
+	timerNow       func() time.Time
+	timerAfterFunc streamAfterFunc
 	// refusal, when set, is the answer of a stream the hook had to refuse
 	// instead of streaming it; it runs once the wrapped handler returned.
 	refusal func()
@@ -281,8 +292,10 @@ func (s *streamHook) start() bool {
 		SID:        sid,
 		Now:        signing.now,
 		Cutoff:     signing.cutoff,
+		Final:      signing.gate,
 		Flush:      flush,
 		Stop:       s.cancel,
+		Interrupt:  s.interruptWriter,
 	})
 	if err != nil {
 		// No unsigned stream byte is ever written: the open header failed.
@@ -298,10 +311,15 @@ func (s *streamHook) start() bool {
 	s.w.WriteHeader(http.StatusOK)
 	flush()
 	s.session = session
-	// 3.4: the duration timer ends the stream; 5.1 keeps the end frame below
-	// the successor activation, so a closer cutoff wins.
+	if s.timerNow == nil {
+		s.timerNow = time.Now
+	}
+	if s.timerAfterFunc == nil {
+		s.timerAfterFunc = func(d time.Duration, f func()) StreamTimer { return time.AfterFunc(d, f) }
+	}
+	s.durationAt = s.timerNow().Add(s.handler.streams.MaxStreamDuration)
 	d := s.handler.streams.MaxStreamDuration
-	if cutoff, ok := signing.cutoffNow(); ok {
+	if cutoff, ok := s.signing.cutoffNow(); ok {
 		remaining := time.Duration(cutoff-session.OpenTimestamp()-1) * time.Second
 		if remaining < d {
 			d = remaining
@@ -311,10 +329,71 @@ func (s *streamHook) start() bool {
 		d = time.Millisecond
 	}
 	final := s.finalResponse
-	s.timer = time.AfterFunc(d, func() { _ = session.Timeout(final) })
+	s.armTimer(session, final)
 	return true
 }
 
+func (s *streamHook) armTimer(session *stream.Session, final func(string) string) {
+	d := s.durationAt.Sub(s.timerNow())
+	if d <= 0 {
+		err := session.Timeout(final)
+		if err != nil {
+			s.interruptWriter()
+		}
+		<-session.Done()
+		s.releaseResources()
+		return
+	}
+	if cutoff, ok := s.signing.cutoffNow(); ok {
+		remaining := time.Duration(cutoff-s.signing.now()-1) * time.Second
+		if remaining < d {
+			d = remaining
+		}
+	}
+	// Re-read a provider's live cutoff frequently even when no successor was
+	// known at open; a later rotation must shorten the current timer.
+	if d > 100*time.Millisecond {
+		d = 100 * time.Millisecond
+	}
+	if d <= 0 {
+		d = time.Millisecond
+	}
+	timer := s.timerAfterFunc(d, func() {
+		cutoffReached := false
+		if cutoff, ok := s.signing.cutoffNow(); ok {
+			cutoffReached = s.signing.now() >= cutoff-1
+		}
+		timedOut := false
+		if !s.timerNow().Before(s.durationAt) || cutoffReached {
+			err := session.Timeout(final)
+			timedOut = session.Closed()
+			if err != nil {
+				s.interruptWriter()
+				timedOut = true
+			}
+		}
+		if timedOut {
+			<-session.Done()
+			s.releaseResources()
+			return
+		}
+		if !session.Terminating() {
+			s.armTimer(session, final)
+		}
+	})
+	s.timerMu.Lock()
+	if s.timerStopped || session.Closed() {
+		s.timerMu.Unlock()
+		timer.Stop()
+		return
+	}
+	previous := s.timer
+	s.timer = timer
+	s.timerMu.Unlock()
+	if previous != nil {
+		previous.Stop()
+	}
+}
 func (s *streamHook) streaming() bool { return s != nil && s.session != nil }
 
 func (s *streamHook) write(p []byte) (int, error) {
@@ -335,26 +414,44 @@ func (s *streamHook) finish() {
 		return
 	}
 	s.finishOnce.Do(func() {
-		if s.timer != nil {
-			s.timer.Stop()
+		defer s.releaseResources()
+		s.timerMu.Lock()
+		s.timerStopped = true
+		timer := s.timer
+		s.timerMu.Unlock()
+		if timer != nil {
+			timer.Stop()
 		}
 		if s.session != nil {
-			// 3.1, 5.1: the final gate runs before the end frame, so a stream
-			// never closes with a key the provider already retired.
-			if s.signing.gate != nil {
-				_ = s.signing.gate()
+			if err := s.session.Close(); err != nil {
+				s.interruptWriter()
 			}
-			_ = s.session.Close()
-		}
-		// The lease is released only after the stream ended (3.3, 5.1).
-		if s.signing.release != nil {
-			s.signing.release()
-		}
-		if s.release != nil {
-			// The limiter frees the slot exactly once, on every path (3.3).
-			s.release()
+			<-s.session.Done()
 		}
 	})
+}
+
+func (s *streamHook) releaseResources() {
+	s.releaseOnce.Do(func() {
+		defer func() {
+			if s.release != nil {
+				s.release()
+			}
+		}()
+		if s.signing.release != nil {
+			defer s.signing.release()
+		}
+	})
+}
+
+func (s *streamHook) interruptWriter() {
+	if s.w != nil {
+		controller := http.NewResponseController(s.w)
+		_ = controller.SetWriteDeadline(time.Now())
+		if closer, ok := s.w.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
+	}
 }
 
 // refused reports that the hook has an answer to write instead of the stream.
