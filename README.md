@@ -138,8 +138,8 @@ The server can rotate its response-signing key without re-pinning clients. One `
 |---|---|
 | 1 | Recovery after an abnormal stop (kill, OOM, power loss) is a manual operator procedure: nonce and ring stores stay dirty/unknown and every entry point refuses to serve (fail closed) until it completes. The Go CLI ships `nonce-inspect` and `nonce-reconcile-terminal`; Rust and TypeScript expose library recovery functions only ([docs/operations.md](docs/operations.md)). |
 | 2 | One owner of the nonce/ring state per deployment; no cluster or HA mode. |
-| 3 | Upstream servers that answer with SSE are unsupported: the gateway closes the stream and answers a signed 501 (the official TypeScript MCP server 2.4.0 answers initialize with text/event-stream even in JSON response mode). |
-| 4 | Bounded MCP profile: legacy Streamable HTTP 2025-11-25 entered through stdio, one JSON-RPC object per POST, no sessions, no GET stream. |
+| 3 | Legacy gateway profile refuses upstream event-stream answers with signed 501; modern-capable profiles support signed streams only with `Jack-Accept: s1` (see [operations](docs/operations.md)). |
+| 4 | Legacy CLI profile: bounded Streamable HTTP 2025-11-25 entered through stdio, one JSON-RPC object per POST, no sessions, no GET stream. |
 | 5 | Signatures do not cover arbitrary headers and provide no confidentiality; TLS is the transport's job. |
 | 6 | On Windows the CLI stores fail closed by design; SDKs are tested on Windows in CI, the durable private-file stores are Linux-only. |
 | 7 | Audit delivery is best effort. |

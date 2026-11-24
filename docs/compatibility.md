@@ -18,6 +18,16 @@ Servers select `legacy`, `modern`, or `both`. `legacy` always uses the legacy er
 
 Clients negotiate/fallback based on verified replies, not unsigned status/body content: verified success or recognized modern JSON-RPC errors indicate modern; selected legacy responses such as 405 lead to legacy `initialize`; unverified/malformed replies or network failures do not establish an era (spec 04 C9). A verified `-32022` can prompt one retry only with mutually supported versions, otherwise negotiation fails (spec 04 C9).
 
+## CLI profiles
+
+| CLI component | Era/profile selection | Behavior |
+|---|---|---|
+| `jack gateway` | `profile` config or `--profile legacy\|modern\|both`; default `legacy` | Legacy remains the default; `modern` enables modern rules and `both` selects per authenticated request. Signed streams require a modern-capable profile and `Jack-Accept: s1`. |
+| `jack bridge` | Client config `era`: `legacy` (default), `modern`, `auto` | Legacy behavior remains unchanged by default; modern relays verified replies and signed-stream frames. `auto` probes using verified era negotiation. The bridge does not listen on a socket. |
+| `jack events receive` | No protocol-era setting | Separate webhook callback receiver; receipt state is persisted and restored after restart. |
+
+Raw CR or LF in a verified signed-stream message aborts only that bridge stream and emits a diagnostic to stderr. Closing stdin cancels active calls; matching `notifications/cancelled` cancels the request.
+
 ## 2026-07-28 changes and Jack handling
 
 The design's classification in `design/mcp-2026-07-28.md` §2 distinguishes transparent v1-carried changes (**T**), modern header/dispatch rules (**H**), signed streams (**S**) and webhooks (**W**). The normative details are in specs 04-06, not the earlier historical design wording.

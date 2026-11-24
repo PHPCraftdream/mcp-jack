@@ -1,6 +1,6 @@
 # MCP compatibility design
 
-**Status:** research and design only; no implementation or conformance claim. **Reviewed:** 2026-11-09. Scope: future mcp-jack bridge/gateway interoperability with MCP clients and servers. This document distinguishes repository observations, upstream requirements, inferences, and proposed tests. Recommendations are not approved product changes.
+**Status:** historical research and design only; no implementation or conformance claim. **Reviewed:** 2026-11-09. Scope: future mcp-jack bridge/gateway interoperability with MCP clients and servers. This document distinguishes repository observations, upstream requirements, inferences, and proposed tests. Recommendations are not approved product changes. The proposed bridge and CI sections predate merged PR 136 and do not describe current runtime support; for current Go CLI facts, see [operations](../operations.md) and [compatibility](../compatibility.md).
 
 ## Decision summary
 
@@ -57,7 +57,7 @@ Local `path:line` observations below refer to tracked source at HEAD `777771fed0
 | Stream refusal / timing | No stream transformation. | Same media-type response choices; request stream lifecycle differs. | Go SSE-to-501 may wait for handler return; Rust drops and TS cancels SSE. Source inspection only; no runtime timing claim. |
 | Batches | [2025-03-26](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports.md) allows arrays of requests/notifications or responses; [2025-06-18](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports.md) removes them; 2025-11-25 requires one object. | One request/notification. | Test the version-dependent distinction; do not generalize legacy batch support. |
 
-## Proposed bridge contract (not implemented)
+## Historical proposed bridge contract
 
 1. Relay the caller's `initialize` → upstream `initialize` result → caller's `notifications/initialized` exactly once; store the negotiated protocol version and session id. Do not run a second handshake or rewrite capabilities.
 2. For stdio, remove only the delimiter newline before signing the exact HTTP body bytes; after successful response verification, add the stdio frame delimiter. Bind/sign exact bytes. Framing and hop-by-hop headers may change; protocol metadata must not be arbitrarily rewritten.
@@ -114,4 +114,4 @@ Cancellation and shutdown are separate gates: per [2025-03-26 transport](https:/
 2. Require explicit no-session JSON-response upstream mode, or defer session-required deployments until signed DELETE/refusal lifecycle exists.
 3. Approve separate CI fixture toolchains and ownership/wiring of the three proposed CI jobs and their separate signing-boundary fixtures.
 
-Until these gates close, this is a source-backed compatibility design, not evidence that a bridge exists, dependencies were installed, or interoperability tests pass.
+Until these gates close, this historical design is not evidence of broad interoperability or CI results; current bridge/profile implementation is documented elsewhere.

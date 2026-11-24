@@ -11,7 +11,7 @@ The entry point is `cmd/jack`; the command layer is `internal/cli.Run(ctx, args,
 IO)`. Exit status is zero for success and one for failure. `help` writes usage to
 stderr. All diagnostics are fixed, secret-free strings. No command prints a
 seed, invite, credential, HTTP error body, supplied path, or supplied URL.
-Bridge stdout contains verified protocol frames only. Commands with documented
+The bridge emits verified JSON-RPC replies and verified signed-stream frames on stdout, plus a locally generated JSON-RPC `-32602` denial for modern `jack.*` tool calls; that denial is not signed or forwarded. Commands with documented
 JSON output emit only their public result or diagnostics; other commands produce
 no stdout.
 
@@ -216,7 +216,7 @@ Gateway configuration (shown fields required; `native_admin` is optional and def
 }
 ```
 
-`native_admin` enables only the fixed user/invite administrative native-tool allowlist and defaults to `false`. `webhook_keys` and `webhook_egress_ip_ranges` are optional operator-only inputs for `jack.server.webhook_key`; the tool is disabled unless at least one webhook key is configured. Each key supplies a base64url Ed25519 `public_key` and its matching `kid`; SDK validation enforces the key and range limits. These configured keys must be a subset of those published in the Server Card; the CLI has no card-publication API and does not publish or establish that subset itself. Caller request fields never provide these trusted values. This explicit webhook route is separate from the default native allowlist and from `jack.server.key`. `--profile` overrides it after strict config validation. `modern` applies modern MCP rules to every request; `both` classifies each authenticated request using the modern spec's header/body signals. `streams` is accepted only with `modern` or `both` and all values are range-checked before conversion; omitted values use s1 defaults (1 MiB frame cap, 4 streams per identity, one-hour duration, and a heartbeat bounded by half the signature window). The gateway forwards `Jack-Accept` and modern mirror metadata without changing signed request bytes. Upstream event-stream bodies are relayed through SDK middleware only when the profile is modern-capable and `Jack-Accept` includes valid `s1`; the middleware signs the downstream stream. Legacy behavior continues to refuse event streams.
+`native_admin` enables only the fixed user/invite administrative native-tool allowlist and defaults to `false`. `webhook_keys` and `webhook_egress_ip_ranges` are optional operator-only inputs for `jack.server.webhook_key`; the tool is disabled unless at least one webhook key is configured. Each key supplies a base64url Ed25519 `public_key` and its matching `kid`; SDK validation enforces the key and range limits. These configured keys must be a subset of those published in the Server Card; the CLI has no card-publication API and does not publish or establish that subset itself. Caller request fields never provide these trusted values. This explicit webhook route is separate from the default native allowlist and from `jack.server.key`. `--profile` overrides it after strict config validation. `modern` applies modern MCP rules to every request; `both` classifies each authenticated request using the modern spec's header/body signals. `streams` is accepted only with `modern` or `both` and all values are range-checked before conversion; omitted values use s1 defaults (1 MiB frame cap, 4 streams per identity, one-hour duration, and a heartbeat bounded by half the signature window). `2025-06-18` and `2025-11-25` are the supported legacy compatibility versions. The legacy/default inbound `MCP-Protocol-Version` check accepts an absent header or exactly one `2025-11-25` value and rejects other or multiple values. `modern` and `both` use the same inbound allowlist: absent is accepted, as is exactly one allowed legacy or modern date; other or multiple values are rejected. Upstream RESPONSE headers have a separate check: legacy accepts only `2025-11-25` when supplied, modern accepts modern dates, and `both` accepts modern dates plus `2025-06-18` and `2025-11-25`. The CLI legacy bridge specifically requires exactly `2025-11-25` for `initialize`. Upstream event-stream bodies are relayed through SDK middleware only for modern-capable profiles when `Jack-Accept` includes valid `s1`; the middleware signs the downstream stream. The legacy profile refuses event streams.
 
 Termination for remote clients is an external, trusted reverse-proxy deployment;
 configure it to preserve the signed origin-form target and exact body bytes.
@@ -237,23 +237,23 @@ need a separately designed credential/hop mechanism.
 The configured HTTP URL must have literal authority `upstream`, no query or
 fragment, and a nonempty fixed path. That authority is HTTP metadata only: every
 dial goes to the Unix socket. Incoming Host, path and query cannot select routing.
-The SDK authenticates the incoming method/target/body before forwarding. Outgoing
-headers are rebuilt from scratch: only Accept (including both values),
-Content-Type, and protocol version are copied. The three fixed identity headers
+The SDK authenticates the incoming method/target/body before forwarding. Outgoing headers are rebuilt from scratch: all profiles forward only `Accept` (including both values), `Content-Type` and `MCP-Protocol-Version`; `modern` and `both` additionally forward `Jack-Accept`, `Mcp-Method`, `Mcp-Name` and syntactically valid `Mcp-Param-*` headers (case-insensitive `Mcp-Param-` prefix and valid HTTP header-name syntax). The three fixed identity headers
 `X-Jack-Kid`, `X-Jack-Name`, `X-Jack-Admin` are populated solely from
-`server.IdentityFromContext`. Cookies, caller identity duplicates, Authorization,
-forwarding headers and Jack-Auth never cross the hop. Upstream response headers
+`server.IdentityFromContext`; caller-supplied values for these headers are
+replaced, not forwarded. `Jack-Auth` and arbitrary or otherwise unallowlisted
+caller headers are never forwarded. Upstream response headers
 are likewise allowlisted to Content-Type and validated protocol version.
 
 SDK verifier/handler perform request verification and response signing. Ordinary
 POST bodies are preserved byte-for-byte. Native tools are intercepted before
 upstream. GET is authenticated and answered with signed 405 (no SSE endpoint).
-An upstream SSE response is promptly closed, passed to the middleware as an SSE
-refusal and becomes signed 501, without reading a stream to EOF. These are distinct
-failures. Unsupported HTTP methods retain the SDK's **unsigned pre-auth 405**;
-clients must fail verification, not treat that response as authenticated. Header,
-body-read, admission and pre-auth failures can also be unsigned. There is no
-claim that every error is signed.
+For an upstream event-stream response, the legacy profile closes it and returns a
+signed 501 refusal. `modern` and `both` relay the upstream stream through middleware
+and sign it only when `Jack-Accept` opts in with `s1`; without that opt-in, the
+stream is refused with signed 501. Unsupported HTTP methods retain the SDK's
+**unsigned pre-auth 405**; clients must fail verification, not treat that response
+as authenticated. Header, body-read, admission and pre-auth failures can also be
+unsigned. There is no claim that every error is signed.
 
 Upstream redirects are never followed and become signed 502. Session headers and
 cancellation notifications are explicitly refused. Request/response bodies are
