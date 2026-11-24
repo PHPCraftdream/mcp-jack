@@ -80,6 +80,35 @@ test("sender posts only a challenge before verification and delivers the same ev
   assert.deepEqual(seen[0]?.body, message.body);
 });
 
+test("sender forwards exact webhook header names to the injected dialer before the wire", async () => {
+  const { transport, seen } = recordingTransport(() => ({ status: 200 }));
+  const verifier = new EndpointVerifier({ transport, allowlist: [PAIR.canonicalUrl], now, nonceSource: () => NONCE });
+  const sender = new WebhookSender({
+    transport,
+    verifier,
+    now,
+    randomBytes,
+    jack: {
+      aud: "https://svc.example.test",
+      signingKey: { kid: "test", publicKey: new Uint8Array(32), sign: () => new Uint8Array(64) },
+    },
+  });
+  const message = sampleEvent();
+
+  assert.equal((await sender.deliver(TARGET, message)).accepted, true);
+  const request = seen[0];
+  if (request === undefined) throw new Error("Missing delivery request");
+  // Pre-wire header record seen by the injected dialer; wire spelling is not asserted here because the test cannot capture raw bytes.
+  assert.deepEqual(Object.keys(request.headers).sort(), [
+    "Jack-Webhook-Auth",
+    "X-MCP-Subscription-Id",
+    "content-type",
+    "webhook-id",
+    "webhook-signature",
+    "webhook-timestamp",
+  ].sort());
+});
+
 test("sender refuses an oversized event without making any request", async () => {
   const { sender, seen } = setup();
   const message = eventMessage(new Uint8Array(262145), randomBytes);

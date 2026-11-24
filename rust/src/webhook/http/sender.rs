@@ -678,3 +678,46 @@ fn challenge_rejection(reason: &str) -> EchoVerdict {
         reason: Some(reason.to_owned()),
     }
 }
+
+#[cfg(test)]
+mod header_name_tests {
+    use super::{delivery_headers, OutgoingMessage};
+    use crate::webhook::MessageKind;
+    use ed25519_dalek::SigningKey;
+
+    /// This observes only pre-transport names and does NOT assert wire spelling:
+    /// `http::HeaderName` lowercases names, and Hyper's current choices cannot
+    /// express this mixed-case combo while preserving lowercase `webhook-*` names.
+    #[test]
+    fn delivery_headers_preserve_pre_transport_header_name_spelling_only() {
+        let message = OutgoingMessage {
+            principal: "example".to_owned(),
+            url: "https://example.com/hook".to_owned(),
+            subscription_id: "sub_0123456789abcdef".to_owned(),
+            kind: MessageKind::Event,
+            body: b"{}".to_vec(),
+            secrets: Vec::new(),
+            signing_keys: Vec::new(),
+            aud: Some("example".to_owned()),
+            jack_signing: Some(("kid".to_owned(), SigningKey::from_bytes(&[7; 32]))),
+            expires_at_ms: None,
+        };
+
+        let names: Vec<String> = delivery_headers(&message, "event_12345678", "100", 100, 30)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+
+        assert_eq!(
+            names,
+            [
+                "Content-Type",
+                "webhook-id",
+                "webhook-timestamp",
+                "webhook-signature",
+                "X-MCP-Subscription-Id",
+                "Jack-Webhook-Auth",
+            ]
+        );
+    }
+}

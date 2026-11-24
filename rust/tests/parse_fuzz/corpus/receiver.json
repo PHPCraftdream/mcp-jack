@@ -1,0 +1,27 @@
+{
+  "cases": [
+    {
+      "headers": [
+        ["webhook-id", "msg_7Qk2mZ4rT9xV1bN6pL3sD8wY5cJ0hG2f"],
+        ["webhook-timestamp", "1767225600"],
+        ["webhook-signature", "v1,Bt7vsCONxET/3czQb/iQTyNMinnzGL2DglV13p/vKpk="],
+        ["x-mcp-subscription-id", "sub_a3f1c8e2b0d49f7e"]
+      ],
+      "body": {
+        "eventId": "evt_1",
+        "name": "incident.created",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "data": {"severity": "P1"}
+      }
+    },
+    {
+      "headers": [
+        ["webhook-id", "msg_verification_7Qk2mZ4rT9xV1bN6pL3sD8wY5cJ0hG2f"],
+        ["webhook-timestamp", "1767225600"],
+        ["webhook-signature", "v1,/LA9YEiYEaS12utgc/Y7rXHYdj5KMIzq3qzWRxuwEfk="],
+        ["X-MCP-Subscription-Id", "sub_a3f1c8e2b0d49f7e"]
+      ],
+      "body": {"type": "verification", "challenge": "KfROIaIYzOA4LouilLN_Jw"}
+    }
+  ]
+}
