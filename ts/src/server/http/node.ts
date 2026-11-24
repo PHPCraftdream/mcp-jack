@@ -3,9 +3,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { AUTH_VALUES_SYMBOL, HEADER_VALUES_SYMBOL, RAW_BODY_SYMBOL, RAW_TARGET_SYMBOL, dropFragment, isOriginFormTarget } from "./fetch.js";
 import type { JackRequest } from "./fetch.js";
 import { finishResponseAdmission } from "../durable/finish.js";
+import { STREAM_DEFAULT_MAX_DURATION_MS } from "../../stream/codes.js";
 
 /** Go defaultMaxBodyBytes (mirrors fetch.ts). */
 const DEFAULT_MAX_BODY_BYTES = 1 << 20;
+const STREAM_DRAIN_DEADLINE_MS = STREAM_DEFAULT_MAX_DURATION_MS;
 
 const noop = (): void => {};
 
@@ -24,10 +26,21 @@ type ReadResult =
  */
 export function serveNode(
   handler: (req: Request) => Promise<Response>,
-  options?: { maxBodyBytes?: number },
+  options?: {
+    maxBodyBytes?: number;
+    /** Match the configured stream duration when overriding the stream default. */
+    streamDrainDeadlineMs?: number;
+    /** Internal scheduling seam for deterministic adapter tests. */
+    scheduleDrainDeadline?: (callback: () => void, delayMs: number) => () => void;
+  },
 ): (req: IncomingMessage, res: ServerResponse) => void {
   const limit =
     options?.maxBodyBytes !== undefined && options.maxBodyBytes > 0 ? options.maxBodyBytes : DEFAULT_MAX_BODY_BYTES;
+  const drainDeadlineMs = options?.streamDrainDeadlineMs ?? STREAM_DRAIN_DEADLINE_MS;
+  const scheduleDrainDeadline = options?.scheduleDrainDeadline ?? ((callback: () => void, delayMs: number) => {
+    const handle = setTimeout(callback, delayMs);
+    return (): void => clearTimeout(handle);
+  });
 
   return (req, res) => {
     // Aborted connections emit 'error'/'aborted'; without listeners the
@@ -96,6 +109,7 @@ export function serveNode(
    * ended, failed or the socket died; never throws.
    */
   async function writeEventStream(res: ServerResponse, resp: Response, controller: AbortController): Promise<void> {
+    const drainDeadlineAt = Date.now() + drainDeadlineMs;
     const reader = resp.body?.getReader();
     const stop = (): void => {
       // 3.7: the client is gone; cancel the signed pump and the handler with it.
@@ -134,6 +148,34 @@ export function serveNode(
       return;
     }
     try {
+      const waitForDrain = (): Promise<boolean> => new Promise((resolve) => {
+        let settled = false;
+        let cancelDeadline: (() => void) | undefined;
+        const cleanup = (): void => {
+          res.removeListener("drain", onDrain);
+          res.removeListener("close", onClose);
+          controller.signal.removeEventListener("abort", onAbort);
+          cancelDeadline?.();
+        };
+        const settle = (ok: boolean): void => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          resolve(ok);
+        };
+        const onDrain = (): void => settle(true);
+        const onClose = (): void => settle(false);
+        const onAbort = (): void => settle(false);
+        res.once("drain", onDrain);
+        res.once("close", onClose);
+        controller.signal.addEventListener("abort", onAbort, { once: true });
+        cancelDeadline = scheduleDrainDeadline(() => {
+          settle(false);
+          stop();
+          if (!res.destroyed && !res.writableEnded) res.end();
+        }, Math.max(0, drainDeadlineAt - Date.now()));
+        if (res.destroyed || res.writableEnded || controller.signal.aborted) settle(false);
+      });
       for (;;) {
         // Never write a byte after the socket died.
         if (res.destroyed || res.writableEnded) {
@@ -146,7 +188,10 @@ export function serveNode(
           stop();
           return;
         }
-        res.write(next.value);
+        if (!res.write(next.value) && !(await waitForDrain())) {
+          stop();
+          return;
+        }
       }
     } catch {
       // A read error or a write into a dead socket: same disconnect path.

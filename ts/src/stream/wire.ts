@@ -177,6 +177,7 @@ export class StreamEventReader {
   private started = false;
   private readonly bomPrefix: number[] = [];
   private finished = false;
+  private heldCrBlankLine = false;
 
   /** An absent `maxEventBytes` keeps the unbounded buffering a test helper relies on. */
   constructor(options?: { readonly maxEventBytes?: number }) {
@@ -232,7 +233,15 @@ export class StreamEventReader {
     return events;
   }
 
-  /** Ends the body and returns the events a final lone CR completed (2.14). */
+  /** True when the held trailing CR is itself the blank-line event terminator. */
+  get pendingCrTerminatesEvent(): boolean {
+    return this.heldCrBlankLine;
+  }
+
+  get hasPendingCr(): boolean {
+    return this.len > 0 && this.pos === this.len - 1 && this.buf[this.pos] === CR;
+  }
+
   finish(): StreamLine[][] {
     if (this.finished) {
       return [];
@@ -277,6 +286,7 @@ export class StreamEventReader {
     this.lineStart = 0;
     this.eventBytes = 0;
     this.lines = [];
+    this.heldCrBlankLine = false;
   }
 
   // Growing only on overflow copies the old bytes O(log n) times, so n pushes
@@ -317,8 +327,10 @@ export class StreamEventReader {
       // A trailing CR may be the first half of a CRLF that straddles chunks;
       // it is the one byte a later push examines again.
       if (byte === CR && i + 1 === len) {
+        this.heldCrBlankLine = i === start && this.lines.length > 0;
         break;
       }
+      this.heldCrBlankLine = false;
       const contentEnd = i;
       // 2.14: a lone CR and a CRLF are both one terminator.
       const termEnd = byte === CR && buf[i + 1] === LF ? i + 2 : i + 1;

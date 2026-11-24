@@ -45,6 +45,10 @@ export interface StreamServerOptions {
   readonly successorActivation?: (kid: string) => number | undefined;
   /** The 2.4 sid bytes: 16 CSPRNG bytes, drawn with `crypto.randomBytes(16)` by default; injectable for tests. */
   readonly sidSource?: () => Uint8Array;
+  /** Stream scheduler; defaults to the pump's unref'd timer. */
+  readonly schedule?: (callback: () => void, delayMs: number) => unknown;
+  /** Cancels a handle returned by `schedule`; defaults to the pump timer cancellation. */
+  readonly cancelSchedule?: (handle: unknown) => void;
 }
 
 /** Stream settings with every default applied and every limit checked. */
@@ -57,6 +61,8 @@ export interface ResolvedStreamOptions {
   readonly windowSeconds: number;
   readonly successorActivation?: (kid: string) => number | undefined;
   readonly sidSource: () => Uint8Array;
+  readonly schedule?: (callback: () => void, delayMs: number) => unknown;
+  readonly cancelSchedule?: (handle: unknown) => void;
 }
 
 // 2.4: a sid is exactly 16 bytes.
@@ -130,6 +136,8 @@ export function resolveStreamOptions(options: StreamServerOptions | undefined): 
     // A conditional spread keeps exactOptionalPropertyTypes satisfied.
     ...(successorActivation === undefined ? {} : { successorActivation }),
     sidSource,
+    ...(options?.schedule === undefined ? {} : { schedule: options.schedule }),
+    ...(options?.cancelSchedule === undefined ? {} : { cancelSchedule: options.cancelSchedule }),
   };
 }
 
@@ -326,6 +334,8 @@ export function startSignedStream(handoff: StreamHandoff): Response {
       // 5.1: the successor activation is re-read per frame, so a cutoff learned
       // while the stream runs still caps every later frame ts.
       successorActivation: (): number | undefined => handoff.successorActivation?.(signer.kid),
+      ...(options.schedule === undefined ? {} : { schedule: options.schedule }),
+      ...(options.cancelSchedule === undefined ? {} : { cancelSchedule: options.cancelSchedule }),
       // 3.3/3.7: the pump closes once, releasing the slot and cancelling the
       // handler whichever way the stream ends.
       onClose: (): void => {
