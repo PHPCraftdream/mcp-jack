@@ -23,6 +23,10 @@ mod modern;
 use std::collections::HashMap;
 
 #[allow(dead_code)]
+#[path = "stream/mod.rs"]
+mod stream;
+
+#[allow(dead_code)]
 #[path = "webhook/sender.rs"]
 mod webhook_sender;
 
@@ -225,6 +229,9 @@ fn main() {
     }
     if webhook_sender::mode_from_args().as_deref() == Some("webhook-sender") {
         webhook_sender::run_mode();
+    }
+    if stream::mode_from_args().as_deref() == Some("stream-client") {
+        stream::run_client();
     }
     let flags = parse_flags();
     if !flags.mode.is_empty() {
