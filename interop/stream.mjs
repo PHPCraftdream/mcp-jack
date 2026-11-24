@@ -112,7 +112,7 @@ function makeVerifier(fixtures) {
     if (!signed(text, e.sig)) throw Error('bad v1 refusal signature');
     let parsed;
     try { parsed = JSON.parse(body.toString('utf8')); } catch { throw Error('v1 refusal body is not JSON'); }
-    const bodyCode = parsed?.error?.message ?? parsed?.error?.code;
+    const bodyCode = parsed?.error?.code;
     if (terminal.http_code !== undefined && terminal.http_code !== null && bodyCode !== terminal.http_code) throw Error('v1 refusal code differs from signed body');
     if (terminal.code !== undefined && terminal.code !== null && bodyCode !== terminal.code) throw Error('terminal refusal code differs from signed body');
   }

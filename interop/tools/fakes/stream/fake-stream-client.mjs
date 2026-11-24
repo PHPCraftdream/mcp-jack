@@ -76,7 +76,7 @@ function refusal(res, raw) {
   if (valid) {
     try {
       const parsed = JSON.parse(raw.toString('utf8'));
-      valid = parsed?.jsonrpc === '2.0' && parsed.id === requestObject.id && parsed.error?.code === -32603 && parsed.error?.message === (status === 501 ? 'streaming_unsupported' : 'stream_limit_exceeded');
+      valid = parsed?.error?.code === (status === 501 ? 'streaming_unsupported' : 'stream_limit_exceeded') && typeof parsed.error.message === 'string' && !('jsonrpc' in parsed);
     } catch { valid = false; }
   }
   terminal(valid ? 'refused' : 'error', valid ? (status === 501 ? 'streaming_unsupported' : 'stream_limit_exceeded') : 'stream_bad_signature', status, valid ? evidence : null, null, [], 0);
