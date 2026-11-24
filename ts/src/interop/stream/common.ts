@@ -23,7 +23,13 @@ export function clockFile(file: string): () => number {
   return () => { const text = readFileSync(file, "utf8").trim(); if (!/^(0|[1-9][0-9]*)$/.test(text)) throw new Error("invalid clock file"); const n = Number(text); if (!Number.isSafeInteger(n)) throw new Error("invalid clock file"); return n; };
 }
 export const b64 = (v: Uint8Array): string => encodeBase64URL(v);
-export const scenarios = JSON.parse(readFileSync(new URL("../../../../interop/stream-scenarios.json", import.meta.url), "utf8")).matrices.stream as Array<Record<string, any>>;
-export function scenario(id: string): Record<string, any> { const row = scenarios.find(x => x.id === id); if (!row) throw new Error(`unknown active stream scenario ${id}`); return row; }
+const matrixDoc = JSON.parse(readFileSync(new URL("../../../../interop/stream-scenarios.json", import.meta.url), "utf8")).matrices as { stream?: Array<Record<string, any>>; staged?: Array<Record<string, any>> };
+export const scenarios = matrixDoc.stream ?? [];
+const stagedScenarios = matrixDoc.staged ?? [];
+export function scenario(id: string): Record<string, any> {
+  const row = scenarios.find((x) => x.id === id) ?? stagedScenarios.find((x) => x.id === id);
+  if (!row) throw new Error(`unknown active stream scenario ${id}`);
+  return row;
+}
 export function jsonl(v: unknown): void { process.stdout.write(`${JSON.stringify(v)}\n`); }
 export function diagnostic(err: unknown): void { process.stderr.write(`${err instanceof Error ? err.stack ?? err.message : String(err)}\n`); }

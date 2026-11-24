@@ -6,7 +6,7 @@ import { createSigningFetch } from "../../client/transport/transport.js";
 import { openSignedStream } from "../../client/stream/session.js";
 import { parseRequestAuth, parseResponseAuth } from "../../core/auth-header.js";
 import { decodeBase64URLFixed, encodeBase64URL } from "../../core/encoding.js";
-import { parseStreamFrame, parseStreamOpenAuth, StreamEventReader } from "../../stream/wire.js";
+import { parseStreamFrame, parseStreamOpenAuth, StreamEventReader, streamSignalCode } from "../../stream/wire.js";
 import { clockFile, diagnostic, integer, jsonl, need, parseFlags, scenario } from "./common.js";
 
 type Pair = readonly [string, string];
@@ -288,6 +288,36 @@ async function main(): Promise<void> {
   try {
     session = await openSignedStream(config, url.href, init, fetch);
   } catch (error) {
+    if (capture?.status === 429) {
+      const raw = Buffer.concat(capture.chunks.map((chunk: Uint8Array) => Buffer.from(chunk)));
+      let refusal: unknown;
+      try { refusal = JSON.parse(raw.toString("utf8")); } catch { refusal = null; }
+      const record = typeof refusal === "object" && refusal !== null && !Array.isArray(refusal) ? refusal as Record<string, unknown> : undefined;
+      const errorRecord = typeof record?.error === "object" && record.error !== null && !Array.isArray(record.error) ? record.error as Record<string, unknown> : undefined;
+      if (typeof errorRecord?.message !== "string") throw error;
+      const refusalCode = errorRecord.message;
+      const requestHeaders = evidenceHeaders(capture, body, mirrors, accept);
+      const requestAuth = parseRequestAuth(authValues(requestHeaders));
+      const responseAuth = parseResponseAuth(capture.rawResponseHeaders
+        .filter(([name]: Pair) => name.toLowerCase() === "jack-auth")
+        .map(([, value]: Pair) => value));
+      const evidence = {
+        status: capture.status,
+        ts: responseAuth.ts,
+        kid: responseAuth.kid,
+        request_sig: requestAuth.sig,
+        body_b64u: encodeBase64URL(raw),
+        sig: responseAuth.sig,
+      };
+      terminalJsonl({
+        type: "terminal", scenario: id, outcome: "refused", code: refusalCode,
+        http_status: capture.status, http_code: refusalCode, frames_verified: 0,
+        request_id: requestData.id, mcp_complete: false, terminal_frame: null,
+        request_sig: requestAuth.sig, v1_evidence: evidence, open: null, frames: [],
+        failure_frame: null, successor_activation: null,
+      });
+      return;
+    }
     if (capture?.status === 401) {
       const raw = Buffer.concat(capture.chunks.map((chunk: Uint8Array) => Buffer.from(chunk)));
       let refusal: unknown;
@@ -368,11 +398,13 @@ async function main(): Promise<void> {
     }
   }
 
-  const failed = done.terminal.state === "error"
-    ? capture.wireFrames[done.terminal.framesVerified]
-    : undefined;
+  const terminalCode = done.terminal.state === "error" ? done.terminal.code : null;
+  const failedIndex = done.terminal.state === "error"
+    ? (terminalCode === "stream_frame_too_large" ? done.terminal.framesVerified - 1 : done.terminal.framesVerified)
+    : -1;
+  const failed = done.terminal.state === "error" ? capture.wireFrames[failedIndex] : undefined;
   const failureFrame = failed ? {
-    kind: "message",
+    kind: streamSignalCode(failed.data) !== null ? "signal" : "message",
     sid: open.sid,
     kid: open.kid,
     seq: failed.seq,

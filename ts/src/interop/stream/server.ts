@@ -49,6 +49,8 @@ function main(): void {
   };
   const requestLog = need(flags, "request-log");
   let clockControlAcknowledged = false;
+  let heldRelease: (() => void) | undefined;
+  let heldSid: string | undefined;
   const durationRequests = new Map<string, { start: number; cancelled: boolean; elapsed: boolean }>();
   const verifier = new Verifier({ aud, state, nonces: new NonceStore(), native: new Native(), now });
   const sdkHandler = jackFetchHandler(
@@ -136,6 +138,49 @@ function main(): void {
           }),
           streamHeaders(),
         );
+      }
+
+      if (id === "concurrency-limit") {
+        const sid = context.sid;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(eventBytes({ jsonrpc: "2.0", method: "notifications/progress", params: { progress: 1 } }));
+              if (heldRelease === undefined) {
+                heldSid = sid;
+                heldRelease = () => {
+                  try {
+                    controller.enqueue(eventBytes({ jsonrpc: "2.0", id: parsed.id, result: {} }));
+                    controller.close();
+                  } catch {
+                    // the stream may already be closed; nothing is left to write
+                  }
+                };
+              }
+            },
+            cancel() {
+              if (heldSid === sid) {
+                heldRelease = undefined;
+                heldSid = undefined;
+              }
+            },
+          }),
+          streamHeaders(),
+        );
+      }
+
+      if (id === "oversize") {
+        const limit = options.frameMaxBytes;
+        if (limit === undefined) throw new Error("oversize scenario requires --frame-max-bytes");
+        const value = JSON.stringify({ jsonrpc: "2.0", method: "notifications/progress", params: { payload: "x".repeat(limit + 32) } });
+        const dataBytes = Buffer.byteLength(value, "utf8");
+        if (dataBytes <= limit) throw new Error("oversize producer value does not exceed the configured frame limit");
+        log({ event: "frame_suppressed", data_bytes: dataBytes, frame_max_bytes: limit });
+        return make([value]);
+      }
+
+      if (id === "idle") {
+        return new Response(new ReadableStream<Uint8Array>({ start() { /* silent past the client idle deadline */ } }), streamHeaders());
       }
 
       if (method === "events/stream" && id === "max-duration") {
@@ -280,7 +325,14 @@ function main(): void {
             jsonl({ control: "clock_advanced", clock });
           }
         } else if (command.action === "release") {
-          // No active scenario holds a stream for an external release command.
+          const release = heldRelease;
+          const sid = heldSid;
+          heldRelease = undefined;
+          heldSid = undefined;
+          if (release !== undefined) {
+            release();
+            jsonl({ control: "released", ...(sid === undefined ? {} : { sid }) });
+          }
         }
       } catch {
         // Ignore malformed control lines, matching the fake server.
