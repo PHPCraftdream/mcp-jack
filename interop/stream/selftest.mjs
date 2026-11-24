@@ -28,10 +28,11 @@ function validStream(){
   const headers=Buffer.from(`HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache\r\nJack-Auth: s1 kid=${svc.kid},ts=${ts},sid=${sid},sig=${openSig}\r\n`,'latin1');
   return {body,headers,openSig,sid,events:[zero,one,end]};
 }
-function chunked(body){
+function chunked(fixture){
+  const body=fixture.body;
   const cuts=[1,17,body.length>>1,body.length-3].filter((v,i,a)=>v>0&&v<body.length&&a.indexOf(v)===i).sort((a,b)=>a-b);
   const parts=[];let start=0;for(const end of [...cuts,body.length]){parts.push(body.subarray(start,end));start=end;}
-  return Buffer.concat([Buffer.from('HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache\r\nTransfer-Encoding: chunked\r\n\r\n'),...parts.flatMap(p=>[Buffer.from(`${p.length.toString(16)};fixture=yes\r\n`),p,Buffer.from('\r\n')]),Buffer.from('0\r\nX-Fixture-Trailer: retained-semantically\r\n\r\n')]);
+  return Buffer.concat([fixture.headers,Buffer.from('Transfer-Encoding: chunked\r\n\r\n'),...parts.flatMap(p=>[Buffer.from(`${p.length.toString(16)};fixture=yes\r\n`),p,Buffer.from('\r\n')]),Buffer.from('0\r\nX-Fixture-Trailer: retained-semantically\r\n\r\n')]);
 }
 function decodeChunked(data){let at=0;const parts=[];while(true){const e=data.indexOf('\r\n',at);assert.ok(e>=0,'chunk size line');const size=parseInt(data.subarray(at,e).toString('ascii').split(';')[0],16);at=e+2;if(!size){const end=data.indexOf('\r\n\r\n',at);if(end<0){assert.equal(data.subarray(at,at+2).toString(),'\r\n');return Buffer.concat(parts);}return Buffer.concat(parts);}assert.ok(data.length>=at+size+2);parts.push(data.subarray(at,at+size));assert.equal(data.subarray(at+size,at+size+2).toString(),'\r\n');at+=size+2;}}
 function parseResponse(raw){const split=raw.indexOf('\r\n\r\n');assert.ok(split>=0,'HTTP response head');const head=raw.subarray(0,split).toString('latin1'),body=raw.subarray(split+4);assert.match(head,/^HTTP\/1\.1 200 OK/);const length=/\r\ncontent-length:\s*(\d+)/i.exec(`\r\n${head}`),te=/\r\ntransfer-encoding:\s*chunked/i.test(`\r\n${head}`);assert.equal(!!length, !te,'one valid rebuilt body framing');const decoded=te?decodeChunked(body):body; if(length)assert.equal(Number(length[1]),decoded.length,'rebuilt Content-Length');return {head,body:decoded,wireBody:body,chunked:te};}
@@ -44,7 +45,7 @@ function run(args,extraEnv={},timeoutMs=12000){return new Promise((resolveRun,re
 });}
 async function relayControl(transform,framing='chunked',scenario={}){
   const sockets=new Set(),fixture=validStream();let served=false;
-  const upstreamServer=net.createServer(socket=>{sockets.add(socket);socket.on('close',()=>sockets.delete(socket));socket.on('error',()=>{});socket.once('data',()=>{if(served)return;served=true;let response;if(framing==='chunked')response=chunked(fixture.body);else response=Buffer.concat([fixture.headers,Buffer.from(`Content-Length: ${fixture.body.length}\r\n\r\n`),fixture.body]);socket.end(response);});});
+  const upstreamServer=net.createServer(socket=>{sockets.add(socket);socket.on('close',()=>sockets.delete(socket));socket.on('error',()=>{});socket.once('data',()=>{if(served)return;served=true;let response;if(framing==='chunked')response=chunked(fixture);else response=Buffer.concat([fixture.headers,Buffer.from(`Content-Length: ${fixture.body.length}\r\n\r\n`),fixture.body]);socket.end(response);});});
   await new Promise((ok,no)=>{upstreamServer.once('error',no);upstreamServer.listen(0,'127.0.0.1',ok);});let relay;
   try{
     relay=await startRelay({upstreamPort:upstreamServer.address().port,transform,scenario:{relay_options:{seq:1},...scenario}});

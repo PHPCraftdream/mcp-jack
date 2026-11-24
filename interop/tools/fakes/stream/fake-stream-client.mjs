@@ -141,7 +141,8 @@ const requestOptions = { hostname: url.hostname, port: url.port, path: '/mcp', m
         const wireTs = Number(rawJack[2]);
         if (Math.abs(now() - wireTs) > 30 || wireTs < previousTs) throw Error('stream_stale_frame');
       }
-      const activation = Number(arg('--successor-activation'));
+      const activationArg = arg('--successor-activation');
+      const activation = activationArg === null ? NaN : Number(activationArg);
       if (Number.isSafeInteger(activation) && rawJack && Number(rawJack[2]) >= activation) {
         const rawData = [...block.matchAll(/(?:^|\n)data: ?([^\r\n]*)/g)].map(match => match[1]).join('\n');
         const failureFrame = { kind: 'message', sid: open.sid, kid: open.kid, seq: Number(rawJack[1]), ts: Number(rawJack[2]), data: rawData, sig: rawJack[3] };
