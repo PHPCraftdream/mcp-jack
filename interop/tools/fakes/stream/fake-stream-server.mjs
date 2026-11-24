@@ -11,7 +11,7 @@ const scenario = arg('--scenario'), matrix = arg('--matrix') || 'stream';
 const clockFile = arg('--clock-file'), requestLog = arg('--request-log'), durableDir = arg('--durable-dir');
 const fixtures = JSON.parse(readFileSync(join(root, 'spec/fixtures/keys.json'), 'utf8')).keys;
 const svc = fixtures.find(k => k.name === 'svc'), alice = fixtures.find(k => k.name === 'alice');
-if (arg('--durable-init')) {
+if (process.argv.includes('--durable-init')) {
   if (!durableDir) throw Error('--durable-init requires --durable-dir');
   mkdirSync(durableDir, { recursive: true });
   try { writeFileSync(join(durableDir, 'committed-nonces.json'), '[]', { flag: 'wx' }); }
@@ -84,7 +84,15 @@ process.stdin.on('data', chunk => {
       writeLog({ event: 'rotation_announced', reference: command.reference, kid: erin.kid, published_at: now(), activates_at: activation, head_hash: headHash });
       console.log(JSON.stringify({ announced: true, ordinal: 1, head_ordinal: 1, published_at: now(), activates_at: activation, head_hash: headHash }));
     }
-    if (command?.action === 'release' && heldResponse && heldStream) {
+    if (command?.action === 'release' && scenario === 'rotation-cutoff-reopen' && heldResponse && heldStream && !heldStream.released) {
+      const stream = heldStream;
+      stream.released = true;
+      const end = frame(stream.sid, stream.seq, '', stream.prev);
+      stream.res.end(end.wire); stream.cleanup();
+      heldResponse = null; heldStream = null;
+      console.log(JSON.stringify({ control: 'released', sid: stream.sid }));
+    }
+    if (command?.action === 'release' && scenario !== 'rotation-cutoff-reopen' && heldResponse && heldStream) {
       const stream = heldStream;
       if (!stream.released) {
         stream.released = true;
@@ -270,7 +278,7 @@ const server = http.createServer((req, res) => {
         }
         send(JSON.stringify(msg));
       }
-    } else if (!['idle', 'cancel', 'concurrency-limit', 'durable-live-replay', 'durable-restart-replay', 'oversize'].includes(scenario)) for (const item of payloads[metadataProducer] || []) send(JSON.stringify(item));
+    } else if (!['idle', 'cancel', 'concurrency-limit', 'durable-live-replay', 'durable-restart-replay', 'oversize', 'rotation-cutoff-reopen'].includes(scenario)) for (const item of payloads[metadataProducer] || []) send(JSON.stringify(item));
     if (scenario === 'cancel') { send(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1 } })); return; }
     if (scenario === 'concurrency-limit' || scenario === 'durable-live-replay') {
       const firstMessage = scenario === 'durable-live-replay'
@@ -286,6 +294,16 @@ const server = http.createServer((req, res) => {
     }
     if (scenario === 'durable-restart-replay') {
       send(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1, message: 'stream:first' } }));
+      const end = frame(sid, seq, '', prev); res.end(end.wire); closed = true; active.delete(res); return;
+    }
+    if (scenario === 'rotation-cutoff-reopen') {
+      for (const item of payloads[metadataProducer] || []) send(JSON.stringify(item));
+      const activation = Number(arg('--successor-activation'));
+      if (Number.isSafeInteger(activation) && now() < activation && heldResponse === null) {
+        heldResponse = res;
+        heldStream = { res, frame, sid, seq, prev, requestId, released: false, cleanup: () => { if (closed) return; closed = true; active.delete(res); } };
+        return;
+      }
       const end = frame(sid, seq, '', prev); res.end(end.wire); closed = true; active.delete(res); return;
     }
     if (scenario === 'idle') { res.flushHeaders(); const timer = setTimeout(() => { if (closed || res.destroyed) return; const message = JSON.stringify({ jsonrpc: '2.0', id: requestId, result: {} }); send(message); const end = frame(sid, seq, '', prev); res.end(end.wire); closed = true; active.delete(res); }, Math.max(1, Number(options.idleTimeoutMs || arg('--idle-timeout-ms') || 1000) + 25)); timer.unref(); return; }

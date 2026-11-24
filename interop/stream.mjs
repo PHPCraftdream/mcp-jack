@@ -71,21 +71,26 @@ function makeVerifier(fixtures) {
   const keys = fixtures?.keys;
   const svc = Array.isArray(keys) && keys.find(key => key.name === 'svc');
   if (!svc || typeof svc.kid !== 'string' || typeof svc.public_key !== 'string') usageError('svc fixture missing or invalid');
-  const publicKey = createPublicKey({ key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), b64(svc.public_key, 32, 'svc public key')]), format: 'der', type: 'spki' });
-  function signed(text, signature) { return verify(null, Buffer.from(text, 'utf8'), publicKey, b64(signature, 64, 'signature')); }
+  const keyEntries = ['svc', 'erin'].map(name => {
+    const entry = Array.isArray(keys) && keys.find(key => key.name === name);
+    if (!entry || typeof entry.kid !== 'string' || typeof entry.public_key !== 'string') return null;
+    return { kid: entry.kid, public: createPublicKey({ key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), b64(entry.public_key, 32, `${name} public key`)]), format: 'der', type: 'spki' }) };
+  }).filter(Boolean);
+  function keyFor(kid) { return keyEntries.find(entry => entry.kid === kid) || null; }
+  function signed(kid, text, signature) { const entry = keyFor(kid); if (!entry) throw Error(`unknown signing key ${kid}`); return verify(null, Buffer.from(text, 'utf8'), entry.public, b64(signature, 64, 'signature')); }
   function verifyOpen(open, requestSig) {
-    if (!open || open.kid !== svc.kid || !Number.isSafeInteger(open.ts) || open.ts < 0) throw Error('invalid open fields');
+    if (!open || !keyFor(open.kid) || !Number.isSafeInteger(open.ts) || open.ts < 0) throw Error('invalid open fields');
     b64(open.sid, 16, 'stream sid');
     b64(requestSig, 64, 'request signature');
     const text = ['mcp-jack/stream1/open', '200', requestSig, open.kid, String(open.ts), open.sid].join('\n');
-    if (!signed(text, open.sig)) throw Error('bad open signature');
+    if (!signed(open.kid, text, open.sig)) throw Error('bad open signature');
   }
   function verifyFrame(frame, open, expectedSeq, previousSig) {
     if (!frame || frame.sid !== open.sid || frame.kid !== open.kid || frame.seq !== expectedSeq || !Number.isSafeInteger(frame.ts) || frame.ts < 0 || typeof frame.data !== 'string') throw Error(`invalid frame fields at ${expectedSeq}`);
     const bytes = Buffer.from(frame.data, 'utf8');
     if (bytes.toString('utf8') !== frame.data) throw Error(`invalid UTF-8 at frame ${expectedSeq}`);
     const text = ['mcp-jack/stream1/frame', open.sid, String(expectedSeq), String(frame.ts), previousSig, sha256(bytes)].join('\n');
-    if (!signed(text, frame.sig)) throw Error(`bad frame signature ${expectedSeq}`);
+    if (!signed(open.kid, text, frame.sig)) throw Error(`bad frame signature ${expectedSeq}`);
     if (frame.kind === 'end' && frame.data !== '') throw Error('invalid end frame data');
     if (frame.kind !== 'end' && frame.kind !== 'message' && frame.kind !== 'signal') throw Error('unknown frame kind');
     return frame.sig;
@@ -113,7 +118,7 @@ function makeVerifier(fixtures) {
     b64(requestSig, 64, 'request signature');
     const body = b64(e.body_b64u, undefined, 'v1 body');
     const text = ['mcp-jack/v1/response', String(e.status), requestSig, e.kid, String(e.ts), sha256(body)].join('\n');
-    if (!signed(text, e.sig)) throw Error('bad v1 refusal signature');
+    if (!signed(e.kid, text, e.sig)) throw Error('bad v1 refusal signature');
     let parsed;
     try { parsed = JSON.parse(body.toString('utf8')); } catch { throw Error('v1 refusal body is not JSON'); }
     if (terminal.http_status === 429 && body.toString('utf8') !== JSON.stringify({ jsonrpc: '2.0', id: expectedRequestId, error: { code: -32603, message: 'stream_limit_exceeded' } })) throw Error('429 refusal body is not the exact JSON-RPC stream limit envelope');
@@ -224,10 +229,10 @@ function makeVerifier(fixtures) {
         } else if (line.code !== 'stream_after_cutoff' && frame.seq !== expectedSeq) throw Error('failure frame has unexpected sequence');
         if (line.code === 'stream_bad_signature') {
           const text = ['mcp-jack/stream1/frame', line.open.sid, String(frame.seq), String(frame.ts), previous, sha256(bytes)].join('\n');
-          if (signed(text, frame.sig)) throw Error('bad-signature failure frame unexpectedly verifies');
+          if (signed(line.open.kid, text, frame.sig)) throw Error('bad-signature failure frame unexpectedly verifies');
         } else if (line.code !== 'stream_after_cutoff' && line.code !== 'stream_out_of_order') {
           const text = ['mcp-jack/stream1/frame', line.open.sid, String(frame.seq), String(frame.ts), previous, sha256(bytes)].join('\n');
-          if (!signed(text, frame.sig)) throw Error('failure frame lacks a valid chained signature');
+          if (!signed(line.open.kid, text, frame.sig)) throw Error('failure frame lacks a valid chained signature');
         }
       }
     } else if (verified.count && line.frames_verified !== undefined && line.frames_verified !== verified.count) throw Error('terminal frames_verified mismatch');
@@ -297,8 +302,8 @@ function launchResolved(resolved, args, timeout = 30000) {
   return processInfo;
 }
 async function stopServerClean(info) {
-  if (!info || info.child.exitCode !== null || info.child.signalCode !== null) return;
-  info.child.stdin.end();
+  if (!info) return;
+  if (info.child.exitCode === null && info.child.signalCode === null) info.child.stdin.end();
   const result = await info.done;
   if (result.code !== 0 || result.signal || result.timedOut) throw Error(`server clean stop failed${result.signal ? ` (${result.signal})` : ''}: ${result.stderr}`);
 }
@@ -570,6 +575,7 @@ async function main() {
             let announced;
             try { announced = JSON.parse(await server.nextLine(10000)); } catch { throw Error('rotation server returned invalid announce JSON'); }
             if (announced.announced !== true || announced.ordinal !== 1 || announced.head_ordinal !== 1 || announced.published_at !== now || announced.activates_at !== activation || typeof announced.head_hash !== 'string') throw Error('rotation announce differs from the fixture-bound publish/activation contract');
+            try { b64(announced.head_hash, 32, 'announce head hash'); } catch { throw Error('rotation announce head_hash is not canonical base64url of 32 bytes'); }
           }
           if (scenario.relay && !scenario.rotation) {
             relay = await startRelay({ upstreamPort: ready.port, transform: scenario.relay, scenario: { ...scenario, relayFrame: relayFixtureFrame(scenario.relay) } });
@@ -640,9 +646,16 @@ async function main() {
             if (!firstRequest || firstRequest.nonce !== firstRecord.nonce || firstRequest.request_body_b64u !== firstRecord.request_body_b64u || !isDeepStrictEqual(loggedAuth, capturedAuth) || committedAt < 0 || openedAt < 0 || committedAt >= openedAt || replayAt <= openedAt) throw Error('live replay log does not prove exact authenticated replay after nonce commit and stream_open');
             const stillOpen = await Promise.race([clientProcess.done.then(() => false), new Promise(resolveResult => setTimeout(() => resolveResult(true), 50))]);
               if (!stillOpen) throw Error('first stream ended before live replay response');
+              server.write(`${JSON.stringify({ action: 'release' })}\n`);
+              let releaseAck;
+              try { releaseAck = JSON.parse(await server.nextLine(10000)); } catch { throw Error('server did not acknowledge held-stream release'); }
+              if (releaseAck?.control !== 'released' || (releaseAck.sid !== undefined && releaseAck.sid !== firstRecord.open?.sid)) throw Error('server released-control acknowledgement does not match held stream');
               concurrencyHeld = false;
-              await stopChild(clientProcess);
-              const liveLines = parseJsonLines(clientProcess.stdout);
+              const releasedResult = await clientProcess.done;
+              if (releasedResult.code !== 0) throw Error(`held durable client exit ${releasedResult.code}: ${releasedResult.stderr}`);
+              const liveLines = parseJsonLines(releasedResult.stdout);
+              const liveTerminals = liveLines.filter(record => record?.type === 'terminal');
+              if (liveTerminals.length !== 1 || liveLines.at(-1) !== liveTerminals[0]) throw Error('released durable stream must end with exactly one terminal');
               for (const record of liveLines) verifyRecord(record, scenario.request_id);
             } else {
               const initialRows = readRows(requestLog);
@@ -661,6 +674,12 @@ async function main() {
               const restartCommittedAt = rows.findIndex(row => row.event === 'nonce_committed' && row.request_sig === firstRecord.request_sig && row.nonce === firstRecord.nonce && row.nonce_committed_before_first_byte === true);
               const restartOpenedAt = rows.findIndex(row => row.event === 'stream_open' && row.request_sig === firstRecord.request_sig);
               if (!restartRequest || restartRequest.nonce !== scenario.nonce || restartRequest.request_body_b64u !== firstRecord.request_body_b64u || restartCommittedAt < 0 || restartOpenedAt < 0 || restartCommittedAt >= restartOpenedAt || replayRow <= restartOpenedAt) throw Error('restart replay log does not match exact captured authenticated request and ordered nonce lifecycle');
+              const restarted = await clientProcess.done;
+              if (restarted.code !== 0) throw Error(`restart first client exit ${restarted.code}: ${restarted.stderr}`);
+              const restartLines = parseJsonLines(restarted.stdout);
+              const restartTerminals = restartLines.filter(record => record?.type === 'terminal');
+              if (restartTerminals.length !== 1 || restartLines.at(-1) !== restartTerminals[0]) throw Error('restart first stream must end with exactly one terminal');
+              for (const record of restartLines) verifyRecord(record, scenario.request_id);
               await stopServerClean(server); server = null;
               await stopChild(clientProcess);
             }
@@ -832,7 +851,6 @@ async function main() {
           passed++; pairPassed++;
           console.log(`PASS ${scenario.id}`);
           } catch (error) {
-          if (error.contractGap) { console.error(`CONTRACT GAP ${scenario.id}: ${error.message}`); process.exitCode = 2; throw error; }
           failed++;
           console.log(`FAIL ${scenario.id}: ${error.message}`);
           const last = clientProcess?.lastResult;

@@ -124,7 +124,7 @@ function frameFrom(block, open, previous, expectedSeq) {
   if (!strictB64(sig, 64) || (event === 'message' ? dataValue === '' : dataValue !== '')) throw Error('stream_bad_frame');
   if (Buffer.from(dataValue, 'utf8').toString('utf8') !== dataValue || dataValue.includes('\r')) throw Error('stream_bad_frame');
   const signing = ['mcp-jack/stream1/frame', open.sid, String(seq), String(ts), previous, sha(Buffer.from(dataValue, 'utf8'))].join('\n');
-  if (!verify(null, Buffer.from(signing), pinnedKey, Buffer.from(sig, 'base64url'))) throw Error('stream_bad_signature');
+  if (!verify(null, Buffer.from(signing), verifier.key, Buffer.from(sig, 'base64url'))) throw Error('stream_bad_signature');
   return { kind: event === 'jack-end' ? 'end' : 'message', sid: open.sid, kid: open.kid, seq, ts, data: dataValue, sig };
 }
 function isSignal(data) {
@@ -153,7 +153,7 @@ const requestOptions = { hostname: url.hostname, port: url.port, path: '/mcp', m
       const rawJack = /(?:^|\n)jack: seq=(0|[1-9][0-9]{0,14}),ts=(0|[1-9][0-9]{0,11}),sig=([A-Za-z0-9_-]+)/.exec(block);
       const activationArg = arg('--successor-activation');
       const activation = activationArg === null ? NaN : Number(activationArg);
-      const cutoffApplies = knownServerKeys.length > 0 && !ignoreSuccessor && open.kid !== knownServerKeys.at(-1).kid;
+      const cutoffApplies = knownServerKeys.length > 0 && open.kid !== knownServerKeys.at(-1).kid;
       if (Number.isSafeInteger(activation) && cutoffApplies && rawJack && Number(rawJack[2]) >= activation) {
         const rawData = [...block.matchAll(/(?:^|\n)data: ?([^\r\n]*)/g)].map(match => match[1]).join('\n');
         const failureFrame = { kind: 'message', sid: open.sid, kid: open.kid, seq: Number(rawJack[1]), ts: Number(rawJack[2]), data: rawData, sig: rawJack[3] };
@@ -175,7 +175,7 @@ const requestOptions = { hostname: url.hostname, port: url.port, path: '/mcp', m
       let message; try { message = JSON.parse(frame.data); } catch { throw Error('stream_bad_frame'); }
       const evidenceRequestSig = process.env.JACK_STREAM_FAKE_BAD_EVIDENCE === '1' && !badEvidenceEmitted ? 'invalid-request-signature' : requestSig;
       if (evidenceRequestSig !== requestSig) badEvidenceEmitted = true;
-      console.log(JSON.stringify({ type: 'message', scenario, stream_index: 0, data: frame.data, message, request_sig: evidenceRequestSig, request_ts: requestTs,
+      console.log(JSON.stringify({ type: 'message', scenario, stream_index: 0, data: frame.data, message, request_sig: evidenceRequestSig, request_ts: requestTs, nonce,
         request_method: 'POST', request_target: '/mcp', request_body_b64u: b64(requestBody), request_headers: requestHeaders,
         open, frames: frames.slice() }));
       if (scenario === 'cancel' || arg('--action') === 'cancel') { finish('cancelled', null); response.destroy(); return; }
