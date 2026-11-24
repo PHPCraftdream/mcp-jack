@@ -182,9 +182,7 @@ func FuzzWebhookHeaderAndWireBody(f *testing.F) {
 			default:
 				t.Fatalf("Parse returned invalid message kind %q", message.Kind)
 			}
-			if message.Cursor != nil && !wire.ValidCursor(message.Cursor) {
-				t.Fatalf("Parse returned invalid cursor %q", *message.Cursor)
-			}
+			// Spec 06 R1.3: a received cursor is any string or null; the R8.9 grammar binds the sender, so Parse must not enforce it.
 			original := append([]byte(nil), body...)
 			if !reflect.DeepEqual([]byte(message.Raw), original) {
 				t.Fatalf("Parse did not preserve a raw body copy")
