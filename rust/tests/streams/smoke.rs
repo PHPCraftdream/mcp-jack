@@ -273,7 +273,7 @@ async fn opted_in_modern_request_opens_a_verified_stream() {
 /// 202, without taking a slot or turning the handler's SSE answer into a stream.
 #[tokio::test]
 async fn notification_at_capacity_gets_202_without_stream_slot() {
-    const NOTIFICATION: &[u8] = br#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
+    const NOTIFICATION: &[u8] = br#"{"jsonrpc":"2.0","method":"notifications/initialized","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}"#;
     let now = FIXTURE_NOW;
     let seen = Arc::new(Seen::default());
     let options = StreamOptions {
