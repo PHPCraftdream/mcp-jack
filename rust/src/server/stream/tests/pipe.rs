@@ -208,6 +208,66 @@ fn crlf_handler_output_is_normalised_to_lf() {
 }
 
 #[test]
+fn quiet_cutoff_closes_at_known_cutoff_without_messages() {
+    let signer = signer();
+    let activation = OPEN_TS + 2;
+    let (mut pipe, open) = pipe(&signer, limits(), "tools/call", Some("1"), Some(activation));
+    let mut out = Vec::new();
+    assert!(!pipe.tick(ms(2), &mut out));
+    assert_eq!(pipe.stopped(), Some(PipeStop::Cutoff));
+    let parsed = frames(&out);
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0].kind, FrameKind::End);
+    assert!(parsed[0].ts < activation);
+    assert!(parsed[0].ts >= OPEN_TS);
+    let (messages, terminal, verified_frames) = verified(&open, &out, Some(activation));
+    assert!(messages.is_empty());
+    assert_eq!(terminal, None);
+    assert_eq!(verified_frames, 1);
+}
+
+#[test]
+fn successor_cutoff_announced_after_open_is_applied_to_quiet_stream() {
+    let signer = signer();
+    let (mut pipe, open) = pipe(&signer, limits(), "tools/call", Some("1"), None);
+    let mut out = Vec::new();
+    assert!(pipe.tick(ms(1), &mut out));
+    assert!(pipe.push(format!("data: {NOTIFY}\n\n").as_bytes(), ms(1), &mut out));
+    let activation = OPEN_TS + 3;
+    pipe.update_cutoff(Some(activation));
+    assert!(!pipe.tick(ms(3), &mut out));
+    assert_eq!(pipe.stopped(), Some(PipeStop::Cutoff));
+    let parsed = frames(&out);
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(parsed[0].kind, FrameKind::Message);
+    assert_eq!(parsed[1].kind, FrameKind::End);
+    assert!(parsed[1].ts < activation);
+    assert!(parsed[1].ts >= parsed[0].ts);
+    let (messages, terminal, verified_frames) = verified(&open, &out, Some(activation));
+    assert_eq!(messages, vec![NOTIFY.to_string()]);
+    assert_eq!(terminal, None);
+    assert_eq!(verified_frames, 2);
+}
+
+#[test]
+fn one_push_can_contain_multiple_individually_valid_capped_messages() {
+    let signer = signer();
+    let limits = StreamLimits {
+        frame_max_bytes: MIN_FRAME_MAX_BYTES,
+        ..limits()
+    };
+    let (mut pipe, open) = pipe(&signer, limits, "tools/call", Some("1"), None);
+    let message = "z".repeat(MIN_FRAME_MAX_BYTES);
+    let chunk = format!("data: {message}\n\ndata: {message}\n\n");
+    let mut out = Vec::new();
+    assert!(pipe.push(chunk.as_bytes(), ms(0), &mut out));
+    pipe.finish(ms(1), &mut out);
+    let (messages, terminal, _) = verified(&open, &out, None);
+    assert_eq!(messages, vec![message.clone(), message]);
+    assert_eq!(terminal, None);
+}
+
+#[test]
 fn oversize_handler_message_writes_the_signal_then_the_end() {
     let signer = signer();
     let limits = StreamLimits {
@@ -237,6 +297,45 @@ fn oversize_handler_message_writes_the_signal_then_the_end() {
     assert_eq!(messages, Vec::<String>::new());
     assert_eq!(terminal, Some(StreamCode::FrameTooLarge));
     assert_eq!(frames_verified, 1);
+}
+
+#[test]
+fn oversize_unterminated_data_is_signalled_before_a_line_ends() {
+    let signer = signer();
+    let limits = StreamLimits {
+        frame_max_bytes: MIN_FRAME_MAX_BYTES,
+        ..limits()
+    };
+    let (mut pipe, _open) = pipe(&signer, limits, "tools/call", Some("1"), None);
+    let mut out = Vec::new();
+    let mut chunk = b"data: ".to_vec();
+    chunk.extend(std::iter::repeat_n(b'x', MIN_FRAME_MAX_BYTES + 1));
+    assert!(!pipe.push(&chunk, ms(0), &mut out));
+    assert_eq!(
+        pipe.stopped(),
+        Some(PipeStop::Signal(StreamCode::FrameTooLarge))
+    );
+    assert_eq!(pipe.frames_written(), 2, "signal followed by end");
+    assert!(pipe.reader_memory_bytes() <= MIN_FRAME_MAX_BYTES + 4096);
+}
+
+#[test]
+fn framing_overhead_does_not_consume_data_value_cap() {
+    let signer = signer();
+    let limits = StreamLimits {
+        frame_max_bytes: MIN_FRAME_MAX_BYTES,
+        ..limits()
+    };
+    let (mut pipe, open) = pipe(&signer, limits, "tools/call", Some("1"), None);
+    let mut chunk = b": ignored comment\nunknown: ignored metadata\ndata: ".to_vec();
+    chunk.extend(std::iter::repeat_n(b'x', MIN_FRAME_MAX_BYTES));
+    chunk.extend_from_slice(b"\n\n");
+    let mut out = Vec::new();
+    assert!(pipe.push(&chunk, ms(0), &mut out));
+    pipe.finish(ms(1), &mut out);
+    let (messages, terminal, _) = verified(&open, &out, None);
+    assert_eq!(messages, vec!["x".repeat(MIN_FRAME_MAX_BYTES)]);
+    assert_eq!(terminal, None);
 }
 
 #[test]

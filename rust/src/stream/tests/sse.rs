@@ -48,10 +48,12 @@ fn expected_body_events() -> Vec<SseEvent> {
         SseEvent {
             lines: vec![field(b"data", b"a")],
             end: 11,
+            arrived_at_ms: 0,
         },
         SseEvent {
             lines: vec![field(b"data", b"b")],
             end: 27,
+            arrived_at_ms: 0,
         },
     ]
 }
@@ -92,6 +94,7 @@ fn trailing_cr_is_not_committed_early() {
         vec![SseEvent {
             lines: vec![field(b"data", b"x")],
             end: 10,
+            arrived_at_ms: 2,
         }]
     );
 }
@@ -153,6 +156,7 @@ fn comments_inside_an_event() {
         vec![SseEvent {
             lines: vec![field(b"data", b"a"), field(b"data", b"b")],
             end: 24,
+            arrived_at_ms: 0,
         }]
     );
 }
@@ -173,6 +177,7 @@ fn unknown_fields_and_bare_names() {
         vec![SseEvent {
             lines: vec![field(b"x-unknown", b"v"), field(b"bare", b"")],
             end: 19,
+            arrived_at_ms: 0,
         }]
     );
     // Exactly one SP after the colon is stripped.
@@ -225,6 +230,7 @@ fn finish_commits_a_trailing_cr() {
         vec![SseEvent {
             lines: vec![field(b"data", b"x")],
             end: 9,
+            arrived_at_ms: 0,
         }]
     );
 }
@@ -262,6 +268,102 @@ fn arrival_at_includes_the_bom() {
     assert_eq!(reader.arrival_at(3), 40);
     assert_eq!(reader.arrival_at(11), 40);
     assert_eq!(reader.arrival_at(12), 0);
+}
+
+#[test]
+fn capped_reader_bounds_one_byte_chunks_and_aborts_unterminated_line() {
+    const CAP: usize = 1024 * 1024;
+    let mut reader = SseReader::with_max_pending_bytes(CAP);
+    let mut event = b"data: ".to_vec();
+    event.extend_from_slice(&vec![b'x'; CAP]);
+    event.extend_from_slice(b"\n\n");
+    let mut final_event = Vec::new();
+    for (index, byte) in event.iter().enumerate() {
+        final_event.extend(reader.push(std::slice::from_ref(byte), index as i64));
+        assert!(reader.buffered_bytes() <= CAP + 4096);
+    }
+    assert!(!reader.too_large());
+    assert_eq!(reader.arrival_at(event.len() - 1), (event.len() - 1) as i64);
+    assert_eq!(final_event.len(), 1);
+    assert_eq!(final_event[0].arrived_at_ms, (event.len() - 1) as i64);
+
+    let mut oversized = SseReader::with_max_pending_bytes(CAP + 4096);
+    for _ in 0..(CAP + 4097) {
+        let _ = oversized.push(b"x", 1);
+        if oversized.too_large() {
+            break;
+        }
+    }
+    assert!(
+        oversized.too_large(),
+        "unterminated oversized line must fail immediately"
+    );
+    assert_eq!(oversized.buffered_bytes(), 0);
+}
+
+#[test]
+fn capped_reader_allows_exact_data_cap_with_split_crlf() {
+    let mut reader = SseReader::with_max_pending_bytes(3);
+    assert!(reader.push(b"data: abc\r", 1).is_empty());
+    assert!(!reader.too_large());
+    assert!(reader.push(b"\n\r", 2).is_empty());
+    assert!(!reader.too_large());
+    let events = reader.push(b"\n", 3);
+    assert!(!reader.too_large());
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].lines, vec![field(b"data", b"abc")]);
+    assert_eq!(events[0].arrived_at_ms, 3);
+}
+
+#[test]
+fn capped_reader_counts_partial_data_prefixes_and_join_separators() {
+    let mut reader = SseReader::with_max_pending_bytes(3);
+    assert!(!reader.too_large());
+    assert!(reader.push(b"data", 1).is_empty());
+    assert!(!reader.too_large());
+    assert!(reader.push(b": ab", 2).is_empty());
+    assert!(!reader.too_large());
+    assert!(reader.push(b"c", 3).is_empty());
+    assert!(!reader.too_large());
+    assert!(reader.push(b"\ndata:", 4).is_empty());
+    assert!(!reader.too_large());
+    assert!(reader.push(b" x", 5).is_empty());
+    assert!(
+        reader.too_large(),
+        "joined values include their LF separator"
+    );
+    assert_eq!(reader.buffered_bytes(), 0);
+}
+
+#[test]
+fn capped_reader_preserves_finish_trailing_silence_arrival() {
+    let mut reader = SseReader::with_max_pending_bytes(64);
+    let _ = reader.push(b"data: partial", 17);
+    assert_eq!(reader.arrival_at(reader.total_bytes() - 1), 17);
+    assert_eq!(reader.arrival_at(0), 0);
+    assert_eq!(reader.arrival_at(usize::MAX), 0);
+}
+
+#[test]
+fn capped_reader_attributes_split_crlf_to_later_lf() {
+    let mut reader = SseReader::with_max_pending_bytes(64);
+    assert!(reader.push(b"data: x\r\n\r", 4).is_empty());
+    let events = reader.push(b"\n", 9);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].arrived_at_ms, 9);
+}
+
+#[test]
+fn capped_reader_ignores_non_data_fields_and_comments() {
+    let mut reader = SseReader::with_max_pending_bytes(3);
+    let event = reader.push(
+        b": lengthy comment ignored\nx-unknown: lengthy metadata\ndata: abc\n\n",
+        9,
+    );
+    assert!(!reader.too_large());
+    assert_eq!(event.len(), 1);
+    assert_eq!(event[0].arrived_at_ms, 9);
+    assert_eq!(event[0].lines.last().expect("data").value, b"abc");
 }
 
 #[test]

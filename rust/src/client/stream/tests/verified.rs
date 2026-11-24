@@ -61,6 +61,64 @@ fn data_reads(log: &Arc<Mutex<Vec<String>>>) -> usize {
 }
 
 #[test]
+fn frame_arriving_after_blocking_read_deadline_is_rejected() {
+    use std::sync::Barrier;
+    use std::time::Instant;
+
+    struct BlockingBody {
+        entered: Arc<Barrier>,
+        release: Arc<Barrier>,
+        bytes: Vec<u8>,
+    }
+    impl crate::client::stream::StreamBody for BlockingBody {
+        fn next_chunk(
+            &mut self,
+            _deadline: Instant,
+        ) -> Result<crate::client::stream::ChunkRead, TransportError> {
+            self.entered.wait();
+            self.release.wait();
+            Ok(crate::client::stream::ChunkRead::Data(self.bytes.clone()))
+        }
+    }
+
+    let (mut builder, open) = open_builder(REQUEST_SIG, OPEN_TS);
+    let bytes = frame_bytes(&mut builder, OPEN_TS, MSG_A);
+    let clock = Arc::new(std::sync::atomic::AtomicI64::new(0));
+    let entered = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let response = crate::client::stream::StreamResponse {
+        status: 200,
+        headers: stream_headers(open.jack_auth),
+        body: Box::new(BlockingBody {
+            entered: Arc::clone(&entered),
+            release: Arc::clone(&release),
+            bytes,
+        }),
+    };
+    let mut config = config(&[OPEN_TS]);
+    config.stream_idle_ms = 100;
+    let stream = VerifiedStream::from_response(response, config)
+        .expect("the fixture open header verifies")
+        .with_millis_clock({
+            let clock = Arc::clone(&clock);
+            Box::new(move || clock.load(Ordering::SeqCst))
+        });
+    let reader = std::thread::spawn(move || {
+        let mut stream = stream;
+        stream.next()
+    });
+    entered.wait();
+    // The read is blocked under test control; advance the clock before it returns.
+    clock.store(101, Ordering::SeqCst);
+    release.wait();
+    assert_eq!(
+        reader.join().expect("reader thread"),
+        Some(Err(StreamFailure::new(StreamCode::Idle, 0))),
+        "the frame is late based on its arrival after the blocking read"
+    );
+}
+
+#[test]
 fn clean_stream_delivers_messages_then_none() {
     let (mut builder, _) = open_builder(REQUEST_SIG, OPEN_TS);
     let mut bytes = frame_bytes(&mut builder, OPEN_TS, MSG_A);

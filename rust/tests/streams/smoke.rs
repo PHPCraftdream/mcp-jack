@@ -102,6 +102,10 @@ fn server_signing_key() -> SigningKey {
 }
 
 fn layer(profile: Profile, now: i64) -> StreamLayer {
+    layer_with_options(profile, now, StreamOptions::default())
+}
+
+fn layer_with_options(profile: Profile, now: i64, streams: StreamOptions) -> StreamLayer {
     let state = MemoryState::new();
     seed_registry(&state);
     StreamLayer::new(StreamConfig {
@@ -109,7 +113,7 @@ fn layer(profile: Profile, now: i64) -> StreamLayer {
         server_key: server_signing_key(),
         max_body_bytes: 0,
         max_response_bytes: 0,
-        streams: StreamOptions::default(),
+        streams,
     })
     .with_profile(profile)
 }
@@ -265,7 +269,73 @@ async fn opted_in_modern_request_opens_a_verified_stream() {
     );
 }
 
-/// 1.1: without the opt-in the same handler answer keeps the v1 signed 501.
+/// 3.8: a notification at a full stream limit reaches the handler and gets
+/// 202, without taking a slot or turning the handler's SSE answer into a stream.
+#[tokio::test]
+async fn notification_at_capacity_gets_202_without_stream_slot() {
+    const NOTIFICATION: &[u8] = br#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
+    let now = FIXTURE_NOW;
+    let seen = Arc::new(Seen::default());
+    let options = StreamOptions {
+        max_concurrent_streams: 1,
+        ..StreamOptions::default()
+    };
+    let layer = layer_with_options(Profile::Modern, now, options);
+    let registry = layer.registry();
+    let held = registry
+        .try_acquire("alice", 1)
+        .expect("occupy alice's only stream slot");
+    let service = layer.layer(inner(Arc::clone(&seen)));
+    let alice = harness::signer_by_name("alice");
+    let n = NONCE_COUNTER.fetch_add(1, Ordering::SeqCst) + 1;
+    let mut nonce = [0u8; 16];
+    nonce[8..].copy_from_slice(&n.to_be_bytes());
+    let signed = sign_request(
+        &alice,
+        FIXTURE_AUD,
+        "POST",
+        "/mcp",
+        NOTIFICATION,
+        &nonce,
+        now,
+    )
+    .unwrap_or_else(|e| panic!("sign_request: {e}"));
+    let request = http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("Jack-Auth", signed.header_value.as_str())
+        .header("Jack-Accept", "s1")
+        .header("MCP-Protocol-Version", "2026-07-28")
+        .header("Mcp-Method", "notifications/initialized")
+        .header("Content-Type", "application/json")
+        .body(Full::new(Bytes::from_static(NOTIFICATION)))
+        .expect("notification request");
+
+    let response = service.oneshot(request).await.expect("no inner error");
+    assert_eq!(response.status().as_u16(), 202);
+    assert_eq!(
+        response
+            .headers()
+            .get("Content-Type")
+            .and_then(|value| value.to_str().ok()),
+        Some("application/json")
+    );
+    let auth = response
+        .headers()
+        .get("Jack-Auth")
+        .and_then(|value| value.to_str().ok())
+        .expect("202 is signed");
+    assert!(auth.starts_with("v1 "), "notification has no stream opener");
+    assert!(body_bytes(response.into_body()).await.is_empty());
+    assert_eq!(
+        seen.calls.load(Ordering::SeqCst),
+        1,
+        "handler ran despite capacity"
+    );
+    assert_eq!(registry.active("alice"), 1, "notification took no slot");
+    drop(held);
+}
+
 #[tokio::test]
 async fn request_without_opt_in_keeps_the_501() {
     let now = FIXTURE_NOW;

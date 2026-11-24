@@ -29,6 +29,34 @@ use super::wire::error_body;
 use super::{BodyReadError, BoxError, JackService};
 use crate::server::verify::VerifyResult;
 
+/// Whether a body is a JSON-RPC request (with an id) or notification (without
+/// one), for the stream-admission decision in spec 05 section 3.8.
+fn rpc_request_kind(body: &[u8]) -> (bool, bool) {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return (false, false);
+    };
+    let Some(object) = value.as_object() else {
+        return (false, false);
+    };
+    if object.get("jsonrpc").and_then(serde_json::Value::as_str) != Some("2.0")
+        || object
+            .get("method")
+            .and_then(serde_json::Value::as_str)
+            .is_none()
+    {
+        return (false, false);
+    }
+    if let Some(id) = object.get("id") {
+        if id.is_null() {
+            (false, true)
+        } else {
+            (true, false)
+        }
+    } else {
+        (false, true)
+    }
+}
+
 impl<S, ResBody> JackService<S>
 where
     S: Service<http::Request<Full<Bytes>>, Response = http::Response<ResBody>>
@@ -102,12 +130,20 @@ where
                 parts.headers.append(name, value);
             }
         }
-        // 3.3: the per-identity ceiling is checked BEFORE the inner service runs, so an already
-        // consumed nonce is not spent on a stream that can never start. The slot stays in the
-        // seam; `StreamService` releases it whenever no stream is produced.
-        if let Some(seam) = &seam {
-            if modern && !head && !seam.admit(identity.name()) {
-                return Ok(self.stream_limit(res, head));
+        let (json_rpc_request, notification) = rpc_request_kind(&body);
+        let stream_opted_in =
+            seam.is_some() && modern && !head && parts.method == http::Method::POST;
+        let stream_request = stream_opted_in
+            && json_rpc_request
+            && res.rpc_id.as_deref().is_some_and(|id| id.trim() != "null");
+        // 3.3: reserve capacity only for a request shape that 3.8 permits to
+        // stream, before invoking the handler. Notifications and other body
+        // kinds cannot consume a slot or receive a capacity refusal.
+        if stream_request {
+            if let Some(seam) = &seam {
+                if !seam.admit(identity.name()) {
+                    return Ok(self.stream_limit(res, head));
+                }
             }
         }
         let mut inner_req = http::Request::from_parts(parts, Full::new(body));
@@ -135,12 +171,16 @@ where
             .and_then(|v| v.split(';').next())
             .is_some_and(|media| media.trim().eq_ignore_ascii_case("text/event-stream"));
         if streaming {
-            // 1.1/1.2/3.8: only an opted-in, modern, non-HEAD request that carries a JSON-RPC
-            // id may open a signed stream; every other shape keeps the v1 501 below.
-            // 1.4: a stream exists only when the response status is 200, so any other status
-            // keeps that signed 501 path and drops the seam's 3.3 slot as today.
-            if let Some(seam) = seam {
-                if let (true, false, Some(_)) = (modern, head, res.rpc_id.as_ref()) {
+            // 3.8: an opted-in notification gets 202 regardless of the
+            // handler's SSE response. It is not a stream and holds no slot.
+            if stream_opted_in && notification {
+                return Ok(self.signed(head, 202, res, Bytes::new()));
+            }
+            // 1.1/1.2/3.8: only an opted-in, modern, non-HEAD request with a
+            // JSON-RPC id may open a signed stream; every other shape keeps
+            // the v1 501 below. 1.4 requires status 200.
+            if stream_request {
+                if let Some(seam) = seam {
                     if inner_parts.status == http::StatusCode::OK {
                         return Ok(self.open_stream(res, inner_parts, inner_body, method, &seam));
                     }

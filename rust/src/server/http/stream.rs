@@ -173,7 +173,8 @@ pub(crate) struct StreamWork {
     limits: StreamLimits,
     request_id: Option<String>,
     method: String,
-    cutoff: Option<i64>,
+    /// The key cutoff is re-read while the stream is live.
+    cutoff: Box<dyn Fn() -> Option<i64> + Send + Sync>,
     signer: Arc<dyn StreamSigner>,
     clock: Clock,
     release: Option<ReleaseGuard>,
@@ -230,6 +231,54 @@ fn block_on_until<F: Future>(future: F, deadline: Option<Instant>) -> Option<F::
             }
         }
     }
+}
+
+fn earliest_deadline(
+    now: Instant,
+    wake_ms: u64,
+    duration: Option<Instant>,
+    cutoff: Option<Instant>,
+) -> Instant {
+    let wake = now.checked_add(Duration::from_millis(wake_ms));
+    [wake, duration, cutoff]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(now)
+}
+
+/// Polling cancellation at short intervals also detects a peer-close flag without requiring a
+/// wake-up from the channel future.
+fn block_on_until_or_cancelled<F: Future>(
+    future: F,
+    deadline: Instant,
+    cancellation: &AtomicBool,
+) -> Option<F::Output> {
+    let mut future = Box::pin(future);
+    let waker = Waker::from(Arc::new(ThreadWaker(std::thread::current())));
+    let mut cx = Context::from_waker(&waker);
+    loop {
+        if cancellation.load(Ordering::SeqCst) {
+            return None;
+        }
+        if let Poll::Ready(output) = future.as_mut().poll(&mut cx) {
+            return Some(output);
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return None;
+        }
+        std::thread::park_timeout((deadline - now).min(Duration::from_millis(1)));
+    }
+}
+
+/// Polls the final end send once. The slot must be released even if the receiver has stopped
+/// draining, so the terminal frame is best-effort rather than another bounded wait.
+fn try_send_data(tx: &mut Sender<Bytes, std::convert::Infallible>, chunk: Bytes) {
+    let waker = Waker::from(Arc::new(ThreadWaker(std::thread::current())));
+    let mut cx = Context::from_waker(&waker);
+    let mut send = Box::pin(tx.send_data(chunk));
+    let _ = send.as_mut().poll(&mut cx);
 }
 
 /// A deadline-free wait: the signalled future always completes.
@@ -297,12 +346,10 @@ where
         let open_ts = (clock)();
 
         let mut release: Option<ReleaseGuard> = None;
-        let (signer, open_sig, jack_auth, cutoff): (
-            Arc<dyn StreamSigner>,
-            String,
-            String,
-            Option<i64>,
-        ) = match &self.signing {
+        let mut live_cutoff: Box<dyn Fn() -> Option<i64> + Send + Sync> = Box::new(|| None);
+        let (signer, open_sig, jack_auth): (Arc<dyn StreamSigner>, String, String) = match &self
+            .signing
+        {
             SigningProfile::Static { key, kid } => {
                 // 3.1: the open header and every frame use the same static key.
                 let signer: Arc<dyn StreamSigner> =
@@ -312,7 +359,7 @@ where
                 else {
                     return self.internal(res, false);
                 };
-                (signer, open.sig, open.jack_auth, None)
+                (signer, open.sig, open.jack_auth)
             }
             SigningProfile::Rotating { keys } => {
                 let input = ResponseKeyRequest {
@@ -399,13 +446,14 @@ where
                     sig: open_sig.clone(),
                 });
                 // 5.1: the successor activation of the opening key, when the provider knows it.
-                let cutoff = keys.successor_activation(&kid);
+                let cutoff_keys = Arc::clone(keys);
+                let cutoff_kid = kid.clone();
+                live_cutoff = Box::new(move || cutoff_keys.successor_activation(&cutoff_kid));
                 release = Some(guard);
                 (
                     Arc::new(RotationStreamSigner(response_signer)),
                     open_sig,
                     jack_auth,
-                    cutoff,
                 )
             }
         };
@@ -423,7 +471,7 @@ where
             limits: seam.limits,
             request_id: res.rpc_id.clone(),
             method,
-            cutoff,
+            cutoff: live_cutoff,
             signer,
             clock,
             release,
@@ -502,6 +550,7 @@ fn pump(work: StreamWork, mut tx: Sender<Bytes, std::convert::Infallible>) {
         epoch_ms
             .saturating_add(i64::try_from(pump_started.elapsed().as_millis()).unwrap_or(i64::MAX))
     };
+    let mut cutoff_value = cutoff();
     let mut pipe = StreamPipe::new(StreamPipeConfig {
         sid,
         open_sig,
@@ -509,7 +558,7 @@ fn pump(work: StreamWork, mut tx: Sender<Bytes, std::convert::Infallible>) {
         limits,
         request_id,
         method,
-        cutoff,
+        cutoff: cutoff_value,
         started_ms: epoch_ms,
         signer,
     });
@@ -519,15 +568,21 @@ fn pump(work: StreamWork, mut tx: Sender<Bytes, std::convert::Infallible>) {
     let mut out = Vec::new();
     loop {
         let now = Instant::now();
-        let deadline = now
-            .checked_add(Duration::from_millis(wake_ms))
-            .map(|heartbeat_deadline| {
-                duration_deadline.map_or(heartbeat_deadline, |duration| {
-                    heartbeat_deadline.min(duration)
-                })
-            })
-            .or(duration_deadline);
-        let timeout_at_duration = duration_deadline.is_some_and(|duration| now >= duration);
+        cutoff_value = cutoff();
+        pipe.update_cutoff(cutoff_value);
+        let cutoff_deadline = cutoff_value.and_then(|activation| {
+            let activation_ms = activation.saturating_mul(1000);
+            // Reserve a full timestamp second for the signed end frame and its
+            // channel handoff, rather than waking at the already-active key.
+            let close_ms = activation_ms.saturating_sub(1000);
+            let remaining_ms = close_ms.saturating_sub(now_ms());
+            now.checked_add(Duration::from_millis(
+                u64::try_from(remaining_ms).unwrap_or(0),
+            ))
+        });
+        let deadline = earliest_deadline(now, wake_ms, duration_deadline, cutoff_deadline);
+        let timeout_at_duration = duration_deadline.is_some_and(|duration| now >= duration)
+            || cutoff_deadline.is_some_and(|cutoff| now >= cutoff);
         let running = if timeout_at_duration {
             let running = pipe.tick(now_ms(), &mut out);
             if running && out.is_empty() {
@@ -535,7 +590,7 @@ fn pump(work: StreamWork, mut tx: Sender<Bytes, std::convert::Infallible>) {
             }
             running
         } else {
-            match inner.next_chunk(deadline) {
+            match inner.next_chunk(Some(deadline)) {
                 ChunkOutcome::Data(bytes) => {
                     let now_ms = now_ms();
                     pipe.push(&bytes, now_ms, &mut out)
@@ -555,8 +610,10 @@ fn pump(work: StreamWork, mut tx: Sender<Bytes, std::convert::Infallible>) {
         };
         if !out.is_empty() {
             let chunk = Bytes::from(std::mem::take(&mut out));
-            // The transport closed the channel: the client is gone (3.7).
-            if block_on(tx.send_data(chunk)).is_err() {
+            let send_deadline = deadline;
+            if block_on_until_or_cancelled(tx.send_data(chunk), send_deadline, &cancellation)
+                .is_none_or(|result| result.is_err())
+            {
                 break;
             }
         }
@@ -569,13 +626,12 @@ fn pump(work: StreamWork, mut tx: Sender<Bytes, std::convert::Infallible>) {
     pipe.finish(now_ms, &mut out);
     if !out.is_empty() {
         let chunk = Bytes::from(std::mem::take(&mut out));
-        let _ = block_on(tx.send_data(chunk));
+        try_send_data(&mut tx, chunk);
     }
     // 3.7: the handler observes the cancelled request context when its body is dropped below.
     cancellation.store(true, Ordering::SeqCst);
 }
 
-/// 6.3: the JSON-RPC method of the opening request, "" when the body is not an object.
 pub(super) fn rpc_method(body: &[u8]) -> String {
     #[derive(serde::Deserialize)]
     struct RequestMethod<'a> {
@@ -585,5 +641,130 @@ pub(super) fn rpc_method(body: &[u8]) -> String {
     match serde_json::from_slice::<RequestMethod<'_>>(body) {
         Ok(request) => request.method.unwrap_or_default().to_owned(),
         Err(_) => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::stream::StreamOptions;
+
+    struct TwoChunkSource(usize);
+
+    impl ChunkSource for TwoChunkSource {
+        fn next_chunk(&mut self, _deadline: Option<Instant>) -> ChunkOutcome {
+            if self.0 == 2 {
+                return ChunkOutcome::End;
+            }
+            self.0 += 1;
+            ChunkOutcome::Data(Bytes::from_static(b"data: {\"ok\":true}\n\n"))
+        }
+    }
+
+    #[test]
+    fn pump_blocked_capacity_one_send_observes_duration_and_releases_slot() {
+        use ed25519_dalek::SigningKey;
+
+        let registry = Arc::new(StreamRegistry::new());
+        let slot = registry.try_acquire("identity", 1).expect("slot");
+        let (tx, _body) = Channel::<Bytes, std::convert::Infallible>::new(1);
+        let seed = [
+            0xcc, 0x9e, 0x39, 0xe8, 0x30, 0xa4, 0x3e, 0x09, 0xc6, 0x37, 0x2b, 0x14, 0x85, 0x2e,
+            0xf8, 0x0a, 0x2b, 0xb8, 0xe7, 0xb1, 0xaa, 0x4c, 0x04, 0xbf, 0x07, 0x6f, 0x33, 0xe0,
+            0xaa, 0xd2, 0xc9, 0x01,
+        ];
+        let concrete_signer =
+            Arc::new(StaticStreamSigner::new(SigningKey::from_bytes(&seed), None));
+        let signer: Arc<dyn StreamSigner> = concrete_signer.clone();
+        let open = StreamBuilder::open(
+            200,
+            "OsOug0yCJZPIkJ5Huk2UcIxlstzaz4b22EBRHfQHO0YgoHkDflI7kNPpSGO4HzueDASfxlEQRL1Kt45PN0pfBw",
+            "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88",
+            1_767_225_600,
+            "q9nUNYuH-Xf_cgJBVu4_Dg",
+            concrete_signer.as_ref(),
+        )
+        .expect("static signer creates a valid open header")
+        .1;
+        let limits = StreamLimits {
+            max_stream_duration_ms: 30,
+            ..StreamOptions::default().limits(30)
+        };
+        let cancellation = Arc::new(AtomicBool::new(false));
+        let work = StreamWork {
+            inner: Box::new(TwoChunkSource(0)),
+            sid: "q9nUNYuH-Xf_cgJBVu4_Dg".to_string(),
+            open_sig: open.sig,
+            open_ts: 1_767_225_600,
+            limits,
+            request_id: None,
+            method: "GET".to_string(),
+            cutoff: Box::new(|| None),
+            signer,
+            clock: Arc::new(|| 1_767_225_600),
+            release: None,
+            slot,
+            cancellation: Arc::clone(&cancellation),
+        };
+        let (completed_tx, completed_rx) = std::sync::mpsc::channel();
+        let pump_thread = std::thread::spawn(move || {
+            pump(work, tx);
+            let _ = completed_tx.send(());
+        });
+
+        completed_rx
+            .recv_timeout(Duration::from_millis(250))
+            .expect("pump must stop at the duration despite the undrained response");
+        pump_thread.join().expect("pump thread must finish");
+        assert!(
+            cancellation.load(Ordering::SeqCst),
+            "pump must cancel the request"
+        );
+        assert_eq!(registry.active("identity"), 0, "pump must release its slot");
+    }
+
+    #[test]
+    fn blocked_capacity_one_send_is_bounded_by_cutoff() {
+        let registry = Arc::new(StreamRegistry::new());
+        let slot = registry.try_acquire("identity", 1).expect("slot");
+        let (mut tx, _body) = Channel::<Bytes, std::convert::Infallible>::new(1);
+        block_on(tx.send_data(Bytes::from_static(b"occupies capacity"))).expect("first frame fits");
+        let now = Instant::now();
+        let cutoff = now;
+        let duration = now + Duration::from_secs(60);
+        let deadline = earliest_deadline(now, MAX_WAKE_MS, Some(duration), Some(cutoff));
+        assert_eq!(deadline, cutoff, "cutoff must bound a blocked send");
+        assert!(block_on_until_or_cancelled(
+            tx.send_data(Bytes::from_static(b"blocked")),
+            deadline,
+            &AtomicBool::new(false),
+        )
+        .is_none());
+        drop(slot);
+        assert_eq!(registry.active("identity"), 0);
+    }
+    #[test]
+    fn final_end_send_is_best_effort_and_slot_releases_with_full_channel() {
+        let registry = Arc::new(StreamRegistry::new());
+        let slot = registry.try_acquire("identity", 1).expect("slot");
+        let (mut tx, _body) = Channel::<Bytes, std::convert::Infallible>::new(1);
+        block_on(tx.send_data(Bytes::from_static(b"occupies capacity"))).expect("first frame fits");
+
+        try_send_data(&mut tx, Bytes::from_static(b"final end"));
+        drop(slot);
+        assert_eq!(registry.active("identity"), 0);
+    }
+
+    #[test]
+    fn blocked_capacity_one_send_stops_on_cancellation() {
+        let (mut tx, _body) = Channel::<Bytes, std::convert::Infallible>::new(1);
+        block_on(tx.send_data(Bytes::from_static(b"occupies capacity"))).expect("first frame fits");
+        let cancellation = AtomicBool::new(true);
+        assert!(block_on_until_or_cancelled(
+            tx.send_data(Bytes::from_static(b"blocked")),
+            Instant::now() + Duration::from_secs(60),
+            &cancellation,
+        )
+        .is_none());
     }
 }

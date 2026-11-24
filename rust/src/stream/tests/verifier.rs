@@ -461,6 +461,43 @@ fn frame_ts_rules() {
 }
 
 #[test]
+fn completed_event_precedes_oversized_unterminated_data_line_in_same_push() {
+    let mut config = config(&[OPEN_TS, OPEN_TS]);
+    config.frame_max_bytes = 1024;
+    let mut verifier = started(config);
+    let frame = wires(&[(OPEN_TS, MSG_A)]).concat();
+    let oversized_line = format!("data: {}", "x".repeat(1025));
+    let chunk = format!("{frame}{oversized_line}");
+
+    let step = verifier.push(chunk.as_bytes(), 0);
+
+    assert_eq!(step.messages, vec![MSG_A]);
+    let failure = step
+        .terminal
+        .expect("oversized incomplete line is terminal");
+    assert_eq!(failure.code, FrameTooLarge);
+    assert_eq!(failure.frames_verified, 1);
+    assert_eq!(verifier.frames_verified(), 1);
+}
+
+#[test]
+fn oversized_unterminated_line_fails_incrementally_as_frame_too_large() {
+    let mut config = config(&[OPEN_TS]);
+    config.frame_max_bytes = 1024;
+    let mut verifier = started(config);
+    let mut terminal = None;
+    for _ in 0..(1024 + 4097) {
+        let step = verifier.push(b"x", 0);
+        if step.terminal.is_some() {
+            terminal = step.terminal;
+            break;
+        }
+    }
+    assert_eq!(terminal.map(|failure| failure.code), Some(FrameTooLarge));
+    assert_eq!(verifier.frames_verified(), 0);
+}
+
+#[test]
 fn frame_cutoff_rules() {
     // A frame at the cutoff.
     let input = [(OPEN_TS, MSG_A), (OPEN_TS + 1, MSG_B)];
