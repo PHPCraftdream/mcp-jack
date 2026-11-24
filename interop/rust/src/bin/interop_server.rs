@@ -27,6 +27,10 @@ mod durable;
 #[path = "webhook/receiver.rs"]
 mod webhook_receiver;
 
+#[allow(dead_code)]
+#[path = "stream/mod.rs"]
+mod stream;
+
 use mcp_jack::encoding::{decode_b64url, decode_b64url_fixed, encode_b64url, key_id};
 use mcp_jack::server::http::{HandlerConfig, JackLayer};
 use mcp_jack::server::native::{bootstrap_admin, Native, NativeOptions};
@@ -248,6 +252,9 @@ fn main() {
     }
     if webhook_receiver::mode_from_args().as_deref() == Some("webhook-receiver") {
         webhook_receiver::run_mode();
+    }
+    if stream::mode_from_args().as_deref() == Some("stream-server") {
+        stream::run_server();
     }
     // Rotation dispatch happens before the runtime: rotation-server builds
     // its own tokio runtime and must not run inside block_on.

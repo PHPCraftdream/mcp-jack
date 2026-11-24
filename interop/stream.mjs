@@ -725,8 +725,15 @@ async function main() {
             if (record.data === undefined && record.message === undefined) throw Error('message line lacks verified data');
           }
           const terminalCheck = verifyRecord(terminalRecords[0], scenario.request_id);
-          const logText = existsSync(requestLog) ? readFileSync(requestLog, 'utf8') : '';
-          const logRows = logText.split(/\r?\n/).filter(Boolean).map((line, index) => { try { return JSON.parse(line); } catch { throw Error(`request log line ${index + 1} is invalid JSON`); } });
+          const readLogRows = () => (existsSync(requestLog) ? readFileSync(requestLog, 'utf8') : '').split(/\r?\n/).filter(Boolean).map((line, index) => { try { return JSON.parse(line); } catch { throw Error(`request log line ${index + 1} is invalid JSON`); } });
+          let logRows = readLogRows();
+          // The server appends duration_elapsed after the SDK closes the stream; the client can exit first.
+          if (scenario.id === 'max-duration') {
+            for (let waited = 0; waited < 3000 && !logRows.some(row => row.event === 'duration_elapsed' || row.duration_elapsed === true); waited += 50) {
+              await new Promise(resolveWait => setTimeout(resolveWait, 50));
+              logRows = readLogRows();
+            }
+          }
           if (scenario.id === 'max-duration') {
             const changedAt = logRows.findIndex(row => row.event === 'clock_changed' || row.event === 'clock_observed' && row.clock_changed === true);
             const elapsedAt = logRows.findIndex(row => row.event === 'duration_elapsed' || row.duration_elapsed === true);
