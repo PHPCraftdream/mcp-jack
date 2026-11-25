@@ -302,7 +302,15 @@ export async function runCellFlow(ctx) {
   // Applies to the tamper variant too: the tampered bytes are the 501 body, which is itself the
   // known limitation. Skipped only via --allow-skip-ts-server (fail by default, see runCell).
   const firstCapture = proxy.captures[0];
-  if (server === 'ts' && firstCapture && firstCapture.status === 501 && /streaming_unsupported/.test(firstCapture.response_body ?? '')) {
+  const req = firstCapture ? parseJsonOr(firstCapture.request_body) : null;
+  const res = firstCapture ? parseJsonOr(firstCapture.response_body) : null;
+  if (
+    server === 'ts' &&
+    firstCapture &&
+    firstCapture.status === 501 &&
+    req && req.method === 'initialize' &&
+    res && res.error && res.error.code === 'streaming_unsupported'
+  ) {
     throw new KnownLimit('official TS server 2.4.0 answered initialize with text/event-stream (200) despite responseMode json; the gateway refuses SSE by design with a signed 501 streaming_unsupported');
   }
 
@@ -369,13 +377,7 @@ export async function runCell(opts) {
     if (!fcl.ok) reasons.push(`${client} client fixture unavailable: ${fcl.reason}`);
     if (!fsv.ok) reasons.push(`${server} server fixture unavailable: ${fsv.reason}`);
     const text = reasons.join('; ');
-    // Skip is reserved for the known TS-server limitation and only via the opt-in flag.
-    if (allowSkipTsServer && server === 'ts') {
-      chk.note(`SKIP (allowed by --allow-skip-ts-server): ${text}`);
-      g4.skipped = true;
-      return { name, result: 'SKIP', details: chk.lines(), g4, tamper };
-    }
-    chk.bad(`cell cannot run${server === 'ts' ? ' (pass --allow-skip-ts-server to skip TS-server cells)' : ''}: ${text}`);
+    chk.bad(`cell cannot run: ${text}`);
     return { name, result: 'FAIL', details: chk.lines(), g4, tamper };
   }
 
