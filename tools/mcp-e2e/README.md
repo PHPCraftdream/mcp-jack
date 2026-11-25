@@ -32,11 +32,13 @@ and building from exactly these declarations.
 
 ## Lockfiles
 
-`go/go.sum`, `ts/package-lock.json`, and `rust/Cargo.lock` are intentionally
-absent; the parent generates and commits them in CI (`go mod tidy` inside
-`tools/mcp-e2e/go`, `npm install --package-lock-only` inside `tools/mcp-e2e/ts`,
-`cargo generate-lock` inside `tools/mcp-e2e/rust`). The driver and the CI job
-fail clearly while they are missing; never hand-write lockfile contents.
+`go/go.sum`, `ts/package-lock.json`, and `rust/Cargo.lock` are committed, and CI
+builds from exactly these lockfiles using frozen installs: `go mod download`,
+`npm ci`, and `cargo build --locked --release`. CI fails if any lockfile is
+missing. Lockfiles are regenerated in CI only, never on a developer machine, with
+`go mod tidy` inside `tools/mcp-e2e/go`, `npm install --package-lock-only` inside
+`tools/mcp-e2e/ts`, and `cargo generate-lock` inside `tools/mcp-e2e/rust`; the
+owner commits the results afterwards. Never hand-edit lockfiles.
 
 ## How CI runs it
 
