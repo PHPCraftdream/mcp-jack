@@ -46,7 +46,7 @@ walk_go_candidates() {
     ((count+=1)); ((count>10)) && break
     [[ $tag == v* ]] || continue
     ver=$tag
-    printf 'module pins-bootstrap\n\ngo 1.25\n\nrequire github.com/modelcontextprotocol/go-sdk %s\n' "$ver" >"$work/go/go.mod"
+    printf 'module mcp-jack.e2e-modern/go\n\ngo 1.25\n\nrequire github.com/modelcontextprotocol/go-sdk %s\n' "$ver" >"$work/go/go.mod"
     [[ -s $work/go/go.mod ]] || { required_fail "go-manifest-$count" 'go.mod missing'; break; }
     if ! logrun "go-download-$count" bash -c 'cd "$1" && go mod download' _ "$work/go"; then [[ $count == 1 ]] && { latest_status=unknown; latest_reason=download_failed; latest_kind=unknown; }; optional_gap "go-download-$count" 'download failed'; continue; fi
     local dirjson="$out/logs/go-modjson-$count.json" dirjson_err="$out/logs/go-modjson-$count.err" dir
@@ -66,7 +66,7 @@ walk_go_candidates() {
     break
   done
   if [[ $selected_status == unknown ]]; then optional_gap go-fallback 'no protocol-support candidate could be verified'; fi
-  printf 'module pins-bootstrap\n\ngo 1.25\n\nrequire github.com/modelcontextprotocol/go-sdk %s\n' "$selected" >"$work/go/go.mod"
+  printf 'module mcp-jack.e2e-modern/go\n\ngo 1.25\n\nrequire github.com/modelcontextprotocol/go-sdk %s\n' "$selected" >"$work/go/go.mod"
   [[ -s $work/go/go.mod ]] || { required_fail go-lock-manifest 'go.mod missing'; return; }
   if logrun go-lock bash -c 'cd "$1" && go mod download' _ "$work/go"; then
     require_file "$work/go/go.mod" "$out/go/go.mod" go-mod-copy && require_file "$work/go/go.sum" "$out/go/go.sum" go-sum-copy && go_locks_ok=true
@@ -192,7 +192,7 @@ write_ts_lock() {
     if [[ -z $version ]]; then required_fail ts-lock "selected $name truth file version empty"; return; fi
     case $name in client) client=$version ;; server) server=$version ;; node) node=$version ;; esac
   done
-  jq -n --arg c "$client" --arg s "$server" --arg n "$node" '{name:"pins-bootstrap",private:true,dependencies:{"@modelcontextprotocol/client":$c,"@modelcontextprotocol/server":$s,"@modelcontextprotocol/node":$n}}' >"$work/ts/package.json"
+  jq -n --arg c "$client" --arg s "$server" --arg n "$node" '{name:"mcp-jack-e2e-modern-ts",private:true,version:"0.0.0",type:"module",dependencies:{"@modelcontextprotocol/client":$c,"@modelcontextprotocol/server":$s,"@modelcontextprotocol/node":$n}}' >"$work/ts/package.json"
   validate ts-lock-manifest "$work/ts/package.json" || return
   if logrun ts-lock bash -c 'cd "$1" && npm install --no-audit --no-fund' _ "$work/ts"; then
     require_file "$work/ts/package.json" "$out/ts/package.json" ts-package-copy && require_file "$work/ts/package-lock.json" "$out/ts/package-lock.json" ts-lock-copy && ts_locks_ok=true
@@ -234,7 +234,7 @@ write_summary() {
   set_report --argjson go_locks "$go_locks_ok" --argjson ts_locks "$ts_locks_ok" '
     (.typescript.packages) as $packages |
     (["@modelcontextprotocol/client","@modelcontextprotocol/server","@modelcontextprotocol/node"] | map(. as $p | {($p):{latest:($packages[$p].latest.version // ""),selected:($packages[$p].selected.version // ""),protocol_status:($packages[$p].selected.protocol_status // "unknown"),provenance:($packages[$p].selected.provenance // "unverified")}}) | add) as $ts_packages |
-    .summary={go:{latest:(.go.latest.version // ""),selected:(.go.selected.version // ""),protocol_status:(.go.selected.protocol_status // "unknown"),ready_for_pinning:(((.go.selected.protocol_status=="source_literal" or .go.selected.protocol_status=="declared") and .go.selected.commit!=null and $go_locks))},typescript:{packages:$ts_packages,ready_for_pinning:(($packages["@modelcontextprotocol/client"].protocol_status=="source_literal" or $packages["@modelcontextprotocol/client"].protocol_status=="declared") and ($packages["@modelcontextprotocol/server"].protocol_status=="source_literal" or $packages["@modelcontextprotocol/server"].protocol_status=="declared") and $packages["@modelcontextprotocol/client"].provenance=="verified" and $packages["@modelcontextprotocol/server"].provenance=="verified" and $ts_locks)}}
+    .summary={go:{latest:(.go.latest.version // ""),selected:(.go.selected.version // ""),protocol_status:(.go.selected.protocol_status // "unknown"),ready_for_pinning:(((.go.selected.protocol_status=="source_literal" or .go.selected.protocol_status=="declared") and .go.selected.commit!=null and $go_locks))},typescript:{packages:$ts_packages,ready_for_pinning:(($ts_packages["@modelcontextprotocol/client"].protocol_status=="source_literal" or $ts_packages["@modelcontextprotocol/client"].protocol_status=="declared") and ($ts_packages["@modelcontextprotocol/server"].protocol_status=="source_literal" or $ts_packages["@modelcontextprotocol/server"].protocol_status=="declared") and $ts_packages["@modelcontextprotocol/client"].provenance=="verified" and $ts_packages["@modelcontextprotocol/server"].provenance=="verified" and $ts_locks)}}
   '
 }
 set_report '.typescript={packages:{}}'
