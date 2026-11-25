@@ -460,7 +460,7 @@ async function main(): Promise<void> {
     terminal_frame: frames.at(-1)?.kind === "end" ? { kind: "end", sig: frames.at(-1).sig } : null,
     request_sig: requestAuth.sig, v1_evidence: null,
     open: { sid: open.sid, kid: open.kid, ts: open.ts, sig: open.sig },
-    frames, failure_frame: failureFrame, successor_activation: null,
+    frames, failure_frame: failureFrame, successor_activation: successorActivation ?? knownKeys[0]?.activation ?? null,
   });
 }
 
