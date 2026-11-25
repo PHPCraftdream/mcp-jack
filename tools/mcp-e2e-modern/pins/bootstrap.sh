@@ -41,7 +41,6 @@ resolve_go() {
 }
 walk_go_candidates() {
   local latest=$1 lc=$2 tag ver count=0 selected=$1 latest_status=unknown latest_reason=no_probe latest_kind=unknown latest_lines='[]' selected_status=unknown selected_reason=no_probe selected_kind=unknown selected_lines='[]' selected_commit=null
-  local gomodcache; gomodcache=$(go env GOMODCACHE)
   shift 2
   for tag in "$@"; do
     ((count+=1)); ((count>10)) && break
@@ -50,7 +49,10 @@ walk_go_candidates() {
     printf 'module pins-bootstrap\n\ngo 1.25\n\nrequire github.com/modelcontextprotocol/go-sdk %s\n' "$ver" >"$work/go/go.mod"
     [[ -s $work/go/go.mod ]] || { required_fail "go-manifest-$count" 'go.mod missing'; break; }
     if ! logrun "go-download-$count" bash -c 'cd "$1" && go mod download' _ "$work/go"; then [[ $count == 1 ]] && { latest_status=unknown; latest_reason=download_failed; latest_kind=unknown; }; optional_gap "go-download-$count" 'download failed'; continue; fi
-    local src="$gomodcache/github.com/modelcontextprotocol/go-sdk@${ver#v}" log="$out/logs/go-protocol-$count.log" rc kind=source_literal lines
+    local dir log="$out/logs/go-protocol-$count.log" rc kind=source_literal lines
+    dir=$(cd "$work/go" && go list -m -f '{{.Dir}}' github.com/modelcontextprotocol/go-sdk)
+    if [[ -z $dir || ! -d $dir ]]; then optional_gap "go-src-$count" 'module dir unresolved'; continue; fi
+    local src=$dir
     grep -rnF '2026-07-28' "$src" --include='*.go' >"$log" 2>&1; rc=$?
     if (( rc == 1 )); then [[ $count == 1 ]] && { latest_status=absent; latest_reason=no_literal; latest_kind=absent; selected_status=absent; selected_reason=no_literal; selected_kind=absent; }; continue
     elif (( rc >= 2 )); then [[ $count == 1 ]] && { latest_status=unknown; latest_reason=search_error; latest_kind=unknown; }; optional_gap "go-protocol-$count" 'search error'; continue; fi
@@ -83,7 +85,8 @@ resolve_ts_package() {
   meta_size=$(wc -c <"$meta"); head -c 200000 "$meta" >"$artifact"; if (( meta_size > 200000 )); then printf '\nlog truncated\n' >>"$artifact"; fi
   latest=$(jq -r '."dist-tags".latest // empty' "$meta"); if [[ -z $latest ]]; then if [[ $required == true ]]; then required_fail "npm-$safe" 'latest version missing'; else optional_gap "npm-$safe" 'latest version missing'; fi; return; fi
   selected=$latest
-  probe=$(npm_source_match "$pkg" "$latest" "$safe" latest)
+  npm_source_match "$pkg" "$latest" "$safe" latest
+  probe=$NPM_VERDICT
   evidence_file="$out/logs/npm-source-$safe-latest.json"
   case $probe in
     match) status=source_literal; ev=$(jq -cn --slurpfile l "$evidence_file" --arg log "logs/npm-source-$safe-latest.log" '{kind:"source_literal",lines:$l[0],log:$log}') ;;
@@ -98,7 +101,8 @@ resolve_ts_package() {
     while IFS= read -r ver; do
       [[ -n $ver && $ver != *-* && $ver != "$latest" && $(printf '%s\n%s\n' "$ver" "$latest" | sort -V | tail -1) == "$latest" ]] || continue
       ((count+=1)); ((count>10)) && break
-      fallback_probe=$(npm_source_match "$pkg" "$ver" "$safe" "fallback-$count")
+      npm_source_match "$pkg" "$ver" "$safe" "fallback-$count"
+      fallback_probe=$NPM_VERDICT
       case $fallback_probe in
         match|declared) selected=$ver; status=$fallback_probe; evidence_file="$out/logs/npm-source-$safe-fallback-$count.json"; [[ $fallback_probe == declared ]] && evidence_file="$out/logs/npm-declared-$safe-fallback-$count.json"; ev=$(jq -cn --arg k "$fallback_probe" --slurpfile l "$evidence_file" --arg log "logs/${evidence_file##*/}" '{kind:$k,lines:$l[0],log:$log}'); break ;;
         miss) ;;
@@ -119,16 +123,18 @@ resolve_ts_package() {
   jq -n --arg p "$pkg" --arg v "$selected" '{name:$p,version:$v}' >"$out/ts/selected-$safe.json" || { required_fail "npm-$safe" 'selected version write failed'; return; }
   set_report --arg p "$pkg" --arg role "$role" --arg lv "$latest" --arg sv "$selected" --arg ls "$latest_status" --argjson le "$latest_ev" --arg ss "$status" --argjson se "$ev" --argjson lc "$latest_commit" --argjson lu "$latest_url" --argjson commit "$prov_commit" --argjson url "$prov_url" --arg pe "$prov_ev" '.typescript.packages[$p]={role:$role,latest:{version:$lv,protocol_status:$ls,evidence:$le,commit:$lc,verified_release_url:$lu},selected:{version:$sv,protocol_status:$ss,evidence:$se,commit:$commit,verified_release_url:$url,provenance:$pe}}'
 }
+# Communicates its verdict via NPM_VERDICT, not stdout.
 npm_source_match() {
+  NPM_VERDICT=install_failed
   local pkg=$1 ver=$2 safe=$3 label=$4 dir="$work/ts/node_modules/$pkg" logfile="$out/logs/npm-source-$3-$4.log" raw="$out/logs/npm-source-$3-$4.raw" ordered="$out/logs/npm-source-$3-$4.ordered" rc count
   printf '{"name":"pins-bootstrap","private":true,"dependencies":{"%s":"%s"}}\n' "$pkg" "$ver" >"$work/ts/package.json"
-  [[ -s $work/ts/package.json ]] || { printf 'install_failed'; return 0; }
-  if ! logrun "npm-$safe-$label" bash -c 'cd "$1" && npm install --no-audit --no-fund' _ "$work/ts"; then printf 'install_failed'; return 0; fi
+  [[ -s $work/ts/package.json ]] || { NPM_VERDICT=install_failed; return 0; }
+  if ! logrun "npm-$safe-$label" bash -c 'cd "$1" && npm install --no-audit --no-fund' _ "$work/ts"; then NPM_VERDICT=install_failed; return 0; fi
   local includes=(--include='*.md' --include='*.d.ts' --include='*.d.mts' --include='*.js' --include='*.mjs' --include='*.cjs' --include='package.json' --exclude='*.map' --exclude-dir=node_modules)
   grep -rlF '2026-07-28' "${includes[@]}" "$dir" >/dev/null 2>&1; rc=$?
   if (( rc == 0 )); then
     grep -rnF '2026-07-28' "${includes[@]}" "$dir" >"$raw" 2>&1; rc=$?
-    (( rc == 0 )) || { printf 'search_error'; return 0; }
+    (( rc == 0 )) || { NPM_VERDICT=search_error; return 0; }
     { grep -E 'README|package\.json' "$raw"; grep -vE 'README|package\.json' "$raw"; } >"$ordered"
     count=$(wc -l <"$ordered"); cut -c1-240 "$ordered" | head -20 | sed "s|$dir/||" >"$logfile"
     if (( count > 20 )); then printf 'log truncated\n' >>"$logfile"; fi
@@ -138,9 +144,9 @@ npm_source_match() {
       { grep -E 'README|package\.json' "$raw"; grep -vE 'README|package\.json' "$raw"; } >"$ordered"
       count=$(wc -l <"$ordered"); cut -c1-240 "$ordered" | head -20 | sed "s|$dir/||" >"$out/logs/npm-declared-$safe-$label.log"
       if (( count > 20 )); then printf 'log truncated\n' >>"$out/logs/npm-declared-$safe-$label.log"; fi
-      jq -Rsc 'split("\n")|map(select(length>0))' "$out/logs/npm-declared-$safe-$label.log" >"$out/logs/npm-declared-$safe-$label.json"; printf 'declared'
-    else printf 'match'; fi
-  elif (( rc == 1 )); then printf 'miss'; else printf 'search_error'; fi
+      jq -Rsc 'split("\n")|map(select(length>0))' "$out/logs/npm-declared-$safe-$label.log" >"$out/logs/npm-declared-$safe-$label.json"; NPM_VERDICT=declared
+    else NPM_VERDICT=match; fi
+  elif (( rc == 1 )); then NPM_VERDICT=miss; else NPM_VERDICT=search_error; fi
   rm -f "$raw" "$ordered"
   return 0
 }
@@ -189,9 +195,9 @@ write_ts_lock() {
 run_probes() {
   local src="$(dirname "$0")" go_ok=false ts_ok=false
   if [[ -f $src/probe_go.go ]] && cp "$src/probe_go.go" "$work/go/probe_go.go"; then
-    if logrun go-tidy bash -c 'cd "$1" && GOFLAGS=-mod=mod go mod tidy' _ "$work/go"; then
+    if logrun go-get bash -c 'cd "$1" && go get github.com/modelcontextprotocol/go-sdk/mcp' _ "$work/go"; then
       if logrun go-probes bash -c 'cd "$1" && go run probe_go.go' _ "$work/go"; then go_ok=true; require_file "$work/go/go.mod" "$out/go/go.mod" go-probe-mod; require_file "$work/go/go.sum" "$out/go/go.sum" go-probe-sum; else optional_gap go-probe 'compile or run failed'; fi
-    else optional_gap go-tidy 'go mod tidy failed'; fi
+    else optional_gap go-get 'go get failed'; fi
   else optional_gap go-probe 'probe file missing or copy failed'; fi
   if [[ -f $src/probe_ts.mjs ]] && cp "$src/probe_ts.mjs" "$work/ts/probe_ts.mjs"; then
     if logrun ts-probes bash -c 'cd "$1" && node probe_ts.mjs' _ "$work/ts"; then ts_ok=true; else optional_gap ts-probe 'run failed'; fi
