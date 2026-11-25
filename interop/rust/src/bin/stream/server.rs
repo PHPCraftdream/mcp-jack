@@ -33,6 +33,7 @@ pub(super) struct Args {
     pub(super) clock_file: String,
     pub(super) duration_ms: u64,
     pub(super) frame_max_bytes: u64,
+    pub(super) lifecycle: bool,
     successor_activation: Option<u64>,
 }
 
@@ -234,11 +235,22 @@ impl Handler {
             .map(|v| v.as_str())
             .unwrap_or("/");
         let request_sig = auth.as_ref().map(|value| value.sig.clone());
-        append_log_visible(
-            &self.args,
-            request_row(&parts.method, target, &parts.headers, &bytes, verified),
-            "request",
-        );
+        let nonce = auth.as_ref().map(|value| value.nonce.clone());
+        if !self.args.lifecycle {
+            append_log_visible(
+                &self.args,
+                request_row(&parts.method, target, &parts.headers, &bytes, verified),
+                "request",
+            );
+            if verified {
+                append_log_visible(
+                    &self.args,
+                    serde_json::json!({"event":"nonce_committed", "nonce":nonce,
+                    "request_sig":request_sig, "nonce_committed_before_first_byte":true}),
+                    "nonce_committed",
+                );
+            }
+        }
         // JackLayer has already atomically admitted a verified nonce before it
         // invokes the application service. Do not describe missing auth as replay.
         let scenario = self.args.scenario.as_str();
@@ -259,13 +271,20 @@ impl Handler {
         }
         let id = parsed.get("id").cloned().unwrap_or(serde_json::Value::Null);
         let result = serde_json::json!({"jsonrpc":"2.0","id":id,"result":{}});
-        let mut hold_was_active = false;
+        let hold_requested = match scenario {
+            "durable-live-replay" => true,
+            "rotation-cutoff-reopen" => self.args.successor_activation.is_some_and(|activation| {
+                read_clock(&self.args.clock_file).unwrap_or(i64::MAX) < activation as i64
+            }),
+            _ => false,
+        };
         if scenario == "durable-live-replay" || scenario == "durable-restart-replay" {
             let first = serde_json::json!({"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":1,"message":"stream:first"}});
             if !send(&mut sender, first, &self.controls).await {
                 return;
             }
             if scenario == "durable-live-replay" {
+                super::wrapper::register_held(&self.controls, &request_sig);
                 if !wait_for_release(&self.controls).await {
                     return;
                 }
@@ -326,20 +345,15 @@ impl Handler {
                 tokio::select! { _ = &mut shutdown => return, _ = tokio::time::sleep(Duration::from_millis(50)) => {} }
             }
         }
-        if scenario == "rotation-cutoff-reopen"
-            && self.args.successor_activation.is_some_and(|activation| {
-                read_clock(&self.args.clock_file).unwrap_or(i64::MAX) < activation as i64
-            })
-        {
+        if hold_requested {
+            super::wrapper::register_held(&self.controls, &request_sig);
             if !wait_for_release(&self.controls).await {
                 return;
             }
-            hold_was_active = true;
-        }
-        if hold_was_active {
             self.controls.held_done.notify_one();
         }
         if scenario == "concurrency-limit" {
+            super::wrapper::register_held(&self.controls, &request_sig);
             loop {
                 if self.controls.release_requested.load(Ordering::Acquire) {
                     break;
@@ -621,6 +635,7 @@ pub fn run() -> ! {
     });
     #[cfg(not(target_os = "linux"))]
     let verifier = Arc::new(build_verifier(&audience, state, &clock_file, 0));
+    let _idle_timeout_ms = number(&arguments, "--idle-timeout-ms", 90_000);
     // The SDK's StreamOptions does not currently consume a server idle timeout.
     let options = mcp_jack::server::stream::StreamOptions {
         frame_max_bytes: number(&arguments, "--frame-max-bytes", 1_048_576) as usize,
@@ -628,6 +643,7 @@ pub fn run() -> ! {
         max_stream_duration_ms: number(&arguments, "--max-stream-duration-ms", 3_600_000),
         heartbeat_ms: arg(&arguments, "--heartbeat-ms").and_then(|value| value.parse().ok()),
     };
+    let lifecycle = matrix == "rotation-stream" || matrix == "durable-stream";
     let args = Args {
         producer: lookup_producer(&scenario),
         scenario,
@@ -636,6 +652,7 @@ pub fn run() -> ! {
         clock_file,
         duration_ms: number(&arguments, "--max-stream-duration-ms", 3_600_000),
         frame_max_bytes: number(&arguments, "--frame-max-bytes", 1_048_576),
+        lifecycle,
         successor_activation,
     };
     let controls = Arc::new(Controls::default());
@@ -745,21 +762,43 @@ pub fn run() -> ! {
                                 }
                             }
                             Some("release") => {
+                                let lifecycle_hold = args.matrix == "rotation-stream"
+                                    || args.matrix == "durable-stream";
+                                // Arm the completion waiter before releasing so a fast producer cannot signal first.
+                                let done = controls.held_done.notified();
+                                tokio::pin!(done);
+                                done.as_mut().enable();
                                 controls.release_requested.store(true, Ordering::Release);
                                 controls.release.notify_waiters();
-                                let lifecycle_hold = args.scenario == "rotation-cutoff-reopen"
-                                    || args.scenario == "durable-live-replay";
-                                if lifecycle_hold {
-                                    let done = controls.held_done.notified();
-                                    tokio::pin!(done);
-                                    done.as_mut().enable();
-                                    if tokio::time::timeout(Duration::from_secs(2), done).await.is_err() {
-                                        eprintln!("stream server: held stream did not complete; no release acknowledgement");
-                                        continue;
+                                if lifecycle_hold
+                                    && tokio::time::timeout(Duration::from_secs(2), done).await.is_err()
+                                {
+                                    eprintln!("stream server: held stream did not complete; no release acknowledgement");
+                                    continue;
+                                }
+                                let lookup_sid = || {
+                                    let key = controls.held.lock().ok().and_then(|held| held.clone());
+                                    key.and_then(|sig| controls.sid_by_request_sig.lock().ok().and_then(|m| m.get(&sig).cloned()))
+                                };
+                                let mut sid = lookup_sid();
+                                if sid.is_none() {
+                                    for _ in 0..50 {
+                                        tokio::time::sleep(Duration::from_millis(10)).await;
+                                        sid = lookup_sid();
+                                        if sid.is_some() { break; }
                                     }
                                 }
-                                let sid = controls.held_sid.lock().ok().and_then(|g| g.clone());
-                                let mut ack = match serde_json::to_vec(&serde_json::json!({"control":"released","sid":sid})) {
+                                let ack_value = match &sid {
+                                    Some(sid) => serde_json::json!({"control":"released","sid":sid}),
+                                    None => {
+                                        if lifecycle_hold {
+                                            eprintln!("stream server: held stream sid unknown; no release acknowledgement");
+                                            continue;
+                                        }
+                                        serde_json::json!({"control":"released"})
+                                    }
+                                };
+                                let mut ack = match serde_json::to_vec(&ack_value) {
                                     Ok(ack) => ack,
                                     Err(error) => { eprintln!("stream server: release acknowledgement: {error}"); continue; }
                                 };

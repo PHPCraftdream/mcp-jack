@@ -23,7 +23,8 @@ pub(super) struct Controls {
     pub(super) shutdown_requested: AtomicBool,
     pub(super) release_requested: AtomicBool,
     pub(super) latest_clock: Mutex<Option<serde_json::Value>>,
-    pub(super) held_sid: Mutex<Option<String>>,
+    pub(super) sid_by_request_sig: Mutex<std::collections::HashMap<String, String>>,
+    pub(super) held: Mutex<Option<String>>,
 }
 
 pub(super) type HandlerTask = tokio::task::JoinHandle<()>;
@@ -154,23 +155,40 @@ where
                             .find_map(|field| field.strip_prefix("sid=").map(str::to_owned))
                     });
                 if let Some(sid) = sid {
-                    if let Ok(mut held) = controls.held_sid.lock() {
-                        *held = Some(sid.clone());
+                    if let Some(sig) = auth.as_ref().map(|v| v.sig.clone()) {
+                        controls
+                            .sid_by_request_sig
+                            .lock()
+                            .ok()
+                            .map(|mut m| m.insert(sig, sid.clone()));
                     }
-                    let nonce = auth.as_ref().map(|value| value.nonce.clone());
-                    let request_sig = auth.as_ref().map(|value| value.sig.clone());
-                    append_log_visible(
-                        &args,
-                        serde_json::json!({"event":"nonce_committed", "nonce":nonce,
-                        "request_sig":request_sig, "nonce_committed_before_first_byte":true}),
-                        "nonce_committed",
-                    );
-                    append_log_visible(
-                        &args,
-                        serde_json::json!({"event":"stream_open", "sid":sid, "nonce":nonce,
-                        "request_sig":request_sig, "nonce_committed_before_first_byte":true}),
-                        "stream_open",
-                    );
+                    if args.lifecycle {
+                        append_log_visible(
+                            &args,
+                            request_row(&method, &target, &headers, &bytes, true),
+                            "request",
+                        );
+                        let nonce = auth.as_ref().map(|value| value.nonce.clone());
+                        let request_sig = auth.as_ref().map(|value| value.sig.clone());
+                        append_log_visible(
+                            &args,
+                            serde_json::json!({"event":"nonce_committed", "nonce":nonce,
+                            "request_sig":request_sig, "nonce_committed_before_first_byte":true}),
+                            "nonce_committed",
+                        );
+                        append_log_visible(
+                            &args,
+                            serde_json::json!({"event":"stream_open", "sid":sid, "nonce":nonce,
+                            "request_sig":request_sig, "nonce_committed_before_first_byte":true}),
+                            "stream_open",
+                        );
+                    } else {
+                        append_log_visible(
+                            &args,
+                            serde_json::json!({"event":"stream_open","sid":sid,"request_sig":auth.as_ref().map(|v| v.sig.clone()),"nonce":auth.as_ref().map(|v| v.nonce.clone())}),
+                            "stream_open",
+                        );
+                    }
                 }
             }
             if response.status() == http::StatusCode::TOO_MANY_REQUESTS {
@@ -180,6 +198,14 @@ where
             }
             Ok(response)
         })
+    }
+}
+
+pub(super) fn register_held(controls: &Controls, request_sig: &Option<String>) {
+    if let Some(sig) = request_sig {
+        if let Ok(mut held) = controls.held.lock() {
+            *held = Some(sig.clone());
+        }
     }
 }
 
