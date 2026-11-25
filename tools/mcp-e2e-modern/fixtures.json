@@ -1,0 +1,8 @@
+{
+  "fixtures": {
+    "go-server": {"build_kind":"go-binary","artifact":"go/bin/server","env":"GO_SERVER_BIN"},
+    "go-client": {"build_kind":"go-binary","artifact":"go/bin/client","env":"GO_CLIENT_BIN"},
+    "ts-server": {"build_kind":"node-script","artifact":"ts/server.mjs","env":"TS_SERVER_BIN"},
+    "ts-client": {"build_kind":"node-script","artifact":"ts/client.mjs","env":"TS_CLIENT_BIN"}
+  }
+}
