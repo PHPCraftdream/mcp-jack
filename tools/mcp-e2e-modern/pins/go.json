@@ -1,16 +1,16 @@
 {
   "sdk": "github.com/modelcontextprotocol/go-sdk",
   "language": "go",
-  "status": "unresolved",
+  "status": "resolved",
   "module": "github.com/modelcontextprotocol/go-sdk",
-  "version": null,
-  "commit": null,
-  "release_url": null,
+  "version": "v1.8.0",
+  "commit": "3f3b699b2b67e1ed033a63d6651671dab53c2d32",
+  "release_url": "https://github.com/modelcontextprotocol/go-sdk/releases/tag/v1.8.0",
   "protocol_version": "2026-07-28",
-  "protocol_supported": null,
-  "evidence_policy": "declared; unknown may include no_probe",
+  "protocol_supported": true,
+  "evidence": "README.md:39 of v1.8.0: row 'v1.7.0+ | 2026-07-28 | 2026-07-28, 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05'; docs/protocol.md:138 SupportedProtocolVersions starts with 2026-07-28",
   "capabilities": {
-    "protocol_2026_07_28": null,
+    "protocol_2026_07_28": "declared",
     "client_stdio_transport": null,
     "server_streamable_http_transport": null,
     "stateless_server_mode": null,
@@ -19,7 +19,8 @@
     "subscriptions_listen": null,
     "server_discover": null
   },
-  "lockfiles": ["go.mod", "go.sum"],
-  "resolved_by": null,
-  "resolved_at": null
+  "capability_note": "null = not probed by the bootstrap; each fixture reports its own capability manifest at run time (CONTRACT.md)",
+  "lockfiles": ["../go/go.mod", "../go/go.sum"],
+  "resolved_by": "bootstrap run 45685868327 of .github/workflows/mcp-e2e-locks.yml, approved by the parent under the owner's delegation of 2026-11-25",
+  "resolved_at": "2026-11-25"
 }
