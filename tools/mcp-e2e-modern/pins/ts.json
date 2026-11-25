@@ -1,0 +1,49 @@
+{
+  "sdk": "@modelcontextprotocol/typescript-sdk-split",
+  "language": "typescript",
+  "status": "resolved",
+  "packages": [
+    {
+      "name": "@modelcontextprotocol/client",
+      "role": "client",
+      "version": "2.4.0",
+      "commit": "951fe5603a7ec0b2dcb6a0b95d92cd86f93ad9e5",
+      "release_url": "https://github.com/modelcontextprotocol/typescript-sdk/releases/tag/v2.4.0",
+      "protocol_status": "declared"
+    },
+    {
+      "name": "@modelcontextprotocol/server",
+      "role": "server",
+      "version": "2.4.0",
+      "commit": "951fe5603a7ec0b2dcb6a0b95d92cd86f93ad9e5",
+      "release_url": "https://github.com/modelcontextprotocol/typescript-sdk/releases/tag/@modelcontextprotocol/server@2.4.0",
+      "protocol_status": "declared"
+    },
+    {
+      "name": "@modelcontextprotocol/node",
+      "role": "tooling",
+      "version": "2.1.2",
+      "commit": "951fe5603a7ec0b2dcb6a0b95d92cd86f93ad9e5",
+      "release_url": "https://github.com/modelcontextprotocol/typescript-sdk/releases/tag/@modelcontextprotocol/node@2.1.2",
+      "protocol_status": "not_applicable"
+    }
+  ],
+  "umbrella": { "name": "@modelcontextprotocol/sdk", "informational": true, "version": "1.32.2" },
+  "protocol_version": "2026-07-28",
+  "protocol_supported": true,
+  "evidence": "README of @modelcontextprotocol/client 2.4.0: 'v2 of the MCP TypeScript SDK, the stable release line, implementing the 2026-07-28 MCP spec'",
+  "capabilities": {
+    "protocol_2026_07_28": "declared",
+    "client_stdio_transport": null,
+    "server_streamable_http_transport": null,
+    "stateless_server_mode": null,
+    "progress_notifications_tool_call": null,
+    "client_cancellation_api": null,
+    "subscriptions_listen": null,
+    "server_discover": null
+  },
+  "capability_note": "null = not probed by the bootstrap; each fixture reports its own capability manifest at run time (CONTRACT.md)",
+  "lockfiles": ["../ts/package.json", "../ts/package-lock.json"],
+  "resolved_by": "bootstrap run 45685868327 of .github/workflows/mcp-e2e-locks.yml, approved by the parent under the owner's delegation of 2026-11-25",
+  "resolved_at": "2026-11-25"
+}
