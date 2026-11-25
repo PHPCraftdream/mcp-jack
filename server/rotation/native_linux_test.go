@@ -13,6 +13,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -20,9 +22,11 @@ import (
 
 	jack "github.com/PHPCraftdream/mcp-jack"
 	rotationclient "github.com/PHPCraftdream/mcp-jack/client/rotation"
+	clientstream "github.com/PHPCraftdream/mcp-jack/client/stream"
 	"github.com/PHPCraftdream/mcp-jack/durable"
 	"github.com/PHPCraftdream/mcp-jack/rotation"
 	"github.com/PHPCraftdream/mcp-jack/server"
+	"github.com/PHPCraftdream/mcp-jack/server/internal/modern"
 	rotationserver "github.com/PHPCraftdream/mcp-jack/server/rotation"
 )
 
@@ -711,5 +715,254 @@ func TestNativeRefreshActualHTTPDurableNonceAndClientRestart(t *testing.T) {
 	final, err := sender.Refresh(ctx)
 	if err != nil || final.Committed || final.Revision != 2 || final.Terminal != ack.Terminal || nativeCalls.Load() != 3 || appCalls.Load() != 1 || requests.Load() != 5 {
 		t.Fatal("explicit post-activation duplicate refresh changed ACK or retried", err)
+	}
+}
+
+const streamRequestBody = `{"jsonrpc":"2.0","id":1,"method":"events/stream","params":{"name":"email.received","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`
+
+func rotationStreamHandler(t *testing.T, f fixture, provider *rotationserver.Provider, inner http.Handler) http.Handler {
+	t.Helper()
+	caller := makeSigner(35)
+	kid := jack.KeyID(caller.PublicKey())
+	state := server.NewMemoryState()
+	if err := state.Update(func(edit *server.StateEdit) error {
+		edit.PutKey(server.RegistryEntry{Kid: kid, PublicKey: jack.EncodeBase64URL(caller.PublicKey()), Name: "caller"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := server.NewVerifier(server.Config{Aud: "provider-test", State: state, Nonces: server.NewNonceStore(), Now: f.now.Load})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := server.NewHandler(server.HandlerConfig{Verifier: verifier, ResponseKeys: provider, Profile: modern.ProfileModern}, inner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handler
+}
+
+func rotationStreamRequest(t *testing.T, nonceByte byte) (*http.Request, string) {
+	t.Helper()
+	caller := makeSigner(35)
+	kid := jack.KeyID(caller.PublicKey())
+	nonce := jack.EncodeBase64URL(bytes.Repeat([]byte{nonceByte}, 16))
+	auth := jack.RequestAuth{Kid: kid, TS: 1000, Nonce: nonce}
+	auth.Sig = jack.EncodeBase64URL(ed25519.Sign(caller.key, []byte(jack.RequestSigningString("POST", "/mcp", "provider-test", kid, 1000, nonce, []byte(streamRequestBody)))))
+	request := httptest.NewRequest("POST", "/mcp", strings.NewReader(streamRequestBody))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Jack-Auth", jack.FormatRequestAuth(auth))
+	request.Header.Set("Jack-Accept", "s1")
+	request.Header.Set("MCP-Protocol-Version", "2026-07-28")
+	request.Header.Set("Mcp-Method", "events/stream")
+	request.Header.Set("Mcp-Name", "email.received")
+	return request, auth.Sig
+}
+
+func rotationStreamTimestamps(body []byte) []int64 {
+	matches := regexp.MustCompile(`,ts=([0-9]+)`).FindAllStringSubmatch(string(body), -1)
+	timestamps := make([]int64, 0, len(matches))
+	for _, match := range matches {
+		var timestamp int64
+		for _, digit := range match[1] {
+			timestamp = timestamp*10 + int64(digit-'0')
+		}
+		timestamps = append(timestamps, timestamp)
+	}
+	return timestamps
+}
+
+func assertRotationStreamTimestamps(t *testing.T, body []byte, min, max int64) {
+	t.Helper()
+	timestamps := rotationStreamTimestamps(body)
+	if len(timestamps) == 0 {
+		t.Fatal("stream has no timestamps")
+	}
+	for index, timestamp := range timestamps {
+		if timestamp < min || timestamp > max {
+			t.Fatalf("stream timestamp[%d]=%d outside [%d,%d]", index, timestamp, min, max)
+		}
+		if index > 0 && timestamp < timestamps[index-1] {
+			t.Fatalf("stream timestamps decreased: %v", timestamps)
+		}
+	}
+}
+
+func rotationStreamHeaders(header http.Header) []clientstream.Header {
+	names := make([]string, 0, len(header))
+	for name := range header {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var headers []clientstream.Header
+	for _, name := range names {
+		for _, value := range header[name] {
+			headers = append(headers, clientstream.Header{Name: name, Value: value})
+		}
+	}
+	return headers
+}
+
+func TestRotationStreamFinalAllowsWindowBreach(t *testing.T) {
+	f := setup(t)
+	provider, err := rotationserver.New(f.store, f.inventory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	advanced := make(chan struct{})
+	continueStream := make(chan struct{})
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{}}\n\n"))
+		w.(http.Flusher).Flush()
+		close(advanced)
+		<-continueStream
+		_, _ = w.Write([]byte("data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progress\":2}}\n\n"))
+	})
+	handler := rotationStreamHandler(t, f, provider, inner)
+	request, requestSig := rotationStreamRequest(t, 42)
+	output := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() { defer close(done); handler.ServeHTTP(output, request) }()
+	select {
+	case <-advanced:
+	case <-time.After(10 * time.Second):
+		t.Fatal("stream handler did not write its first frame")
+	}
+	f.now.Store(1040)
+	close(continueStream)
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("stream request did not finish")
+	}
+	if !strings.Contains(output.Body.String(), "event: jack-end") {
+		t.Fatalf("stream lacks end frame: %s", output.Body.String())
+	}
+	assertRotationStreamTimestamps(t, output.Body.Bytes(), 1000, 1040)
+	public := f.keys[0].PublicKey()
+	result, err := clientstream.Verify(clientstream.Expectation{Now: func() time.Time { return time.Unix(1040, 0) }, Window: time.Hour, Keys: map[string]clientstream.Key{jack.KeyID(public): {PublicKey: public, SuccessorActivation: nil}}, RequestSig: requestSig}, output.Code, rotationStreamHeaders(output.Header()), [][]byte{output.Body.Bytes()})
+	if err != nil || !result.Complete {
+		t.Fatalf("stream verification complete=%v err=%v", result.Complete, err)
+	}
+}
+
+func TestRotationStreamFinalEndsAfterMidStreamPublication(t *testing.T) {
+	f := setup(t)
+	provider, err := rotationserver.New(f.store, f.inventory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	advanced := make(chan struct{})
+	continueStream := make(chan struct{})
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{}}\n\n"))
+		w.(http.Flusher).Flush()
+		close(advanced)
+		<-continueStream
+		_, _ = w.Write([]byte("data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progress\":2}}\n\n"))
+	})
+	handler := rotationStreamHandler(t, f, provider, inner)
+	request, requestSig := rotationStreamRequest(t, 44)
+	output := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() { defer close(done); handler.ServeHTTP(output, request) }()
+	select {
+	case <-advanced:
+	case <-time.After(10 * time.Second):
+		t.Fatal("stream handler did not write its first frame")
+	}
+	f.now.Store(1050)
+	record := publish(t, f, 1)
+	activation := record.ActivatesAt
+	if activation != 1050+rotation.GraceSeconds {
+		t.Fatalf("successor activation = %d, want %d", activation, 1050+rotation.GraceSeconds)
+	}
+	f.now.Store(activation - 10)
+	close(continueStream)
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("stream request did not finish")
+	}
+	if !strings.Contains(output.Body.String(), "event: jack-end") {
+		t.Fatalf("stream lacks end frame: %s", output.Body.String())
+	}
+	timestamps := rotationStreamTimestamps(output.Body.Bytes())
+	if len(timestamps) == 0 {
+		t.Fatal("stream has no timestamps")
+	}
+	for index, timestamp := range timestamps {
+		if index > 0 && timestamp < timestamps[index-1] {
+			t.Fatalf("stream timestamps decreased: %v", timestamps)
+		}
+		if timestamp >= activation {
+			t.Fatalf("stream timestamp[%d]=%d reached activation %d", index, timestamp, activation)
+		}
+	}
+	public := f.keys[0].PublicKey()
+	result, err := clientstream.Verify(clientstream.Expectation{Now: func() time.Time { return time.Unix(activation-10, 0) }, Window: 96 * time.Hour, Keys: map[string]clientstream.Key{jack.KeyID(public): {PublicKey: public, SuccessorActivation: &activation}}, RequestSig: requestSig}, output.Code, rotationStreamHeaders(output.Header()), [][]byte{output.Body.Bytes()})
+	if err != nil || !result.Complete {
+		t.Fatalf("stream verification complete=%v err=%v", result.Complete, err)
+	}
+}
+
+func TestRotationStreamFinalRejectsActivation(t *testing.T) {
+	f := setup(t)
+	provider, err := rotationserver.New(f.store, f.inventory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	advanced := make(chan struct{})
+	continueStream := make(chan struct{})
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{}}\n\n"))
+		w.(http.Flusher).Flush()
+		close(advanced)
+		<-continueStream
+		_, _ = w.Write([]byte("data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progress\":2}}\n\n"))
+	})
+	handler := rotationStreamHandler(t, f, provider, inner)
+	request, _ := rotationStreamRequest(t, 45)
+	output := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() { defer close(done); handler.ServeHTTP(output, request) }()
+	select {
+	case <-advanced:
+	case <-time.After(10 * time.Second):
+		t.Fatal("stream handler did not write its first frame")
+	}
+	f.now.Store(1050)
+	record := publish(t, f, 1)
+	if record.ActivatesAt != 1050+rotation.GraceSeconds {
+		t.Fatalf("successor activation = %d, want %d", record.ActivatesAt, 1050+rotation.GraceSeconds)
+	}
+	f.now.Store(record.ActivatesAt)
+	close(continueStream)
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("stream request did not finish")
+	}
+	if strings.Contains(output.Body.String(), "event: jack-end") {
+		t.Fatalf("stream unexpectedly ended: %s", output.Body.String())
+	}
+	if strings.Contains(output.Body.String(), `"progress":2`) {
+		t.Fatalf("frame at or after activation was written: %s", output.Body.String())
+	}
+	// The sibling publication test proves publication alone does not refuse the gate.
+	timestamps := rotationStreamTimestamps(output.Body.Bytes())
+	if len(timestamps) == 0 {
+		t.Fatal("stream has no timestamps")
+	}
+	for index, timestamp := range timestamps {
+		if index > 0 && timestamp < timestamps[index-1] {
+			t.Fatalf("stream timestamps decreased: %v", timestamps)
+		}
+		if timestamp >= record.ActivatesAt {
+			t.Fatalf("stream timestamp[%d]=%d reached activation %d", index, timestamp, record.ActivatesAt)
+		}
 	}
 }
