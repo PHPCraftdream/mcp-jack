@@ -1,0 +1,26 @@
+{
+  "sdk": "@modelcontextprotocol/typescript-sdk-split",
+  "language": "typescript",
+  "status": "unresolved",
+  "packages": [
+    { "name": "@modelcontextprotocol/client", "role": "client", "version": null, "commit": null, "latest": { "protocol_status": null, "evidence": null }, "selected": { "protocol_status": null, "evidence": null, "verified_release_url": null } },
+    { "name": "@modelcontextprotocol/server", "role": "server", "version": null, "commit": null, "latest": { "protocol_status": null, "evidence": null }, "selected": { "protocol_status": null, "evidence": null, "verified_release_url": null } },
+    { "name": "@modelcontextprotocol/node", "role": "tooling", "version": null, "commit": null, "latest": { "protocol_status": null, "evidence": null }, "selected": { "protocol_status": null, "evidence": null, "verified_release_url": null } }
+  ],
+  "umbrella": { "name": "@modelcontextprotocol/sdk", "informational": true, "version": null },
+  "protocol_version": "2026-07-28",
+  "protocol_supported": null,
+  "capabilities": {
+    "protocol_2026_07_28": null,
+    "client_stdio_transport": null,
+    "server_streamable_http_transport": null,
+    "stateless_server_mode": null,
+    "progress_notifications_tool_call": null,
+    "client_cancellation_api": null,
+    "subscriptions_listen": null,
+    "server_discover": null
+  },
+  "lockfiles": ["package.json", "package-lock.json"],
+  "resolved_by": null,
+  "resolved_at": null
+}

@@ -1,0 +1,25 @@
+{
+  "sdk": "github.com/modelcontextprotocol/go-sdk",
+  "language": "go",
+  "status": "unresolved",
+  "module": "github.com/modelcontextprotocol/go-sdk",
+  "version": null,
+  "commit": null,
+  "release_url": null,
+  "protocol_version": "2026-07-28",
+  "protocol_supported": null,
+  "evidence_policy": "declared; unknown may include no_probe",
+  "capabilities": {
+    "protocol_2026_07_28": null,
+    "client_stdio_transport": null,
+    "server_streamable_http_transport": null,
+    "stateless_server_mode": null,
+    "progress_notifications_tool_call": null,
+    "client_cancellation_api": null,
+    "subscriptions_listen": null,
+    "server_discover": null
+  },
+  "lockfiles": ["go.mod", "go.sum"],
+  "resolved_by": null,
+  "resolved_at": null
+}
