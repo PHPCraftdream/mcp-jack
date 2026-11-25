@@ -20,7 +20,6 @@ pub(super) struct Controls {
     pub(super) shutdown: tokio::sync::Notify,
     pub(super) release: tokio::sync::Notify,
     pub(super) held_done: tokio::sync::Notify,
-    pub(super) held_active: AtomicBool,
     pub(super) shutdown_requested: AtomicBool,
     pub(super) release_requested: AtomicBool,
     pub(super) latest_clock: Mutex<Option<serde_json::Value>>,
@@ -85,10 +84,6 @@ where
             .map(|v| v.as_str().to_owned())
             .unwrap_or_else(|| "/".to_owned());
         let headers = parts.headers.clone();
-        let verified = parts
-            .extensions
-            .get::<mcp_jack::server::identity::VerifiedIdentity>()
-            .is_some();
         let auth = parse_jack_auth(&headers);
         let bytes = http_body_util::Limited::new(body, WRAPPER_BODY_CAP).collect();
         let inner = self.inner.clone();
@@ -164,14 +159,12 @@ where
                     }
                     let nonce = auth.as_ref().map(|value| value.nonce.clone());
                     let request_sig = auth.as_ref().map(|value| value.sig.clone());
-                    if verified {
-                        append_log_visible(
-                            &args,
-                            serde_json::json!({"event":"nonce_committed", "nonce":nonce,
-                            "request_sig":request_sig, "nonce_committed_before_first_byte":true}),
-                            "nonce_committed",
-                        );
-                    }
+                    append_log_visible(
+                        &args,
+                        serde_json::json!({"event":"nonce_committed", "nonce":nonce,
+                        "request_sig":request_sig, "nonce_committed_before_first_byte":true}),
+                        "nonce_committed",
+                    );
                     append_log_visible(
                         &args,
                         serde_json::json!({"event":"stream_open", "sid":sid, "nonce":nonce,
@@ -191,7 +184,6 @@ where
 }
 
 pub(super) async fn wait_for_release(controls: &Controls) -> bool {
-    controls.held_active.store(true, Ordering::Release);
     if controls.release_requested.load(Ordering::Acquire) {
         return true;
     }

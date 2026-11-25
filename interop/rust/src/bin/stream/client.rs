@@ -9,15 +9,35 @@ const MAX_HEAD: usize = 32 * 1024;
 const MAX_EVENT: usize = 1024 * 1024;
 
 pub fn run() -> ! {
+    let a = args();
+    let successor_activation = fallback_successor_activation(&a);
     let mut request_sig = None;
     if let Err(_e) = run_inner(&mut request_sig) {
-        let a = args();
         let scenario = flag(&a, "--scenario").unwrap_or_default();
         emit(
-            &serde_json::json!({"type":"terminal","scenario":scenario,"outcome":"error","code":"client_error","http_status":null,"http_code":null,"frames_verified":0,"request_id":null,"mcp_complete":false,"terminal_frame":null,"request_sig":request_sig,"v1_evidence":null,"open":null,"frames":[],"failure_frame":null,"successor_activation":null}),
+            &serde_json::json!({"type":"terminal","scenario":scenario,"outcome":"error","code":"client_error","http_status":null,"http_code":null,"frames_verified":0,"request_id":null,"mcp_complete":false,"terminal_frame":null,"request_sig":request_sig,"v1_evidence":null,"open":null,"frames":[],"failure_frame":null,"successor_activation":successor_activation}),
         );
     }
     std::process::exit(0)
+}
+
+fn fallback_successor_activation(a: &[String]) -> Option<i64> {
+    flag(a, "--successor-activation")
+        .and_then(|value| value.parse().ok())
+        .or_else(|| {
+            a.iter()
+                .enumerate()
+                .filter(|(_, value)| value.as_str() == "--known-server-key")
+                .filter_map(|(index, _)| a.get(index + 1))
+                .filter_map(|entry| {
+                    entry.split(',').find_map(|field| {
+                        field
+                            .strip_prefix("activation=")
+                            .and_then(|value| value.parse::<i64>().ok())
+                    })
+                })
+                .max()
+        })
 }
 
 fn run_inner(request_sig_out: &mut Option<String>) -> Result<(), String> {

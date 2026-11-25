@@ -43,10 +43,7 @@ fn read_clock(path: &str) -> Result<i64, String> {
 fn emit(v: &serde_json::Value) {
     let mut o = std::io::stdout().lock();
     let _ = serde_json::to_writer(&mut o, v);
-    let _ = o.write_all(
-        b"
-",
-    );
+    let _ = o.write_all(b"\n");
     let _ = o.flush();
 }
 fn b64(b: &[u8]) -> String {

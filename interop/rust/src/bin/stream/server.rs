@@ -508,35 +508,33 @@ fn build_verifier(
     state: FileState,
     clock_file: &str,
     window_seconds: i64,
-) -> Arc<Verifier> {
-    Arc::new(
-        Verifier::new(Config {
-            aud: audience.to_owned(),
-            state: Arc::new(state),
-            nonces: Arc::new(NonceStore::new()),
-            audit: None,
-            native: Some(Arc::new(Native::new(NativeOptions::default()))),
-            window_seconds,
-            now: {
-                let clock_path = clock_file.to_owned();
-                Arc::new(move || read_clock(&clock_path).unwrap_or(0))
-            },
-        })
-        .unwrap_or_else(|error| {
-            eprintln!("stream server: verifier: {error}");
-            std::process::exit(1)
-        }),
-    )
+) -> Verifier {
+    Verifier::new(Config {
+        aud: audience.to_owned(),
+        state: Arc::new(state),
+        nonces: Arc::new(NonceStore::new()),
+        audit: None,
+        native: Some(Arc::new(Native::new(NativeOptions::default()))),
+        window_seconds,
+        now: {
+            let clock_path = clock_file.to_owned();
+            Arc::new(move || read_clock(&clock_path).unwrap_or(0))
+        },
+    })
+    .unwrap_or_else(|error| {
+        eprintln!("stream server: verifier: {error}");
+        std::process::exit(1)
+    })
 }
 
 fn build_stream_layer(
-    verifier: Arc<Verifier>,
+    verifier: Verifier,
     key: ed25519_dalek::SigningKey,
     options: mcp_jack::server::stream::StreamOptions,
     profile: Profile,
 ) -> StreamLayer {
     StreamLayer::new(StreamConfig {
-        verifier,
+        verifier: Arc::new(verifier),
         server_key: key,
         max_body_bytes: 0,
         max_response_bytes: 0,
@@ -611,7 +609,7 @@ pub fn run() -> ! {
         std::process::exit(1)
     });
     #[cfg(target_os = "linux")]
-    let verifier = if let Some((store, provider, _)) = &rotation {
+    let verifier = Arc::new(if let Some((store, provider, _)) = &rotation {
         build_verifier(&audience, state, &clock_file, 0).with_server_keys(Arc::new(
             rotation::server_key_tool(Arc::clone(store), Arc::clone(provider)),
         ))
@@ -620,10 +618,9 @@ pub fn run() -> ! {
             .with_durable_nonces(Arc::clone(&setup.store))
     } else {
         build_verifier(&audience, state, &clock_file, 0)
-    };
+    });
     #[cfg(not(target_os = "linux"))]
-    let verifier = build_verifier(&audience, state, &clock_file, 0);
-    let _idle_timeout_ms = number(&arguments, "--idle-timeout-ms", 90_000);
+    let verifier = Arc::new(build_verifier(&audience, state, &clock_file, 0));
     // The SDK's StreamOptions does not currently consume a server idle timeout.
     let options = mcp_jack::server::stream::StreamOptions {
         frame_max_bytes: number(&arguments, "--frame-max-bytes", 1_048_576) as usize,
@@ -654,16 +651,26 @@ pub fn run() -> ! {
     #[cfg(target_os = "linux")]
     let layer = Arc::new(if let Some((_, provider, _)) = &rotation {
         StreamLayer::rotating(rotation::rotating_config(
-            verifier,
+            verifier.clone(),
             provider.clone(),
             options,
         ))
         .with_profile(profile)
     } else {
-        build_stream_layer(verifier, key, options, profile)
+        build_stream_layer(
+            Arc::try_unwrap(verifier).unwrap_or_else(|_| unreachable!()),
+            key,
+            options,
+            profile,
+        )
     });
     #[cfg(not(target_os = "linux"))]
-    let layer = Arc::new(build_stream_layer(verifier, key, options, profile));
+    let layer = Arc::new(build_stream_layer(
+        Arc::try_unwrap(verifier).unwrap_or_else(|_| unreachable!()),
+        key,
+        options,
+        profile,
+    ));
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -740,11 +747,16 @@ pub fn run() -> ! {
                             Some("release") => {
                                 controls.release_requested.store(true, Ordering::Release);
                                 controls.release.notify_waiters();
-                                if controls.held_active.swap(false, Ordering::AcqRel) {
+                                let lifecycle_hold = args.scenario == "rotation-cutoff-reopen"
+                                    || args.scenario == "durable-live-replay";
+                                if lifecycle_hold {
                                     let done = controls.held_done.notified();
-                                    let _ = tokio::time::timeout(Duration::from_secs(2), done).await;
-                                    // StreamLayer signs the end frame after the producer returns and has no SDK completion hook; this bounded grace is the last-resort ordering bridge.
-                                    tokio::time::sleep(Duration::from_millis(200)).await;
+                                    tokio::pin!(done);
+                                    done.as_mut().enable();
+                                    if tokio::time::timeout(Duration::from_secs(2), done).await.is_err() {
+                                        eprintln!("stream server: held stream did not complete; no release acknowledgement");
+                                        continue;
+                                    }
                                 }
                                 let sid = controls.held_sid.lock().ok().and_then(|g| g.clone());
                                 let mut ack = match serde_json::to_vec(&serde_json::json!({"control":"released","sid":sid})) {
