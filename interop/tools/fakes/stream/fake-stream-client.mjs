@@ -49,6 +49,7 @@ if (typeof aud !== 'string' || aud.length === 0) throw Error('--aud is required'
 const requestText = ['mcp-jack/v1/request', 'POST', '/mcp', aud, alice.kid, String(requestTs), nonce, sha(requestBody)].join('\n');
 const requestSig = b64(sign(null, Buffer.from(requestText, 'utf8'), privateKey));
 const requestHeaders = [['content-type', 'application/json'], ['content-length', String(requestBody.length)], ['Jack-Auth', `v1 kid=${alice.kid},ts=${requestTs},nonce=${nonce},sig=${requestSig}`], ...mirrorHeaders, ...(arg('--jack-accept') ? [['Jack-Accept', arg('--jack-accept')]] : [])];
+if (process.env.JACK_STREAM_FAKE_ROTATION_NO_END === 'keepalive') requestHeaders.push(['Connection', 'keep-alive']);
 let emitted = false, badEvidenceEmitted = false;
 function terminal(outcome, code, status, evidence, open, frames, verifiedCount = frames?.length || 0, failureFrame = null) {
   if (emitted) return; emitted = true;
