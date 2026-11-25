@@ -828,7 +828,9 @@ pub fn run() -> ! {
                         let service = hyper_util::service::TowerToHyperService::new(
                             SharedService::new(layer.layer(handler), controls.clone(), args.clone()),
                         );
+                        // Half-close: the raw replay client shuts its write side right after the request.
                         let _ = hyper::server::conn::http1::Builder::new()
+                            .half_close(true)
                             .serve_connection(hyper_util::rt::TokioIo::new(socket), service).await;
                     }));
                 }
