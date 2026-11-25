@@ -9,10 +9,11 @@ mkdir -p "$work/go" "$work/ts" || exit 1
 fail=0
 go_locks_ok=false
 ts_locks_ok=false
-logrun() { local n=$1; shift; "$@" >"$out/logs/$n.log" 2>&1; local rc=$?; printf '%s\n' "$rc" >"$out/logs/$n.exit"; return "$rc"; }
+log_line() { printf '%s\n' "$*"; }
+logrun() { local n=$1; shift; local full="$out/logs/$n.full"; "$@" >"$full" 2>&1; local rc=$? size; size=$(wc -c <"$full"); head -c 200000 "$full" >"$out/logs/$n.log"; if (( size > 200000 )); then printf '\nlog truncated\n' >>"$out/logs/$n.log"; fi; rm -f "$full"; printf '%s\n' "$rc" >"$out/logs/$n.exit"; log_line "$n: exit $rc"; return "$rc"; }
 record() { local key=$1 name=$2 msg=$3; printf '%s\n' "$msg" >>"$out/logs/$name.log"; set_report --arg n "$name" --arg m "$msg" ".${key} += [{name:\$n,message:\$m}]" || fail=1; }
-required_fail() { record failures "$1" "$2"; fail=1; }
-optional_gap() { record optional_gaps "$1" "$2"; }
+required_fail() { log_line "required-fail: $1: $2"; record failures "$1" "$2"; fail=1; }
+optional_gap() { log_line "optional-gap: $1: $2"; record optional_gaps "$1" "$2"; }
 set_report() { local t="$report.tmp"; jq "$@" "$report" >"$t" && jq -e . "$t" >/dev/null && mv "$t" "$report" || { rm -f "$t"; printf '%s\n' 'report update failed' >>"$out/logs/report-write.log"; fail=1; return 1; }; }
 require_file() { local src=$1 dst=$2 name=$3; if [[ -f $src ]] && cp "$src" "$dst"; then return 0; fi; required_fail "$name" "file copy failed: $src"; return 1; }
 validate() { jq -e . "$2" >/dev/null 2>&1 || { required_fail "$1" "invalid JSON: $2"; return 1; }; }
@@ -30,8 +31,9 @@ gh_tag_commit() {
   return 1
 }
 resolve_go() {
-  local f="$out/go/releases.json"
+  local f="$work/go/releases.json" artifact="$out/go/releases.json"
   if ! curl -fsSL 'https://api.github.com/repos/modelcontextprotocol/go-sdk/releases?per_page=20&page=1' -o "$f" || ! validate go-release-json "$f"; then required_fail go-latest 'latest Go release metadata unavailable'; return; fi
+  local release_size; release_size=$(wc -c <"$f"); head -c 200000 "$f" >"$artifact"; if (( release_size > 200000 )); then printf '\nlog truncated\n' >>"$artifact"; fi
   mapfile -t go_tags < <(jq -r '.[]|select(.draft==false and .prerelease==false)|.tag_name' "$f" | head -20)
   if ((${#go_tags[@]}==0)); then required_fail go-latest 'no stable Go release'; return; fi
   local latest=${go_tags[0]} commit=null; if c=$(gh_tag_commit modelcontextprotocol/go-sdk "$latest"); then commit=$(json_string "$c"); else required_fail go-latest 'latest release tag unresolved'; fi
@@ -70,20 +72,22 @@ walk_go_candidates() {
   if [[ $latest_status == absent ]]; then latest_evidence='{"kind":"absent","reason":"no_literal"}'; else latest_evidence=$(jq -cn --arg k "$latest_kind" --argjson l "$latest_lines" '{kind:$k,lines:$l}'); fi
   if [[ $selected_status == unknown ]]; then selected_evidence='{"kind":"unknown","reason":"no_probe"}'; else selected_evidence=$(jq -cn --arg k "$selected_kind" --argjson l "$selected_lines" '{kind:$k,lines:$l}'); fi
   set_report --arg lv "$latest" --arg sv "$selected" --argjson lc "$lc" --argjson sc "$selected_commit" --arg ls "$latest_status" --arg ss "$selected_status" --argjson le "$latest_evidence" --argjson se "$selected_evidence" '.go={latest:{version:$lv,commit:$lc,protocol_status:$ls,evidence:$le},selected:{version:$sv,commit:$sc,protocol_status:$ss,evidence:$se}}'
+  log_line "go: latest=$latest selected=$selected protocol_status=$selected_status locks_ok=$go_locks_ok"
 }
 resolve_ts_package() {
-  local pkg=$1 required=$2 safe=${1##*/} meta="$out/ts/registry-${1##*/}.json" latest selected status=unknown ev=download_failed probe evidence_file
+  local pkg=$1 required=$2 safe=${1##*/} meta="$work/ts/registry-${1##*/}.json" artifact="$out/ts/registry-${1##*/}.json" latest selected status=unknown ev=download_failed probe evidence_file meta_size
   safe=${safe//-/_}
   if ! curl -fsSL "https://registry.npmjs.org/$pkg" -o "$meta" || ! validate "npm-json-$safe" "$meta"; then
     if [[ $required == true ]]; then required_fail "npm-$safe" 'registry metadata unavailable'; else optional_gap "npm-$safe" 'umbrella package unavailable'; fi; return
   fi
+  meta_size=$(wc -c <"$meta"); head -c 200000 "$meta" >"$artifact"; if (( meta_size > 200000 )); then printf '\nlog truncated\n' >>"$artifact"; fi
   latest=$(jq -r '."dist-tags".latest // empty' "$meta"); if [[ -z $latest ]]; then if [[ $required == true ]]; then required_fail "npm-$safe" 'latest version missing'; else optional_gap "npm-$safe" 'latest version missing'; fi; return; fi
   selected=$latest
   probe=$(npm_source_match "$pkg" "$latest" "$safe" latest)
   evidence_file="$out/logs/npm-source-$safe-latest.json"
   case $probe in
-    match) status=source_literal; ev=$(jq -cn --argjson l "$(<"$evidence_file")" --arg log "logs/npm-source-$safe-latest.log" '{kind:"source_literal",lines:$l,log:$log}') ;;
-    declared) status=declared; ev=$(jq -cn --argjson l "$(<"$out/logs/npm-declared-$safe-latest.json")" --arg log "logs/npm-declared-$safe-latest.log" '{kind:"declared",lines:$l,log:$log}') ;;
+    match) status=source_literal; ev=$(jq -cn --slurpfile l "$evidence_file" --arg log "logs/npm-source-$safe-latest.log" '{kind:"source_literal",lines:$l[0],log:$log}') ;;
+    declared) status=declared; ev=$(jq -cn --slurpfile l "$out/logs/npm-declared-$safe-latest.json" --arg log "logs/npm-declared-$safe-latest.log" '{kind:"declared",lines:$l[0],log:$log}') ;;
     miss) status=absent; ev='{"kind":"absent","reason":"no_literal"}' ;;
     search_error) status=unknown; ev='{"kind":"unknown","reason":"source_search_error"}' ;;
     *) status=unknown; ev='{"kind":"unknown","reason":"download_failed"}' ;;
@@ -96,7 +100,7 @@ resolve_ts_package() {
       ((count+=1)); ((count>10)) && break
       fallback_probe=$(npm_source_match "$pkg" "$ver" "$safe" "fallback-$count")
       case $fallback_probe in
-        match|declared) selected=$ver; status=$fallback_probe; evidence_file="$out/logs/npm-source-$safe-fallback-$count.json"; [[ $fallback_probe == declared ]] && evidence_file="$out/logs/npm-declared-$safe-fallback-$count.json"; ev=$(jq -cn --arg k "$fallback_probe" --argjson l "$(<"$evidence_file")" --arg log "logs/${evidence_file##*/}" '{kind:$k,lines:$l,log:$log}'); break ;;
+        match|declared) selected=$ver; status=$fallback_probe; evidence_file="$out/logs/npm-source-$safe-fallback-$count.json"; [[ $fallback_probe == declared ]] && evidence_file="$out/logs/npm-declared-$safe-fallback-$count.json"; ev=$(jq -cn --arg k "$fallback_probe" --slurpfile l "$evidence_file" --arg log "logs/${evidence_file##*/}" '{kind:$k,lines:$l[0],log:$log}'); break ;;
         miss) ;;
         search_error) optional_gap "npm-search-$safe-fallback-$count" 'search error' ;;
         *) ;;
@@ -112,21 +116,32 @@ resolve_ts_package() {
   [[ $pkg == @modelcontextprotocol/client ]] && role=client
   [[ $pkg == @modelcontextprotocol/server ]] && role=server
   [[ $pkg == @modelcontextprotocol/node ]] && role=tooling
+  jq -n --arg p "$pkg" --arg v "$selected" '{name:$p,version:$v}' >"$out/ts/selected-$safe.json" || { required_fail "npm-$safe" 'selected version write failed'; return; }
   set_report --arg p "$pkg" --arg role "$role" --arg lv "$latest" --arg sv "$selected" --arg ls "$latest_status" --argjson le "$latest_ev" --arg ss "$status" --argjson se "$ev" --argjson lc "$latest_commit" --argjson lu "$latest_url" --argjson commit "$prov_commit" --argjson url "$prov_url" --arg pe "$prov_ev" '.typescript.packages[$p]={role:$role,latest:{version:$lv,protocol_status:$ls,evidence:$le,commit:$lc,verified_release_url:$lu},selected:{version:$sv,protocol_status:$ss,evidence:$se,commit:$commit,verified_release_url:$url,provenance:$pe}}'
 }
 npm_source_match() {
-  local pkg=$1 ver=$2 safe=$3 label=$4 dir="$work/ts/node_modules/$pkg" logfile="$out/logs/npm-source-$3-$4.log" rc lines tag
+  local pkg=$1 ver=$2 safe=$3 label=$4 dir="$work/ts/node_modules/$pkg" logfile="$out/logs/npm-source-$3-$4.log" raw="$out/logs/npm-source-$3-$4.raw" ordered="$out/logs/npm-source-$3-$4.ordered" rc count
   printf '{"name":"pins-bootstrap","private":true,"dependencies":{"%s":"%s"}}\n' "$pkg" "$ver" >"$work/ts/package.json"
   [[ -s $work/ts/package.json ]] || { printf 'install_failed'; return 0; }
   if ! logrun "npm-$safe-$label" bash -c 'cd "$1" && npm install --no-audit --no-fund' _ "$work/ts"; then printf 'install_failed'; return 0; fi
-  grep -rlF '2026-07-28' "$dir" >/dev/null 2>&1; rc=$?
+  local includes=(--include='*.md' --include='*.d.ts' --include='*.d.mts' --include='*.js' --include='*.mjs' --include='*.cjs' --include='package.json' --exclude='*.map' --exclude-dir=node_modules)
+  grep -rlF '2026-07-28' "${includes[@]}" "$dir" >/dev/null 2>&1; rc=$?
   if (( rc == 0 )); then
-    grep -rnF '2026-07-28' "$dir" >"$logfile" 2>&1; rc=$?
+    grep -rnF '2026-07-28' "${includes[@]}" "$dir" >"$raw" 2>&1; rc=$?
     (( rc == 0 )) || { printf 'search_error'; return 0; }
-    jq -Rsc 'split("\n")|map(select(length>0))|.[0:5]' "$logfile" >"$out/logs/npm-source-$safe-$label.json"
-    grep -rnE '2025-11-25.*2026-07-28|2026-07-28.*2025-11-25' "$dir" >"$out/logs/npm-declared-$safe-$label.log" 2>/dev/null; rc=$?
-    if (( rc == 0 )); then jq -Rsc 'split("\n")|map(select(length>0))|.[0:5]' "$out/logs/npm-declared-$safe-$label.log" >"$out/logs/npm-declared-$safe-$label.json"; printf 'declared'; else printf 'match'; fi
+    { grep -E 'README|package\.json' "$raw"; grep -vE 'README|package\.json' "$raw"; } >"$ordered"
+    count=$(wc -l <"$ordered"); cut -c1-240 "$ordered" | head -20 | sed "s|$dir/||" >"$logfile"
+    if (( count > 20 )); then printf 'log truncated\n' >>"$logfile"; fi
+    jq -Rsc 'split("\n")|map(select(length>0))' "$logfile" >"$out/logs/npm-source-$safe-$label.json"
+    grep -rnE '2025-11-25.*2026-07-28|2026-07-28.*2025-11-25' "${includes[@]}" "$dir" >"$raw" 2>/dev/null; rc=$?
+    if (( rc == 0 )); then
+      { grep -E 'README|package\.json' "$raw"; grep -vE 'README|package\.json' "$raw"; } >"$ordered"
+      count=$(wc -l <"$ordered"); cut -c1-240 "$ordered" | head -20 | sed "s|$dir/||" >"$out/logs/npm-declared-$safe-$label.log"
+      if (( count > 20 )); then printf 'log truncated\n' >>"$out/logs/npm-declared-$safe-$label.log"; fi
+      jq -Rsc 'split("\n")|map(select(length>0))' "$out/logs/npm-declared-$safe-$label.log" >"$out/logs/npm-declared-$safe-$label.json"; printf 'declared'
+    else printf 'match'; fi
   elif (( rc == 1 )); then printf 'miss'; else printf 'search_error'; fi
+  rm -f "$raw" "$ordered"
   return 0
 }
 verify_ts_provenance() {
@@ -149,18 +164,22 @@ verify_ts_provenance() {
   fi
   if [[ $found != null ]]; then
     rel="https://api.github.com/repos/modelcontextprotocol/typescript-sdk/releases/tags/$matched"
-    if curl -fsSL "$rel" -o "$out/logs/release-$safe.json" && jq -e --arg t "$matched" '.tag_name==$t' "$out/logs/release-$safe.json" >/dev/null 2>&1; then url=$(json_string "https://github.com/modelcontextprotocol/typescript-sdk/releases/tag/$matched"); else :; # Keep tag-verified commit without optional release URL.
+    local release_raw="$out/logs/release-$safe.raw"
+    if curl -fsSL "$rel" -o "$release_raw"; then local release_size; release_size=$(wc -c <"$release_raw"); head -c 200000 "$release_raw" >"$out/logs/release-$safe.json"; if (( release_size > 200000 )); then printf '\nlog truncated\n' >>"$out/logs/release-$safe.json"; fi; rm -f "$release_raw"; fi
+    if jq -e --arg t "$matched" '.tag_name==$t' "$out/logs/release-$safe.json" >/dev/null 2>&1; then url=$(json_string "https://github.com/modelcontextprotocol/typescript-sdk/releases/tag/$matched"); else :; # Keep tag-verified commit without optional release URL.
     fi
   fi
   PROV_COMMIT=$found; PROV_URL=$url; PROV_EVIDENCE=unverified
   [[ $found != null ]] && PROV_EVIDENCE=verified
 }
 write_ts_lock() {
-  local client server node
-  client=$(jq -r '.typescript.packages["@modelcontextprotocol/client"].selected.version // empty' "$report")
-  server=$(jq -r '.typescript.packages["@modelcontextprotocol/server"].selected.version // empty' "$report")
-  node=$(jq -r '.typescript.packages["@modelcontextprotocol/node"].selected.version // empty' "$report")
-  if [[ -z $client || -z $server || -z $node ]]; then required_fail ts-lock 'selected split package version missing'; return; fi
+  local client server node name version
+  for name in client server node; do
+    if [[ ! -f $out/ts/selected-$name.json ]]; then required_fail ts-lock "selected $name truth file missing"; return; fi
+    version=$(jq -r '.version // empty' "$out/ts/selected-$name.json")
+    if [[ -z $version ]]; then required_fail ts-lock "selected $name truth file version empty"; return; fi
+    case $name in client) client=$version ;; server) server=$version ;; node) node=$version ;; esac
+  done
   jq -n --arg c "$client" --arg s "$server" --arg n "$node" '{name:"pins-bootstrap",private:true,dependencies:{"@modelcontextprotocol/client":$c,"@modelcontextprotocol/server":$s,"@modelcontextprotocol/node":$n}}' >"$work/ts/package.json"
   validate ts-lock-manifest "$work/ts/package.json" || return
   if logrun ts-lock bash -c 'cd "$1" && npm install --no-audit --no-fund' _ "$work/ts"; then
@@ -200,12 +219,11 @@ write_references() {
   { echo '# Verified source references'; echo; jq -r '"Go latest: \(.go.latest.version // "unknown"), selected: \(.go.selected.version // "unknown")."' "$report"; jq -r '.typescript.packages|to_entries[]|"\(.key): latest \(.value.latest.version), selected \(.value.selected.version), commit \(.value.selected.commit // "unverified"), release \(.value.selected.verified_release_url // "unverified")"' "$report"; } >"$out/SOURCE_REFERENCES.md" || required_fail references 'reference write failed'
 }
 write_summary() {
-  local ts_ok go_status ts_status gl gs tl ts
-  ts_ok=$(jq -r '[.typescript.packages["@modelcontextprotocol/client"].selected.provenance,.typescript.packages["@modelcontextprotocol/server"].selected.provenance,.typescript.packages["@modelcontextprotocol/node"].selected.provenance]|all(.=="verified")' "$report")
-  go_status=$(jq -r '.go.selected.protocol_status // "unknown"' "$report"); ts_status=$(jq -r '[.typescript.packages["@modelcontextprotocol/client"].selected.protocol_status,.typescript.packages["@modelcontextprotocol/server"].selected.protocol_status,.typescript.packages["@modelcontextprotocol/node"].selected.protocol_status]|join(",")' "$report")
-  gl=$(jq -r '.go.latest.version // ""' "$report"); gs=$(jq -r '.go.selected.version // ""' "$report")
-  tl=$(jq -r '[.typescript.packages["@modelcontextprotocol/client"].selected.version,.typescript.packages["@modelcontextprotocol/server"].selected.version,.typescript.packages["@modelcontextprotocol/node"].selected.version]|join(",")' "$report"); ts=$tl
-  set_report --arg gl "$gl" --arg gs "$gs" --arg tl "$tl" --arg ts "$ts" --arg gp "$go_status" --arg tp "$ts_status" --argjson go_locks "$go_locks_ok" --argjson ts_locks "$ts_locks_ok" --argjson tpv "$ts_ok" '.summary={go:{latest:$gl,selected:$gs,protocol_status:$gp,ready_for_pinning:(($gp=="source_literal" or $gp=="declared") and .go.selected.commit!=null and $go_locks)},typescript:{latest:$tl,selected:$ts,protocol_status:$tp,ready_for_pinning:(($tp|split(",")|all(.=="source_literal" or .=="declared")) and $tpv and $ts_locks)}}'
+  set_report --argjson go_locks "$go_locks_ok" --argjson ts_locks "$ts_locks_ok" '
+    (.typescript.packages) as $packages |
+    (["@modelcontextprotocol/client","@modelcontextprotocol/server","@modelcontextprotocol/node"] | map(. as $p | {($p):{latest:($packages[$p].latest.version // ""),selected:($packages[$p].selected.version // ""),protocol_status:($packages[$p].selected.protocol_status // "unknown"),provenance:($packages[$p].selected.provenance // "unverified")}}) | add) as $ts_packages |
+    .summary={go:{latest:(.go.latest.version // ""),selected:(.go.selected.version // ""),protocol_status:(.go.selected.protocol_status // "unknown"),ready_for_pinning:(((.go.selected.protocol_status=="source_literal" or .go.selected.protocol_status=="declared") and .go.selected.commit!=null and $go_locks))},typescript:{packages:$ts_packages,ready_for_pinning:([$ts_packages[]|(.protocol_status=="source_literal" or .protocol_status=="declared") and .provenance=="verified"]|all) and $ts_locks}}
+  '
 }
 set_report '.typescript={packages:{}}'
 resolve_go
