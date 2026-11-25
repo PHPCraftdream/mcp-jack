@@ -1,7 +1,14 @@
 import { createServer } from "node:http";
-import { readFileSync, appendFileSync } from "node:fs";
+import { readFileSync, appendFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
 import { InMemorySigner } from "../../client/signing/signer.js";
 import { encodeBase64URL } from "../../core/encoding.js";
+import { RotationServerProvider } from "../../rotation/server/provider.js";
+import type { RotationServerKey } from "../../rotation/server/provider.js";
+import { RotationServerStore } from "../../rotation/server/store.js";
+import { ServerKeyTool } from "../../server/server-key-tool.js";
+import { DurableNonceStore } from "../../server/durable/store.js";
+import { DurableNonceAdmission } from "../../server/durable/admission.js";
 import { parseRequestAuth } from "../../core/auth-header.js";
 import {
   jackFetchHandler,
@@ -25,10 +32,19 @@ const keys = JSON.parse(
 
 function main(): void {
   const flags = parseFlags(process.argv.slice(2));
+  if (flags["durable-init"] !== undefined) {
+    const dir = need(flags, "durable-dir");
+    const now = clockFile(need(flags, "clock-file"));
+    const storePath = join(dir, "durable-nonces.bin");
+    if (!existsSync(storePath)) DurableNonceStore.initializeUnused(storePath, { deploymentId: "mcp-jack-stream-interop", window: 30, now });
+    process.stdout.write('{"durable_initialized":true}\n');
+    process.exit(0);
+  }
   const id = need(flags, "scenario");
   const meta = scenario(id);
+  const matrix = need(flags, "matrix");
   const now = clockFile(need(flags, "clock-file"));
-  if (need(flags, "profile") !== "modern" || need(flags, "matrix") !== "stream") {
+  if (need(flags, "profile") !== "modern" || !["stream", "rotation-stream", "durable-stream"].includes(matrix)) {
     throw new Error("expected modern stream matrix");
   }
 
@@ -39,6 +55,43 @@ function main(): void {
   const signer = new InMemorySigner(seed);
   const serviceKey = keys.find((key: any) => key.name === "svc");
   if (signer.kid() !== serviceKey.kid) throw new Error("server seed does not identify fixture svc");
+
+  let rotationStore: RotationServerStore | undefined;
+  let rotationProvider: RotationServerProvider | undefined;
+  let closeRotationStore: () => void = () => undefined;
+  if (flags["rotation-store"] !== undefined) {
+    const rotationPath = need(flags, "rotation-store");
+    const kid0 = signer.kid();
+    const rotationOptions = {
+      binding: { endpoint: "http://127.0.0.1", aud }, window: 30,
+      checkpoint: { ordinal: 0, hash: "-", kid: kid0, publicKeyB64u: encodeBase64URL(signer.publicKey()), publishedAt: 0 },
+      now, anchorReference: "ring-0",
+    };
+    if (!existsSync(rotationPath)) RotationServerStore.initializeUnused(rotationPath, rotationOptions);
+    rotationStore = RotationServerStore.open(rotationPath, rotationOptions);
+    closeRotationStore = () => rotationStore?.close();
+    const rotationKeys: RotationServerKey[] = [{ reference: "ring-0", signer }];
+    const ringSeed = flags["ring-seed"];
+    if (ringSeed !== undefined) {
+      const eq = ringSeed.indexOf("=");
+      if (eq <= 0) throw new Error("invalid --ring-seed");
+      const reference = ringSeed.slice(0, eq);
+      const seedHex = ringSeed.slice(eq + 1);
+      if (!/^[0-9a-fA-F]{64}$/.test(seedHex)) throw new Error("invalid --ring-seed");
+      const seedBytes = Buffer.from(seedHex, "hex");
+      if (seedBytes.length !== 32) throw new Error("invalid --ring-seed");
+      rotationKeys.push({ reference, signer: new InMemorySigner(seedBytes) });
+    }
+    rotationProvider = new RotationServerProvider(rotationStore, rotationKeys);
+  }
+  let durableStore: DurableNonceStore | undefined;
+  let closeDurableStore: () => void = () => undefined;
+  if (flags["durable-dir"] !== undefined) {
+    durableStore = DurableNonceStore.open(join(need(flags, "durable-dir"), "durable-nonces.bin"), {
+      deploymentId: "mcp-jack-stream-interop", window: 30, now,
+    });
+    closeDurableStore = () => durableStore?.close();
+  }
 
   const options = {
     ...(meta.stream_options ?? {}),
@@ -52,11 +105,14 @@ function main(): void {
   let heldRelease: (() => void) | undefined;
   let heldSid: string | undefined;
   const durationRequests = new Map<string, { start: number; cancelled: boolean; elapsed: boolean }>();
-  const verifier = new Verifier({ aud, state, nonces: new NonceStore(), native: new Native(), now });
+  const verifier = durableStore !== undefined
+    ? new Verifier({ aud, state, native: new Native(), now, durable: new DurableNonceAdmission({ store: durableStore, now }) })
+    : new Verifier({ aud, state, nonces: new NonceStore(), native: new Native(), now,
+      ...(rotationStore === undefined || rotationProvider === undefined ? {} : { serverKeys: new ServerKeyTool(rotationStore, rotationProvider) }) });
   const sdkHandler = jackFetchHandler(
     {
       verifier,
-      serverKey: seed,
+      ...(rotationProvider === undefined ? { serverKey: seed } : { rotationKeys: rotationProvider }),
       profile: "modern",
       streams: {
         ...(options.heartbeatMs === undefined ? {} : { heartbeatMs: options.heartbeatMs }),
@@ -167,6 +223,50 @@ function main(): void {
           }),
           streamHeaders(),
         );
+      }
+
+      if (id === "rotation-cutoff-reopen") {
+        const activation = integer(flags, "successor-activation");
+        const progress = { jsonrpc: "2.0", method: "notifications/progress", params: { progress: 1 } };
+        const final = { jsonrpc: "2.0", id: parsed.id, result: {} };
+        if (now() < activation && heldRelease === undefined) {
+          const sid = context.sid;
+          return new Response(new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(eventBytes(progress));
+              controller.enqueue(eventBytes(final));
+              heldSid = sid;
+              heldRelease = () => { try { controller.close(); } catch { /* already closed */ } };
+            },
+            cancel() {
+              if (heldSid === sid) { heldRelease = undefined; heldSid = undefined; }
+            },
+          }), streamHeaders());
+        }
+        return make([progress, final]);
+      }
+
+      if (id === "durable-live-replay") {
+        const progress = { jsonrpc: "2.0", method: "notifications/progress", params: { progress: 1, message: "stream:first" } };
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(eventBytes(progress));
+            const sid = context.sid;
+            heldSid = sid;
+            heldRelease = () => {
+              try { controller.enqueue(eventBytes({ jsonrpc: "2.0", id: parsed.id, result: {} })); controller.close(); }
+              catch { /* already closed */ }
+            };
+          },
+          cancel() {
+            if (heldSid === context.sid) { heldRelease = undefined; heldSid = undefined; }
+          },
+        }), streamHeaders());
+      }
+
+      if (id === "durable-restart-replay") {
+        const progress = { jsonrpc: "2.0", method: "notifications/progress", params: { progress: 1, message: "stream:first" } };
+        return make([progress, { jsonrpc: "2.0", id: parsed.id, result: {} }]);
       }
 
       if (id === "oversize") {
@@ -280,7 +380,7 @@ function main(): void {
     );
   }
   function log(row: Record<string, unknown>): void {
-    appendFileSync(requestLog, `${JSON.stringify({ scenario: id, matrix: "stream", ...row })}\n`);
+    appendFileSync(requestLog, `${JSON.stringify({ scenario: id, matrix, ...row })}\n`);
   }
 
   const server = createServer(serveNode(handler));
@@ -296,6 +396,8 @@ function main(): void {
   const stop = () => {
     if (stopping) return;
     stopping = true;
+    try { closeRotationStore(); } catch (error) { process.stderr.write(`rotation store close: ${error instanceof Error ? error.message : String(error)}\n`); }
+    try { closeDurableStore(); } catch (error) { process.stderr.write(`durable store close: ${error instanceof Error ? error.message : String(error)}\n`); }
     server.closeAllConnections();
     server.close(() => process.exit(0));
   };
@@ -308,7 +410,25 @@ function main(): void {
       pending = pending.slice(at + 1);
       try {
         const command = JSON.parse(line);
-        if (command.action === "clock_advanced" && id === "max-duration") {
+        if (command.op === "announce") {
+          if (rotationProvider === undefined) {
+            process.stderr.write("announce requires rotation mode\n");
+            continue;
+          }
+          if (typeof command.reference !== "string" || typeof command.kid !== "string") {
+            process.stderr.write("announce requires string reference and kid\n");
+            continue;
+          }
+          try {
+            const r = rotationProvider.announce(command.reference, command.kid);
+            log({ event: "rotation_announced", reference: command.reference, kid: command.kid,
+              published_at: r.record.publishedAt, activates_at: r.record.activatesAt, head_hash: r.record.hash });
+            jsonl({ announced: true, ordinal: r.record.ordinal, head_ordinal: r.record.ordinal,
+              published_at: r.record.publishedAt, activates_at: r.record.activatesAt, head_hash: r.record.hash });
+          } catch (error) {
+            process.stderr.write(`announce failed: ${error instanceof Error ? error.message : String(error)}\n`);
+          }
+        } else if (command.action === "clock_advanced" && id === "max-duration") {
           const clock = now();
           if (command.clock === clock) {
             log({ event: "clock_changed", clock, start: command.start, duration_ms: command.duration_ms });

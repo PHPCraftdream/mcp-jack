@@ -4,6 +4,8 @@ import { writeFileSync } from 'node:fs';
 
 const keyFromSeed = seed => createPrivateKey({ key: Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), Buffer.from(seed, 'hex')]), format: 'der', type: 'pkcs8' });
 const sha256 = bytes => createHash('sha256').update(bytes).digest('base64url');
+const b64 = bytes => Buffer.from(bytes).toString('base64url');
+const canonicalSid = value => typeof value === 'string' && /^[A-Za-z0-9_-]+$/.test(value) && Buffer.from(value, 'base64url').length === 16 && b64(Buffer.from(value, 'base64url')) === value;
 const requireSingleTerminal = (records, label) => {
   const terminals = records.filter(record => record?.type === 'terminal');
   if (terminals.length !== 1 || records.at(-1) !== terminals[0]) throw Error(`${label} must end with exactly one terminal record`);
@@ -14,10 +16,11 @@ const recordsToMessages = records => records.filter(record => record?.type === '
 
 export async function runRotationScenario(ctx) {
   const { scenario, activation, clock, erin } = ctx;
+  let observedSid = null;
   // Called by the relay at injection time so seq/prev bind to the live chain and the
   // frame is signed by the predecessor key only after they are fixed.
   const signCutoff = ({ sid, seq, prev }) => {
-    if (sid !== scenario.sid || !Number.isSafeInteger(seq) || seq < 0 || typeof prev !== 'string' || !prev) throw Error(`cutoff injection chain mismatch sid=${sid} seq=${seq}`);
+    if (sid !== observedSid || !Number.isSafeInteger(seq) || seq < 0 || typeof prev !== 'string' || !prev) throw Error(`cutoff injection chain mismatch sid=${sid} seq=${seq}`);
     const data = JSON.stringify({ jsonrpc: '2.0', method: 'notifications/jack/stream_error', params: { code: 'stream_after_cutoff' } });
     const text = ['mcp-jack/stream1/frame', sid, String(seq), String(activation), prev, sha256(Buffer.from(data, 'utf8'))].join('\n');
     const sig = sign(null, Buffer.from(text, 'utf8'), keyFromSeed(ctx.svc.seed_hex)).toString('base64url');
@@ -39,13 +42,17 @@ export async function runRotationScenario(ctx) {
       firstRecords.push(record);
     }
     for (const record of firstRecords) ctx.verifyRecord(record, scenario.request_id);
+    const observedSids = firstRecords.map(record => record?.open?.sid);
+    if (!observedSids.every(canonicalSid)) throw Error('rotation old-stream records lack a canonical 16-byte base64url open sid');
+    if (new Set(observedSids).size !== 1) throw Error('rotation old-stream open sid is not consistent across records');
+    observedSid = observedSids[0];
     // Cutoff: advance the shared clock to A, then release the server hold so the end
     // frame crosses (and is replaced) while the client clock reads A.
     writeFileSync(ctx.clockFile, `${activation}\n`);
     ctx.server.write(`${JSON.stringify({ action: 'release' })}\n`);
     let releaseAck;
     try { releaseAck = JSON.parse(await ctx.server.nextLine(10000)); } catch { throw Error('rotation server did not acknowledge the held-stream release'); }
-    if (releaseAck?.control !== 'released' || releaseAck.sid !== scenario.sid) throw Error('rotation release acknowledgement does not match the held old stream');
+    if (releaseAck?.control !== 'released' || releaseAck.sid !== observedSid) throw Error('rotation release acknowledgement does not match the held old stream');
     const firstResult = await first.done;
     if (firstResult.code !== 0) throw Error(`rotation cutoff client exit ${firstResult.code}: ${firstResult.stderr}`);
     const firstAll = ctx.parseJsonLines(firstResult.stdout);
