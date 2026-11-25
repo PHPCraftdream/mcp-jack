@@ -125,8 +125,9 @@ func (provider *Provider) selectSigner(snapshot rotation.ServerSnapshot, clock r
 
 // AuthorizeResponse does not trust the body/tool when selecting an identity and does not fall back.
 // Final is single-use; Release is required after the physical write, including on any error.
-// Cutoff is the selected key's successor activation, nil when unknown; a stream signer
-// releases the lease after the open header because a stream has no single physical write.
+// Cutoff is the selected key's successor activation, nil when unknown. Final applies the window
+// bound (buffered responses); FinalStream, when present, is the stream end gate that follows the
+// live ring and the opening key's eligibility.
 func (provider *Provider) AuthorizeResponse(input server.ResponseKeyRequest) (server.ResponseKeyAuthorization, error) {
 	if provider == nil || provider.store == nil {
 		return server.ResponseKeyAuthorization{}, ErrUnavailable
@@ -181,6 +182,25 @@ func (provider *Provider) AuthorizeResponse(input server.ResponseKeyRequest) (se
 			}
 			current, err := provider.selectSigner(snapshot, final)
 			if err != nil || current.public != signer.public || released.Load() {
+				return ErrUnavailable
+			}
+			return nil
+		},
+		FinalStream: func() error {
+			if released.Load() || !finalized.CompareAndSwap(false, true) {
+				return ErrUnavailable
+			}
+			// The stream gate re-reads the live ring (5.1); eligibility, not snapshot bytes, decides refusal.
+			current, _, err := provider.store.Snapshot()
+			if err != nil {
+				return ErrUnavailable
+			}
+			final, err := provider.store.CheckSnapshotClock(current)
+			if err != nil || final.HighWater < clock.HighWater {
+				return ErrUnavailable
+			}
+			currentSigner, err := provider.selectSigner(current, final)
+			if err != nil || currentSigner.public != signer.public || released.Load() {
 				return ErrUnavailable
 			}
 			return nil

@@ -39,9 +39,15 @@ type ResponseKeyAuthorization struct {
 	Timestamp int64
 	// Cutoff is the successor activation A known for the selected key (spec 05
 	// section 5.1); nil means the provider knows no successor.
-	Cutoff  *int64
-	Final   func() error
-	Release func()
+	Cutoff *int64
+	Final  func() error
+	// FinalStream, when set, replaces Final as the end gate of a signed stream
+	// (spec 05 section 5.1). A provider that sets it must keep the Final
+	// guarantees: single use, the lease held, and refusal when the opening key
+	// is no longer the eligible signer at the end clock. Nil means the stream
+	// uses Final.
+	FinalStream func() error
+	Release     func()
 }
 
 // ResponseKeyProvider is selected explicitly; persistence/clock/ring invariants belong to the provider.
@@ -616,9 +622,13 @@ func (h *handler) streamKey(res verify.Result) (streamSigning, error) {
 			releaseResponseAuthorization(authorization.Release)
 			return streamSigning{}, err
 		}
-		// The lease stays held for the whole stream: the final gate and the
-		// release run in finish, after the end frame (3.1, 3.3, 5.1).
+		// The lease stays held for the whole stream: the final gate runs before
+		// the end frame is written, the release when the stream finishes (3.1, 3.3, 5.1).
 		kid := jack.KeyID(public)
+		gate := authorization.Final
+		if authorization.FinalStream != nil {
+			gate = authorization.FinalStream
+		}
 		signing := streamSigning{
 			key: stream.Key{
 				Kid:       kid,
@@ -635,7 +645,7 @@ func (h *handler) streamKey(res verify.Result) (streamSigning, error) {
 				}
 				return t
 			},
-			gate:    authorization.Final,
+			gate:    gate,
 			release: authorization.Release,
 		}
 		if reader, ok := h.keys.(StreamCutoffReader); ok {
