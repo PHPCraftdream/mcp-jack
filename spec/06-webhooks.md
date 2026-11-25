@@ -20,9 +20,9 @@ Three roles take part. The **sender** is the wrapped MCP server acting through J
 
 One outbound HTTPS `POST` carries one message to one subscription. The channel does not use `Jack-Auth`: the `mcp-jack/v1` request and response signatures do not apply to it, and a receiver never asks for one. A delivery is authenticated by the Standard Webhooks signatures of section 2 and, when configured, by the Jack signature of section 4.
 
-- `R1.1` Delivery request profile. Method `POST`; scheme `https` only. `Content-Type: application/json`. Exactly these headers are present: `webhook-id`, `webhook-timestamp`, `webhook-signature`, `X-MCP-Subscription-Id`, and `Jack-Webhook-Auth` when a `w1` key is configured (section 4). Header names are case-insensitive on receipt; a sender emits lowercase `webhook-*` and the exact mixed case `X-MCP-Subscription-Id` and `Jack-Webhook-Auth`. No other header is required, and `User-Agent` is unspecified.
+- `R1.1` Delivery request profile. Method `POST`; scheme `https` only. `Content-Type: application/json`. Exactly these headers are present: `webhook-id`, `webhook-timestamp`, `webhook-signature`, `X-MCP-Subscription-Id`, and `Jack-Webhook-Auth` when a `w1` key is configured (section 4). Header names are case-insensitive, on the wire and on receipt: a receiver MUST match them without regard to case, and no party may depend on the case a sender used. A sender SHOULD emit lowercase `webhook-*` and the spellings `X-MCP-Subscription-Id` and `Jack-Webhook-Auth` where its HTTP stack preserves case; a sender whose stack normalizes names (HTTP/2 and HTTP/3 always lowercase them, and so do some HTTP/1.1 implementations) conforms. No other header is required, and `User-Agent` is unspecified.
 
-| header | emitted spelling | required |
+| header | recommended spelling | required |
 |---|---|---|
 | webhook id | `webhook-id` | always |
 | attempt timestamp | `webhook-timestamp` | always |
