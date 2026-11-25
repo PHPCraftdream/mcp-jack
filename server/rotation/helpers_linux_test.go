@@ -82,7 +82,8 @@ func publish(t *testing.T, f fixture, index int) rotation.Record {
 	}
 	clock, err := f.store.CheckSnapshotClock(previous)
 	if err != nil {
-		t.Fatal(err)
+		// Context for the next occurrence: which state the snapshot and the clock were in.
+		t.Fatalf("publish %d: CheckSnapshotClock: %v (now=%d, revision=%d, records=%d, clock=%+v)", index, err, f.now.Load(), previous.Public.Revision, len(previous.Public.Records), previous.Public.Clock)
 	}
 	checkpoint := previous.Public.Checkpoint
 	if len(previous.Public.Records) != 0 {
