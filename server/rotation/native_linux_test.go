@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -803,6 +804,17 @@ func rotationStreamHeaders(header http.Header) []clientstream.Header {
 	return headers
 }
 
+// releaseOnCleanup returns an idempotent release of a held stream handler and
+// also runs it on cleanup, so a failed test never leaves the handler holding
+// the serving lease that the store Close waits for.
+func releaseOnCleanup(t *testing.T, held chan struct{}) func() {
+	t.Helper()
+	var once sync.Once
+	release := func() { once.Do(func() { close(held) }) }
+	t.Cleanup(release)
+	return release
+}
+
 func TestRotationStreamFinalAllowsWindowBreach(t *testing.T) {
 	f := setup(t)
 	provider, err := rotationserver.New(f.store, f.inventory)
@@ -811,6 +823,7 @@ func TestRotationStreamFinalAllowsWindowBreach(t *testing.T) {
 	}
 	advanced := make(chan struct{})
 	continueStream := make(chan struct{})
+	release := releaseOnCleanup(t, continueStream)
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte("data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{}}\n\n"))
@@ -830,7 +843,7 @@ func TestRotationStreamFinalAllowsWindowBreach(t *testing.T) {
 		t.Fatal("stream handler did not write its first frame")
 	}
 	f.now.Store(1040)
-	close(continueStream)
+	release()
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
@@ -855,6 +868,7 @@ func TestRotationStreamFinalEndsAfterMidStreamPublication(t *testing.T) {
 	}
 	advanced := make(chan struct{})
 	continueStream := make(chan struct{})
+	release := releaseOnCleanup(t, continueStream)
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte("data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{}}\n\n"))
@@ -880,7 +894,7 @@ func TestRotationStreamFinalEndsAfterMidStreamPublication(t *testing.T) {
 		t.Fatalf("successor activation = %d, want %d", activation, 1050+rotation.GraceSeconds)
 	}
 	f.now.Store(activation - 10)
-	close(continueStream)
+	release()
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
@@ -916,6 +930,7 @@ func TestRotationStreamFinalRejectsActivation(t *testing.T) {
 	}
 	advanced := make(chan struct{})
 	continueStream := make(chan struct{})
+	release := releaseOnCleanup(t, continueStream)
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte("data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{}}\n\n"))
@@ -940,7 +955,7 @@ func TestRotationStreamFinalRejectsActivation(t *testing.T) {
 		t.Fatalf("successor activation = %d, want %d", record.ActivatesAt, 1050+rotation.GraceSeconds)
 	}
 	f.now.Store(record.ActivatesAt)
-	close(continueStream)
+	release()
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
