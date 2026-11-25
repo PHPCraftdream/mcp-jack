@@ -9,21 +9,48 @@ const MAX_HEAD: usize = 32 * 1024;
 const MAX_EVENT: usize = 1024 * 1024;
 
 pub fn run() -> ! {
+    let a = args();
+    let successor_activation = fallback_successor_activation(&a);
     let mut request_sig = None;
     if let Err(_e) = run_inner(&mut request_sig) {
-        let a = args();
         let scenario = flag(&a, "--scenario").unwrap_or_default();
         emit(
-            &serde_json::json!({"type":"terminal","scenario":scenario,"outcome":"error","code":"client_error","http_status":null,"http_code":null,"frames_verified":0,"request_id":null,"mcp_complete":false,"terminal_frame":null,"request_sig":request_sig,"v1_evidence":null,"open":null,"frames":[],"failure_frame":null,"successor_activation":null}),
+            &serde_json::json!({"type":"terminal","scenario":scenario,"outcome":"error","code":"client_error","http_status":null,"http_code":null,"frames_verified":0,"request_id":null,"mcp_complete":false,"terminal_frame":null,"request_sig":request_sig,"v1_evidence":null,"open":null,"frames":[],"failure_frame":null,"successor_activation":successor_activation}),
         );
     }
     std::process::exit(0)
+}
+
+fn fallback_successor_activation(a: &[String]) -> Option<i64> {
+    flag(a, "--successor-activation")
+        .and_then(|value| value.parse().ok())
+        .or_else(|| {
+            a.iter()
+                .enumerate()
+                .filter(|(_, value)| value.as_str() == "--known-server-key")
+                .filter_map(|(index, _)| a.get(index + 1))
+                .filter_map(|entry| {
+                    entry.split(',').find_map(|field| {
+                        field
+                            .strip_prefix("activation=")
+                            .and_then(|value| value.parse::<i64>().ok())
+                    })
+                })
+                .max()
+        })
 }
 
 fn run_inner(request_sig_out: &mut Option<String>) -> Result<(), String> {
     let a = args();
     let get = |k: &str| flag(&a, k).ok_or_else(|| format!("missing {k}"));
     let scenario = get("--scenario")?;
+    let explicit_successor_activation = flag(&a, "--successor-activation")
+        .map(|value| {
+            value
+                .parse::<i64>()
+                .map_err(|_| "invalid --successor-activation")
+        })
+        .transpose()?;
     let _profile = get("--profile")?;
     let matrix = get("--matrix")?;
     if matrix.is_empty() {
@@ -91,6 +118,67 @@ fn run_inner(request_sig_out: &mut Option<String>) -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .next()
         .ok_or("URL has no address")?;
+    let pkbytes = mcp_jack::encoding::decode_b64url_fixed(&get("--server-public-key")?, 32)
+        .map_err(|e| e.to_string())?;
+    let pk: [u8; 32] = pkbytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| "invalid server key")?;
+    let predecessor_kid = mcp_jack::encoding::key_id(&pk);
+    let predecessor_activation = explicit_successor_activation;
+    let clock_path = get("--clock-file")?;
+    let mut known_keys = Vec::new();
+    for (index, value) in a.iter().enumerate() {
+        if value == "--known-server-key" {
+            let entry = a.get(index + 1).ok_or("missing --known-server-key value")?;
+            let (kid, fields) = entry.split_once(',').ok_or("invalid --known-server-key")?;
+            let kid = kid
+                .strip_prefix("kid=")
+                .ok_or("invalid --known-server-key kid")?;
+            let mut public = None;
+            let mut activation = None;
+            for field in fields.split(',') {
+                let (name, value) = field
+                    .split_once('=')
+                    .ok_or("invalid --known-server-key field")?;
+                match name {
+                    "public" if public.is_none() => public = Some(value),
+                    "activation" if activation.is_none() => {
+                        activation =
+                            Some(value.parse::<i64>().map_err(|_| "invalid key activation")?);
+                    }
+                    _ => return Err("invalid --known-server-key fields".into()),
+                }
+            }
+            let public = public.ok_or("missing known server public key")?;
+            let bytes = mcp_jack::encoding::decode_b64url_fixed(public, 32)
+                .map_err(|_| "invalid known server public key")?;
+            let public_key: [u8; 32] = bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| "invalid known server public key")?;
+            if mcp_jack::encoding::key_id(&public_key) != kid {
+                return Err("known server key id mismatch".into());
+            }
+            known_keys.push((
+                kid.to_owned(),
+                public_key,
+                activation.ok_or("missing key activation")?,
+            ));
+        }
+    }
+    let successor_activation = explicit_successor_activation.or_else(|| {
+        known_keys
+            .iter()
+            .map(|(_, _, activation)| *activation)
+            .max()
+    });
+    let now_at_open = read_clock(&clock_path)?;
+    let selected_successor = known_keys
+        .iter()
+        .filter(|(_, _, activation)| now_at_open >= *activation)
+        .max_by_key(|(_, _, activation)| *activation);
+    let response_pk = selected_successor.map_or(pk, |(_, public_key, _)| *public_key);
     let mut sock =
         TcpStream::connect_timeout(&addr, Duration::from_secs(5)).map_err(|e| e.to_string())?;
     sock.set_read_timeout(Some(Duration::from_secs(90)))
@@ -109,12 +197,9 @@ fn run_inner(request_sig_out: &mut Option<String>) -> Result<(), String> {
         .and_then(|_| sock.write_all(&body))
         .map_err(|e| format!("request write: {e}"))?;
     let (status, rh, response_headers, mut reader) = read_head(sock)?;
-    let pkbytes = mcp_jack::encoding::decode_b64url_fixed(&get("--server-public-key")?, 32)
-        .map_err(|e| e.to_string())?;
-    let pk: [u8; 32] = pkbytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| "invalid server key")?;
+    let now_path = clock_path.clone();
+    let _rotation_store = flag(&a, "--rotation-store");
+    let _durable_dir = flag(&a, "--durable-dir");
     let is_sse = status == 200
         && response_headers
             .get("content-type")
@@ -142,7 +227,7 @@ fn run_inner(request_sig_out: &mut Option<String>) -> Result<(), String> {
         let has_auth = response_headers.contains_key("jack-auth");
         let now = read_clock(&get("--clock-file")?).unwrap_or(0);
         let valid = mcp_jack::signing::verify_response(
-            &pk,
+            &response_pk,
             status as i64,
             &[auth.as_str()],
             &request_sig,
@@ -163,7 +248,7 @@ fn run_inner(request_sig_out: &mut Option<String>) -> Result<(), String> {
         } else {
             serde_json::Value::Null
         };
-        let mut terminal = serde_json::json!({"type":"terminal","scenario":scenario,"outcome":"refused","code":actual,"http_status":status,"http_code":actual,"frames_verified":0,"request_id":request_id,"mcp_complete":false,"terminal_frame":null,"request_sig":request_sig,"v1_evidence":v1,"open":null,"frames":[],"failure_frame":null,"successor_activation":null});
+        let mut terminal = serde_json::json!({"type":"terminal","scenario":scenario,"outcome":"refused","code":actual,"http_status":status,"http_code":actual,"frames_verified":0,"request_id":request_id,"mcp_complete":false,"terminal_frame":null,"request_sig":request_sig,"v1_evidence":v1,"open":null,"frames":[],"failure_frame":null,"successor_activation":successor_activation});
         if unsigned_replay {
             terminal["code"] = serde_json::json!("replayed_nonce");
             terminal["http_code"] = serde_json::json!("replayed_nonce");
@@ -172,10 +257,32 @@ fn run_inner(request_sig_out: &mut Option<String>) -> Result<(), String> {
         emit(&terminal);
         return Ok(());
     }
-    let clock_path = get("--clock-file")?;
-    let now_path = clock_path.clone();
-    let mut cfg =
-        StreamVerifierConfig::pinned(mcp_jack::encoding::key_id(&pk), pk, request_sig.clone());
+    let mut keys = std::collections::BTreeMap::new();
+    if let Some((kid, public_key, _)) = selected_successor {
+        keys.insert(
+            kid.clone(),
+            mcp_jack::client::rotation_auth::RotationResponseKey {
+                public_key: *public_key,
+                not_before: 0,
+                known_cutoff: None,
+            },
+        );
+    } else {
+        keys.insert(
+            predecessor_kid,
+            mcp_jack::client::rotation_auth::RotationResponseKey {
+                public_key: pk,
+                not_before: 0,
+                known_cutoff: predecessor_activation.or_else(|| {
+                    known_keys
+                        .iter()
+                        .map(|(_, _, activation)| *activation)
+                        .min()
+                }),
+            },
+        );
+    }
+    let mut cfg = StreamVerifierConfig::new(keys, request_sig.clone());
     cfg.now = Arc::new(move || read_clock(&now_path).unwrap_or(0));
     cfg.frame_max_bytes = frame_max_bytes;
     cfg.stream_idle_ms = idle_timeout_ms.min(i64::MAX as u64) as i64;
@@ -184,7 +291,7 @@ fn run_inner(request_sig_out: &mut Option<String>) -> Result<(), String> {
         Ok(open) => open.clone(),
         Err(e) => {
             emit(
-                &serde_json::json!({"type":"terminal","scenario":scenario,"outcome":"error","code":code(e.code),"http_status":status,"http_code":null,"frames_verified":0,"request_id":request_id,"mcp_complete":false,"terminal_frame":null,"request_sig":request_sig,"v1_evidence":null,"open":null,"frames":[],"failure_frame":null,"successor_activation":null}),
+                &serde_json::json!({"type":"terminal","scenario":scenario,"outcome":"error","code":code(e.code),"http_status":status,"http_code":null,"frames_verified":0,"request_id":request_id,"mcp_complete":false,"terminal_frame":null,"request_sig":request_sig,"v1_evidence":null,"open":null,"frames":[],"failure_frame":null,"successor_activation":successor_activation}),
             );
             return Ok(());
         }
@@ -198,7 +305,7 @@ fn run_inner(request_sig_out: &mut Option<String>) -> Result<(), String> {
     let mut last_message = serde_json::Value::Null;
     let mut failure_frame = serde_json::Value::Null;
     let mut terminal: Option<mcp_jack::stream::StreamFailure> = None;
-    let cancel = flag(&a, "--action").unwrap_or_else(|| scenario.clone()) == "cancel";
+    let cancel = flag(&a, "--action").map_or(scenario == "cancel", |action| action == "cancel");
     let opened_at = Instant::now();
     let mut last_byte_at: Option<Instant> = None;
     let loop_deadline_ms = max_stream_duration_ms
@@ -286,6 +393,7 @@ fn run_inner(request_sig_out: &mut Option<String>) -> Result<(), String> {
                 f.code,
                 mcp_jack::stream::StreamCode::OutOfOrder
                     | mcp_jack::stream::StreamCode::BadSignature
+                    | mcp_jack::stream::StreamCode::AfterCutoff
             )
         }) {
             if let Some(ev) = events.get(verified) {
@@ -376,7 +484,7 @@ fn run_inner(request_sig_out: &mut Option<String>) -> Result<(), String> {
     } else {
         "error"
     };
-    let row = serde_json::json!({"type":"terminal","scenario":scenario,"outcome":outcome,"code":if cancel && delivered > 0 { serde_json::Value::Null } else { terminal.map(|f| serde_json::json!(code(f.code))).unwrap_or(serde_json::Value::Null) },"http_status":status,"http_code":null,"frames_verified":verifier.frames_verified(),"request_id":request_id,"mcp_complete":complete,"terminal_frame":end.map(|f| serde_json::json!({"kind":"end","sig":f.sig})),"request_sig":request_sig,"v1_evidence":null,"open":open_json,"frames":fs,"failure_frame":failure_frame,"successor_activation":null});
+    let row = serde_json::json!({"type":"terminal","scenario":scenario,"outcome":outcome,"code":if cancel && delivered > 0 { serde_json::Value::Null } else { terminal.map(|f| serde_json::json!(code(f.code))).unwrap_or(serde_json::Value::Null) },"http_status":status,"http_code":null,"frames_verified":verifier.frames_verified(),"request_id":request_id,"mcp_complete":complete,"terminal_frame":end.map(|f| serde_json::json!({"kind":"end","sig":f.sig})),"request_sig":request_sig,"v1_evidence":null,"open":open_json,"frames":fs,"failure_frame":failure_frame,"successor_activation":successor_activation});
     emit(&row);
     Ok(())
 }

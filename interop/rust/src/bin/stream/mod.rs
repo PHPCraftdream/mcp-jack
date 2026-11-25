@@ -121,5 +121,14 @@ pub fn verify_wire(
 }
 #[path = "client.rs"]
 mod client;
+#[cfg(target_os = "linux")]
+#[path = "durable.rs"]
+mod durable;
+#[cfg(target_os = "linux")]
+#[path = "rotation.rs"]
+mod rotation;
 #[path = "server.rs"]
 mod server;
+
+#[path = "wrapper.rs"]
+mod wrapper;
