@@ -49,15 +49,17 @@ walk_go_candidates() {
     printf 'module pins-bootstrap\n\ngo 1.25\n\nrequire github.com/modelcontextprotocol/go-sdk %s\n' "$ver" >"$work/go/go.mod"
     [[ -s $work/go/go.mod ]] || { required_fail "go-manifest-$count" 'go.mod missing'; break; }
     if ! logrun "go-download-$count" bash -c 'cd "$1" && go mod download' _ "$work/go"; then [[ $count == 1 ]] && { latest_status=unknown; latest_reason=download_failed; latest_kind=unknown; }; optional_gap "go-download-$count" 'download failed'; continue; fi
-    local dir log="$out/logs/go-protocol-$count.log" rc kind=source_literal lines
-    dir=$(cd "$work/go" && go list -m -f '{{.Dir}}' github.com/modelcontextprotocol/go-sdk)
-    if [[ -z $dir || ! -d $dir ]]; then optional_gap "go-src-$count" 'module dir unresolved'; continue; fi
+    local dirjson="$out/logs/go-modjson-$count.json" dirjson_err="$out/logs/go-modjson-$count.err" dir
+    local log="$out/logs/go-protocol-$count.log" rc kind=source_literal lines
+    if ! (cd "$work/go" && go mod download -json github.com/modelcontextprotocol/go-sdk) >"$dirjson" 2>"$dirjson_err"; then optional_gap "go-src-$count" "go mod download -json failed: $(tail -c 300 "$dirjson_err" 2>/dev/null)"; continue; fi
+    dir=$(jq -r '.Dir // empty' "$dirjson")
+    if [[ -z $dir || ! -d $dir ]]; then optional_gap "go-src-$count" "module dir unresolved: $(tail -c 300 "$dirjson_err" 2>/dev/null)"; continue; fi
     local src=$dir
-    grep -rnF '2026-07-28' "$src" --include='*.go' >"$log" 2>&1; rc=$?
+    grep -rnF '2026-07-28' "$src" --include='*.go' --include='*.md' >"$log" 2>&1; rc=$?
     if (( rc == 1 )); then [[ $count == 1 ]] && { latest_status=absent; latest_reason=no_literal; latest_kind=absent; selected_status=absent; selected_reason=no_literal; selected_kind=absent; }; continue
     elif (( rc >= 2 )); then [[ $count == 1 ]] && { latest_status=unknown; latest_reason=search_error; latest_kind=unknown; }; optional_gap "go-protocol-$count" 'search error'; continue; fi
     lines=$(jq -Rsc 'split("\n")|map(select(length>0))|.[0:5]' "$log")
-    grep -rnE '2025-11-25.*2026-07-28|2026-07-28.*2025-11-25' "$src" --include='*.go' >"$out/logs/go-declared-$count.log" 2>/dev/null; rc=$?
+    grep -rnE '2025-11-25.*2026-07-28|2026-07-28.*2025-11-25' "$src" --include='*.go' --include='*.md' >"$out/logs/go-declared-$count.log" 2>/dev/null; rc=$?
     if (( rc == 0 )); then kind=declared; lines=$(jq -Rsc 'split("\n")|map(select(length>0))|.[0:5]' "$out/logs/go-declared-$count.log"); elif (( rc >= 2 )); then optional_gap "go-declared-$count" 'search error'; fi
     if [[ $count == 1 ]]; then latest_status=$kind; latest_kind=$kind; latest_lines=$lines; fi
     selected=$tag; selected_status=$kind; selected_kind=$kind; selected_lines=$lines
@@ -77,7 +79,10 @@ walk_go_candidates() {
   log_line "go: latest=$latest selected=$selected protocol_status=$selected_status locks_ok=$go_locks_ok"
 }
 resolve_ts_package() {
-  local pkg=$1 required=$2 safe=${1##*/} meta="$work/ts/registry-${1##*/}.json" artifact="$out/ts/registry-${1##*/}.json" latest selected status=unknown ev=download_failed probe evidence_file meta_size
+  local pkg=$1 required=$2 safe=${1##*/} meta="$work/ts/registry-${1##*/}.json" artifact="$out/ts/registry-${1##*/}.json" latest selected status=unknown ev=download_failed probe evidence_file meta_size role=informational
+  [[ $pkg == @modelcontextprotocol/client ]] && role=client
+  [[ $pkg == @modelcontextprotocol/server ]] && role=server
+  [[ $pkg == @modelcontextprotocol/node ]] && role=tooling
   safe=${safe//-/_}
   if ! curl -fsSL "https://registry.npmjs.org/$pkg" -o "$meta" || ! validate "npm-json-$safe" "$meta"; then
     if [[ $required == true ]]; then required_fail "npm-$safe" 'registry metadata unavailable'; else optional_gap "npm-$safe" 'umbrella package unavailable'; fi; return
@@ -112,14 +117,15 @@ resolve_ts_package() {
     done < <(jq -r '.versions|keys[]' "$meta" | sort -Vr)
     [[ $status == source_literal || $status == declared ]] || optional_gap "npm-fallback-$safe" 'no verified protocol-support candidate'
   fi
+  if [[ $role == tooling ]]; then
+    latest_status=not_applicable; latest_ev=$(jq -cn '{kind:"not_applicable",reason:"adapter package"}')
+    status=not_applicable; ev=$(jq -cn '{kind:"not_applicable",reason:"adapter package"}')
+  fi
   verify_ts_provenance "$meta" "$latest" "$safe-latest"
   if [[ $PROV_COMMIT == null && $required == true ]]; then optional_gap "npm-latest-$safe" 'latest provenance unverified'; fi
   local latest_commit=$PROV_COMMIT latest_url=$PROV_URL
   verify_ts_provenance "$meta" "$selected" "$safe"
-  local prov_commit=$PROV_COMMIT prov_url=$PROV_URL prov_ev=$PROV_EVIDENCE role=informational
-  [[ $pkg == @modelcontextprotocol/client ]] && role=client
-  [[ $pkg == @modelcontextprotocol/server ]] && role=server
-  [[ $pkg == @modelcontextprotocol/node ]] && role=tooling
+  local prov_commit=$PROV_COMMIT prov_url=$PROV_URL prov_ev=$PROV_EVIDENCE
   jq -n --arg p "$pkg" --arg v "$selected" '{name:$p,version:$v}' >"$out/ts/selected-$safe.json" || { required_fail "npm-$safe" 'selected version write failed'; return; }
   set_report --arg p "$pkg" --arg role "$role" --arg lv "$latest" --arg sv "$selected" --arg ls "$latest_status" --argjson le "$latest_ev" --arg ss "$status" --argjson se "$ev" --argjson lc "$latest_commit" --argjson lu "$latest_url" --argjson commit "$prov_commit" --argjson url "$prov_url" --arg pe "$prov_ev" '.typescript.packages[$p]={role:$role,latest:{version:$lv,protocol_status:$ls,evidence:$le,commit:$lc,verified_release_url:$lu},selected:{version:$sv,protocol_status:$ss,evidence:$se,commit:$commit,verified_release_url:$url,provenance:$pe}}'
 }
@@ -228,7 +234,7 @@ write_summary() {
   set_report --argjson go_locks "$go_locks_ok" --argjson ts_locks "$ts_locks_ok" '
     (.typescript.packages) as $packages |
     (["@modelcontextprotocol/client","@modelcontextprotocol/server","@modelcontextprotocol/node"] | map(. as $p | {($p):{latest:($packages[$p].latest.version // ""),selected:($packages[$p].selected.version // ""),protocol_status:($packages[$p].selected.protocol_status // "unknown"),provenance:($packages[$p].selected.provenance // "unverified")}}) | add) as $ts_packages |
-    .summary={go:{latest:(.go.latest.version // ""),selected:(.go.selected.version // ""),protocol_status:(.go.selected.protocol_status // "unknown"),ready_for_pinning:(((.go.selected.protocol_status=="source_literal" or .go.selected.protocol_status=="declared") and .go.selected.commit!=null and $go_locks))},typescript:{packages:$ts_packages,ready_for_pinning:([$ts_packages[]|(.protocol_status=="source_literal" or .protocol_status=="declared") and .provenance=="verified"]|all) and $ts_locks}}
+    .summary={go:{latest:(.go.latest.version // ""),selected:(.go.selected.version // ""),protocol_status:(.go.selected.protocol_status // "unknown"),ready_for_pinning:(((.go.selected.protocol_status=="source_literal" or .go.selected.protocol_status=="declared") and .go.selected.commit!=null and $go_locks))},typescript:{packages:$ts_packages,ready_for_pinning:(($packages["@modelcontextprotocol/client"].protocol_status=="source_literal" or $packages["@modelcontextprotocol/client"].protocol_status=="declared") and ($packages["@modelcontextprotocol/server"].protocol_status=="source_literal" or $packages["@modelcontextprotocol/server"].protocol_status=="declared") and $packages["@modelcontextprotocol/client"].provenance=="verified" and $packages["@modelcontextprotocol/server"].provenance=="verified" and $ts_locks)}}
   '
 }
 set_report '.typescript={packages:{}}'
