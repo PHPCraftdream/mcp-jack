@@ -16,6 +16,7 @@ import { test } from "node:test";
 import { parseRequestAuth } from "../../../src/core/auth-header.js";
 import { encodeBase64URL } from "../../../src/core/encoding.js";
 import { openSignedStream } from "../../../src/client/stream/session.js";
+import { setPumpClockForTests, startVerifiedStream } from "../../../src/client/stream/pump.js";
 import { createSigningFetch, StreamingUnsupportedError } from "../../../src/client/transport/transport.js";
 import { StreamVerifyError } from "../../../src/stream/codes.js";
 import { StreamSigner } from "../../../src/stream/signer.js";
@@ -93,6 +94,51 @@ function cutAt(activation: number): (kid: string) => StreamServerKey | undefined
 function noBytes(): Uint8Array {
   return new Uint8Array(0);
 }
+
+test("stream client: the fired idle timer latches stream_idle although the pump clock did not advance", { timeout: 5_000 }, async () => {
+  const signer = streamSigner(fixtureNow);
+  const controller = new AbortController();
+  setPumpClockForTests(() => 1_000);
+  // The pump's idle timer is unref'd (a real socket keeps the loop alive); hold a ref here.
+  const keepAlive = setInterval(() => undefined, 10);
+  try {
+    const body = new ReadableStream<Uint8Array>({ start(): void {} }, { highWaterMark: 0 });
+    const pump = startVerifiedStream({
+      status: 200,
+      headers: openHeaders(signer),
+      body,
+      requestSig: REQUEST_SIG,
+      options: { resolveKey: pinnedSvc, now: (): number => fixtureNow, requestSig: REQUEST_SIG, streamIdleMs: 40 },
+      abort: controller,
+    });
+    void pump.messages().next().catch(() => undefined);
+    assert.deepEqual((await pump.done).terminal, { state: "error", code: "stream_idle", framesVerified: 0 });
+  } finally {
+    clearInterval(keepAlive);
+    setPumpClockForTests(undefined);
+  }
+});
+
+test("stream client: a pump that ends without an end frame aborts the connection", { timeout: 5_000 }, async () => {
+  const signer = streamSigner(fixtureNow);
+  const controller = new AbortController();
+  const body = new ReadableStream<Uint8Array>({
+    start(value): void {
+      value.error(new Error("wire reset"));
+    },
+  });
+  const pump = startVerifiedStream({
+    status: 200,
+    headers: openHeaders(signer),
+    body,
+    requestSig: REQUEST_SIG,
+    options: { resolveKey: pinnedSvc, now: (): number => fixtureNow, requestSig: REQUEST_SIG },
+    abort: controller,
+  });
+  void pump.messages().next().catch(() => undefined);
+  assert.deepEqual((await pump.done).terminal, { state: "error", code: "stream_truncated", framesVerified: 0 });
+  assert.equal(controller.signal.aborted, true);
+});
 
 test("stream client: the idle timeout runs on the injected clock", { timeout: 30_000 }, () => {
   const signer = streamSigner(fixtureNow);

@@ -266,11 +266,13 @@ function launch(target, args, timeout = 30000) { return launchResolved(targetCom
 function launchResolved(resolved, args, timeout = 30000) {
   const [command, prefix] = resolved;
   const child = spawn(command, [...prefix, ...args], { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'] });
+  const startedAt = Date.now();
   children.add(child);
-  let stdout = '', stderr = '', pending = '', timedOut = false, killTimer;
+  let stdout = '', stderr = '', pending = '', timedOut = false, firstByteAt = null, killedAt = null, killTimer;
   const lineQueue = [], lineWaiters = [];
   child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
   child.stdout.on('data', chunk => {
+    if (firstByteAt === null) firstByteAt = Date.now();
     stdout += chunk; pending += chunk;
     let at;
     while ((at = pending.indexOf('\n')) >= 0) {
@@ -280,7 +282,7 @@ function launchResolved(resolved, args, timeout = 30000) {
     }
   });
   child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-8000); });
-  const processInfo = { child, get stdout() { return stdout; }, get stderr() { return stderr; },
+  const processInfo = { child, startedAt, get firstByteAt() { return firstByteAt; }, get killedAt() { return killedAt; }, get stdout() { return stdout; }, get stderr() { return stderr; },
     write(value) { if (!child.stdin.destroyed) child.stdin.write(value); },
     nextLine(timeoutMs = 10000) {
       if (lineQueue.length) return Promise.resolve(lineQueue.shift());
@@ -293,6 +295,7 @@ function launchResolved(resolved, args, timeout = 30000) {
   processInfo.done = new Promise((resolveDone, rejectDone) => {
     const timer = setTimeout(() => {
       timedOut = true;
+      killedAt = Date.now();
       if (!child.kill('SIGTERM') && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
       killTimer = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); }, 1200);
     }, timeout);
@@ -856,6 +859,11 @@ async function main() {
           const last = clientProcess?.lastResult;
           if (last) console.log(`  client stdout: ${String(last.stdout).slice(0, 3000)}\n  client stderr: ${String(last.stderr).slice(0, 1000)}`);
           if (diagLog && existsSync(diagLog)) console.log(`  request log: ${readFileSync(diagLog, 'utf8').slice(0, 3000)}`);
+          if (server?.stderr) console.log(`  server stderr: ${server.stderr.slice(-2000)}`);
+          if (clientProcess) {
+            const iso = value => value === null ? 'never' : new Date(value).toISOString();
+            console.log(`  timeline: started=${iso(clientProcess.startedAt)} firstByte=${iso(clientProcess.firstByteAt)} killed=${clientProcess.killedAt === null ? 'running' : iso(clientProcess.killedAt)}`);
+          }
         } finally {
           if (concurrencyHeld && server) server.write(`${JSON.stringify({ action: 'release' })}\n`);
           if (secondClientProcess) await stopChild(secondClientProcess);

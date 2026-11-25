@@ -205,6 +205,7 @@ export class StreamPump {
     const body = this.body;
     if (body === null) {
       // An empty body has no end frame: 4.4 truncation, measured at 0 ms.
+      this.abort.abort();
       this.finish(0);
       return;
     }
@@ -258,9 +259,12 @@ export class StreamPump {
         const read = await readBeforeIdle(reader, Math.max(1, remaining + 1));
         if (read.kind === "idle") {
           // idle() throws stream_idle; it returns only when the end frame is in.
+          // The timer fired, so the deadline has passed: sub-millisecond rounding
+          // between the timer and the elapsed clock must never turn an idle body
+          // into a truncated one.
           let idleError: unknown;
           try {
-            this.verifier.idle(this.elapsed());
+            this.verifier.idle(Math.max(this.elapsed(), this.lastVerifiedMs + this.idleMs + 1));
           } catch (err) {
             idleError = err;
           }
@@ -282,6 +286,7 @@ export class StreamPump {
       }
     } catch {
       // A read error ends the body without an end frame (4.4 truncation).
+      this.abort.abort();
       this.finish(this.elapsed());
     } finally {
       try {
@@ -537,9 +542,16 @@ function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value
   return { promise, resolve };
 }
 
-/** One sampling point for 4.5, which only ever compares differences. */
+/** One sampling point for 4.5's monotonic millisecond timeline; it compares differences only. */
+let clockOverride: (() => number) | undefined;
+
+/** @internal: test-only clock override; pass undefined to restore the monotonic clock. */
+export function setPumpClockForTests(clock: (() => number) | undefined): void {
+  clockOverride = clock;
+}
+
 function nowMs(): number {
-  return Date.now();
+  return clockOverride !== undefined ? clockOverride() : performance.now();
 }
 
 /** @internal: the signing clock default, the same wall-clock seconds the v1 response path reads. */
