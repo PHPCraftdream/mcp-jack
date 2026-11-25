@@ -43,7 +43,10 @@ fn read_clock(path: &str) -> Result<i64, String> {
 fn emit(v: &serde_json::Value) {
     let mut o = std::io::stdout().lock();
     let _ = serde_json::to_writer(&mut o, v);
-    let _ = o.write_all(b"\n");
+    let _ = o.write_all(
+        b"
+",
+    );
     let _ = o.flush();
 }
 fn b64(b: &[u8]) -> String {
@@ -121,5 +124,14 @@ pub fn verify_wire(
 }
 #[path = "client.rs"]
 mod client;
+#[cfg(target_os = "linux")]
+#[path = "durable.rs"]
+mod durable;
+#[cfg(target_os = "linux")]
+#[path = "rotation.rs"]
+mod rotation;
 #[path = "server.rs"]
 mod server;
+
+#[path = "wrapper.rs"]
+mod wrapper;

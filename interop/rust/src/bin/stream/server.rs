@@ -1,18 +1,8 @@
 //! Signed-stream interop server. Request verification and every response/frame
 //! signature are supplied by the SDK's `StreamLayer`.
-use std::{
-    convert::Infallible,
-    future::Future,
-    io::{BufRead, Write},
-    pin::Pin,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
-    task::{Context, Poll},
-    time::Duration,
-};
-
+use super::wrapper::{wait_for_release, Controls, HandlerTask, SharedService, StreamBody};
+#[cfg(target_os = "linux")]
+use super::{durable, rotation};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Channel};
 use mcp_jack::server::{
@@ -21,161 +11,29 @@ use mcp_jack::server::{
     native::{Native, NativeOptions},
     nonce::NonceStore,
     state_file::FileState,
-    verify::{Clock, Config, Verifier},
+    verify::{Config, Verifier},
+};
+use std::{
+    convert::Infallible,
+    io::{BufRead, Write},
+    pin::Pin,
+    sync::{atomic::Ordering, Arc, Mutex},
+    task::{Context, Poll},
+    time::Duration,
 };
 use tower_layer::Layer as _;
 use tower_service::Service;
 
 #[derive(Clone)]
-struct Args {
-    scenario: String,
-    producer: String,
-    matrix: String,
-    request_log: Option<String>,
-    clock_file: String,
-    duration_ms: u64,
-    frame_max_bytes: u64,
-}
-
-#[derive(Default)]
-struct Controls {
-    clock: tokio::sync::Notify,
-    shutdown: tokio::sync::Notify,
-    release: tokio::sync::Notify,
-    shutdown_requested: AtomicBool,
-    latest_clock: Mutex<Option<serde_json::Value>>,
-    held_sid: Mutex<Option<String>>,
-}
-
-type StreamBody = Channel<Bytes, Infallible>;
-type HandlerTask = tokio::task::JoinHandle<()>;
-
-// Bounds wrapper buffering; the SDK rejects bodies above its 1 MiB default.
-const WRAPPER_BODY_CAP: usize = 4 * 1024 * 1024;
-
-struct SharedService<S> {
-    inner: Arc<Mutex<S>>,
-    controls: Arc<Controls>,
-    args: Args,
-}
-
-impl<S> Clone for SharedService<S> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: Arc::clone(&self.inner),
-            controls: self.controls.clone(),
-            args: self.args.clone(),
-        }
-    }
-}
-
-impl<S> SharedService<S> {
-    fn new(service: S, controls: Arc<Controls>, args: Args) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(service)),
-            controls,
-            args,
-        }
-    }
-}
-
-impl<S> Service<http::Request<hyper::body::Incoming>> for SharedService<S>
-where
-    S: Service<http::Request<http_body_util::Full<Bytes>>, Response = http::Response<StreamBody>>
-        + Send
-        + 'static,
-    S::Error: Send + 'static,
-    S::Future: Send + 'static,
-{
-    type Response = http::Response<StreamBody>;
-    type Error = S::Error;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
-
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .poll_ready(cx)
-    }
-
-    fn call(&mut self, request: http::Request<hyper::body::Incoming>) -> Self::Future {
-        let (parts, body) = request.into_parts();
-        let method = parts.method.clone();
-        let target = parts
-            .uri
-            .path_and_query()
-            .map(|v| v.as_str().to_owned())
-            .unwrap_or_else(|| "/".to_owned());
-        let headers = parts.headers.clone();
-        let bytes = http_body_util::Limited::new(body, WRAPPER_BODY_CAP).collect();
-        let inner = self.inner.clone();
-        let controls = self.controls.clone();
-        let args = self.args.clone();
-        Box::pin(async move {
-            let bytes = match bytes.await {
-                Ok(collected) => collected.to_bytes(),
-                Err(_) => {
-                    // Over the wrapper cap: refused unsigned; driver bodies stay below it.
-                    let (tx, body) = Channel::new(1);
-                    drop(tx);
-                    return Ok(http::Response::builder()
-                        .status(http::StatusCode::PAYLOAD_TOO_LARGE)
-                        .body(body)
-                        .expect("static status is valid"));
-                }
-            };
-            let request =
-                http::Request::from_parts(parts, http_body_util::Full::new(bytes.clone()));
-            let future = inner
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .call(request);
-            let response = future.await?;
-            if response.status() == http::StatusCode::OK
-                && response
-                    .headers()
-                    .get(http::header::CONTENT_TYPE)
-                    .and_then(|v| v.to_str().ok())
-                    .is_some_and(|v| v.starts_with("text/event-stream"))
-            {
-                let sid = response
-                    .headers()
-                    .get("Jack-Auth")
-                    .and_then(|v| v.to_str().ok())
-                    .filter(|v| v.starts_with("s1 "))
-                    .and_then(|value| value.strip_prefix("s1 "))
-                    .and_then(|fields| {
-                        fields
-                            .split(',')
-                            .map(str::trim)
-                            .find_map(|field| field.strip_prefix("sid=").map(str::to_owned))
-                    });
-                if let Some(sid) = sid {
-                    if let Ok(mut held) = controls.held_sid.lock() {
-                        *held = Some(sid.clone());
-                    }
-                    let auth_values: Vec<_> = headers
-                        .get_all("Jack-Auth")
-                        .iter()
-                        .filter_map(|v| v.to_str().ok())
-                        .collect();
-                    let auth = mcp_jack::auth_header::parse_request_auth(&auth_values).ok();
-                    append_log_visible(
-                        &args,
-                        // Grant and nonce-commit evidence is logged by the handler rows.
-                        serde_json::json!({"event":"stream_open","sid":sid,"request_sig":auth.as_ref().map(|v| v.sig.clone()),"nonce":auth.as_ref().map(|v| v.nonce.clone())}),
-                        "stream_open",
-                    );
-                }
-            }
-            if response.status() == http::StatusCode::TOO_MANY_REQUESTS {
-                let mut row = request_row(&method, &target, &headers, &bytes, true);
-                row["refused"] = serde_json::json!(429);
-                append_log_visible(&args, row, "request");
-            }
-            Ok(response)
-        })
-    }
+pub(super) struct Args {
+    pub(super) scenario: String,
+    pub(super) producer: String,
+    pub(super) matrix: String,
+    pub(super) request_log: Option<String>,
+    pub(super) clock_file: String,
+    pub(super) duration_ms: u64,
+    pub(super) frame_max_bytes: u64,
+    successor_activation: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -194,7 +52,7 @@ fn lookup_producer(scenario: &str) -> String {
     let Ok(doc) = serde_json::from_str::<serde_json::Value>(&text) else {
         return scenario.to_owned();
     };
-    for matrix in ["stream", "staged"] {
+    for matrix in ["stream", "staged", "rotation-stream", "durable-stream"] {
         if let Some(rows) = doc
             .pointer(&format!("/matrices/{matrix}"))
             .and_then(|v| v.as_array())
@@ -213,7 +71,18 @@ fn lookup_producer(scenario: &str) -> String {
     scenario.to_owned()
 }
 
-fn request_row(
+pub(super) fn parse_jack_auth(
+    headers: &http::HeaderMap,
+) -> Option<mcp_jack::auth_header::RequestAuth> {
+    let auth_values: Vec<_> = headers
+        .get_all("Jack-Auth")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .collect();
+    mcp_jack::auth_header::parse_request_auth(&auth_values).ok()
+}
+
+pub(super) fn request_row(
     method: &http::Method,
     target: &str,
     headers: &http::HeaderMap,
@@ -226,12 +95,7 @@ fn request_row(
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
     let request_method = parsed.get("method").and_then(|v| v.as_str()).unwrap_or("");
-    let auth_values: Vec<_> = headers
-        .get_all("Jack-Auth")
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .collect();
-    let auth = mcp_jack::auth_header::parse_request_auth(&auth_values).ok();
+    let auth = parse_jack_auth(headers);
     let request_headers: Vec<serde_json::Value> = headers
         .iter()
         .filter_map(|(name, value)| {
@@ -294,10 +158,8 @@ fn log_error(context: &str, error: String) {
     eprintln!("stream server: {context} log: {error}");
 }
 
-fn append_log_visible(args: &Args, row: serde_json::Value, context: &str) {
-    if let Err(error) = append_log(args, row) {
-        log_error(context, error);
-    }
+pub(super) fn append_log_visible(args: &Args, row: serde_json::Value, context: &str) {
+    let _ = append_log(args, row).map_err(|error| log_error(context, error));
 }
 
 fn read_clock(path: &str) -> Result<i64, String> {
@@ -361,13 +223,7 @@ impl Handler {
             .cloned()
             .unwrap_or_else(|| serde_json::json!({}));
         let _method = parsed.get("method").and_then(|v| v.as_str()).unwrap_or("");
-        let auth_values: Vec<_> = parts
-            .headers
-            .get_all("Jack-Auth")
-            .iter()
-            .filter_map(|v| v.to_str().ok())
-            .collect();
-        let auth = mcp_jack::auth_header::parse_request_auth(&auth_values).ok();
+        let auth = parse_jack_auth(&parts.headers);
         let verified = parts
             .extensions
             .get::<mcp_jack::server::identity::VerifiedIdentity>()
@@ -378,24 +234,13 @@ impl Handler {
             .map(|v| v.as_str())
             .unwrap_or("/");
         let request_sig = auth.as_ref().map(|value| value.sig.clone());
-        let nonce = auth.as_ref().map(|value| value.nonce.clone());
         append_log_visible(
             &self.args,
             request_row(&parts.method, target, &parts.headers, &bytes, verified),
             "request",
         );
-
         // JackLayer has already atomically admitted a verified nonce before it
         // invokes the application service. Do not describe missing auth as replay.
-        if verified {
-            append_log_visible(
-                &self.args,
-                serde_json::json!({"event":"nonce_committed", "nonce":nonce,
-                "request_sig":request_sig, "nonce_committed_before_first_byte":true}),
-                "nonce_committed",
-            );
-        }
-
         let scenario = self.args.scenario.as_str();
         let producer = self.args.producer.as_str();
         let heartbeat = parts.extensions.get::<StreamHeartbeat>().copied();
@@ -414,6 +259,23 @@ impl Handler {
         }
         let id = parsed.get("id").cloned().unwrap_or(serde_json::Value::Null);
         let result = serde_json::json!({"jsonrpc":"2.0","id":id,"result":{}});
+        let mut hold_was_active = false;
+        if scenario == "durable-live-replay" || scenario == "durable-restart-replay" {
+            let first = serde_json::json!({"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":1,"message":"stream:first"}});
+            if !send(&mut sender, first, &self.controls).await {
+                return;
+            }
+            if scenario == "durable-live-replay" {
+                if !wait_for_release(&self.controls).await {
+                    return;
+                }
+                let _ = send(&mut sender, result, &self.controls).await;
+                self.controls.held_done.notify_one();
+                return;
+            }
+            let _ = send(&mut sender, result, &self.controls).await;
+            return;
+        }
         let mut messages = Vec::new();
         // The staged `idle` row names producer `progress-final` but its behaviour is
         // a silent hold (fake-harness parity); overridden here explicitly.
@@ -464,8 +326,24 @@ impl Handler {
                 tokio::select! { _ = &mut shutdown => return, _ = tokio::time::sleep(Duration::from_millis(50)) => {} }
             }
         }
+        if scenario == "rotation-cutoff-reopen"
+            && self.args.successor_activation.is_some_and(|activation| {
+                read_clock(&self.args.clock_file).unwrap_or(i64::MAX) < activation as i64
+            })
+        {
+            if !wait_for_release(&self.controls).await {
+                return;
+            }
+            hold_was_active = true;
+        }
+        if hold_was_active {
+            self.controls.held_done.notify_one();
+        }
         if scenario == "concurrency-limit" {
             loop {
+                if self.controls.release_requested.load(Ordering::Acquire) {
+                    break;
+                }
                 if self.controls.shutdown_requested.load(Ordering::Acquire) {
                     return;
                 }
@@ -483,7 +361,6 @@ impl Handler {
             let _ = send(&mut sender, result, &self.controls).await;
             return;
         }
-
         if scenario == "cancel" {
             if let Some(cancellation) = cancellation {
                 while !cancellation.is_cancelled()
@@ -511,9 +388,9 @@ impl Handler {
             return;
         }
         if scenario == "max-duration" {
-            // StreamLayer measures this deadline with Instant from pump startup;
-            // changing the injected clock file does not alter its elapsed time.
             if let Some(cancellation) = cancellation {
+                // StreamLayer measures this deadline with Instant from pump startup;
+                // changing the injected clock file does not alter its elapsed time.
                 let deadline = tokio::time::Instant::now()
                     + Duration::from_millis(self.args.duration_ms)
                     + Duration::from_secs(5);
@@ -565,11 +442,9 @@ impl Service<http::Request<http_body_util::Full<Bytes>>> for Handler {
     type Error = Infallible;
     type Future =
         Pin<Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>>;
-
     fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
-
     fn call(&mut self, request: http::Request<http_body_util::Full<Bytes>>) -> Self::Future {
         let handler = self.clone();
         let task_registry = Arc::clone(&self.tasks);
@@ -628,6 +503,48 @@ fn number(args: &[String], name: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
+fn build_verifier(
+    audience: &str,
+    state: FileState,
+    clock_file: &str,
+    window_seconds: i64,
+) -> Arc<Verifier> {
+    Arc::new(
+        Verifier::new(Config {
+            aud: audience.to_owned(),
+            state: Arc::new(state),
+            nonces: Arc::new(NonceStore::new()),
+            audit: None,
+            native: Some(Arc::new(Native::new(NativeOptions::default()))),
+            window_seconds,
+            now: {
+                let clock_path = clock_file.to_owned();
+                Arc::new(move || read_clock(&clock_path).unwrap_or(0))
+            },
+        })
+        .unwrap_or_else(|error| {
+            eprintln!("stream server: verifier: {error}");
+            std::process::exit(1)
+        }),
+    )
+}
+
+fn build_stream_layer(
+    verifier: Arc<Verifier>,
+    key: ed25519_dalek::SigningKey,
+    options: mcp_jack::server::stream::StreamOptions,
+    profile: Profile,
+) -> StreamLayer {
+    StreamLayer::new(StreamConfig {
+        verifier,
+        server_key: key,
+        max_body_bytes: 0,
+        max_response_bytes: 0,
+        streams: options,
+    })
+    .with_profile(profile)
+}
+
 pub fn run() -> ! {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let profile = match required(&arguments, "--profile").as_str() {
@@ -642,6 +559,18 @@ pub fn run() -> ! {
     let audience = required(&arguments, "--aud");
     let state_path = required(&arguments, "--state");
     let clock_file = required(&arguments, "--clock-file");
+    let successor_activation = arg(&arguments, "--successor-activation").map(|value| {
+        value.parse().unwrap_or_else(|_| {
+            eprintln!("stream server: invalid --successor-activation");
+            std::process::exit(1)
+        })
+    });
+    let durable_dir = arg(&arguments, "--durable-dir");
+    let durable_init = arguments.iter().any(|value| value == "--durable-init");
+    if durable_init && durable_dir.is_none() {
+        eprintln!("stream server: --durable-init requires --durable-dir");
+        std::process::exit(1)
+    }
     if let Err(error) = read_clock(&clock_file) {
         eprintln!("stream server: clock: {error}");
         std::process::exit(1);
@@ -653,28 +582,47 @@ pub fn run() -> ! {
             std::process::exit(1)
         }
     };
+    #[cfg(target_os = "linux")]
+    durable::initialize_if_requested(durable_dir.as_deref(), durable_init, &audience, &clock_file);
+    #[cfg(not(target_os = "linux"))]
+    if durable_dir.is_some() || durable_init {
+        eprintln!("durable-stream requires linux (durable nonce stores)");
+        std::process::exit(1)
+    }
+    #[cfg(target_os = "linux")]
+    let durable_setup = durable::open_optional(durable_dir.as_deref(), &audience, &clock_file);
+    #[cfg(target_os = "linux")]
+    let rotation = rotation::setup(&arguments, &seed, &clock_file);
+    #[cfg(not(target_os = "linux"))]
+    {
+        if arg(&arguments, "--rotation-store").is_some()
+            || arg(&arguments, "--ring-seed").is_some()
+            || arg(&arguments, "--successor-activation").is_some()
+        {
+            eprintln!("stream server: rotation-stream requires linux (SDK rotation stores)");
+            std::process::exit(1)
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    #[allow(unused_variables)]
+    let rotation: Option<()> = None;
     let state = FileState::open(state_path).unwrap_or_else(|error| {
         eprintln!("stream server: state: {error}");
         std::process::exit(1)
     });
-    let clock_path = clock_file.clone();
-    let now: Clock = Arc::new(move || read_clock(&clock_path).unwrap_or(0));
-    let verifier = Arc::new(
-        Verifier::new(Config {
-            aud: audience,
-            state: Arc::new(state),
-            nonces: Arc::new(NonceStore::new()),
-            audit: None,
-            native: Some(Arc::new(Native::new(NativeOptions::default()))),
-            window_seconds: 0,
-            now,
-        })
-        .unwrap_or_else(|error| {
-            eprintln!("stream server: verifier: {error}");
-            std::process::exit(1)
-        }),
-    );
-
+    #[cfg(target_os = "linux")]
+    let verifier = if let Some((store, provider, _)) = &rotation {
+        build_verifier(&audience, state, &clock_file, 0).with_server_keys(Arc::new(
+            rotation::server_key_tool(Arc::clone(store), Arc::clone(provider)),
+        ))
+    } else if let Some(setup) = &durable_setup {
+        build_verifier(&audience, state, &clock_file, setup.window)
+            .with_durable_nonces(Arc::clone(&setup.store))
+    } else {
+        build_verifier(&audience, state, &clock_file, 0)
+    };
+    #[cfg(not(target_os = "linux"))]
+    let verifier = build_verifier(&audience, state, &clock_file, 0);
     let _idle_timeout_ms = number(&arguments, "--idle-timeout-ms", 90_000);
     // The SDK's StreamOptions does not currently consume a server idle timeout.
     let options = mcp_jack::server::stream::StreamOptions {
@@ -691,6 +639,7 @@ pub fn run() -> ! {
         clock_file,
         duration_ms: number(&arguments, "--max-stream-duration-ms", 3_600_000),
         frame_max_bytes: number(&arguments, "--frame-max-bytes", 1_048_576),
+        successor_activation,
     };
     let controls = Arc::new(Controls::default());
     let tasks = Arc::new(Mutex::new(Vec::new()));
@@ -702,17 +651,19 @@ pub fn run() -> ! {
     let key = ed25519_dalek::SigningKey::from_bytes(&seed);
     let public_key = mcp_jack::encoding::encode_b64url(key.verifying_key().as_bytes());
     let server_kid = mcp_jack::encoding::key_id(key.verifying_key().as_bytes());
-    let layer = Arc::new(
-        StreamLayer::new(StreamConfig {
+    #[cfg(target_os = "linux")]
+    let layer = Arc::new(if let Some((_, provider, _)) = &rotation {
+        StreamLayer::rotating(rotation::rotating_config(
             verifier,
-            server_key: key,
-            max_body_bytes: 0,
-            max_response_bytes: 0,
-            streams: options,
-        })
-        .with_profile(profile),
-    );
-
+            provider.clone(),
+            options,
+        ))
+        .with_profile(profile)
+    } else {
+        build_stream_layer(verifier, key, options, profile)
+    });
+    #[cfg(not(target_os = "linux"))]
+    let layer = Arc::new(build_stream_layer(verifier, key, options, profile));
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -736,13 +687,26 @@ pub fn run() -> ! {
                 if control_tx.blocking_send(line).is_err() { break; }
             }
         });
+        #[cfg(target_os = "linux")]
+        let rotation_provider = rotation.as_ref().map(|(_, provider, _)| Arc::clone(provider));
+        #[cfg(target_os = "linux")]
+        #[allow(unused_variables)]
+        let rotation_activation = rotation.as_ref().map(|(_, _, activation)| *activation);
         let mut connections = Vec::new();
         loop {
             tokio::select! {
                 command = control_rx.recv() => match command {
                     Some(line) => {
                         let value: serde_json::Value = serde_json::from_str(&line).unwrap_or(serde_json::Value::Null);
-                        match value.get("action").and_then(|v| v.as_str()) {
+                        match value.get("op").and_then(|v| v.as_str()) {
+                            #[cfg(target_os = "linux")]
+                            Some("announce") => {
+                                let reference = value.get("reference").and_then(|v| v.as_str()).unwrap_or("");
+                                let kid = value.get("kid").and_then(|v| v.as_str()).unwrap_or("");
+                                let Some(provider) = rotation_provider.as_ref() else { continue; };
+                                if !rotation::announce(provider, reference, kid, |row| append_log(&args, row)) { continue; }
+                            }
+                            _ => match value.get("action").and_then(|v| v.as_str()) {
                             Some("clock_advanced") => {
                                 let requested = value.get("clock").and_then(serde_json::Value::as_i64);
                                 match (read_clock(&args.clock_file), requested) {
@@ -774,7 +738,14 @@ pub fn run() -> ! {
                                 }
                             }
                             Some("release") => {
+                                controls.release_requested.store(true, Ordering::Release);
                                 controls.release.notify_waiters();
+                                if controls.held_active.swap(false, Ordering::AcqRel) {
+                                    let done = controls.held_done.notified();
+                                    let _ = tokio::time::timeout(Duration::from_secs(2), done).await;
+                                    // StreamLayer signs the end frame after the producer returns and has no SDK completion hook; this bounded grace is the last-resort ordering bridge.
+                                    tokio::time::sleep(Duration::from_millis(200)).await;
+                                }
                                 let sid = controls.held_sid.lock().ok().and_then(|g| g.clone());
                                 let mut ack = match serde_json::to_vec(&serde_json::json!({"control":"released","sid":sid})) {
                                     Ok(ack) => ack,
@@ -786,6 +757,7 @@ pub fn run() -> ! {
                                 }
                             }
                             _ => continue,
+                        }
                         }
                         let _ = std::io::stdout().flush();
                     }
@@ -847,5 +819,7 @@ pub fn run() -> ! {
         eprintln!("stream server: {error}");
         std::process::exit(1);
     }
+    #[cfg(target_os = "linux")]
+    durable::close_optional(durable_setup.as_ref());
     std::process::exit(0)
 }
