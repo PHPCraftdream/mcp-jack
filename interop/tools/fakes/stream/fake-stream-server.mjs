@@ -87,10 +87,13 @@ process.stdin.on('data', chunk => {
     if (command?.action === 'release' && scenario === 'rotation-cutoff-reopen' && heldResponse && heldStream && !heldStream.released) {
       const stream = heldStream;
       stream.released = true;
-      const end = frame(stream.sid, stream.seq, '', stream.prev);
-      stream.res.end(end.wire); stream.cleanup();
+      const noEnd = process.env.JACK_STREAM_FAKE_ROTATION_NO_END;
+      if (noEnd === 'clean' || noEnd === 'keepalive') stream.res.end();
+      else if (noEnd === 'abort') stream.res.destroy();
+      else { const end = frame(stream.sid, stream.seq, '', stream.prev); stream.res.end(end.wire); }
+      stream.cleanup();
       heldResponse = null; heldStream = null;
-      console.log(JSON.stringify({ control: 'released', sid: stream.sid }));
+      console.log(JSON.stringify({ control: 'released', sid: process.env.JACK_STREAM_FAKE_ROTATION_BAD_RELEASE_SID === '1' ? b64(Buffer.alloc(16, 255)) : stream.sid }));
     }
     if (command?.action === 'release' && scenario !== 'rotation-cutoff-reopen' && heldResponse && heldStream) {
       const stream = heldStream;
@@ -215,8 +218,10 @@ const server = http.createServer((req, res) => {
       v1Response(res, 429, requestSig, 'stream_limit_exceeded', requestId); return;
     }
     const suppliedSid = arg('--sid') || scenarioMeta?.sid;
-    const sid = suppliedSid || b64(randomBytes(16)), ts = now();
+    let sid = suppliedSid || b64(randomBytes(16)), ts = now();
     if (!/^[A-Za-z0-9_-]+$/.test(sid) || Buffer.from(sid, 'base64url').length !== 16 || b64(Buffer.from(sid, 'base64url')) !== sid) throw Error('sid must be canonical 16-byte base64url');
+    const rotationActivation = Number(arg('--successor-activation'));
+    if (scenario === 'rotation-cutoff-reopen' && process.env.JACK_STREAM_FAKE_RANDOM_SID === '1' && Number.isSafeInteger(rotationActivation) && now() < rotationActivation) sid = b64(createHash('sha256').update(`rotation-random-sid\n${sid}`).digest().subarray(0, 16));
     const identity = keyAt(), openSig = b64(sign(null, Buffer.from(['mcp-jack/stream1/open', '200', requestSig, identity.kid, String(ts), sid].join('\n')), identity.key));
     res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', 'x-accel-buffering': 'no', 'Jack-Auth': `s1 kid=${identity.kid},ts=${ts},sid=${sid},sig=${openSig}` });
       writeLog({ event: 'stream_open', nonce_committed_before_first_byte: true, sid, request_sig: requestSig, identity: alice.kid, server_kid: identity.kid });

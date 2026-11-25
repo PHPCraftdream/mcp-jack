@@ -35,8 +35,10 @@ type capture struct {
 	mirrors        [][2]string
 }
 type recorder struct {
-	base http.RoundTripper
-	c    *capture
+	base       http.RoundTripper
+	c          *capture
+	successors map[string]int64
+	now        func() time.Time
 }
 type teeBody struct {
 	io.ReadCloser
@@ -66,7 +68,16 @@ func (r recorder) RoundTrip(req *http.Request) (*http.Response, error) {
 	r.c.headers = requestHeaders(req, r.c.mirrors)
 	r.c.mu.Unlock()
 	resp, e := r.base.RoundTrip(req)
-	if e == nil {
+	if e == nil && resp != nil {
+		if len(r.successors) > 0 {
+			if open := parseOpen(resp.Header.Get("Jack-Auth")); open != nil {
+				if activation, known := r.successors[open.KID]; known && r.now().Unix() < activation {
+					_ = resp.Body.Close()
+					return nil, fmt.Errorf("stream open uses successor server key %s before its activation", open.KID)
+				}
+			}
+		}
+		// The SDK stream verifier has no not-before per key, so refuse early successor opens here.
 		r.c.mu.Lock()
 		r.c.status = resp.StatusCode
 		r.c.responseHeader = resp.Header.Clone()
@@ -112,6 +123,8 @@ type openEvidence struct {
 	Sig string `json:"sig"`
 }
 
+var terminalSuccessorActivation any
+
 func main() {
 	profile := flag.String("profile", "modern", "")
 	_ = flag.String("matrix", "stream", "")
@@ -134,10 +147,23 @@ func main() {
 	_ = flag.Int("max-concurrent-streams", 0, "")
 	_ = flag.Int64("max-stream-duration-ms", 0, "")
 	_ = flag.Int64("heartbeat-ms", 0, "")
-	_ = flag.String("successor-activation", "", "")
+	successorActivationText := flag.String("successor-activation", "", "")
 	_ = flag.String("rotation-store", "", "")
 	_ = flag.String("durable-dir", "", "")
+	var knownKeys knownServerKeys
+	flag.Var(&knownKeys, "known-server-key", "")
 	flag.Parse()
+	var successorActivation *int64
+	if value, parseErr := strconv.ParseInt(*successorActivationText, 10, 64); parseErr == nil {
+		terminalSuccessorActivation = value
+		if value > 0 {
+			successorActivation = &value
+		}
+	}
+	if successorActivation == nil && len(knownKeys) > 0 {
+		value := knownKeys[0].activation
+		successorActivation = &value
+	}
 	fail := func(err error) {
 		if *scenario != "" {
 			emit(map[string]any{"type": "terminal", "scenario": *scenario, "outcome": "error", "code": "stream_bad_frame", "http_status": nil, "http_code": nil, "frames_verified": 0, "request_id": nil, "mcp_complete": false, "terminal_frame": nil, "request_sig": nil, "v1_evidence": nil, "open": nil, "frames": []frame{}, "failure_frame": nil, "successor_activation": nil})
@@ -184,14 +210,41 @@ func main() {
 		n, _ := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
 		return time.Unix(n, 0)
 	}
+	clockAtStart := now().Unix()
+	pinnedPub := pub
+	pinnedCutoff := successorActivation
+	pinnedSuccessor := false
+	if successorActivation != nil && clockAtStart >= *successorActivation && len(knownKeys) > 0 {
+		// At/after the activation the successor is the ONLY verifier for new streams:
+		// pin it (this also lets signed v1 responses of the reopen verify) and drop the predecessor.
+		pinnedPub = knownKeys[0].public
+		pinnedCutoff = nil
+		pinnedSuccessor = true
+	}
 	cap := &capture{mirrors: append([][2]string(nil), mirrors...)}
-	base := recorder{base: http.DefaultTransport, c: cap}
-	tr := client.NewTransport(base, *aud, signer, pub)
+	successors := make(map[string]int64, len(knownKeys))
+	for _, entry := range knownKeys {
+		successors[entry.kid] = entry.activation
+	}
+	base := recorder{base: http.DefaultTransport, c: cap, successors: successors, now: now}
+	tr := client.NewTransport(base, *aud, signer, pinnedPub)
 	tr.Now = now
 	tr.Nonce = func() ([]byte, error) {
 		return append([]byte(nil), seed...), nil
 	}
-	tr.Stream = &clientstream.ClientConfig{FrameMaxBytes: int64(*frameMax), Idle: time.Duration(*idle) * time.Millisecond}
+	streamIdle := time.Duration(*idle) * time.Millisecond
+	if streamIdle <= 0 && (len(knownKeys) > 0 || successorActivation != nil) {
+		streamIdle = 96 * time.Hour // clock jumps to the successor activation must not trip stream_idle before the cutoff check
+	}
+	tr.Stream = &clientstream.ClientConfig{FrameMaxBytes: int64(*frameMax), Idle: streamIdle}
+	if !pinnedSuccessor && (len(knownKeys) > 0 || successorActivation != nil) {
+		config := tr.Stream
+		config.Keys = make(map[string]clientstream.Key, len(knownKeys))
+		for _, entry := range knownKeys {
+			config.Keys[entry.kid] = clientstream.Key{PublicKey: entry.public}
+		}
+		config.PinnedSuccessorActivation = pinnedCutoff
+	}
 	req, err := http.NewRequest("POST", parsedURL.String(), bytes.NewReader(rawBody))
 	if err != nil {
 		fail(err)
@@ -488,7 +541,7 @@ func isStreamSignal(data string) bool {
 }
 
 func failureFrame(all, verified []frame, code string) any {
-	if code != "stream_out_of_order" && code != "stream_bad_signature" {
+	if code != "stream_out_of_order" && code != "stream_bad_signature" && code != "stream_after_cutoff" {
 		return nil
 	}
 	if len(all) > len(verified) {
@@ -515,7 +568,7 @@ func emitTerminal(scenario, outcome, code string, open *openEvidence, frames []f
 	if responseStatus != 0 {
 		status = responseStatus
 	}
-	emit(map[string]any{"type": "terminal", "scenario": scenario, "outcome": outcome, "code": c, "http_status": status, "http_code": nil, "frames_verified": count, "request_id": rpc["id"], "mcp_complete": complete, "terminal_frame": terminalFrame, "request_sig": sig, "v1_evidence": evidence, "open": open, "frames": frames, "failure_frame": failure, "successor_activation": nil})
+	emit(map[string]any{"type": "terminal", "scenario": scenario, "outcome": outcome, "code": c, "http_status": status, "http_code": nil, "frames_verified": count, "request_id": rpc["id"], "mcp_complete": complete, "terminal_frame": terminalFrame, "request_sig": sig, "v1_evidence": evidence, "open": open, "frames": frames, "failure_frame": failure, "successor_activation": terminalSuccessorActivation})
 }
 func emitRefusal(scenario string, status int, h http.Header, body []byte, sig string, requestID any, c *capture) {
 	ev := map[string]any{"status": status, "request_sig": sig, "body_b64u": base64.RawURLEncoding.EncodeToString(body)}

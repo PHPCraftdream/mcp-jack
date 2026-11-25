@@ -130,12 +130,12 @@ export async function startRelay({ upstreamPort, transform = 'pass', scenario } 
   const server = net.createServer(downstream => {
     track(downstream);
     const upstream = net.connect(upstreamPort, '127.0.0.1'); track(upstream);
-    let requestEnded = false, responseBuffer = Buffer.alloc(0), head = null, completed = false;
+    let requestEnded = false, responseBuffer = Buffer.alloc(0), head = null, completed = false, branchHandlesAbort = false;
     downstream.on('data', chunk => { if (!upstream.destroyed && !upstream.write(chunk)) downstream.pause(); });
     upstream.on('drain', () => downstream.resume());
     downstream.on('end', () => { requestEnded = true; upstream.end(); });
     downstream.on('close', () => { if (!requestEnded && !upstream.destroyed) upstream.destroy(); });
-    upstream.on('error', () => downstream.destroy());
+    upstream.on('error', () => { if (!branchHandlesAbort) downstream.destroy(); });
     if (transform === 'pass' || process.env.JACK_STREAM_SELFTEST_NO_TAMPER === '1') {
       upstream.on('data', chunk => { if (!downstream.destroyed && !downstream.write(chunk)) upstream.pause(); });
       downstream.on('drain', () => upstream.resume());
@@ -143,12 +143,26 @@ export async function startRelay({ upstreamPort, transform = 'pass', scenario } 
       return;
     }
     if (transform === 'after-cutoff') {
+      branchHandlesAbort = true;
       // Streaming path: forward each decoded event live so the client can verify it
       // under the clock in effect when it arrives; only the end frame is replaced.
-      let headInfo = null, bodyBuf = Buffer.alloc(0), eventBuf = Buffer.alloc(0), activeSid = null, prevSig = null, injected = false, headSent = false, chunkSize = null, chunkHave = 0;
+      let headInfo = null, bodyBuf = Buffer.alloc(0), eventBuf = Buffer.alloc(0), activeSid = null, prevSig = null, injected = false, headSent = false, chunkSize = null, chunkHave = 0, lastSeq = -1, trailersPending = false;
       const fail = () => { if (!downstream.destroyed) downstream.destroy(); if (!upstream.destroyed) upstream.destroy(); };
       const emit = bytes => { if (!downstream.destroyed) downstream.write(bytes); };
       const chunkOut = bytes => emit(Buffer.concat([Buffer.from(`${bytes.length.toString(16)}\r\n`, 'latin1'), bytes, Buffer.from('\r\n')]));
+      const injectCutoff = forcedSeq => {
+        if (injected) return;
+        if (!headInfo || activeSid === null) { fail(); return; }
+        const seq = Number.isSafeInteger(forcedSeq) ? forcedSeq : lastSeq + 1;
+        let frame;
+        try { frame = scenario.relayCutoffSign({ sid: activeSid, seq, prev: prevSig }); } catch { fail(); return; }
+        if (!Buffer.isBuffer(frame)) { fail(); return; }
+        injected = true; applied = true;
+        chunkOut(frame); emit(Buffer.from('0\r\n\r\n', 'latin1'));
+        if (!downstream.destroyed) downstream.end();
+        if (!upstream.destroyed) upstream.destroy();
+      };
+      const completeUpstream = () => { if (!injected) injectCutoff(); else if (!upstream.destroyed) upstream.destroy(); };
       const pump = () => {
         if (injected) return;
         if (!headInfo) {
@@ -166,6 +180,7 @@ export async function startRelay({ upstreamPort, transform = 'pass', scenario } 
           emit(Buffer.from(lines.join('\r\n') + '\r\n\r\n', 'latin1')); headSent = true;
         }
         for (;;) {
+          if (trailersPending) break;
           if (headInfo.chunked) {
             // Incremental: payload bytes stream into eventBuf as they arrive; a held
             // stream must not wait for a chunk boundary to forward complete events.
@@ -175,7 +190,7 @@ export async function startRelay({ upstreamPort, transform = 'pass', scenario } 
               const sizeMatch = /^([0-9a-fA-F]+)(?:;[^\r\n]*)?$/.exec(bodyBuf.subarray(0, lineEnd).toString('latin1'));
               if (!sizeMatch) { fail(); return; }
               chunkSize = Number.parseInt(sizeMatch[1], 16); bodyBuf = bodyBuf.subarray(lineEnd + 2);
-              if (chunkSize === 0) { chunkSize = null; break; }
+              if (chunkSize === 0) { chunkSize = null; trailersPending = true; break; }
               chunkHave = 0;
             }
             const avail = Math.min(chunkSize - chunkHave, bodyBuf.length);
@@ -195,22 +210,23 @@ export async function startRelay({ upstreamPort, transform = 'pass', scenario } 
           else if (lf >= 0) { end = lf; delim = 2; } else break;
           const event = eventBuf.subarray(0, end + delim); eventBuf = eventBuf.subarray(end + delim);
           const { fields } = parseEvent(event);
-          if (fields.kind === 'jack-end') {
-            let frame;
-            try { frame = scenario.relayCutoffSign({ sid: activeSid, seq: Number(fields.seq), prev: prevSig }); } catch { fail(); return; }
-            if (!Buffer.isBuffer(frame)) { fail(); return; }
-            injected = true; applied = true;
-            chunkOut(frame); emit(Buffer.from('0\r\n\r\n', 'latin1'));
-            if (!downstream.destroyed) downstream.end();
-            if (!upstream.destroyed) upstream.destroy();
-            return;
-          }
+          if (fields.kind === 'jack-end') { injectCutoff(Number(fields.seq)); return; }
+          const seqValue = Number(fields.seq); if (Number.isSafeInteger(seqValue) && seqValue > lastSeq) lastSeq = seqValue;
           chunkOut(event);
           if (fields.sig) prevSig = fields.sig;
         }
+        if (trailersPending) {
+          if (bodyBuf.subarray(0, 2).equals(Buffer.from('\r\n'))) { bodyBuf = bodyBuf.subarray(2); completeUpstream(); return; }
+          const trailerEnd = bodyBuf.indexOf('\r\n\r\n');
+          if (trailerEnd >= 0) { bodyBuf = bodyBuf.subarray(trailerEnd + 4); completeUpstream(); return; }
+          if (bodyBuf.length > MAX_BODY) fail();
+          return;
+        }
       };
       upstream.on('data', chunk => { bodyBuf = Buffer.concat([bodyBuf, chunk]); pump(); });
-      upstream.on('end', () => { if (!injected) fail(); });
+      upstream.on('end', () => { if (!injected) injectCutoff(); });
+      upstream.on('close', () => { if (!injected) injectCutoff(); });
+      upstream.on('error', () => { if (!injected) injectCutoff(); else if (!downstream.destroyed) downstream.destroy(); });
       return;
     }
     const finish = eof => {

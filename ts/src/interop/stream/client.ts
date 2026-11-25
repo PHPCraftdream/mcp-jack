@@ -5,9 +5,10 @@ import { InMemorySigner } from "../../client/signing/signer.js";
 import { createSigningFetch } from "../../client/transport/transport.js";
 import { openSignedStream } from "../../client/stream/session.js";
 import { parseRequestAuth, parseResponseAuth } from "../../core/auth-header.js";
-import { decodeBase64URLFixed, encodeBase64URL } from "../../core/encoding.js";
+import { decodeBase64URLFixed, encodeBase64URL, keyId } from "../../core/encoding.js";
+import type { StreamServerKey } from "../../stream/verify.js";
 import { parseStreamFrame, parseStreamOpenAuth, StreamEventReader, streamSignalCode } from "../../stream/wire.js";
-import { clockFile, diagnostic, integer, jsonl, need, parseFlags, scenario } from "./common.js";
+import { clockFile, diagnostic, integer, jsonl, need, parseFlagsFull, scenario } from "./common.js";
 
 type Pair = readonly [string, string];
 type MutablePair = [string, string];
@@ -197,7 +198,9 @@ function terminalJsonl(value: Record<string, unknown>): void {
 }
 
 async function main(): Promise<void> {
-  const flags = parseFlags(process.argv.slice(2));
+  const parsed = parseFlagsFull(process.argv.slice(2));
+  const flags = parsed.flags;
+  const repeated = parsed.repeated;
   const id = need(flags, "scenario");
   currentScenario = id;
   const meta = scenario(id);
@@ -212,6 +215,39 @@ async function main(): Promise<void> {
   const seed = Buffer.from(need(flags, "seed-hex"), "hex");
   const signer = new InMemorySigner(seed);
   const serverKey = decodeBase64URLFixed(need(flags, "server-public-key"), 32);
+  const knownKeys: { kid: string; publicKey: Uint8Array; activation: number }[] = [];
+  for (const value of repeated["known-server-key"] ?? []) {
+    const fields: Record<string, string> = {};
+    for (const segment of value.split(",")) {
+      const eq = segment.indexOf("=");
+      if (eq <= 0) throw new Error("invalid --known-server-key");
+      const name = segment.slice(0, eq);
+      if (!(["kid", "public", "activation"] as const).includes(name as "kid" | "public" | "activation") || Object.hasOwn(fields, name)) {
+        throw new Error("invalid --known-server-key");
+      }
+      fields[name] = segment.slice(eq + 1);
+    }
+    if (fields.kid === undefined || fields.kid === "" || fields.public === undefined || fields.activation === undefined ||
+      !/^(0|[1-9][0-9]*)$/.test(fields.activation)) throw new Error("invalid --known-server-key");
+    const activation = Number(fields.activation);
+    if (!Number.isSafeInteger(activation)) throw new Error("invalid --known-server-key");
+    let publicKey: Uint8Array;
+    try { publicKey = decodeBase64URLFixed(fields.public, 32); } catch { throw new Error("invalid --known-server-key"); }
+    knownKeys.push({ kid: fields.kid, publicKey, activation });
+  }
+  const pinnedKid = keyId(serverKey);
+  const successorActivation = flags["successor-activation"] === undefined ? undefined : integer(flags, "successor-activation");
+  const resolveKey = (kid: string): StreamServerKey | undefined => {
+    const entry = knownKeys.find((candidate) => candidate.kid === kid);
+    if (entry !== undefined) {
+      if (now() < entry.activation) return undefined;
+      return { kid: entry.kid, publicKey: entry.publicKey };
+    }
+    if (kid === pinnedKid) {
+      return successorActivation === undefined ? { kid, publicKey: serverKey } : { kid, publicKey: serverKey, successorActivation };
+    }
+    return undefined;
+  };
   const body = Buffer.from(need(flags, "request-body-json"));
   const requestData = JSON.parse(body.toString("utf8"));
   currentRequestId = requestData.id;
@@ -230,6 +266,7 @@ async function main(): Promise<void> {
     aud,
     signer,
     serverKey,
+    resolveKey,
     clock: now,
     nonceSource: () => nonce,
     windowSeconds: 30,
@@ -423,7 +460,7 @@ async function main(): Promise<void> {
     terminal_frame: frames.at(-1)?.kind === "end" ? { kind: "end", sig: frames.at(-1).sig } : null,
     request_sig: requestAuth.sig, v1_evidence: null,
     open: { sid: open.sid, kid: open.kid, ts: open.ts, sig: open.sig },
-    frames, failure_frame: failureFrame, successor_activation: null,
+    frames, failure_frame: failureFrame, successor_activation: successorActivation ?? knownKeys[0]?.activation ?? null,
   });
 }
 

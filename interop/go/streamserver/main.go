@@ -14,16 +14,32 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
+	"github.com/PHPCraftdream/mcp-jack/durable"
+	"github.com/PHPCraftdream/mcp-jack/rotation"
 	"github.com/PHPCraftdream/mcp-jack/server"
+	rotationserver "github.com/PHPCraftdream/mcp-jack/server/rotation"
 )
 
 type fixedClock struct{ path string }
+
+type ringSigner struct {
+	priv ed25519.PrivateKey
+}
+
+func (s ringSigner) PublicKey() []byte {
+	return append([]byte(nil), s.priv.Public().(ed25519.PublicKey)...)
+}
+
+func (s ringSigner) Sign(message []byte) ([]byte, error) {
+	return ed25519.Sign(s.priv, message), nil
+}
 
 func (c fixedClock) Now() int64 {
 	b, err := os.ReadFile(c.path)
@@ -58,32 +74,45 @@ type scenarioRow struct {
 	Producer string `json:"producer"`
 }
 
-func scenarioProducer(id string) string {
+func scenarioMeta(id string) (scenarioRow, bool) {
 	b, err := os.ReadFile("interop/stream-scenarios.json")
 	if err != nil {
-		return ""
+		return scenarioRow{}, false
 	}
 	var doc struct {
 		Matrices struct {
-			Stream []scenarioRow `json:"stream"`
-			Staged []scenarioRow `json:"staged"`
+			Stream         []scenarioRow `json:"stream"`
+			Staged         []scenarioRow `json:"staged"`
+			RotationStream []scenarioRow `json:"rotation-stream"`
+			DurableStream  []scenarioRow `json:"durable-stream"`
 		} `json:"matrices"`
 	}
 	if json.Unmarshal(b, &doc) != nil {
-		return ""
+		return scenarioRow{}, false
 	}
-	for _, pool := range [][]scenarioRow{doc.Matrices.Stream, doc.Matrices.Staged} {
+	for _, pool := range [][]scenarioRow{doc.Matrices.Stream, doc.Matrices.Staged, doc.Matrices.RotationStream, doc.Matrices.DurableStream} {
 		for _, row := range pool {
-			if row.ID == id && row.Producer != "" {
-				return row.Producer
+			if row.ID == id {
+				return row, true
 			}
 		}
+	}
+	return scenarioRow{}, false
+}
+
+func scenarioProducer(id string) string {
+	row, ok := scenarioMeta(id)
+	if ok {
+		return row.Producer
 	}
 	return ""
 }
 
 type control struct {
 	Action     string `json:"action"`
+	Op         string `json:"op"`
+	Reference  string `json:"reference"`
+	Kid        string `json:"kid"`
 	Clock      int64  `json:"clock"`
 	Start      int64  `json:"start"`
 	DurationMS int64  `json:"duration_ms"`
@@ -92,21 +121,25 @@ type control struct {
 type releaseState struct {
 	mu      sync.Mutex
 	sid     string
+	ack     string
 	release chan control
 }
 type releaseContextKey struct{}
 
 type streamOpenWriter struct {
 	http.ResponseWriter
-	log       *auditLog
-	request   *http.Request
-	scenario  string
-	serverKID string
-	heartbeat int64
-	committed bool
-	status    int
-	body      bytes.Buffer
-	release   *releaseState
+	log          *auditLog
+	request      *http.Request
+	scenario     string
+	serverKID    string
+	heartbeat    int64
+	commitLogged bool
+	committed    bool
+	nonce        string
+	sig          string
+	status       int
+	body         bytes.Buffer
+	release      *releaseState
 }
 
 func (w *streamOpenWriter) WriteHeader(status int) {
@@ -127,6 +160,8 @@ func (w *streamOpenWriter) WriteHeader(status int) {
 					w.release.mu.Unlock()
 				}
 			}
+			w.commitLogged = true
+			w.log.put(map[string]any{"event": "nonce_committed", "nonce": w.nonce, "request_sig": w.sig, "nonce_committed_before_first_byte": true})
 			w.log.put(map[string]any{"event": "stream_open", "sid": sid, "request_sig": requestAuth.Sig, "identity": requestAuth.Kid, "server_kid": serverKID, "nonce_committed_before_first_byte": true})
 			if w.scenario == "events-stream" {
 				w.log.put(map[string]any{"event": "heartbeat_granted", "request_sig": requestAuth.Sig, "heartbeat_granted_ms": w.heartbeat})
@@ -174,14 +209,32 @@ func main() {
 	duration := flag.Int64("max-stream-duration-ms", 0, "")
 	heartbeat := flag.Int64("heartbeat-ms", 0, "")
 	_ = flag.Int64("idle-timeout-ms", 0, "")
-	_ = flag.String("ring-seed", "", "")
-	_ = flag.String("successor-activation", "", "")
-	_ = flag.String("rotation-store", "", "")
-	_ = flag.String("durable-dir", "", "")
+	ringSeed := flag.String("ring-seed", "", "")
+	successorActivation := flag.Int64("successor-activation", 0, "")
+	rotationStore := flag.String("rotation-store", "", "")
+	durableDir := flag.String("durable-dir", "", "")
+	durableInit := flag.Bool("durable-init", false, "")
 	seedHex := flag.Lookup("server-seed-hex")
 	flag.Parse()
+	if *durableInit {
+		if *durableDir == "" {
+			fmt.Fprintln(os.Stderr, "--durable-init requires --durable-dir")
+			os.Exit(1)
+		}
+		if err := durable.InitializeUnused(filepath.Join(*durableDir, "committed-nonces.db"), durable.Options{DeploymentID: "mcp-jack-stream-interop", Window: 30, Now: fixedClock{*clockPath}.Now}); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println(`{"durable_initialized":true}`)
+		os.Exit(0)
+	}
 	producer := scenarioProducer(*scenario)
-	if *scenario == "idle" || producer == "" {
+	// Lifecycle rows declare producer progress-final; dispatch them by scenario id.
+	switch *scenario {
+	case "idle", "rotation-cutoff-reopen", "durable-live-replay", "durable-restart-replay":
+		producer = *scenario
+	}
+	if producer == "" {
 		producer = *scenario
 	}
 	fail := func(err error) { fmt.Fprintln(os.Stderr, err); os.Exit(1) }
@@ -194,7 +247,60 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	verifier, err := server.NewVerifier(server.Config{Aud: *aud, State: state, Nonces: server.NewNonceStore(), Now: clock.Now})
+	var provider *rotationserver.Provider
+	var rotStore *durable.ServerStore
+	erinKid := ""
+	if *ringSeed != "" && *rotationStore != "" {
+		rest, ok := strings.CutPrefix(*ringSeed, "ring-1=")
+		if !ok {
+			fail(fmt.Errorf("invalid --ring-seed"))
+		}
+		erinSeed, err := hex.DecodeString(rest)
+		if err != nil || len(erinSeed) != ed25519.SeedSize {
+			fail(fmt.Errorf("invalid --ring-seed"))
+		}
+		svcPub := ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)
+		svcKid := jack.KeyID(svcPub)
+		var anchorPub [32]byte
+		copy(anchorPub[:], svcPub)
+		rotationOpts := durable.TrustOptions{Binding: rotation.Binding{Endpoint: "http://127.0.0.1/mcp", Audience: *aud}, Window: 30, Checkpoint: rotation.Checkpoint{Ordinal: 0, Hash: "-", KID: svcKid, PublicKey: anchorPub, PublishedAt: 0}, Now: clock.Now}
+		serverOpts := durable.ServerOptions{TrustOptions: rotationOpts, AnchorReference: "ring-0"}
+		if _, err := os.Stat(*rotationStore); os.IsNotExist(err) {
+			if err := durable.InitializeServerUnused(*rotationStore, serverOpts); err != nil {
+				fail(err)
+			}
+		} else if err != nil {
+			fail(err)
+		}
+		rotStore, err = durable.OpenServer(*rotationStore, serverOpts)
+		if err != nil {
+			fail(err)
+		}
+		erinKey := ed25519.NewKeyFromSeed(erinSeed)
+		erinKid = jack.KeyID(erinKey.Public().(ed25519.PublicKey))
+		provider, err = rotationserver.New(rotStore, []rotationserver.Key{{Reference: "ring-0", Signer: ringSigner{priv: ed25519.NewKeyFromSeed(seed)}}, {Reference: "ring-1", Signer: ringSigner{priv: erinKey}}})
+		if err != nil {
+			fail(err)
+		}
+	}
+	var durableStore *durable.Store
+	if *durableDir != "" {
+		store, err := durable.Open(filepath.Join(*durableDir, "committed-nonces.db"), durable.Options{DeploymentID: "mcp-jack-stream-interop", Window: 30, Now: clock.Now})
+		if err != nil {
+			fail(err)
+		}
+		durableStore = store
+	}
+	verifierConfig := server.Config{Aud: *aud, State: state, Now: clock.Now}
+	if provider != nil {
+		verifierConfig.ServerKeys = provider
+	}
+	if durableStore != nil {
+		verifierConfig.DurableNonces = durableStore
+	} else {
+		verifierConfig.Nonces = server.NewNonceStore()
+	}
+	verifier, err := server.NewVerifier(verifierConfig)
 	if err != nil {
 		fail(err)
 	}
@@ -226,17 +332,33 @@ func main() {
 		sc := bufio.NewScanner(os.Stdin)
 		for sc.Scan() {
 			var c control
-			if json.Unmarshal(sc.Bytes(), &c) == nil {
-				if c.Action == "release" {
-					select {
-					case releaseControls <- c:
-					default:
-					}
-				} else {
-					select {
-					case controls <- c:
-					default:
-					}
+			if json.Unmarshal(sc.Bytes(), &c) != nil {
+				continue
+			}
+			if c.Op == "announce" {
+				if provider == nil || c.Reference != "ring-1" || c.Kid != erinKid {
+					fmt.Fprintf(os.Stderr, "invalid rotation announce command\n")
+					continue
+				}
+				publication, err := provider.Announce(c.Reference, c.Kid)
+				if err != nil {
+					fmt.Println(`{"announced":false,"reason":"rotation_state_unavailable"}`)
+					continue
+				}
+				record := publication.Record
+				log.put(map[string]any{"event": "rotation_announced", "reference": c.Reference, "kid": erinKid, "published_at": record.PublishedAt, "activates_at": record.ActivatesAt, "head_hash": record.Hash})
+				fmt.Println(mustJSON(map[string]any{"announced": true, "ordinal": record.Ordinal, "head_ordinal": record.Ordinal, "published_at": record.PublishedAt, "activates_at": record.ActivatesAt, "head_hash": record.Hash}))
+				continue
+			}
+			if c.Action == "release" {
+				select {
+				case releaseControls <- c:
+				default:
+				}
+			} else {
+				select {
+				case controls <- c:
+				default:
 				}
 			}
 		}
@@ -262,7 +384,6 @@ func main() {
 			}
 		}
 		log.put(row)
-		log.put(map[string]any{"event": "nonce_committed", "request_sig": sig, "nonce": auth.Nonce, "nonce_committed_before_first_byte": true})
 		if r.Header.Get("Jack-Accept") == "" {
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = io.WriteString(w, "data: refusal\n\n")
@@ -294,7 +415,7 @@ func main() {
 		progress := map[string]any{"jsonrpc": "2.0", "method": "notifications/progress", "params": map[string]any{"progress": 1}}
 		final := map[string]any{"jsonrpc": "2.0", "id": in.ID, "result": map[string]any{}}
 		switch producer {
-		case "concurrency-limit", "durable-live-replay", "durable-restart-replay":
+		case "concurrency-limit":
 			emit(progress)
 			if release != nil {
 				select {
@@ -306,9 +427,43 @@ func main() {
 					}
 					emit(final)
 					release.mu.Lock()
-					sid := release.sid
+					release.ack = release.sid
 					release.mu.Unlock()
-					fmt.Fprintln(os.Stdout, mustJSON(map[string]any{"control": "released", "sid": sid}))
+				}
+			}
+		case "durable-live-replay":
+			emit(map[string]any{"jsonrpc": "2.0", "method": "notifications/progress", "params": map[string]any{"progress": 1, "message": "stream:first"}})
+			if release != nil {
+				select {
+				case <-r.Context().Done():
+					return
+				case _, open := <-release.release:
+					if !open {
+						return
+					}
+					emit(final)
+					release.mu.Lock()
+					release.ack = release.sid
+					release.mu.Unlock()
+				}
+			}
+		case "durable-restart-replay":
+			emit(map[string]any{"jsonrpc": "2.0", "method": "notifications/progress", "params": map[string]any{"progress": 1, "message": "stream:first"}})
+			emit(final)
+		case "rotation-cutoff-reopen":
+			emit(progress)
+			emit(final)
+			if *successorActivation > 0 && clock.Now() < *successorActivation && release != nil {
+				select {
+				case <-r.Context().Done():
+					return
+				case _, open := <-release.release:
+					if !open {
+						return
+					}
+					release.mu.Lock()
+					release.ack = release.sid
+					release.mu.Unlock()
 				}
 			}
 		case "progress-final", "relay-drop", "relay-edit-data", "relay-truncate", "relay-reorder", "relay-splice", "relay-replay":
@@ -369,14 +524,20 @@ func main() {
 	})
 	pub := ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)
 	serverKID := jack.KeyID(pub)
-	handler, err := server.NewHandler(server.HandlerConfig{Verifier: verifier, ServerKey: ed25519.NewKeyFromSeed(seed), Profile: server.Profile(*profile), Streams: &opts, TimerNow: func() time.Time { return time.Unix(clock.Now(), 0) }}, app)
+	var handlerConfig = server.HandlerConfig{Verifier: verifier, ServerKey: ed25519.NewKeyFromSeed(seed), Profile: server.Profile(*profile), Streams: &opts, TimerNow: func() time.Time { return time.Unix(clock.Now(), 0) }}
+	if provider != nil {
+		handlerConfig.ServerKey = nil
+		handlerConfig.ResponseKeys = provider
+	}
+	handler, err := server.NewHandler(handlerConfig, app)
 	if err != nil {
 		fail(err)
 	}
 	wrapped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		state := &releaseState{release: releaseControls}
-		ctx := context.WithValue(r.Context(), releaseContextKey{}, state)
-		outer := &streamOpenWriter{ResponseWriter: w, log: log, request: r, scenario: producer, serverKID: serverKID, heartbeat: opts.Heartbeat.Milliseconds(), release: state}
+		release := &releaseState{release: releaseControls}
+		ctx := context.WithValue(r.Context(), releaseContextKey{}, release)
+		auth, _ := jack.ParseRequestAuth(r.Header.Values("Jack-Auth"))
+		outer := &streamOpenWriter{ResponseWriter: w, log: log, request: r, scenario: producer, serverKID: serverKID, heartbeat: opts.Heartbeat.Milliseconds(), release: release, nonce: auth.Nonce, sig: auth.Sig}
 		handler.ServeHTTP(outer, r.WithContext(ctx))
 		if outer.status == http.StatusUnauthorized {
 			var refusal struct {
@@ -388,6 +549,16 @@ func main() {
 				auth, _ := jack.ParseRequestAuth(r.Header.Values("Jack-Auth"))
 				log.put(map[string]any{"event": "replayed_nonce", "request_sig": auth.Sig, "nonce": auth.Nonce})
 			}
+		}
+		if !outer.commitLogged && (outer.status == http.StatusOK || outer.status == http.StatusTooManyRequests || outer.status == http.StatusNotImplemented || outer.status == http.StatusBadGateway) && outer.nonce != "" {
+			log.put(map[string]any{"event": "nonce_committed", "nonce": outer.nonce, "request_sig": outer.sig, "nonce_committed_before_first_byte": true})
+		}
+		// Printed after the handler returned; the SDK exposes no later completion hook.
+		release.mu.Lock()
+		ack := release.ack
+		release.mu.Unlock()
+		if ack != "" {
+			fmt.Fprintln(os.Stdout, mustJSON(map[string]any{"control": "released", "sid": ack}))
 		}
 	})
 	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", *port))
@@ -408,6 +579,12 @@ func main() {
 	}
 	_ = srv.Close()
 	<-scannerDone
+	if rotStore != nil {
+		_ = rotStore.Close()
+	}
+	if durableStore != nil {
+		_ = durableStore.Close()
+	}
 }
 func hasListChangedNotification(params map[string]any) bool {
 	items, ok := params["notifications"].([]any)
