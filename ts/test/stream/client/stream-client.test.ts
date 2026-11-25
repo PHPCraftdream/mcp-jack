@@ -99,6 +99,8 @@ test("stream client: the fired idle timer latches stream_idle although the pump 
   const signer = streamSigner(fixtureNow);
   const controller = new AbortController();
   setPumpClockForTests(() => 1_000);
+  // The pump's idle timer is unref'd (a real socket keeps the loop alive); hold a ref here.
+  const keepAlive = setInterval(() => undefined, 10);
   try {
     const body = new ReadableStream<Uint8Array>({ start(): void {} }, { highWaterMark: 0 });
     const pump = startVerifiedStream({
@@ -112,6 +114,7 @@ test("stream client: the fired idle timer latches stream_idle although the pump 
     void pump.messages().next().catch(() => undefined);
     assert.deepEqual((await pump.done).terminal, { state: "error", code: "stream_idle", framesVerified: 0 });
   } finally {
+    clearInterval(keepAlive);
     setPumpClockForTests(undefined);
   }
 });
