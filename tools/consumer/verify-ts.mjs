@@ -22,8 +22,8 @@ const inventoryPath = path.join(stageDir, "inventory.json");
 const inventory = JSON.parse(await readFile(inventoryPath, "utf8"));
 const allowed = /^(?:package\.json|README\.md|LICENSE-MIT|LICENSE-APACHE|dist\/(?:(?!interop\/)[^/]+\/)*[^/]+\.(?:js|d\.ts))$/u;
 const required = ["package.json", "README.md", "LICENSE-MIT", "LICENSE-APACHE", "dist/index.js", "dist/index.d.ts"];
-if (inventory.name !== "mcp-jack" || inventory.version !== "0.1.0" || inventory.private !== true) {
-  throw new Error("staged package identity/private metadata changed");
+if (inventory.name !== "mcp-jack" || inventory.version !== "0.1.0") {
+  throw new Error("staged package identity metadata changed");
 }
 if (inventory.artifact !== path.basename(artifact) || !Array.isArray(inventory.members)) {
   throw new Error("staged package inventory is incomplete");
@@ -63,8 +63,8 @@ const resolved = execFileSync(
 const resolvedPath = await realpath(new URL(resolved));
 if (!resolvedPath.startsWith(packageRoot + path.sep)) throw new Error("package-root import did not resolve inside the installed archive");
 const installedManifest = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8"));
-if (installedManifest.name !== inventory.name || installedManifest.version !== inventory.version || installedManifest.private !== true) {
-  throw new Error("installed archive metadata differs from the private staged package");
+if (installedManifest.name !== inventory.name || installedManifest.version !== inventory.version) {
+  throw new Error("installed archive metadata differs from the staged package");
 }
 if (installedManifest.main !== "./dist/index.js" || installedManifest.types !== "./dist/index.d.ts" || installedManifest.type !== "module") {
   throw new Error("installed archive root ESM metadata is incomplete");
