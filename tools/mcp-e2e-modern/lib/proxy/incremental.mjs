@@ -84,7 +84,10 @@ export function startIncrementalProxy({ port = 0, secrets = [], limits = {} } = 
         } else responseText = appendLimited(responseText, text);
       });
       up.on('end', () => {
-        if (media === 'text/event-stream') recordFrame(sseBuffer);
+        if (media === 'text/event-stream') {
+          if (up.headers['jack-auth'] !== undefined) rawSignatures.set(id, { openHeader: up.headers['jack-auth'], status: up.statusCode ?? null, sse: true });
+          recordFrame(sseBuffer);
+        }
         else {
           if (up.headers['jack-auth'] !== undefined) rawSignatures.set(id, { status: up.statusCode ?? null, jackAuth: up.headers['jack-auth'], body: responseText });
           add({ hop: id, direction: 'response', method: down.method ?? null, status: up.statusCode ?? null, media_type: media, headers: Object.fromEntries(['jack-auth'].filter((key) => up.headers[key] !== undefined).map((key) => [key, up.headers[key]])), body: responseText });

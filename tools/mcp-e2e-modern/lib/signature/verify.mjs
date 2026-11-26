@@ -21,6 +21,7 @@ export function verifyResponseSignature({ jackAuthHeader, status, requestSig, bo
     if (keyBytes.length !== 32) return { ok: false, reason: 'malformed_public_key' };
     const spki = Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), keyBytes]);
     const publicKey = createPublicKey({ key: spki, format: 'der', type: 'spki' });
+    // Hashes the captured bounded, re-encoded body; timestamp freshness is not checked.
     const bodyHash = createHash('sha256').update(Buffer.from(body, 'utf8')).digest('base64url');
     const signingString = ['mcp-jack/v1/response', String(status), requestSig, values.get('kid'), values.get('ts'), bodyHash].join('\n');
     return verify(null, Buffer.from(signingString), publicKey, decode(values.get('sig')))

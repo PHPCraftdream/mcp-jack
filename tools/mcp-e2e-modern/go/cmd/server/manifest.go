@@ -53,7 +53,7 @@ func manifest() []capability {
 		{
 			ID:       "subscriptions_listen",
 			Status:   "supported",
-			Evidence: "mcp.ClientSession.Subscribe opens subscriptions/listen for a resource and Unsubscribe cancels it (mcp/client.go:1379-1435); the server acknowledges and retains the stream until cancellation (mcp/server.go:1256-1320)",
+			Evidence: "ServerOptions.SubscribeHandler and UnsubscribeHandler enable resources/subscribe (mcp/server.go:109-111,1211-1222); subscriptions/listen registers subscriptions, sends subscriptions/acknowledged, then serves until client disconnect/context cancellation (mcp/server.go:1266-1338,1314-1320); stateless transport routes notifications to the open listen stream (mcp/streamable.go:1865-1877). No server-initiated graceful listen end: server.go:1314-1320 returns only on cancellation, so the driver must observe client disconnect as stream end.",
 		},
 		{
 			ID:       "server_discover",

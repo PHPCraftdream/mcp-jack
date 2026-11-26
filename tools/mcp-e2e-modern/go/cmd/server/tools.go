@@ -83,10 +83,42 @@ func newServer(reg *callRegistry) *mcp.Server {
 		&mcp.Implementation{Name: "e2e-modern-go-server", Version: sdkVer},
 		&mcp.ServerOptions{
 			Capabilities: &mcp.ServerCapabilities{
+				Tools:     &mcp.ToolCapabilities{ListChanged: true},
 				Resources: &mcp.ResourceCapabilities{Subscribe: true, ListChanged: true},
 			},
+			SubscribeHandler: func(context.Context, *mcp.SubscribeRequest) error {
+				// SDK registers the subscription after this handler returns (server.go:1219-1228).
+				return nil
+			},
+			UnsubscribeHandler: func(context.Context, *mcp.UnsubscribeRequest) error { return nil },
 		},
 	)
+	srv.AddSendingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			result, err := next(ctx, method, req)
+			if err != nil || method != "notifications/subscriptions/acknowledged" {
+				return result, err
+			}
+			params, ok := req.GetParams().(*mcp.SubscriptionsAcknowledgedParams)
+			if !ok {
+				return result, nil
+			}
+			notifications := params.Notifications
+			go func() {
+				// Run after the ack write path so notifications cannot block it.
+				for _, uri := range notifications.ResourceSubscriptions {
+					if uri != "" {
+						_ = srv.ResourceUpdated(context.Background(), &mcp.ResourceUpdatedNotificationParams{URI: uri})
+					}
+				}
+				if notifications.ToolsListChanged {
+					// Re-adding the same tool emits the SDK's tool-list-changed notification.
+					mcp.AddTool(srv, &mcp.Tool{Name: "echo", Description: "Return the supplied value unchanged"}, echo)
+				}
+			}()
+			return result, nil
+		}
+	})
 	mcp.AddTool(srv, &mcp.Tool{Name: "echo", Description: "Return the supplied value unchanged"}, echo)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "progress",

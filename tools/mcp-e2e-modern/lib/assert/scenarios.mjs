@@ -32,7 +32,7 @@ export function assertScenario2({ captures = [], bridge = {}, sdkErrorPresent = 
   return result([
     expect(!methods.includes('initialize') && !methods.includes('notifications/initialized'), 'no initialize', JSON.stringify(methods)),
     expect(fallbackCount === 0, 'no legacy fallback', String(fallbackCount)),
-    expect(typeof bridge.exit_code === 'number' && bridge.exit_code !== 0, 'bridge failed closed', String(bridge.exit_code)),
+    expect(typeof bridge.exit_code === 'number' && bridge.exit_code !== 0 && bridge.close_observed !== false, 'bridge failed closed', String(bridge.exit_code)),
     expect(bridge.stdout_bytes === 0, 'no bridge stdout', String(bridge.stdout_bytes)),
     expect(sdkErrorPresent, 'SDK error present', 'client-visible SDK error must be recorded'),
     expect(refusedCount >= 1, 'request refused', String(refusedCount)),
@@ -133,6 +133,6 @@ export function assertScenario8({ captures = [], flipped = false, upstreamStatus
   return result([
     expect(flipped === true, 'one byte flipped', String(flipped)),
     expect(upstreamStatus === 200 && response?.status === 200, 'upstream status', String(upstreamStatus)),
-    expect(typeof bridgeResult.exit_code === 'number' && bridgeResult.exit_code !== 0 && bridgeResult.stdout_bytes === 0 && bridgeResult.fabricated_result !== true, 'fail closed', JSON.stringify(bridgeResult)),
+    expect(typeof bridgeResult.exit_code === 'number' && bridgeResult.exit_code !== 0 && bridgeResult.close_observed !== false && bridgeResult.stdout_bytes === 0 && bridgeResult.fabricated_result !== true, 'fail closed', JSON.stringify(bridgeResult)),
   ]);
 }

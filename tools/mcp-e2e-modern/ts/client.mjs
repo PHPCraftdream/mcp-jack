@@ -21,7 +21,7 @@ const bridgeMode = argv.includes('--bridge-bin');
 let sdk = { name: '@modelcontextprotocol/client', version: 'unknown' };
 const result = {
   scenario, sdk, outcome: 'fail', tool_result: null, sdk_error: null, request_meta: null,
-  bridge: { spawned: false, exit_code: null, close_observed: false, stdout_bytes: 0, stderr_tail: '' },
+  bridge: { spawned: false, exit_code: null, close_observed: false, close_signal: null, stdout_bytes: 0, stderr_tail: '' },
   progress: [], capability_evidence: null,
   sdk_notes: 'pinned-modern connect issues a server/discover probe before attaching; on stdio the SDK probes via a sibling bridge process, so probe POSTs may appear at the capture proxy separate from session traffic',
   timings: { started_ms: 0, first_event_ms: null, completed_ms: null, cancelled_ms: null },
@@ -31,7 +31,6 @@ let transport;
 let bridgeBytes = 0;
 let bridgeStderr = '';
 let bridgeExit = null;
-let bridgeCloseObserved = false;
 let bridgeClosePromise = null;
 let callId;
 let cancellation;
@@ -65,12 +64,11 @@ try {
       await startTransport();
       const child = transport._process;
       bridgeClosePromise = child ? new Promise((resolve) => {
-        if (child.exitCode !== null) { bridgeExit = child.exitCode; bridgeCloseObserved = true; resolve({ code: child.exitCode, observed: true }); return; }
-        child.once('close', (code) => { bridgeExit = code; bridgeCloseObserved = true; resolve({ code, observed: true }); });
-      }) : Promise.resolve({ code: null, observed: false });
+        child.once('close', (code, signal) => { bridgeExit = code; resolve({ code, signal, observed: true }); });
+      }) : Promise.resolve({ code: null, signal: null, observed: false });
       child?.stdout?.on('data', (chunk) => { bridgeBytes += chunk.length; });
+      transport.stderr?.on('data', (chunk) => { bridgeStderr = (bridgeStderr + chunk.toString('utf8')).slice(-2000); });
     };
-    transport.stderr?.on('data', (chunk) => { bridgeStderr = (bridgeStderr + chunk.toString('utf8')).slice(-2000); });
   }
   client = new Client({ name: 'mcp-e2e-modern-ts-client', version: '1' }, {
     versionNegotiation: { mode: { pin: '2026-07-28' } },
@@ -139,17 +137,26 @@ try {
     result.outcome = 'fail';
   }
   } finally {
-  const closeOutcome = await bounded(Promise.resolve().then(() => client?.close()).catch((error) => { if (!result.sdk_error) result.sdk_error = String(error); }), 5000, 'client close');
-  if (closeOutcome?.timeout) result.sdk_error = `${result.sdk_error ? `${result.sdk_error}; ` : ''}client close timeout after 5000ms`;
   if (result.bridge.spawned && transport) {
     const child = transport._process;
-    const bridgeOutcome = await bounded(bridgeClosePromise ?? Promise.resolve({ code: null, observed: false }), 5000, 'bridge child close');
-    if (bridgeOutcome?.timeout) result.sdk_error = `${result.sdk_error ? `${result.sdk_error}; ` : ''}bridge child close timeout after 5000ms; exit_code=${bridgeExit}; stdout_bytes=${bridgeBytes}; stderr_tail=${bridgeStderr.slice(-2000)}`;
-    const observed = !bridgeOutcome?.timeout && bridgeOutcome?.observed === true;
+    if (child?.stdin && !child.stdin.destroyed) {
+      // Stdin EOF initiates the fixture-owned stdio bridge shutdown.
+      child.stdin.end();
+    }
+    let bridgeOutcome = await bounded(bridgeClosePromise ?? Promise.resolve({ code: null, signal: null, observed: false }), 5000, 'bridge child close');
+    const initialObserved = !bridgeOutcome?.timeout && bridgeOutcome?.observed === true;
+    const closeOutcome = await bounded(Promise.resolve().then(() => client?.close()).catch((error) => { if (!result.sdk_error) result.sdk_error = String(error); }), 5000, 'client close');
+    if (closeOutcome?.timeout) result.sdk_error = `${result.sdk_error ? `${result.sdk_error}; ` : ''}client close timeout after 5000ms`;
+    if (!initialObserved) bridgeOutcome = await bounded(bridgeClosePromise ?? Promise.resolve({ code: null, signal: null, observed: false }), 2000, 'bridge final close');
+    const observed = initialObserved || (!bridgeOutcome?.timeout && bridgeOutcome?.observed === true);
     result.bridge.exit_code = observed ? bridgeOutcome.code : (bridgeExit ?? (child?.exitCode !== null && child?.exitCode !== undefined ? child.exitCode : null));
     result.bridge.close_observed = observed;
+    result.bridge.close_signal = observed ? bridgeOutcome.signal : null;
     result.bridge.stdout_bytes = bridgeBytes;
     result.bridge.stderr_tail = bridgeStderr.slice(-2000);
+  } else {
+    const closeOutcome = await bounded(Promise.resolve().then(() => client?.close()).catch((error) => { if (!result.sdk_error) result.sdk_error = String(error); }), 5000, 'client close');
+    if (closeOutcome?.timeout) result.sdk_error = `${result.sdk_error ? `${result.sdk_error}; ` : ''}client close timeout after 5000ms`;
   }
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
