@@ -14,7 +14,6 @@ import (
 
 	jack "github.com/PHPCraftdream/mcp-jack"
 	"github.com/PHPCraftdream/mcp-jack/client"
-	"github.com/PHPCraftdream/mcp-jack/durable"
 	"github.com/PHPCraftdream/mcp-jack/rotation"
 )
 
@@ -34,7 +33,7 @@ type Reply struct {
 	Body   []byte
 }
 
-func NewHTTP(store *durable.TrustStore, signer client.Signer, timeout time.Duration) (*HTTPClient, error) {
+func NewHTTP(store ClientTrustState, signer client.Signer, timeout time.Duration) (*HTTPClient, error) {
 	if timeout <= 0 || timeout > 30*time.Second {
 		return nil, localError("rotation_state_unknown")
 	}

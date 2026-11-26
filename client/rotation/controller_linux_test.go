@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
 	rotationclient "github.com/PHPCraftdream/mcp-jack/client/rotation"
@@ -117,6 +118,14 @@ func requireCode(t *testing.T, err error, code string) {
 	if !errors.As(err, &refusal) || refusal.Code != code || refusal.HTTPStatus != 0 {
 		t.Fatalf("got %v; want local %s", err, code)
 	}
+}
+
+func TestControllerTypedNilDurableStore(t *testing.T) {
+	var nilStore *durable.TrustStore
+	_, err := rotationclient.New(nilStore)
+	requireCode(t, err, "rotation_state_unknown")
+	_, err = rotationclient.NewHTTP(nilStore, fixtureSigner(1), 5*time.Second)
+	requireCode(t, err, "rotation_state_unknown")
 }
 
 func TestControllerOrdinaryResponseUnknownPrecedenceAndDurableClock(t *testing.T) {
