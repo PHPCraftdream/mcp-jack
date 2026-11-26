@@ -99,11 +99,6 @@ func newServer(reg *callRegistry) *mcp.Server {
 			if err != nil {
 				return result, err
 			}
-			if method == "notifications/tools/list_changed" || method == "notifications/resources/updated" {
-				// The notification has been written to the listen stream: end the stream now.
-				scenarioListenCancel.cancelLastListen()
-				return result, nil
-			}
 			if method != "notifications/subscriptions/acknowledged" {
 				return result, nil
 			}

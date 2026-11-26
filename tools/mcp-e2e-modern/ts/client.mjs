@@ -38,6 +38,9 @@ let bridgeBytes = 0;
 let bridgeStderr = '';
 let bridgePid = null;
 let callId;
+let releaseUrl;
+let releaseEvidence = { observed: false, status: null, body: null };
+let releasePromise;
 let cancellation;
 try {
   const require = createRequire(import.meta.url);
@@ -126,6 +129,8 @@ try {
       result.outcome = 'ok';
     } else if (scenario === 4 || scenario === 6) {
       callId = scenario === 4 ? 's4' : 's6';
+      releaseUrl = scenario === 4 ? value('--release-url') : undefined;
+      if (scenario === 4 && !releaseUrl) throw new Error('scenario 4 requires --release-url');
       cancellation = new AbortController();
       if (scenario === 6) {
         process.stdin.setEncoding('utf8');
@@ -142,20 +147,48 @@ try {
         onprogress: (event) => {
           if (result.timings.first_event_ms === null) result.timings.first_event_ms = elapsed();
           result.progress.push({ progress: event.progress, ...(event.total === undefined ? {} : { total: event.total }) });
+          if (scenario === 4 && result.progress.length === 1) {
+            releasePromise = fetch(releaseUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ call_id: callId }), signal: AbortSignal.timeout(10000) })
+              .then(async (response) => {
+                const text = await response.text();
+                let body;
+                try { body = JSON.parse(text); } catch { body = text; }
+                releaseEvidence = { observed: response.status === 200 && body?.released === true, status: response.status, body };
+                if (!releaseEvidence.observed) throw new Error(`scenario 4 release rejected: status=${response.status}, body=${JSON.stringify(body).slice(0, 500)}`);
+              })
+              .catch((error) => {
+                releaseEvidence = { observed: false, status: releaseEvidence.status, body: releaseEvidence.body };
+                result.release = releaseEvidence;
+                result.sdk_error = `${error.name}: ${error.message}`;
+                cancellation.abort('scenario 4 release failed');
+              });
+          }
         },
       });
+      if (releasePromise) await releasePromise;
+      if (scenario === 4) result.release = releaseEvidence;
       assertNotError(res, 'progress');
       result.tool_result = res;
-      result.timings.completed_ms = elapsed();
-      result.outcome = 'ok';
+      if (scenario === 4 && (!releaseEvidence.observed || releaseEvidence.status !== 200)) {
+        result.outcome = 'fail';
+        result.sdk_error = result.sdk_error ?? 'scenario 4 release was not confirmed';
+      } else {
+        result.timings.completed_ms = elapsed();
+        result.outcome = 'ok';
+      }
     }
   }
 } catch (error) {
+  if (scenario === 4 && releasePromise) {
+    await releasePromise;
+    result.release = releaseEvidence;
+  }
   if (!error?.unsupported) {
-    result.sdk_error = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    const callError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    result.sdk_error = scenario === 4 && result.sdk_error ? `${result.sdk_error}; ${callError}` : callError;
     result.outcome = 'fail';
   }
-  } finally {
+} finally {
   if (result.bridge.spawned && transport) {
     const closeOutcome = await bounded(Promise.resolve().then(() => transport.close()), 5000, 'bridge close');
     if (closeOutcome?.timeout) result.sdk_error = `${result.sdk_error ? `${result.sdk_error}; ` : ''}bridge close timeout after 5000ms`;
@@ -166,7 +199,7 @@ try {
     result.bridge.close_signal = bridgeCloseSignal;
     result.bridge.stdout_bytes = bridgeBytes;
     result.bridge.stderr_tail = bridgeStderr.slice(-2000);
-    result.bridge.transport_diagnostic = JSON.stringify({ spawned_children: spawnedCount, start_without_child: startWithoutChild, pid_after_start: bridgePid, closed: bridgeClosed });
+    result.bridge.transport_diagnostic = JSON.stringify({ spawned_children: spawnedCount, start_without_child: startWithoutChild, pid_after_start: bridgePid, closed: bridgeClosed, exit_code: bridgeExit, signal: bridgeCloseSignal, stdout_bytes: bridgeBytes, stderr_tail: bridgeStderr.slice(-2000) });
   } else {
     const closeOutcome = await bounded(Promise.resolve().then(() => client?.close()).catch((error) => { if (!result.sdk_error) result.sdk_error = String(error); }), 5000, 'client close');
     if (closeOutcome?.timeout) result.sdk_error = `${result.sdk_error ? `${result.sdk_error}; ` : ''}client close timeout after 5000ms`;

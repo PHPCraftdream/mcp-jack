@@ -18,6 +18,7 @@ type runOut struct {
 	completedMs        *int64
 	cancelledMs        *int64
 	capabilityEvidence string
+	release            *releaseEvidence
 }
 
 // echoParams builds tools/call params with optional _meta.

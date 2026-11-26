@@ -50,6 +50,7 @@ type config struct {
 	bridgeConfig string
 	era          string
 	probeConfig  string
+	releaseURL   string
 }
 
 func parseFlags() (*config, []string) {
@@ -63,6 +64,7 @@ func parseFlags() (*config, []string) {
 	bridgeConfig := flag.String("bridge-config", "", "driver-written bridge config path (jack mode)")
 	era := flag.String("era", "", "bridge era: modern|auto (jack mode)")
 	probeConfig := flag.String("config", "", "scenario 5 direct-mode config path")
+	releaseURL := flag.String("release-url", "", "scenario 4 release control URL")
 	flag.Parse()
 	var errs []string
 	if *scenario < 1 || *scenario > 8 {
@@ -88,12 +90,21 @@ func parseFlags() (*config, []string) {
 	if *probeConfig != "" {
 		cfg.probeConfig = *probeConfig
 	}
+	if *releaseURL != "" {
+		cfg.releaseURL = *releaseURL
+	}
 	return cfg, errs
 }
 
 // validate enforces the CONTRACT.md mode exclusivity rules.
 func (c *config) validate() []string {
 	var errs []string
+	if c.scenario == 4 && c.releaseURL == "" {
+		errs = append(errs, "--release-url is required for scenario 4")
+	}
+	if c.scenario != 4 && c.releaseURL != "" {
+		errs = append(errs, "--release-url is only allowed for scenario 4")
+	}
 	jack := c.bridgeBin != "" || c.bridgeConfig != "" || c.era != ""
 	if c.direct == jack {
 		errs = append(errs, "exactly one of --direct or jack mode (--bridge-bin --bridge-config --era) is required")
@@ -247,7 +258,7 @@ func run(cfg *config, clock elapsed, stdin io.Reader) *result {
 	case 3:
 		out = scenario3(ctx, s, now)
 	case 4:
-		out = scenario4(ctx, s, now)
+		out = scenario4(ctx, s, now, cfg.releaseURL)
 	case 6:
 		out = scenario6(ctx, s, scanLines(stdin), now)
 	case 7:
@@ -262,6 +273,7 @@ func run(cfg *config, clock elapsed, stdin io.Reader) *result {
 		res.CapabilityEvidence = &out.capabilityEvidence
 	}
 	res.RequestMeta = out.meta
+	res.Release = out.release
 	res.Timings.CompletedMs = out.completedMs
 	res.Timings.CancelledMs = out.cancelledMs
 	return res

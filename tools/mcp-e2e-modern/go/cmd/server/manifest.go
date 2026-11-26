@@ -52,8 +52,8 @@ func manifest() []capability {
 		},
 		{
 			ID:       "subscriptions_listen",
-			Status:   "supported",
-			Evidence: "ServerOptions.SubscribeHandler and UnsubscribeHandler enable resources/subscribe (mcp/server.go:109-111,1211-1222); subscriptions/listen sends acknowledged then blocks on ctx.Done and returns a result (mcp/server.go:1314-1320). After notification delivery, the fixture cancels the listen request's child context; the SDK handler then returns its final result, but the SDK does not guarantee that result is written before the response closes because hangResponse selects ctx.Done and stream completion symmetrically (mcp/streamable.go:1267-1272), and the child context is also the response-wait context (mcp/streamable.go:1770). Therefore, the driver verifies observable delivery only.",
+			Status:   "unsupported",
+			Evidence: "Stateless HTTP fixture creates a temporary session per request and closes it when the request completes (mcp/streamable.go:367-369); subscriptions/listen sends ack, then blocks until ctx.Done and only then returns its result (mcp/server.go:1314-1320); servePOST waits on req.Context (mcp/streamable.go:1770), hangResponse selects ctx.Done and done symmetrically (mcp/streamable.go:1267-1272), so server cannot guarantee the final result is written before the stream closes; run 45766164556 captures for scenario-7-ts-client-go-server-direct and -bridge-modern showed ack plus notifications/tools/list_changed, no final JSON-RPC result, and direct upstream-aborted / bridged jack-end.",
 		},
 		{
 			ID:       "server_discover",

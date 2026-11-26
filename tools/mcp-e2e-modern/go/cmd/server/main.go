@@ -9,14 +9,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime/debug"
-	"strings"
-	"sync"
 	"syscall"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -40,53 +37,6 @@ func sdkVersionFromBuild() string {
 
 const usage = "usage: server --listen 127.0.0.1:0 --control-listen 127.0.0.1:0 [--legacy-only]"
 
-// One scenario-7 client runs per server process.
-type listenCancelSlot struct {
-	mu     sync.Mutex
-	cancel context.CancelFunc
-}
-
-func (s *listenCancelSlot) remember(cancel context.CancelFunc) {
-	s.mu.Lock()
-	s.cancel = cancel
-	s.mu.Unlock()
-}
-
-func (s *listenCancelSlot) cancelLastListen() {
-	s.mu.Lock()
-	cancel := s.cancel
-	s.cancel = nil
-	s.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-}
-
-func listenContextHandler(next http.Handler, slot *listenCancelSlot) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if req.Method != http.MethodPost {
-			next.ServeHTTP(w, req)
-			return
-		}
-		body, err := io.ReadAll(io.LimitReader(req.Body, 1<<20+1))
-		if err != nil || len(body) > 1<<20 {
-			http.Error(w, "request body too large or unreadable", http.StatusRequestEntityTooLarge)
-			return
-		}
-		req.Body = io.NopCloser(strings.NewReader(string(body)))
-		if !strings.Contains(string(body), `"subscriptions/listen"`) {
-			next.ServeHTTP(w, req)
-			return
-		}
-		child, cancel := context.WithCancel(req.Context())
-		slot.remember(cancel)
-		defer cancel()
-		next.ServeHTTP(w, req.WithContext(child))
-	})
-}
-
-var scenarioListenCancel listenCancelSlot
-
 func main() {
 	listen := flag.String("listen", "127.0.0.1:0", "MCP streamable HTTP listen address")
 	controlListen := flag.String("control-listen", "127.0.0.1:0", "control channel listen address")
@@ -102,12 +52,12 @@ func main() {
 		sdkVer = v
 	}
 	srv := newServer(reg)
-	var handler http.Handler = listenContextHandler(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv },
+	var handler http.Handler = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv },
 		&mcp.StreamableHTTPOptions{
 			Stateless:                    true,
 			PropagateRequestCancellation: true,
 			DisableLocalhostProtection:   true,
-		}), &scenarioListenCancel)
+		})
 	if *legacyOnly {
 		handler = legacyGate(handler)
 	}

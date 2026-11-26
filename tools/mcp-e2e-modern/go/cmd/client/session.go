@@ -12,12 +12,13 @@ import (
 const clientName = "e2e-modern-go-client"
 
 type session struct {
-	client  *mcp.Client
-	sess    *mcp.ClientSession
-	direct  bool
-	bridge  *bridgeProc
-	rec     *recorder
-	updated chan string // notifications/resources/updated URIs
+	client               *mcp.Client
+	sess                 *mcp.ClientSession
+	direct               bool
+	bridge               *bridgeProc
+	rec                  *recorder
+	updated              chan string // notifications/resources/updated URIs
+	releaseFirstProgress chan struct{}
 }
 
 // newClient builds the official SDK client with progress and resource-updated
@@ -33,6 +34,12 @@ func newClient(rec *recorder) (*mcp.Client, chan string) {
 				p := req.Params
 				total := &p.Total
 				rec.add(progressObs{Progress: p.Progress, Total: total})
+				if p.Progress == 1 && rec.releaseSignal != nil {
+					select {
+					case rec.releaseSignal <- struct{}{}:
+					default:
+					}
+				}
 			},
 			ResourceUpdatedHandler: func(_ context.Context, req *mcp.ResourceUpdatedNotificationRequest) {
 				select {
