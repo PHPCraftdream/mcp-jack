@@ -164,7 +164,7 @@ func (store *TrustStore) advanceTrustClock(expected []byte) (rotation.ClockTuple
 	defer done()
 	var result rotation.ClockTuple
 	conflict := false
-	err = store.transact(func(tx *bolt.Tx) error {
+	err = store.write(func(tx *bolt.Tx) error {
 		guard, err := store.ownedGuard(tx)
 		if err != nil {
 			return err
@@ -229,7 +229,7 @@ func (store *TrustStore) Snapshot() (rotation.TrustSnapshot, rotation.ClockTuple
 	defer done()
 	var data []byte
 	var guard trustGuard
-	err = store.db.View(func(tx *bolt.Tx) error {
+	err = store.viewChecked(func(tx *bolt.Tx) error {
 		var raw []byte
 		var err error
 		raw, data, err = readTrustRows(tx)
@@ -282,7 +282,7 @@ func (store *TrustStore) CompareAndSwap(expected, desired rotation.TrustSnapshot
 		return err
 	}
 	defer done()
-	err = store.transact(func(tx *bolt.Tx) error {
+	err = store.write(func(tx *bolt.Tx) error {
 		guard, err := store.ownedGuard(tx)
 		if err != nil {
 			return err
@@ -325,12 +325,14 @@ type TrustOptions struct {
 	Binding    rotation.Binding
 	Window     int64
 	Checkpoint rotation.Checkpoint
-	Now        func() int64
+	// Now is a plain clock sample: the store calls it with its write lock held, so it must not call back into the store.
+	Now func() int64
 }
 
 // TrustStore owns a separate lifetime-exclusive trust/clock domain.
 type TrustStore struct {
 	mu        sync.Mutex
+	check     sync.RWMutex
 	db        *bolt.DB
 	file      *os.File
 	options   TrustOptions
@@ -506,6 +508,20 @@ func (store *TrustStore) begin() (func(), error) {
 	return store.active.Done, nil
 }
 
+// read-only Check is unsafe while a writer commits (bbolt tx_check.go); the
+// write side serializes committing transactions against views that reach it.
+func (store *TrustStore) write(apply func(*bolt.Tx) error) error {
+	store.check.Lock()
+	defer store.check.Unlock()
+	return store.transact(apply)
+}
+
+func (store *TrustStore) viewChecked(apply func(*bolt.Tx) error) error {
+	store.check.RLock()
+	defer store.check.RUnlock()
+	return store.db.View(apply)
+}
+
 func (store *TrustStore) ownedGuard(tx *bolt.Tx) (trustGuard, error) {
 	bucket := tx.Bucket(trustBucket)
 	if bucket == nil {
@@ -534,7 +550,7 @@ func (store *TrustStore) Close() error {
 			var snapshot rotation.TrustSnapshot
 			var guard trustGuard
 			var data []byte
-			err := store.db.View(func(tx *bolt.Tx) error {
+			err := store.viewChecked(func(tx *bolt.Tx) error {
 				var raw []byte
 				var err error
 				raw, data, err = readTrustRows(tx)
@@ -551,7 +567,7 @@ func (store *TrustStore) Close() error {
 				err = ownedfile.ErrRecoveryRequired
 			}
 			if err == nil {
-				err = store.transact(func(tx *bolt.Tx) error {
+				err = store.write(func(tx *bolt.Tx) error {
 					current, err := store.ownedGuard(tx)
 					if err != nil || current.Clock.Unsafe {
 						return ownedfile.ErrInvalidStore
