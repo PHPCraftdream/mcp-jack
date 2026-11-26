@@ -1,0 +1,156 @@
+# One-time bootstrap to create placeholder packages so Trusted Publishing can be configured.
+# Publishes with short-lived tokens from the registry-bootstrap GitHub environment
+# (secrets NPM_BOOTSTRAP_TOKEN and CARGO_BOOTSTRAP_TOKEN, owned by the owner, not stored in the repo).
+# After Trusted Publishing is configured, never use this workflow again; real releases go through publish.yml tokenless.
+
+name: publish-placeholder
+
+on:
+  workflow_dispatch:
+    inputs:
+      registry:
+        description: Which registry to bootstrap
+        required: true
+        type: choice
+        options: [npm, crates, both]
+      confirm:
+        description: Type publish-placeholder-0.0.0 exactly to confirm
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  gate:
+    name: gate dispatch
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      registry: ${{ steps.inputs.outputs.registry }}
+    env:
+      CONFIRM: ${{ inputs.confirm }}
+      REGISTRY: ${{ inputs.registry }}
+    steps:
+      - name: Require the default branch
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::the placeholder publish must be dispatched from refs/heads/main"
+            exit 1
+          fi
+      - name: Require the exact confirmation
+        run: |
+          if [ "$CONFIRM" != "publish-placeholder-0.0.0" ]; then
+            echo "::error::confirmation input must be exactly publish-placeholder-0.0.0"
+            exit 1
+          fi
+      - name: Require a known registry choice
+        run: |
+          if [ "$REGISTRY" != "npm" ] && [ "$REGISTRY" != "crates" ] && [ "$REGISTRY" != "both" ]; then
+            echo "::error::registry input must be npm, crates, or both"
+            exit 1
+          fi
+      - name: Record validated inputs
+        id: inputs
+        run: echo "registry=$REGISTRY" >> "$GITHUB_OUTPUT"
+
+  publish-npm:
+    name: publish placeholder to npm (bootstrap token)
+    runs-on: ubuntu-latest
+    needs: [gate]
+    environment: registry-bootstrap
+    timeout-minutes: 10
+    if: needs.gate.outputs.registry == 'npm' || needs.gate.outputs.registry == 'both'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      # Node 24 ships npm >= 11.5.1, required for npm Trusted Publishing.
+      # setup-node writes an .npmrc entry that makes npm use NODE_AUTH_TOKEN.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Verify the manifest version is 0.0.0
+        working-directory: tools/release/placeholder/npm
+        run: |
+          if [ "$(node -p "require('./package.json').version")" != "0.0.0" ]; then
+            echo "::error::placeholder npm manifest version must be 0.0.0"
+            exit 1
+          fi
+      - name: Verify the exact published file list
+        working-directory: tools/release/placeholder/npm
+        run: |
+          npm pack --dry-run --json > "$RUNNER_TEMP/npm-pack.json"
+          if [ "$(jq -c '[.files[].path] | sort' "$RUNNER_TEMP/npm-pack.json")" != '["LICENSE-APACHE","LICENSE-MIT","README.md","package.json"]' ]; then
+            echo "::error::unexpected file list"
+            exit 1
+          fi
+      - name: Verify the version is not already on npm
+        run: |
+          code="$(curl -sS -o /dev/null -w '%{http_code}' https://registry.npmjs.org/mcp-jack)" || {
+            echo "::error::could not query npm (HTTP ${code:-unknown})"
+            exit 1
+          }
+          if [ "$code" = "200" ]; then
+            echo "::error::mcp-jack already exists on the npm registry"
+            exit 1
+          elif [ "$code" != "404" ]; then
+            echo "::error::could not query npm (HTTP $code)"
+            exit 1
+          fi
+      - name: Publish the placeholder
+        working-directory: tools/release/placeholder/npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
+        run: npm publish --access public
+      - name: Summarize
+        run: echo "Published mcp-jack@0.0.0 to npm (placeholder bootstrap, token-based)." >> "$GITHUB_STEP_SUMMARY"
+
+  publish-crates:
+    name: publish placeholder to crates.io (bootstrap token)
+    runs-on: ubuntu-latest
+    needs: [gate]
+    environment: registry-bootstrap
+    timeout-minutes: 10
+    if: needs.gate.outputs.registry == 'crates' || needs.gate.outputs.registry == 'both'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      - name: Verify the manifest version is 0.0.0
+        working-directory: tools/release/placeholder/crate
+        run: grep -qx 'version = "0.0.0"' Cargo.toml
+      - name: Verify the exact packaged file list
+        working-directory: tools/release/placeholder/crate
+        run: |
+          cargo package --list > "$RUNNER_TEMP/crate-files.txt"
+          expected="$(printf 'Cargo.toml\nCargo.toml.orig\nLICENSE-APACHE\nLICENSE-MIT\nREADME.md\nsrc/lib.rs\n')"
+          # Drop only Cargo.lock and .cargo_vcs_info.json, which cargo package generates; keep the remaining inventory exact.
+          actual="$(grep -Fvx -e Cargo.lock -e .cargo_vcs_info.json "$RUNNER_TEMP/crate-files.txt" | sort)"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::unexpected file list"
+            exit 1
+          fi
+      - name: Verify the version is not already on crates.io
+        run: |
+          code="$(curl -sS -A mcp-jack-release-ci -o /dev/null -w '%{http_code}' https://crates.io/api/v1/crates/mcp-jack)"
+          if [ "$code" = "200" ]; then
+            echo "::error::mcp-jack already exists on crates.io"
+            exit 1
+          elif [ "$code" != "404" ]; then
+            echo "::error::could not query crates.io (HTTP $code)"
+            exit 1
+          fi
+      - name: Publish the placeholder
+        working-directory: tools/release/placeholder/crate
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_BOOTSTRAP_TOKEN }}
+        run: cargo publish
+      - name: Summarize
+        run: echo "Published mcp-jack@0.0.0 to crates.io (placeholder bootstrap, token-based)." >> "$GITHUB_STEP_SUMMARY"
