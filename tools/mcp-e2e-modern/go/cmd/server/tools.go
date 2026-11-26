@@ -96,8 +96,16 @@ func newServer(reg *callRegistry) *mcp.Server {
 	srv.AddSendingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 			result, err := next(ctx, method, req)
-			if err != nil || method != "notifications/subscriptions/acknowledged" {
+			if err != nil {
 				return result, err
+			}
+			if method == "notifications/tools/list_changed" || method == "notifications/resources/updated" {
+				// The notification has been written to the listen stream: end the stream now.
+				scenarioListenCancel.cancelLastListen()
+				return result, nil
+			}
+			if method != "notifications/subscriptions/acknowledged" {
+				return result, nil
 			}
 			params, ok := req.GetParams().(*mcp.SubscriptionsAcknowledgedParams)
 			if !ok {
@@ -115,7 +123,6 @@ func newServer(reg *callRegistry) *mcp.Server {
 					// Re-adding the same tool emits the SDK's tool-list-changed notification.
 					mcp.AddTool(srv, &mcp.Tool{Name: "echo", Description: "Return the supplied value unchanged"}, echo)
 				}
-				scenarioListenCancel.cancelLastListen()
 			}()
 			return result, nil
 		}
