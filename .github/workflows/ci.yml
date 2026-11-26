@@ -671,8 +671,11 @@ jobs:
       - name: Build the shipping CLI
         run: go build -trimpath -o "$RUNNER_TEMP/jack" ./cmd/jack
       - name: Self-test the driver
+        timeout-minutes: 5
         run: node tools/mcp-e2e-modern/run.mjs --self-test
       - name: Run the modern matrix
+        if: ${{ !cancelled() }}
+        timeout-minutes: 80
         run: node tools/mcp-e2e-modern/run.mjs --jack-bin "$RUNNER_TEMP/jack" --artifacts "$RUNNER_TEMP/mcp-e2e-modern-artifacts"
       - name: Upload the modern matrix artifacts
         if: always()

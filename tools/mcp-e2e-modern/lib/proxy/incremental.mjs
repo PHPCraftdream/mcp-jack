@@ -9,6 +9,7 @@ export function startIncrementalProxy({ port = 0, secrets = [], limits = {} } = 
   const captures = [];
   const requests = new Map();
   const waiters = new Set();
+  const outbound = new Set();
   let sequence = 0;
   const add = (record) => {
     if (captures.length >= maxEvents) return;
@@ -31,6 +32,7 @@ export function startIncrementalProxy({ port = 0, secrets = [], limits = {} } = 
     const target = new URL(down.url ?? '/', upstreamBase);
     const headers = { ...down.headers, host: target.host };
     const upstream = requestHttp(target, { method: down.method, headers });
+    outbound.add(upstream); upstream.once('close', () => outbound.delete(upstream));
     let aborted = false;
     const abortUpstream = () => {
       if (aborted || res.writableEnded) return;
@@ -96,7 +98,7 @@ export function startIncrementalProxy({ port = 0, secrets = [], limits = {} } = 
       resolve({ url: `http://127.0.0.1:${address.port}`, port: address.port, captures, requests, metadata: requests, waitFor(predicate) {
         const match = captures.find(predicate); if (match) return Promise.resolve(match);
         return new Promise((done) => waiters.add({ predicate, resolve: done }));
-      }, close: () => new Promise((done) => { server.closeAllConnections?.(); server.close(done); }) });
+      }, close: () => new Promise((done) => { for (const req of outbound) req.destroy(); server.closeAllConnections?.(); server.close(() => done()); }) });
     });
   });
 }

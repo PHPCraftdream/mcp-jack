@@ -5,6 +5,7 @@ import { CAPTURE_DEFAULTS } from '../config.mjs';
 export function startTamperProxy({ port = 0, secrets = [], flipByteOffset = 0, upstream, limits = {} } = {}) {
   const base = new URL(upstream ?? limits.upstream ?? process.env.MCP_E2E_UPSTREAM ?? 'http://127.0.0.1:0');
   const captures = [];
+  const outbound = new Set();
   let sequence = 0;
   let flipped = false;
   const save = (entry) => {
@@ -34,6 +35,7 @@ export function startTamperProxy({ port = 0, secrets = [], flipByteOffset = 0, u
         });
         up.on('error', () => res.destroy());
       });
+      outbound.add(req); req.once('close', () => outbound.delete(req));
       req.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end('upstream request failed'); });
       req.end(body);
     });
@@ -43,7 +45,7 @@ export function startTamperProxy({ port = 0, secrets = [], flipByteOffset = 0, u
     server.listen(port, '127.0.0.1', () => {
       server.off('error', reject);
       const address = server.address();
-      resolve({ url: `http://127.0.0.1:${address.port}`, port: address.port, captures, get flipped() { return flipped; }, stop: () => new Promise((done) => { server.closeAllConnections?.(); server.close(done); }) });
+      resolve({ url: `http://127.0.0.1:${address.port}`, port: address.port, captures, get flipped() { return flipped; }, stop: () => new Promise((done) => { for (const req of outbound) req.destroy(); server.closeAllConnections?.(); server.close(() => done()); }) });
     });
   });
 }
