@@ -33,8 +33,9 @@ export async function writeLogs(dir, name, text) {
   await writeFile(join(dir, `${safe}.log`), String(text), 'utf8');
 }
 
-export async function pruneIfNotKept(dir, keep = false, cells = [], processFailing = false) {
+export async function pruneIfNotKept(dir, keep = false, cells = [], processFailing = false, isExpired = null) {
   if (keep || processFailing || cells.some((cell) => cell?.outcome === 'FAIL')) return false;
+  if (typeof isExpired === 'function' && isExpired()) return false;
   await rm(dir, { recursive: true, force: true });
   return true;
 }
