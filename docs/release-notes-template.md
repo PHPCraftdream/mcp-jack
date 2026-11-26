@@ -47,7 +47,7 @@ These names and matrix dimensions are from current workflow source, not proof of
 | `.github/workflows/license.yml` | `go licences`, `rust licences`, `ts licences`, `dual-licence manifests` |  |  |  |
 | `.github/workflows/vulnerabilities.yml` | `Go govulncheck (module)`, `Go govulncheck (package)`, `Go govulncheck (symbol)`, `Rust advisories`, `npm audit (ts)`, `npm audit (tools/license/tooling)` |  |  |  |
 | `.github/workflows/spec-fixtures.yml` | `generate and upload fixtures`, `generate and upload candidate fixtures` (only if this workflow ran) |  |  |  |
-| `.github/workflows/release-candidate.yml` | jobs as defined by the workflow once merged (manual run for one exact SHA; build, checksum, attestation, downloaded-bytes verification, Go proxy check) |  |  |  |
+| `.github/workflows/release-candidate.yml` | jobs defined by the workflow (manual run for one exact SHA; build, checksum, attestation, downloaded-bytes verification, Go proxy check) |  |  |  |
 
 Distinguish success from skipped, cancelled, setup-failed, scanner-failed, advisory finding, and infrastructure failure. Consumer-package lanes exercise their defined packages; they are not release-binary builds. The RC binary, per-file checksum, attestation and downloaded-bytes verification jobs belong to `release-candidate.yml`, which is started manually for one exact SHA; until a run is observed they are unobserved. `spec-fixtures.yml` is not a PR-triggered workflow; the PR-triggered fixture-freshness candidate is `fixtures are up to date` in `ci.yml`.
 
@@ -71,7 +71,7 @@ Record actual artifact ID, name, run and attempt, filenames, platform/toolchain,
 - Verification method/tool/version, result, evidence: `____________________________`
 - Reviewer/date/limitations: `____________________________`
 
-Verify subject/digest against the exact artifact and repository/workflow/ref/source claims against the authorized repository and exact run. Upload digest, checksum, and attestation are distinct evidence. An attestation does not prove a consumer used that artifact. Current workflows use read-only repository permissions and define no RC attestation generation or verification job. If required evidence is unavailable, mark **MISSING** in verification; absence is not a pass.
+Verify subject/digest against the exact artifact and repository/workflow/ref/source claims against the authorized repository and exact run. Upload digest, checksum, and attestation are distinct evidence. An attestation does not prove a consumer used that artifact. The `attest` job of `release-candidate.yml` generates build provenance attestations for the RC bundle and its `verify` job verifies them for that run's downloaded artifacts; an attestation is evidence only for the exact artifacts it covers. If required evidence is unavailable, mark **MISSING** in verification; absence is not a pass.
 
 ## Verification and final disposition
 
@@ -83,7 +83,7 @@ For each required target, identify the artifact ID and SHA-256 above that the co
 |---|---|---|---|---|---|
 |  |  |  |  |  |  |
 
-The source-defined package wiring is described in [`package-inventory.md`](package-inventory.md), not an executed receipt. It names TypeScript `mcp-jack-0.1.0.tgz`, Rust `mcp-jack-0.1.0.crate`, and Go `go-module-snapshot.tgz`, with inventories. Go verification consumes its staged module **directory**, not the uploaded tarball; Rust verification extracts the crate; TypeScript verification installs the staged tarball. These are SDK consumer packages, not RC executables. Current workflow source does not produce RC binaries, per-file RC checksums, or build attestations.
+The source-defined package wiring is described in [`package-inventory.md`](package-inventory.md), not an executed receipt. It names TypeScript `mcp-jack-0.1.0.tgz`, Rust `mcp-jack-0.1.0.crate`, and Go `go-module-snapshot.tgz`, with inventories. Go verification consumes its staged module **directory**, not the uploaded tarball; Rust verification extracts the crate; TypeScript verification installs the staged tarball. These are SDK consumer packages, not RC executables. The RC bundle's four `jack` CLI binaries are built only for testing (reproducible build of six targets, per-file checksums, attestation) and are distributed nowhere: no GitHub Release, no registry.
 
 ### Compatibility, security, and limitations review
 

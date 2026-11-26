@@ -54,7 +54,7 @@ Attestations are generated only for the exact final candidate artifacts. Verific
 
 ## Publication and registry ownership
 
-The owner-ordered Rust and TypeScript package versions are 0.1.0. Registry publication is prepared but is not run by CI or by any agent: the release candidate is artifact-only and publishes nothing, and the two manual workflows below (`publish-placeholder.yml`, `publish.yml`) publish only when the owner dispatches them. Creating tokens, accounts, environments, secrets and trusted publishers on the registries and on GitHub is the owner's action. Each real publication needs the owner's separate explicit authorization at dispatch time. These workflows create no git tag and no GitHub Release; announcing a release stays a separate owner decision.
+The owner-ordered Rust and TypeScript package versions are 0.1.0. Registry publication is prepared but is not run by CI or by any agent: the release candidate is artifact-only and publishes nothing, and the two manual workflows below (`publish-placeholder.yml`, `publish.yml`) publish only when the owner dispatches them. Creating tokens, accounts, environments, secrets and trusted publishers on the registries and on GitHub is the owner's action. Each real publication needs the owner's separate explicit authorization at dispatch time. The release candidate's four `jack` CLI binaries are built only for testing (reproducible build of six targets, checksums, attestation) and are distributed nowhere: no GitHub Release, no registry. These workflows create no git tag and no GitHub Release; announcing a release stays a separate owner decision.
 
 ### Placeholder bootstrap (one-time, token-based)
 
@@ -64,9 +64,9 @@ The `mcp-jack` 0.0.0 placeholder packages create the two registry entries, a pre
 2. Create a GitHub environment `registry-bootstrap` on the repository, add required reviewers, and add the secrets `NPM_BOOTSTRAP_TOKEN` and `CARGO_BOOTSTRAP_TOKEN`.
 3. Dispatch `.github/workflows/publish-placeholder.yml` from `main` with `confirm` = `publish-placeholder-0.0.0` — once with registry `npm`, once with registry `crates` (or `both` once).
 4. Revoke both tokens and delete both secrets from the environment.
-5. Configure Trusted Publishing on both registries for the real tokenless releases: repository `PHPCraftdream/mcp-jack`, workflow file `publish.yml`, environment `release` (both npm and crates.io).
+5. Do not configure Trusted Publishing in this bootstrap: a newly configured npm trusted publisher expires if it does not complete a first successful publish within 2 days. Configure it only when the release candidate for the final release commit is green and `publish.yml` is in `main`, then dispatch `publish.yml` within 2 days (see below).
 
-**Established:** a published version number can never be reused or replaced. npm unpublish is time-limited; crates.io only supports yanking. npm Trusted Publishing requires npm >= 11.5.1, Node >= 22.14, and `id-token: write` in the publishing workflow. crates.io Trusted Publishing can only be created after the crate exists (a first manual publish).
+**Established:** a published version number can never be reused or replaced. npm unpublish is time-limited; crates.io only supports yanking. npm Trusted Publishing requires npm >= 11.5.1, Node >= 22.14, and `id-token: write` in the publishing workflow. Prerequisites: npm configures Trusted Publishing in the package's settings, so the package must already exist (implied by the documented flow; docs.npmjs.com/trusted-publishers, read 2026-11-26, does not state it explicitly). A newly created npm trusted publisher must complete its first successful publish within 2 days or it expires and can no longer be used or edited (same page). crates.io Trusted Publishing can only be created after the crate exists (RFC 3691, known only from search-result quotes). None of this is confirmed against the live registries.
 
 **UNVERIFIED — owner to confirm:** exact token scopes currently offered by npm and any additional registry or account requirements.
 
@@ -74,14 +74,13 @@ After the Trusted Publishing hand-over succeeds, `tools/release/placeholder/**`,
 
 ### Trusted Publishing and the 0.1.0 release
 
-This is an owner checklist of values to enter, not verified settings. The document's top-level **UNVERIFIED** disclaimer applies: record actual values and approved read-only evidence; do not infer that any control is enabled.
+This is an owner checklist of values to enter, not verified settings. The document's top-level **UNVERIFIED** disclaimer applies: record actual values and approved read-only evidence; do not infer that any control is enabled. A newly created npm trusted-publisher configuration must complete its first successful publish within 2 days or it expires and can no longer be used or edited (docs.npmjs.com/trusted-publishers, read 2026-11-26).
 
-- [ ] Configure Registry Trusted Publishing for **both** npmjs.com and crates.io with repository `PHPCraftdream/mcp-jack`, workflow file `publish.yml`, and environment `release`.
 - [ ] npm: create the package first with the placeholder bootstrap `mcp-jack@0.0.0`. Confirm the packed `package.json` `repository.url` exactly matches the GitHub repository: `git+https://github.com/PHPCraftdream/mcp-jack.git` (package directory `ts`).
 - [ ] crates.io: create the crate first with the same placeholder bootstrap. The publishing job's `environment:` must match the environment configured on crates.io.
 - [ ] GitHub: under repo Settings → Environments, create `release` and require the owner as reviewer. The `publish-npm` and `publish-crates` jobs in `publish.yml` then wait for manual approval.
 - [ ] Dispatch inputs for `publish.yml`: `sha` is the full 40-character SHA and an ancestor of `main`; `rc_run_id` is the run ID of the successful `release-candidate` run for that SHA; `version` must equal the version in `ts/package.json`, `rust/Cargo.toml`, and the artifact names; `registries` is `npm`, `crates`, or `both`.
-- [ ] Order: run `release-candidate` on the final release SHA first and let it fully succeed; then dispatch `publish.yml` from `main`.
+- [ ] Order: run `release-candidate` on the final release SHA first and let it fully succeed; confirm `publish.yml` is in `main`; then configure Trusted Publishing on both registries (repository `PHPCraftdream/mcp-jack`, workflow file `publish.yml`, environment `release`) and dispatch `publish.yml` within 2 days of configuring npm Trusted Publishing.
 - [ ] Partial failure: before re-dispatching, check on each registry which version is actually visible — a publish step can succeed while its later visibility check fails. A re-dispatch for a registry that already has the version fails closed; re-dispatch only the registry that lacks the version, with `registries` scoped to it, and never `both` unless neither registry succeeded.
 
 Machine facts from the workflow and registry protocols (not evidence that settings are configured):
@@ -96,7 +95,7 @@ Unverified assumptions to resolve from the first real run:
 - [ ] Exact npm version shipped with Node 24 on runners; the workflow checks it at run time.
 - [ ] crates.io sparse-index propagation delay; the visibility check retries.
 - [ ] `cargo package` byte-identity across runs; the workflow compares member lists and member bytes of the attested RC crate and of the crate `cargo package` produces from the checked-out SHA instead. It does not compare archive framing or the separate repackage that `cargo publish` uploads.
-- [ ] crates.io Trusted Publishing requires the crate to already exist; the bootstrap above is intended to satisfy this.
+- [ ] crates.io Trusted Publishing expiry or time-window behavior is not verified (the npm 2-day window above is from docs.npmjs.com/trusted-publishers, read 2026-11-26); its create-after-first-publish prerequisite is recorded under **Established** above from RFC 3691 as quoted in search results only. The bootstrap above is intended to satisfy the prerequisite.
 
 ## Maintainer evidence record
 

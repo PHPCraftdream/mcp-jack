@@ -5,6 +5,7 @@ This file records repository history. The dated `0.1.0` section below is the cur
 ## 0.1.0 (2026-11-26)
 
 - Adds Go CLI gateway profiles `legacy|modern|both`, bridge eras `legacy|modern|auto` with opt-in `s1` signed streams, and `jack events receive` with persisted receipt state; adds API `Client.Call`, `Client.CurrentEra`, `stream.ClientConfig.Consumer` and `ConsumerStdio`.
+- Go client rotation accepts a portable `ClientTrustState` interface instead of the Linux-only file store; `*durable.TrustStore` remains the Linux reference implementation, and Windows and macOS consumers provide their own.
 
 - Adds the MCP 2026-07-28 modern profile alongside the supported 2025-06-18 and 2025-11-25 legacy profiles, with modern header-mirror validation and verified-reply era negotiation.
 - Adds opt-in `s1` signed streams and Events transport support, plus webhook sender/receiver support with Standard Webhooks signatures, dedicated `w1` signing, endpoint verification, and SSRF controls.
