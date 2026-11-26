@@ -44,7 +44,7 @@ const MetaVersionKey = "io.modelcontextprotocol/protocolVersion"
 // (spec 04 C7).
 const (
 	ImplementationName    = "mcp-jack"
-	ImplementationVersion = "0.2.0"
+	ImplementationVersion = "0.1.0"
 )
 
 // ClassificationMessage is the fixed message of the spec 02 section 2 item 4

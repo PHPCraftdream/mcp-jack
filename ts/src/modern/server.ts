@@ -21,7 +21,7 @@ export type ServerProfile = "legacy" | "modern" | "both";
 export const SERVER_PROFILES: readonly ServerProfile[] = ["legacy", "modern", "both"];
 
 /** Jack's implementation name and version, reported in `result._meta["io.modelcontextprotocol/serverInfo"]` (spec 04 C7). */
-export const JACK_SERVER_INFO: { readonly name: string; readonly version: string } = { name: "mcp-jack", version: "0.2.0" };
+export const JACK_SERVER_INFO: { readonly name: string; readonly version: string } = { name: "mcp-jack", version: "0.1.0" };
 
 /** The closed list of fixed reasons a modern-era request can be refused. */
 export type ModernRefusalReason =

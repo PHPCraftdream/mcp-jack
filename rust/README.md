@@ -2,7 +2,7 @@ This crate is the Rust SDK for mcp-jack, the secure transport protocol wrapping 
 
 ## Rust compatibility and security migration
 
-The crate's current minimum supported Rust version is **1.88**. This is required by the pinned Hickory 0.26.3 DNS crates and the development-time `time` 0.3.47 parser fix; the crate remains edition 2021, version 0.2.0, and unpublished (`publish = false`). The default feature set remains empty. Hickory resolver, network, and protocol dependencies are optional and activated only by `client-http`; the exact lower bounds protect fresh downstream resolutions from upstream `^0.26.0` dependency ranges. See [the Rust security upgrade record](../docs/design/rust-security-upgrade.md) for advisory scope, upstream provenance, limitations, and validation status. The dependency inventory later in this README is an explicitly historical snapshot from the original HTTP transport integration, not the current graph or MSRV.
+The crate's current minimum supported Rust version is **1.88**. This is required by the pinned Hickory 0.26.3 DNS crates and the development-time `time` 0.3.47 parser fix; the crate remains edition 2021, version 0.1.0, and unpublished (`publish = false`). The default feature set remains empty. Hickory resolver, network, and protocol dependencies are optional and activated only by `client-http`; the exact lower bounds protect fresh downstream resolutions from upstream `^0.26.0` dependency ranges. See [the Rust security upgrade record](../docs/design/rust-security-upgrade.md) for advisory scope, upstream provenance, limitations, and validation status. The dependency inventory later in this README is an explicitly historical snapshot from the original HTTP transport integration, not the current graph or MSRV.
 
 ## Tower HTTP adapter (feature `http`)
 
@@ -303,7 +303,7 @@ Documents are canonical JCS-style JSON capped at 4096 bytes; every error from th
 
 ## Packaged crate consumer (CI)
 
-`publish = false` in rust/Cargo.toml means `cargo publish` is blocked, while `cargo package` still produces a distributable `.crate` artifact: packing is NOT publication — there is no registry upload, no tag and no release, and the version stays 0.2.0. The CI-only driver pair packages the crate into a stage and verifies it from a standalone consumer crate:
+`publish = false` in rust/Cargo.toml means `cargo publish` is blocked, while `cargo package` still produces a distributable `.crate` artifact: packing is NOT publication — there is no registry upload, no tag and no release, and the version stays 0.1.0. The CI-only driver pair packages the crate into a stage and verifies it from a standalone consumer crate:
 
 ```
 node tools/consumer/package-rust.mjs tools/consumer/.scratch/rust-consumer

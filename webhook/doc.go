@@ -1,4 +1,4 @@
-// Package webhook implements spec/06-webhooks.md for the mcp-jack 0.2.0
+// Package webhook implements spec/06-webhooks.md for the mcp-jack 0.1.0
 // release line. It provides webhook delivery, reception, endpoint verification,
 // Server Card key discovery, and subscription helpers.
 //

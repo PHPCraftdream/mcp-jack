@@ -155,7 +155,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: rc-ts-tarball-${{ env.RC_SHA }}
-          path: tools/consumer/.scratch/ts-consumer/mcp-jack-0.2.0.tgz
+          path: tools/consumer/.scratch/ts-consumer/mcp-jack-0.1.0.tgz
           if-no-files-found: error
 
   # Rust SDK crate: same as the CI consumer-rust lane.
@@ -185,7 +185,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: rc-rust-crate-${{ env.RC_SHA }}
-          path: tools/consumer/.scratch/rust-consumer/mcp-jack-0.2.0.crate
+          path: tools/consumer/.scratch/rust-consumer/mcp-jack-0.1.0.crate
           if-no-files-found: error
 
   # Go SDK module archive: same as the CI consumer-go lane, including the
@@ -360,8 +360,8 @@ jobs:
             jack-darwin-arm64 \
             jack-linux-amd64 \
             jack-linux-arm64 \
-            mcp-jack-0.2.0.tgz \
-            mcp-jack-0.2.0.crate \
+            mcp-jack-0.1.0.tgz \
+            mcp-jack-0.1.0.crate \
             rc-manifest.json \
             SHA256SUMS
           do

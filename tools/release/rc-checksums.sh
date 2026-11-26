@@ -37,8 +37,8 @@ names="$(printf '%s\n' \
   jack-darwin-arm64 \
   jack-linux-amd64 \
   jack-linux-arm64 \
-  mcp-jack-0.2.0.tgz \
-  mcp-jack-0.2.0.crate \
+  mcp-jack-0.1.0.tgz \
+  mcp-jack-0.1.0.crate \
   | LC_ALL=C sort)"
 
 # Nothing else may have landed in the bundle: no extra files, no directories.
