@@ -1,21 +1,22 @@
-// Package rotationclient connects candidate client gates to the concrete durable store.
+// Package rotationclient connects candidate client gates to the client trust state.
+// *durable.TrustStore is the Linux reference implementation.
 package rotationclient
 
 import (
 	"bytes"
 	"errors"
+	"reflect"
 	"sync/atomic"
 	"time"
 
 	jack "github.com/PHPCraftdream/mcp-jack"
 	"github.com/PHPCraftdream/mcp-jack/client"
-	"github.com/PHPCraftdream/mcp-jack/durable"
 	"github.com/PHPCraftdream/mcp-jack/rotation"
 )
 
 // Controller does not own the store lifecycle and does no network fetch/retry.
 type Controller struct {
-	store      *durable.TrustStore
+	store      ClientTrustState
 	binding    rotation.Binding
 	window     int64
 	checkpoint rotation.Checkpoint
@@ -46,8 +47,21 @@ func mappedError(err error, fallback string) error {
 	return localError(fallback)
 }
 
-func New(store *durable.TrustStore) (*Controller, error) {
+// nilState reports whether the state is absent, including a typed nil.
+func nilState(store ClientTrustState) bool {
 	if store == nil {
+		return true
+	}
+	value := reflect.ValueOf(store)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	}
+	return false
+}
+
+func New(store ClientTrustState) (*Controller, error) {
+	if nilState(store) {
 		return nil, localError("rotation_state_unknown")
 	}
 	snapshot, _, err := store.Snapshot()
