@@ -34,7 +34,7 @@ const capabilities = [
   cap('stateless', 'supported', 'createMcpHandler legacy:"stateless" per-request fallback'),
   cap('progress', 'supported', 'ctx.mcpReq.notify({method:"notifications/progress"}) in server.mjs'),
   cap('cancellation', 'supported', 'ctx.mcpReq.signal and client callTool RequestOptions.signal'),
-  cap('subscriptions_listen', 'supported', 'createMcpHandler handler.notify and Client.listen(filter)'),
+  cap('subscriptions_listen', 'supported', 'createMcpHandler notify.toolsChanged publishes to subscribed streams; handler.close gracefully closes all streams (handler-wide; createMcpHandler.ts:1027).'),
   cap('server_discover', 'supported', 'createMcpHandler modern leg installs server/discover'),
   cap('protocol_2026_07_28', 'supported', 'createMcpHandler serves per-request modern 2026-07-28 envelopes; --legacy-only refuses every SDK-classified modern request via isLegacyRequest(toWebRequest(req)) before dispatch (covers envelope-only and header-only traffic)'),
 ];
@@ -68,9 +68,25 @@ const factory = () => {
   return mcp;
 };
 const legacyOnly = args.includes('--legacy-only');
+const listenOnce = args.includes('--listen-once');
 const handler = createMcpHandler(factory, { responseMode: 'auto', legacy: 'stateless' });
 const mcpNodeHandler = toNodeHandler(handler);
-setInterval(() => handler.notify.toolsChanged(), 1000).unref();
+if (listenOnce) {
+  let listenObserved = false;
+  const fetch = handler.fetch;
+  handler.fetch = async (request, options) => {
+    const body = request.method === 'POST' ? await request.clone().json().catch(() => null) : null;
+    const trigger = !listenObserved && body?.method === 'subscriptions/listen';
+    if (trigger) listenObserved = true;
+    const response = await fetch(request, options);
+    if (trigger) {
+      // Scenario 7 uses one client session; SDK shutdown is handler-wide.
+      await handler.notify.toolsChanged();
+      await handler.close();
+    }
+    return response;
+  };
+} else setInterval(() => handler.notify.toolsChanged(), 1000).unref();
 const mainServer = createServer((req, res) => {
   void (async () => {
     if (legacyOnly) {

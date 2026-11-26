@@ -8,6 +8,8 @@ export function startIncrementalProxy({ port = 0, secrets = [], limits = {} } = 
   const maxBytes = limits.maxBytesPerEvent ?? CAPTURE_DEFAULTS.maxBytesPerEvent;
   const captures = [];
   const requests = new Map();
+  // Raw evidence is in-process only, persisted as boolean+fingerprint only.
+  const rawSignatures = new Map();
   const waiters = new Set();
   const outbound = new Set();
   let sequence = 0;
@@ -22,7 +24,7 @@ export function startIncrementalProxy({ port = 0, secrets = [], limits = {} } = 
     const id = `hop-${++sequence}`;
     if (requests.size >= maxEvents) requests.delete(requests.keys().next().value);
     const allowed = ['jack-accept', 'accept', 'mcp-protocol-version', 'protocol-version', 'mcp-method', 'mcp-name', ...Object.keys(down.headers).filter((key) => key.startsWith('mcp-param-'))];
-    const hop = { id, hop: id, method: down.method ?? null, headers: Object.fromEntries(allowed.filter((key) => down.headers[key] !== undefined).map((key) => [key, down.headers[key]])), hasAuth: down.headers['jack-auth'] !== undefined || down.headers.authorization !== undefined };
+    const hop = { id, hop: id, method: down.method ?? null, headers: Object.fromEntries([...allowed, 'jack-auth'].filter((key) => down.headers[key] !== undefined).map((key) => [key, down.headers[key]])), hasAuth: down.headers['jack-auth'] !== undefined || down.headers.authorization !== undefined };
     requests.set(id, hop);
     let reqText = '';
     const appendLimited = (current, addition) => {
@@ -38,16 +40,16 @@ export function startIncrementalProxy({ port = 0, secrets = [], limits = {} } = 
       if (aborted || res.writableEnded) return;
       aborted = true;
       upstream.destroy();
-      add({ hop: id, direction: 'event', method: down.method ?? null, status: null, media_type: null, body: '[upstream-aborted]' });
+      add({ hop: id, direction: 'event', method: down.method ?? null, status: null, media_type: null, headers: {}, body: '[upstream-aborted]' });
     };
     res.on('close', abortUpstream);
     down.on('data', (chunk) => { reqText = appendLimited(reqText, chunk.toString('utf8')); });
-    down.on('end', () => add({ hop: id, direction: 'request', method: down.method ?? null, status: null, media_type: down.headers['content-type']?.split(';')[0] ?? null, body: reqText }));
+    down.on('end', () => add({ hop: id, direction: 'request', method: down.method ?? null, status: null, media_type: down.headers['content-type']?.split(';')[0] ?? null, headers: Object.fromEntries(['jack-auth'].filter((key) => down.headers[key] !== undefined).map((key) => [key, down.headers[key]])), body: reqText }));
     down.on('aborted', abortUpstream);
     down.on('error', abortUpstream);
     upstream.on('error', (error) => {
       if (aborted) return;
-      add({ hop: id, direction: 'event', method: down.method ?? null, status: null, media_type: null, body: `[upstream-error] ${error.message}` });
+      add({ hop: id, direction: 'event', method: down.method ?? null, status: null, media_type: null, headers: {}, body: `[upstream-error] ${error.message}` });
       if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' });
       res.end('upstream request failed');
     });
@@ -59,7 +61,7 @@ export function startIncrementalProxy({ port = 0, secrets = [], limits = {} } = 
       const eventFields = [];
       const recordFrame = (frame) => {
         if (!frame) return;
-        add({ hop: id, direction: 'event', method: down.method ?? null, status: up.statusCode ?? null, media_type: media, body: frame });
+        add({ hop: id, direction: 'event', method: down.method ?? null, status: up.statusCode ?? null, media_type: media, headers: {}, body: frame });
       };
       up.on('data', (chunk) => {
         if (!res.destroyed && !res.write(chunk)) {
@@ -83,7 +85,10 @@ export function startIncrementalProxy({ port = 0, secrets = [], limits = {} } = 
       });
       up.on('end', () => {
         if (media === 'text/event-stream') recordFrame(sseBuffer);
-        else add({ hop: id, direction: 'response', method: down.method ?? null, status: up.statusCode ?? null, media_type: media, body: responseText });
+        else {
+          if (up.headers['jack-auth'] !== undefined) rawSignatures.set(id, { status: up.statusCode ?? null, jackAuth: up.headers['jack-auth'], body: responseText });
+          add({ hop: id, direction: 'response', method: down.method ?? null, status: up.statusCode ?? null, media_type: media, headers: Object.fromEntries(['jack-auth'].filter((key) => up.headers[key] !== undefined).map((key) => [key, up.headers[key]])), body: responseText });
+        }
         if (!res.destroyed) res.end();
       });
       up.on('error', () => { if (!res.destroyed) res.destroy(); });
@@ -95,7 +100,7 @@ export function startIncrementalProxy({ port = 0, secrets = [], limits = {} } = 
     server.listen(port, '127.0.0.1', () => {
       server.off('error', reject);
       const address = server.address();
-      resolve({ url: `http://127.0.0.1:${address.port}`, port: address.port, captures, requests, metadata: requests, waitFor(predicate) {
+      resolve({ url: `http://127.0.0.1:${address.port}`, port: address.port, captures, requests, rawSignatures, metadata: requests, waitFor(predicate) {
         const match = captures.find(predicate); if (match) return Promise.resolve(match);
         return new Promise((done) => waiters.add({ predicate, resolve: done }));
       }, close: () => new Promise((done) => { for (const req of outbound) req.destroy(); server.closeAllConnections?.(); server.close(() => done()); }) });

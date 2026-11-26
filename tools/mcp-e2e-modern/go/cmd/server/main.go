@@ -53,7 +53,11 @@ func main() {
 	}
 	srv := newServer(reg)
 	var handler http.Handler = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv },
-		&mcp.StreamableHTTPOptions{PropagateRequestCancellation: true})
+		&mcp.StreamableHTTPOptions{
+			Stateless:                    true,
+			PropagateRequestCancellation: true,
+			DisableLocalhostProtection:   true,
+		})
 	if *legacyOnly {
 		handler = legacyGate(handler)
 	}

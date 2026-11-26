@@ -11,12 +11,13 @@ import (
 )
 
 type runOut struct {
-	outcome     string
-	toolResult  json.RawMessage
-	sdkErr      string
-	meta        any
-	completedMs *int64
-	cancelledMs *int64
+	outcome            string
+	toolResult         json.RawMessage
+	sdkErr             string
+	meta               any
+	completedMs        *int64
+	cancelledMs        *int64
+	capabilityEvidence string
 }
 
 // echoParams builds tools/call params with optional _meta.

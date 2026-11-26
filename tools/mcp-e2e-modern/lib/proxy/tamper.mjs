@@ -17,14 +17,14 @@ export function startTamperProxy({ port = 0, secrets = [], flipByteOffset = 0, u
     down.on('data', (chunk) => chunks.push(chunk));
     down.on('end', () => {
       const body = Buffer.concat(chunks);
-      save({ hop, direction: 'request', method: down.method ?? null, status: null, media_type: down.headers['content-type']?.split(';')[0] ?? null, body: body.toString('utf8') });
+      save({ hop, direction: 'request', method: down.method ?? null, status: null, media_type: down.headers['content-type']?.split(';')[0] ?? null, headers: Object.fromEntries(['jack-auth'].filter((key) => down.headers[key] !== undefined).map((key) => [key, down.headers[key]])), body: body.toString('utf8') });
       const target = new URL(down.url ?? '/', base);
       const req = requestHttp(target, { method: down.method, headers: { ...down.headers, host: target.host } }, (up) => {
         const out = [];
         up.on('data', (chunk) => out.push(chunk));
         up.on('end', () => {
           const bytes = Buffer.concat(out);
-          save({ hop, direction: 'response', method: down.method ?? null, status: up.statusCode ?? null, media_type: String(up.headers['content-type'] ?? '').split(';')[0] || null, body: bytes.toString('utf8') });
+          save({ hop, direction: 'response', method: down.method ?? null, status: up.statusCode ?? null, media_type: String(up.headers['content-type'] ?? '').split(';')[0] || null, headers: Object.fromEntries(['jack-auth'].filter((key) => up.headers[key] !== undefined).map((key) => [key, up.headers[key]])), body: bytes.toString('utf8') });
           let send = bytes;
           if (!flipped && bytes.length && Number.isInteger(flipByteOffset) && flipByteOffset >= 0 && flipByteOffset < bytes.length) {
             send = Buffer.from(bytes); send[flipByteOffset] ^= 1; flipped = true;

@@ -251,13 +251,16 @@ func run(cfg *config, clock elapsed, stdin io.Reader) *result {
 	case 6:
 		out = scenario6(ctx, s, scanLines(stdin), now)
 	case 7:
-		out = scenario7(ctx, s, now)
+		out = scenario7(ctx, s, now, cfg.server)
 	default:
 		out = scenario8(ctx, s, now)
 	}
 	res.Outcome = out.outcome
 	res.ToolResult = out.toolResult
 	res.SDKError = strPtr(out.sdkErr)
+	if out.capabilityEvidence != "" {
+		res.CapabilityEvidence = &out.capabilityEvidence
+	}
 	res.RequestMeta = out.meta
 	res.Timings.CompletedMs = out.completedMs
 	res.Timings.CancelledMs = out.cancelledMs

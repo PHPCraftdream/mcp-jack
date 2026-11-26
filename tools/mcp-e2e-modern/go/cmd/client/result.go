@@ -17,10 +17,11 @@ type sdkID struct {
 }
 
 type bridgeInfo struct {
-	Spawned     bool   `json:"spawned"`
-	ExitCode    *int   `json:"exit_code"`
-	StdoutBytes int64  `json:"stdout_bytes"`
-	StderrTail  string `json:"stderr_tail"`
+	Spawned       bool   `json:"spawned"`
+	ExitCode      *int   `json:"exit_code"`
+	CloseObserved bool   `json:"close_observed"`
+	StdoutBytes   int64  `json:"stdout_bytes"`
+	StderrTail    string `json:"stderr_tail"`
 }
 
 type progressObs struct {
