@@ -676,7 +676,7 @@ jobs:
       - name: Run the modern matrix
         if: ${{ !cancelled() }}
         timeout-minutes: 80
-        run: node tools/mcp-e2e-modern/run.mjs --jack-bin "$RUNNER_TEMP/jack" --artifacts "$RUNNER_TEMP/mcp-e2e-modern-artifacts"
+        run: node tools/mcp-e2e-modern/run.mjs --jack-bin "$RUNNER_TEMP/jack" --artifacts "$RUNNER_TEMP/mcp-e2e-modern-artifacts" --keep
       - name: Upload the modern matrix artifacts
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
