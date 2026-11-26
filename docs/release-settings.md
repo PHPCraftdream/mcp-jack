@@ -52,9 +52,25 @@ The owner approved (2026-11-15) an artifact-only release-candidate workflow, `.g
 
 Attestations are generated only for the exact final candidate artifacts. Verification subject and digest must match the exact consumed bytes and the repository, workflow, ref and full-SHA claims; a per-file SHA-256 is distinct from an upload digest and from an attestation. Record artifact IDs, inventories, platforms, toolchains, verification evidence and exact-artifact consumer results as in [`release-notes-template.md`](release-notes-template.md). The release candidate publishes nothing.
 
-## Publication and registry ownership — deferred
+## Publication and registry ownership
 
-Registry publisher ownership and trusted-publisher decisions are **DEFERRED**. They are not an artifact-only RC prerequisite and are not authorized here. The owner-ordered Rust and TypeScript package versions are 0.1.0; publication flags remain. RC scope is artifact-only, with no registry publication. No publication, registry, token, account, trusted-publisher, or configuration steps are authorized. Do not create/configure credentials or publishers, make further version changes, publish, tag, create a GitHub Release, or announce a release. Future publication needs separate explicit owner authorization and review.
+The owner-ordered Rust and TypeScript package versions are 0.1.0. Registry publication is prepared but is not run by CI or by any agent: the release candidate is artifact-only and publishes nothing, and the two manual workflows below (`publish-placeholder.yml`, `publish.yml`) publish only when the owner dispatches them. Creating tokens, accounts, environments, secrets and trusted publishers on the registries and on GitHub is the owner's action. Each real publication needs the owner's separate explicit authorization at dispatch time. These workflows create no git tag and no GitHub Release; announcing a release stays a separate owner decision.
+
+### Placeholder bootstrap (one-time, token-based)
+
+The `mcp-jack` 0.0.0 placeholder packages create the two registry entries, a prerequisite for configuring Trusted Publishing.
+
+1. Create short-expiry, minimal-scope tokens with 2FA enabled on both accounts: an npm granular token limited to publishing the `mcp-jack` package (or the account's packages, as npm allows) and a crates.io token with the publish-new scope. Never commit them.
+2. Create a GitHub environment `registry-bootstrap` on the repository, add required reviewers, and add the secrets `NPM_BOOTSTRAP_TOKEN` and `CARGO_BOOTSTRAP_TOKEN`.
+3. Dispatch `.github/workflows/publish-placeholder.yml` from `main` with `confirm` = `publish-placeholder-0.0.0` — once with registry `npm`, once with registry `crates` (or `both` once).
+4. Revoke both tokens and delete both secrets from the environment.
+5. Configure Trusted Publishing on both registries for the real tokenless releases: repository `PHPCraftdream/mcp-jack`, workflow file `publish.yml`, environment `release` (both npm and crates.io).
+
+**Established:** a published version number can never be reused or replaced. npm unpublish is time-limited; crates.io only supports yanking. npm Trusted Publishing requires npm >= 11.5.1, Node >= 22.14, and `id-token: write` in the publishing workflow. crates.io Trusted Publishing can only be created after the crate exists (a first manual publish).
+
+**UNVERIFIED — owner to confirm:** exact token scopes currently offered by npm and any additional registry or account requirements.
+
+After the Trusted Publishing hand-over succeeds, `tools/release/placeholder/**`, `publish-placeholder.yml`, and the `placeholder-dry-run` job in `ci.yml` are obsolete and may be removed in a later cleanup PR.
 
 ### Trusted Publishing and the 0.1.0 release
 

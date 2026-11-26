@@ -684,3 +684,37 @@ jobs:
           name: mcp-e2e-modern-${{ github.sha }}
           path: ${{ runner.temp }}/mcp-e2e-modern-artifacts/
           if-no-files-found: warn
+
+  # Placeholder packages under tools/release/placeholder are markdown-only artifacts; this job proves they still pack to exactly the expected files before any real bootstrap run.
+  placeholder-dry-run:
+    name: placeholder publish dry run
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      - name: Verify npm placeholder package
+        working-directory: tools/release/placeholder/npm
+        run: |
+          test "$(node -p "require('./package.json').version")" = "0.0.0"
+          # Packs without publishing and needs no token.
+          npm pack --dry-run --json > "$RUNNER_TEMP/npm-pack.json"
+          # npm pack --json prints an array with one entry per package.
+          test "$(jq -c '[.[0].files[].path] | sort' "$RUNNER_TEMP/npm-pack.json")" = '["LICENSE-APACHE","LICENSE-MIT","README.md","package.json"]'
+      - name: Verify crates.io placeholder package
+        working-directory: tools/release/placeholder/crate
+        run: |
+          grep -qx 'version = "0.0.0"' Cargo.toml
+          cargo package --list > "$RUNNER_TEMP/crate-files.txt"
+          expected="$(printf 'Cargo.toml\nCargo.toml.orig\nLICENSE-APACHE\nLICENSE-MIT\nREADME.md\nsrc/lib.rs\n')"
+          # Drop only Cargo.lock and .cargo_vcs_info.json, which cargo package generates; keep the remaining inventory exact.
+          actual="$(grep -Fvx -e Cargo.lock -e .cargo_vcs_info.json "$RUNNER_TEMP/crate-files.txt" | sort)"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::unexpected file list"
+            exit 1
+          fi
+          # cargo package builds and verifies the packaged crate locally and does not depend on registry state; cargo publish --dry-run can refuse an already-published version, which would turn CI red after the bootstrap publish.
+          cargo package
