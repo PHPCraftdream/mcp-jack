@@ -86,7 +86,8 @@ jobs:
         working-directory: tools/release/placeholder/npm
         run: |
           npm pack --dry-run --json > "$RUNNER_TEMP/npm-pack.json"
-          if [ "$(jq -c '[.files[].path] | sort' "$RUNNER_TEMP/npm-pack.json")" != '["LICENSE-APACHE","LICENSE-MIT","README.md","package.json"]' ]; then
+          # npm pack --json prints an array with one entry per package.
+          if [ "$(jq -c '[.[0].files[].path] | sort' "$RUNNER_TEMP/npm-pack.json")" != '["LICENSE-APACHE","LICENSE-MIT","README.md","package.json"]' ]; then
             echo "::error::unexpected file list"
             exit 1
           fi

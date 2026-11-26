@@ -702,7 +702,8 @@ jobs:
           test "$(node -p "require('./package.json').version")" = "0.0.0"
           # Packs without publishing and needs no token.
           npm pack --dry-run --json > "$RUNNER_TEMP/npm-pack.json"
-          test "$(jq -c '[.files[].path] | sort' "$RUNNER_TEMP/npm-pack.json")" = '["LICENSE-APACHE","LICENSE-MIT","README.md","package.json"]'
+          # npm pack --json prints an array with one entry per package.
+          test "$(jq -c '[.[0].files[].path] | sort' "$RUNNER_TEMP/npm-pack.json")" = '["LICENSE-APACHE","LICENSE-MIT","README.md","package.json"]'
       - name: Verify crates.io placeholder package
         working-directory: tools/release/placeholder/crate
         run: |
