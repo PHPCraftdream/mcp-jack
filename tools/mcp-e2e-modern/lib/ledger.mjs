@@ -3,7 +3,7 @@ import { REQUIRED_SCENARIOS, SKIPPABLE_SCENARIOS } from './config.mjs';
 const outcomes = ['PASS', 'FAIL', 'SKIP'];
 const attributions = ['sdk', 'fixture', 'jack'];
 const oracleResults = ['verified', 'invalid', 'not-applicable', 'not-run'];
-const captureKeys = ['hop', 'direction', 'method', 'status', 'media_type', 'body'];
+const captureKeys = ['hop', 'direction', 'method', 'status', 'media_type', 'headers', 'body'];
 const timingKeys = ['readiness_ms', 'tool_ms', 'first_event_ms', 'stream_completion_ms', 'cancellation_ms', 'shutdown_ms'];
 
 export function makeCell(input = {}) {
@@ -17,7 +17,7 @@ export function makeCell(input = {}) {
     outcome: input.outcome ?? 'FAIL',
     attribution: input.attribution ?? 'jack',
     reason: input.reason ?? '',
-    captures: input.captures ?? [],
+    captures: (input.captures ?? []).map((capture) => ({ hop: capture.hop, direction: capture.direction, method: capture.method, status: capture.status, media_type: capture.media_type, headers: capture.headers ?? {}, body: capture.body })),
     signature_oracle: input.signature_oracle ?? { applicable: false, result: 'not-applicable' },
     timings: input.timings ?? Object.fromEntries(timingKeys.map((key) => [key, null])),
     ...(Object.hasOwn(input, 'failure_fingerprint') ? { failure_fingerprint: input.failure_fingerprint } : {}),
@@ -49,6 +49,7 @@ export function validateCell(record) {
     if (!capture || typeof capture !== 'object' || Object.keys(capture).length !== captureKeys.length || captureKeys.some((key) => !Object.hasOwn(capture, key))) errors.push(`captures[${index}] fields do not match schema`);
     else {
       for (const key of ['hop', 'direction', 'body']) if (typeof capture[key] !== 'string') errors.push(`captures[${index}].${key} must be a string`);
+      if (capture.headers !== null && (!capture.headers || typeof capture.headers !== 'object' || Array.isArray(capture.headers) || Object.keys(capture.headers).some((key) => key !== 'jack-auth') || Object.values(capture.headers).some((value) => typeof value !== 'string'))) errors.push(`captures[${index}].headers must contain only string Jack-Auth values or be null`);
       if (!['request', 'response', 'event'].includes(capture.direction)) errors.push(`captures[${index}].direction is invalid`);
       if (capture.method !== null && typeof capture.method !== 'string') errors.push(`captures[${index}].method must be string or null`);
       if (capture.media_type !== null && typeof capture.media_type !== 'string') errors.push(`captures[${index}].media_type must be string or null`);

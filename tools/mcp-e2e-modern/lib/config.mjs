@@ -41,6 +41,12 @@ export const DEFAULTS = Object.freeze({
 export const LEDGER_DEFAULT = DEFAULTS.ledger;
 export const ARTIFACTS_DEFAULT = DEFAULTS.artifacts;
 
+export function runDeadlineMs(cells, config = DEFAULTS) {
+  if (!Number.isInteger(cells) || cells <= 0) throw new TypeError('cells must be a positive integer');
+  const perCell = config.readiness + Math.max(config.directTool, config.bridgeTool) + config.firstStreamEvent + config.streamCompletion + config.cancellation + config.shutdown;
+  return Math.min(perCell * Math.max(1, cells), 4_500_000);
+}
+
 export function resolveConfig(overrides = {}) {
   const config = { ...DEFAULTS, ...overrides };
   for (const key of Object.keys(DEADLINES)) {

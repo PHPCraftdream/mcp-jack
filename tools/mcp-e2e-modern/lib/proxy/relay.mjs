@@ -5,8 +5,13 @@ export function startRelay({ socketPath, target }) {
   const upstreamTarget = new URL(target);
   if (upstreamTarget.protocol !== 'http:') throw new TypeError('relay target must use http');
   const methods = [];
+  const sockets = new Set();
   const server = net.createServer((client) => {
+    sockets.add(client);
+    client.once('close', () => sockets.delete(client));
     const upstream = net.createConnection({ host: upstreamTarget.hostname, port: Number(upstreamTarget.port || 80) });
+    sockets.add(upstream);
+    upstream.once('close', () => sockets.delete(upstream));
     let headerBuffer = '';
     let bodyRemaining = 0;
     let chunkRemaining = null;
@@ -25,14 +30,18 @@ export function startRelay({ socketPath, target }) {
       if (methods.length >= 200 || headerLimitReached) return;
       let input = chunkBuffer + chunk.toString('latin1');
       chunkBuffer = '';
+      let parserState = null;
       while (input && methods.length < 200 && !headerLimitReached) {
+        const sig = `${input.length}|${chunkRemaining}|${chunkTerminator}|${readingTrailers}|${bodyRemaining}|${chunked}|${currentEntry !== null}`;
+        if (sig === parserState) throw new Error('relay parser stalled: no state change between iterations');
+        parserState = sig;
         if (chunked && currentEntry) {
           if (chunkRemaining !== null) {
             const consumed = Math.min(chunkRemaining, input.length);
             storeBody(input.slice(0, consumed));
             chunkRemaining -= consumed;
             input = input.slice(consumed);
-            if (chunkRemaining === 0) chunkTerminator = true;
+            if (chunkRemaining === 0) { chunkRemaining = null; chunkTerminator = true; }
             else break;
             continue;
           }
@@ -128,6 +137,12 @@ export function startRelay({ socketPath, target }) {
     socketPath,
     ready,
     methods,
-    close: () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
+    close: () => new Promise((resolve) => {
+      let settled = false;
+      const done = () => { if (!settled) { settled = true; resolve(); } };
+      try { server.close(done); } catch { done(); }
+      for (const socket of sockets) { socket.once('close', () => { if (!sockets.size) done(); }); socket.destroy(); }
+      if (!sockets.size) done();
+    }),
   };
 }

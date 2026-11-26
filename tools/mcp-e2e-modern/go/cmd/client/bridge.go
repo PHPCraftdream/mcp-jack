@@ -121,16 +121,23 @@ func (b *bridgeProc) info() bridgeInfo {
 	b.mu.Lock()
 	exit := b.exit
 	b.mu.Unlock()
+	closed := false
+	select {
+	case <-b.done:
+		closed = true
+	default:
+	}
 	return bridgeInfo{
-		Spawned:     true,
-		ExitCode:    exit,
-		StdoutBytes: b.stdout.bytes,
-		StderrTail:  b.stderr.String(),
+		Spawned:       true,
+		ExitCode:      exit,
+		CloseObserved: closed,
+		StdoutBytes:   b.stdout.bytes,
+		StderrTail:    b.stderr.String(),
 	}
 }
 
 func noBridge() bridgeInfo {
-	return bridgeInfo{Spawned: false, ExitCode: nil, StdoutBytes: 0, StderrTail: ""}
+	return bridgeInfo{Spawned: false, ExitCode: nil, CloseObserved: false, StdoutBytes: 0, StderrTail: ""}
 }
 
 // scanLines exposes a line scanner over the fixture's own stdin (scenario 6).

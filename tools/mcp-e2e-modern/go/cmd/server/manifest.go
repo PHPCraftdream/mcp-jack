@@ -35,11 +35,9 @@ func manifest() []capability {
 			Evidence: "mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server, *mcp.StreamableHTTPOptions) (mcp/streamable.go:231) served over net/http",
 		},
 		{
-			ID:     "stateless",
-			Status: "supported",
-			Evidence: "SDK API mcp.StreamableHTTPOptions.Stateless (mcp/streamable.go:129) exists; this fixture " +
-				"deliberately runs STATEFUL (Stateless not set) because scenario 7 subscriptions/listen needs " +
-				"cross-request session affinity — stateless mode is offered but not exercised here",
+			ID:       "stateless",
+			Status:   "supported",
+			Evidence: "mcp.StreamableHTTPOptions.Stateless uses a temporary session per request (mcp/streamable.go:129-146); enabled by this fixture",
 		},
 		{
 			ID:       "progress",
@@ -53,10 +51,9 @@ func manifest() []capability {
 				"the HTTP request/stream (mcp/streamable.go:221); the fixture tracks ctx.Done() per call_id, no synthetic POST",
 		},
 		{
-			ID:     "subscriptions_listen",
-			Status: "supported",
-			Evidence: "Server.subscriptionsListen SEP-2575 handler (mcp/server.go:1256) with Server.ResourceUpdated " +
-				"notifications delivered on the listen stream (mcp/server.go:1183)",
+			ID:       "subscriptions_listen",
+			Status:   "unsupported",
+			Evidence: "Stateless HTTP fixture creates a temporary session per request and closes it when the request completes (mcp/streamable.go:367-369); subscriptions/listen sends ack, then blocks until ctx.Done and only then returns its result (mcp/server.go:1314-1320); servePOST waits on req.Context (mcp/streamable.go:1770), hangResponse selects ctx.Done and done symmetrically (mcp/streamable.go:1267-1272), so server cannot guarantee the final result is written before the stream closes; run 45766164556 captures for scenario-7-ts-client-go-server-direct and -bridge-modern showed ack plus notifications/tools/list_changed, no final JSON-RPC result, and direct upstream-aborted / bridged jack-end.",
 		},
 		{
 			ID:       "server_discover",
@@ -64,10 +61,9 @@ func manifest() []capability {
 			Evidence: "Server.discover SEP-2575 server/discover handler (mcp/server.go:926)",
 		},
 		{
-			ID:     "protocol_2026_07_28",
-			Status: "supported",
-			Evidence: "SDK v1.8.0 SupportedProtocolVersions starts at 2026-07-28 (docs/protocol.md:138); negotiated " +
-				"by mcp client/server protocolVersion20260728",
+			ID:       "protocol_2026_07_28",
+			Status:   "supported",
+			Evidence: "HTTP supports protocol >= 2026-07-28 only when StreamableHTTPOptions.Stateless is true (mcp/streamable.go:1505-1506); server/discover advertises configured supported versions (mcp/streamable.go:1520-1523)",
 		},
 	}
 }

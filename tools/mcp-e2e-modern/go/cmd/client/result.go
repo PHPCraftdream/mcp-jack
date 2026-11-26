@@ -17,15 +17,22 @@ type sdkID struct {
 }
 
 type bridgeInfo struct {
-	Spawned     bool   `json:"spawned"`
-	ExitCode    *int   `json:"exit_code"`
-	StdoutBytes int64  `json:"stdout_bytes"`
-	StderrTail  string `json:"stderr_tail"`
+	Spawned       bool   `json:"spawned"`
+	ExitCode      *int   `json:"exit_code"`
+	CloseObserved bool   `json:"close_observed"`
+	StdoutBytes   int64  `json:"stdout_bytes"`
+	StderrTail    string `json:"stderr_tail"`
 }
 
 type progressObs struct {
 	Progress float64  `json:"progress"`
 	Total    *float64 `json:"total,omitempty"`
+}
+
+type releaseEvidence struct {
+	Observed bool            `json:"observed"`
+	Status   int             `json:"status"`
+	Body     json.RawMessage `json:"body"`
 }
 
 type timings struct {
@@ -36,16 +43,17 @@ type timings struct {
 }
 
 type result struct {
-	Scenario           int             `json:"scenario"`
-	SDK                sdkID           `json:"sdk"`
-	Outcome            string          `json:"outcome"`
-	ToolResult         json.RawMessage `json:"tool_result"`
-	SDKError           *string         `json:"sdk_error"`
-	RequestMeta        any             `json:"request_meta"`
-	Bridge             bridgeInfo      `json:"bridge"`
-	Progress           []progressObs   `json:"progress"`
-	CapabilityEvidence *string         `json:"capability_evidence"`
-	Timings            timings         `json:"timings"`
+	Scenario           int              `json:"scenario"`
+	SDK                sdkID            `json:"sdk"`
+	Outcome            string           `json:"outcome"`
+	ToolResult         json.RawMessage  `json:"tool_result"`
+	SDKError           *string          `json:"sdk_error"`
+	RequestMeta        any              `json:"request_meta"`
+	Bridge             bridgeInfo       `json:"bridge"`
+	Progress           []progressObs    `json:"progress"`
+	Release            *releaseEvidence `json:"release,omitempty"`
+	CapabilityEvidence *string          `json:"capability_evidence"`
+	Timings            timings          `json:"timings"`
 }
 
 func marshalResult(r result) ([]byte, error) { return json.Marshal(r) }
@@ -53,12 +61,13 @@ func marshalResult(r result) ([]byte, error) { return json.Marshal(r) }
 // recorder collects progress notifications in delivery order and the elapsed
 // time of the first one.
 type recorder struct {
-	mu           sync.Mutex
-	order        []progressObs
-	firstMs      *int64
-	now          func() int64
-	observed     chan struct{}
-	observedOnce sync.Once
+	mu            sync.Mutex
+	order         []progressObs
+	firstMs       *int64
+	now           func() int64
+	observed      chan struct{}
+	observedOnce  sync.Once
+	releaseSignal chan struct{}
 }
 
 func newRecorder(now func() int64) *recorder {

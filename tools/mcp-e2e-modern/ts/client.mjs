@@ -8,6 +8,10 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
 const started = Date.now();
 const elapsed = () => Math.max(0, Date.now() - started);
+function bounded(promise, ms, label) {
+  let timer;
+  return Promise.race([promise, new Promise((resolve) => { timer = setTimeout(() => resolve({ timeout: true, label }), ms); })]).finally(() => clearTimeout(timer));
+}
 const argv = process.argv.slice(2);
 const value = (flag) => { const i = argv.indexOf(flag); return i < 0 ? undefined : argv[i + 1]; };
 const scenario = Number(value('--scenario'));
@@ -17,17 +21,26 @@ const bridgeMode = argv.includes('--bridge-bin');
 let sdk = { name: '@modelcontextprotocol/client', version: 'unknown' };
 const result = {
   scenario, sdk, outcome: 'fail', tool_result: null, sdk_error: null, request_meta: null,
-  bridge: { spawned: false, exit_code: null, stdout_bytes: 0, stderr_tail: '' },
+  bridge: { spawned: false, exit_code: null, close_observed: false, close_signal: null, stdout_bytes: 0, stderr_tail: '' },
   progress: [], capability_evidence: null,
   sdk_notes: 'pinned-modern connect issues a server/discover probe before attaching; on stdio the SDK probes via a sibling bridge process, so probe POSTs may appear at the capture proxy separate from session traffic',
   timings: { started_ms: 0, first_event_ms: null, completed_ms: null, cancelled_ms: null },
 };
 let client;
 let transport;
+let spawnedCount = 0;
+let currentChild = null;
+let bridgeExit = null;
+let bridgeCloseSignal = null;
+let bridgeClosed = false;
+let startWithoutChild = false;
 let bridgeBytes = 0;
 let bridgeStderr = '';
-let bridgeExit = null;
+let bridgePid = null;
 let callId;
+let releaseUrl;
+let releaseEvidence = { observed: false, status: null, body: null };
+let releasePromise;
 let cancellation;
 try {
   const require = createRequire(import.meta.url);
@@ -53,15 +66,26 @@ try {
     const config = value('--bridge-config');
     if (!bin || !config || value('--era') !== (scenario === 1 ? 'auto' : 'modern')) throw new Error('bridge mode requires matching era and config');
     result.bridge.spawned = true;
-    transport = new StdioClientTransport({ command: bin, args: ['bridge', '--config', config], stderr: 'pipe', env: process.env });
-    const startTransport = transport.start.bind(transport);
-    transport.start = async () => {
-      await startTransport();
-      const child = transport._process;
-      child?.stdout?.on('data', (chunk) => { bridgeBytes += chunk.length; });
-      child?.once('close', (code) => { bridgeExit = code; });
-    };
-    transport.stderr?.on('data', (chunk) => { bridgeStderr = (bridgeStderr + chunk.toString('utf8')).slice(-2000); });
+    class ObservedStdioTransport extends StdioClientTransport {
+      async start() {
+        await super.start();
+        const child = this._process; // Plain property in dist/stdio.mjs 2.4.0; readable from a subclass.
+        if (child) {
+          spawnedCount += 1;
+          currentChild = child;
+          bridgeExit = null;
+          bridgeCloseSignal = null;
+          bridgeClosed = false;
+          bridgeBytes = 0; // Negotiation sibling starts before the session child, so retain the last child.
+          child.stdout?.on('data', (c) => { bridgeBytes += c.length; });
+          child.once('close', (code, signal) => { bridgeExit = code; bridgeCloseSignal = signal; bridgeClosed = true; });
+        } else {
+          startWithoutChild = true;
+        }
+      }
+    }
+    transport = new ObservedStdioTransport({ command: bin, args: ['bridge', '--config', config], stderr: 'pipe', env: process.env });
+    transport.stderr.on('data', (chunk) => { bridgeStderr = (bridgeStderr + chunk.toString('utf8')).slice(-2000); });
   }
   client = new Client({ name: 'mcp-e2e-modern-ts-client', version: '1' }, {
     versionNegotiation: { mode: { pin: '2026-07-28' } },
@@ -73,22 +97,23 @@ try {
     throw Object.assign(new Error('unsupported-scenario-5'), { unsupported: true });
   }
   if (scenario !== 5) await client.connect(transport);
+  if (result.bridge.spawned) {
+    bridgePid = transport.pid ?? null;
+    // spawned_children indicates whether the SDK negotiation sibling used this subclass too.
+    result.bridge.transport_diagnostic = JSON.stringify({ spawned_children: spawnedCount, start_without_child: startWithoutChild, pid_after_start: bridgePid, closed: bridgeClosed });
+  }
   if (scenario === 7) {
     let notified;
     const gotNotification = new Promise((resolve) => { notified = resolve; });
     client.setNotificationHandler('notifications/tools/list_changed', () => notified(true));
     const sub = await client.listen({ toolsListChanged: true });
-    await Promise.race([gotNotification, new Promise((_, reject) => setTimeout(() => reject(new Error('listen notification timeout')), 5000))]);
+    const notification = await Promise.race([gotNotification, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
     const endState = await Promise.race([
       sub.closed.then((cause) => ({ cause })),
-      new Promise((resolve) => { const t = setTimeout(() => resolve({ timeout: true }), 5000); t.unref?.(); }),
+      new Promise((resolve) => { const timer = setTimeout(() => resolve({ timeout: true }), 5000); timer.unref?.(); }),
     ]);
-    if (endState.timeout) {
-      await sub.close();
-      throw new Error('subscriptions/listen stream still open after notification; closed locally; no clean server-side end observed');
-    }
-    if (endState.cause !== 'graceful') throw new Error(`subscriptions/listen ended without a clean server-side end (cause: ${endState.cause})`);
-    result.tool_result = { notification: 'notifications/tools/list_changed', honored_filter: sub.honoredFilter, end: endState.cause };
+    if (endState.timeout || endState.cause !== 'graceful' || !notification) throw new Error(`subscriptions/listen lifecycle failed (notification=${notification}, end=${endState.timeout ? 'timeout' : endState.cause})`);
+    result.tool_result = { notification: notification ? 'notifications/tools/list_changed' : null, honored_filter: sub.honoredFilter, end: endState.cause };
     result.timings.completed_ms = elapsed();
     result.outcome = 'ok';
   } else {
@@ -104,6 +129,8 @@ try {
       result.outcome = 'ok';
     } else if (scenario === 4 || scenario === 6) {
       callId = scenario === 4 ? 's4' : 's6';
+      releaseUrl = scenario === 4 ? value('--release-url') : undefined;
+      if (scenario === 4 && !releaseUrl) throw new Error('scenario 4 requires --release-url');
       cancellation = new AbortController();
       if (scenario === 6) {
         process.stdin.setEncoding('utf8');
@@ -120,27 +147,62 @@ try {
         onprogress: (event) => {
           if (result.timings.first_event_ms === null) result.timings.first_event_ms = elapsed();
           result.progress.push({ progress: event.progress, ...(event.total === undefined ? {} : { total: event.total }) });
+          if (scenario === 4 && result.progress.length === 1) {
+            releasePromise = fetch(releaseUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ call_id: callId }), signal: AbortSignal.timeout(10000) })
+              .then(async (response) => {
+                const text = await response.text();
+                let body;
+                try { body = JSON.parse(text); } catch { body = text; }
+                releaseEvidence = { observed: response.status === 200 && body?.released === true, status: response.status, body };
+                if (!releaseEvidence.observed) throw new Error(`scenario 4 release rejected: status=${response.status}, body=${JSON.stringify(body).slice(0, 500)}`);
+              })
+              .catch((error) => {
+                releaseEvidence = { observed: false, status: releaseEvidence.status, body: releaseEvidence.body };
+                result.release = releaseEvidence;
+                result.sdk_error = `${error.name}: ${error.message}`;
+                cancellation.abort('scenario 4 release failed');
+              });
+          }
         },
       });
+      if (releasePromise) await releasePromise;
+      if (scenario === 4) result.release = releaseEvidence;
       assertNotError(res, 'progress');
       result.tool_result = res;
-      result.timings.completed_ms = elapsed();
-      result.outcome = 'ok';
+      if (scenario === 4 && (!releaseEvidence.observed || releaseEvidence.status !== 200)) {
+        result.outcome = 'fail';
+        result.sdk_error = result.sdk_error ?? 'scenario 4 release was not confirmed';
+      } else {
+        result.timings.completed_ms = elapsed();
+        result.outcome = 'ok';
+      }
     }
   }
 } catch (error) {
+  if (scenario === 4 && releasePromise) {
+    await releasePromise;
+    result.release = releaseEvidence;
+  }
   if (!error?.unsupported) {
-    result.sdk_error = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    const callError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    result.sdk_error = scenario === 4 && result.sdk_error ? `${result.sdk_error}; ${callError}` : callError;
     result.outcome = 'fail';
   }
 } finally {
-  try { await client?.close(); } catch (error) { if (!result.sdk_error) result.sdk_error = String(error); }
   if (result.bridge.spawned && transport) {
-    const child = transport._process;
-    if (child?.exitCode !== null && child?.exitCode !== undefined) bridgeExit = child.exitCode;
-    result.bridge.exit_code = bridgeExit;
+    const closeOutcome = await bounded(Promise.resolve().then(() => transport.close()), 5000, 'bridge close');
+    if (closeOutcome?.timeout) result.sdk_error = `${result.sdk_error ? `${result.sdk_error}; ` : ''}bridge close timeout after 5000ms`;
+    const clientCloseOutcome = await bounded(Promise.resolve().then(() => client?.close()).catch((error) => { if (!result.sdk_error) result.sdk_error = String(error); }), 5000, 'client close');
+    if (clientCloseOutcome?.timeout) result.sdk_error = `${result.sdk_error ? `${result.sdk_error}; ` : ''}client close timeout after 5000ms`;
+    result.bridge.exit_code = currentChild ? bridgeExit : null;
+    result.bridge.close_observed = bridgeClosed;
+    result.bridge.close_signal = bridgeCloseSignal;
     result.bridge.stdout_bytes = bridgeBytes;
     result.bridge.stderr_tail = bridgeStderr.slice(-2000);
+    result.bridge.transport_diagnostic = JSON.stringify({ spawned_children: spawnedCount, start_without_child: startWithoutChild, pid_after_start: bridgePid, closed: bridgeClosed, exit_code: bridgeExit, signal: bridgeCloseSignal, stdout_bytes: bridgeBytes, stderr_tail: bridgeStderr.slice(-2000) });
+  } else {
+    const closeOutcome = await bounded(Promise.resolve().then(() => client?.close()).catch((error) => { if (!result.sdk_error) result.sdk_error = String(error); }), 5000, 'client close');
+    if (closeOutcome?.timeout) result.sdk_error = `${result.sdk_error ? `${result.sdk_error}; ` : ''}client close timeout after 5000ms`;
   }
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
