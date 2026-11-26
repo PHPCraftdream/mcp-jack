@@ -120,6 +120,17 @@ func (o OneShot) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 func (c *Connection) OpenStream(ctx context.Context, body []byte) (*clientstream.Stream, *clientstream.VerifiedResponse, error) {
+	return c.openStream(ctx, body, false)
+}
+
+// OpenEraProbe sends the auto-era discovery probe through the same signed
+// path as OpenStream, with the modern protocol version and mirror headers
+// taken from the probe request itself while the connection era is still auto.
+func (c *Connection) OpenEraProbe(ctx context.Context, body []byte) (*clientstream.Stream, *clientstream.VerifiedResponse, error) {
+	return c.openStream(ctx, body, true)
+}
+
+func (c *Connection) openStream(ctx context.Context, body []byte, probe bool) (*clientstream.Stream, *clientstream.VerifiedResponse, error) {
 	base := DirectTransport(c.Timeout)
 	t := client.NewTransport(OneShot{base}, c.Aud, c.Signer, c.Pin)
 	t.Stream = &clientstream.ClientConfig{Consumer: clientstream.ConsumerStdio}
@@ -130,9 +141,19 @@ func (c *Connection) OpenStream(ctx context.Context, body []byte) (*clientstream
 	}
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Accept", "application/json, text/event-stream")
-	r.Header.Set("MCP-Protocol-Version", c.protocolVersion())
-	if err := c.setModernMirrors(r.Header, body); err != nil {
-		return nil, nil, err
+	if probe {
+		r.Header.Set("MCP-Protocol-Version", modern.ModernMin)
+	} else {
+		r.Header.Set("MCP-Protocol-Version", c.protocolVersion())
+	}
+	if probe {
+		if err := c.buildModernMirrors(r.Header, body); err != nil {
+			return nil, nil, err
+		}
+	} else if c.Era == "modern" {
+		if err := c.setModernMirrors(r.Header, body); err != nil {
+			return nil, nil, err
+		}
 	}
 	s, reply, err := t.OpenStream(r)
 	if err != nil {
@@ -152,6 +173,12 @@ func (c *Connection) setModernMirrors(header http.Header, body []byte) error {
 	if c.Era != "modern" {
 		return nil
 	}
+	return c.buildModernMirrors(header, body)
+}
+
+// buildModernMirrors derives the modern mirror headers from the request body
+// alone; the era probe needs it while the connection era is still auto.
+func (c *Connection) buildModernMirrors(header http.Header, body []byte) error {
 	message, err := wire.Object(body)
 	if err != nil {
 		return command.ErrProtocol
