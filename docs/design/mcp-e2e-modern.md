@@ -2,7 +2,7 @@
 
 ## Purpose and boundaries
 
-**Proposal, not an implementation or test result:** add an official-MCP-SDK E2E matrix for the `2026-07-28` modern profile, exercising the merged Go CLI `jack bridge` and `jack gateway`. Keep `tools/mcp-e2e` and its legacy matrix independently runnable and unchanged by modern fixture work.
+**Implemented; see "Result" at the end of this document for the first green run.** The text before it is the original design. It proposed an official-MCP-SDK E2E matrix for the `2026-07-28` modern profile, exercising the merged Go CLI `jack bridge` and `jack gateway`. Keep `tools/mcp-e2e` and its legacy matrix independently runnable and unchanged by modern fixture work.
 
 Cover official SDK client/server interoperation for features both endpoints expose: modern requests and metadata, tool calls, signed progress streams, cancellation, and `subscriptions/listen` where supported. Compare direct SDK-to-SDK controls with Jack paths. Exclude SEP-3415 Events, Events-specific APIs/semantics, SDK-unsupported behavior, and full conformance. Claims about Events status and SDK coverage are **to confirm in CI**; custom handlers, Inspector, or conformance implementations do not count as official-SDK coverage.
 
@@ -97,6 +97,27 @@ F. **Final review.** Reviewer owns no implementation files; review after A–E. 
 - Accept a minimal scripted legacy-only negative control if SDK servers cannot provide one?
 - Confirm measured per-case deadlines and choose the global timeout within 60–90 minutes?
 - Format of the pin manifest (one JSON file per language under `tools/mcp-e2e-modern/pins/` versus one shared file) and who approves a pin change?
+
+## Result
+
+The matrix is the job `mcp modern e2e (official SDK v2 profile)` in `.github/workflows/ci.yml`; the contract is `tools/mcp-e2e-modern/CONTRACT.md`, the pinned SDKs are in `tools/mcp-e2e-modern/pins/` (Go `github.com/modelcontextprotocol/go-sdk` v1.8.0; TypeScript `@modelcontextprotocol/client` and `server` 2.4.0 with `node` 2.1.2). The job runs the driver self-test, then 48 cells (clients Go and TypeScript, servers Go and TypeScript, paths direct, `bridge-modern`, `bridge-auto-both`, `scripted-control`) and keeps the ledger and captures as an artifact (`--keep`).
+
+First green run (CI run 45778678446, commit 899257f): driver self-test 42 of 42; 48 cells, 38 PASS, 10 SKIP, 0 FAIL.
+
+| Scenario | Class | Outcome |
+|---|---|---|
+| 1 auto detection, no initialize | required | PASS in all 4 cells; the probe response is verified as a signed response or a signed `s1` stream against the provisioned key |
+| 2 no silent downgrade | required | PASS in all 4 cells (the bridge exits nonzero, no initialize or legacy retry) |
+| 3 tool call and metadata | required | PASS in all 8 cells (direct controls and `bridge-modern`) |
+| 4 progress stream | capability-skippable | PASS in all 8 cells; the signed frame chain including `jack-end` is verified |
+| 5 missing-opt-in refusal | capability-skippable | SKIP in all 4 cells: no official SDK can sign Jack requests, so the authenticated refusal control cannot be built from official SDK parts |
+| 6 live cancellation | capability-skippable | PASS in all 8 cells |
+| 7 `subscriptions/listen` | capability-skippable | PASS for TypeScript client with TypeScript server (direct and bridged); SKIP in 6 cells: the Go SDK client cannot observe the end of a listen stream (`mcp/shared.go`, `mcp/transport.go`: `Subscribe` does not await the listen response), and the Go SDK server cannot end a listen stream with the final result (cancelling the request closes the stream without it) |
+| 8 tampered response | required | PASS in all 4 cells (a byte covered by the signature is flipped; the bridge exits nonzero and returns no result) |
+
+Findings of the matrix that were fixed in the product: `jack enroll` and the native admin calls built no modern request metadata when the connection era was `modern` (PR 171); the auto-era bridge probe sent no `Accept` header, so the official Go SDK server answered 400 (PR 172, the probe now goes through the signed stream path with both `Accept` values and the stream opt-in). A race in the neighbouring stream interop matrix (the Go fixture decided the rotation hold after emitting its messages) was fixed in PR 173.
+
+Observations that are not defects and stay open: scenario 1 records how many `server/discover` requests the bridge itself sends in addition to the SDK's own; one TypeScript-client run sent one such extra request and the matrix accepts at most one, because C9 allows a re-probe only on a failed cached assumption and whether it is required behaviour is not settled by the spec. Events (SEP-3415) is not covered: no official SDK ships it, and it stays covered by the repository's own matrices.
 
 ## References
 

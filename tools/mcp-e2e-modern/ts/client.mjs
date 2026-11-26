@@ -45,7 +45,9 @@ let cancellation;
 try {
   const require = createRequire(import.meta.url);
   try {
-    const pkgPath = require.resolve('@modelcontextprotocol/client/package.json');
+    let pkgPath;
+    try { pkgPath = require.resolve('@modelcontextprotocol/client/package.json'); }
+    catch { pkgPath = join(dirname(require.resolve('@modelcontextprotocol/client')), '..', 'package.json'); }
     sdk = JSON.parse(await readFile(pkgPath, 'utf8'));
   } catch { }
   result.sdk = { name: sdk.name ?? '@modelcontextprotocol/client', version: sdk.version ?? 'unknown' };
