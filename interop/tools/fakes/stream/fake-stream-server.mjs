@@ -93,6 +93,7 @@ process.stdin.on('data', chunk => {
       else { const end = frame(stream.sid, stream.seq, '', stream.prev); stream.res.end(end.wire); }
       stream.cleanup();
       heldResponse = null; heldStream = null;
+      if (process.env.JACK_STREAM_FAKE_ROTATION_RELEASE_NOISE === '1') console.log('rotation release prelude');
       console.log(JSON.stringify({ control: 'released', sid: process.env.JACK_STREAM_FAKE_ROTATION_BAD_RELEASE_SID === '1' ? b64(Buffer.alloc(16, 255)) : stream.sid }));
     }
     if (command?.action === 'release' && scenario !== 'rotation-cutoff-reopen' && heldResponse && heldStream) {

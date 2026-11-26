@@ -17,6 +17,19 @@ const recordsToMessages = records => records.filter(record => record?.type === '
 export async function runRotationScenario(ctx) {
   const { scenario, activation, clock, erin } = ctx;
   let observedSid = null;
+  const readReleaseAck = async () => {
+    const startedAt = Date.now(), observed = [];
+    while (Date.now() - startedAt < 10000) {
+      let line;
+      try { line = await ctx.server.nextLine(Math.max(1, 10000 - (Date.now() - startedAt))); }
+      catch (error) { throw Error(`rotation release acknowledgement unavailable after ${Date.now() - startedAt}ms; stdout lines=${JSON.stringify(observed)}; nextLine failed: ${error.message}`); }
+      observed.push(line);
+      let record;
+      try { record = JSON.parse(line); } catch { continue; }
+      if (record?.control === 'released') return { record, observed };
+    }
+    throw Error(`rotation release acknowledgement timed out after ${Date.now() - startedAt}ms; stdout lines=${JSON.stringify(observed)}`);
+  };
   // Called by the relay at injection time so seq/prev bind to the live chain and the
   // frame is signed by the predecessor key only after they are fixed.
   const signCutoff = ({ sid, seq, prev }) => {
@@ -50,9 +63,8 @@ export async function runRotationScenario(ctx) {
     // frame crosses (and is replaced) while the client clock reads A.
     writeFileSync(ctx.clockFile, `${activation}\n`);
     ctx.server.write(`${JSON.stringify({ action: 'release' })}\n`);
-    let releaseAck;
-    try { releaseAck = JSON.parse(await ctx.server.nextLine(10000)); } catch { throw Error('rotation server did not acknowledge the held-stream release'); }
-    if (releaseAck?.control !== 'released' || releaseAck.sid !== observedSid) throw Error('rotation release acknowledgement does not match the held old stream');
+    const { record: releaseAck, observed: releaseLines } = await readReleaseAck();
+    if (releaseAck.sid !== observedSid) throw Error(`rotation release acknowledgement sid mismatch: expected=${observedSid} actual=${releaseAck.sid}; stdout lines=${JSON.stringify(releaseLines)}`);
     const firstResult = await first.done;
     if (firstResult.code !== 0) throw Error(`rotation cutoff client exit ${firstResult.code}: ${firstResult.stderr}`);
     const firstAll = ctx.parseJsonLines(firstResult.stdout);
