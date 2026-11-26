@@ -5,15 +5,28 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/PHPCraftdream/mcp-jack/client/modern"
 	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/command"
 	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/wire"
 )
 
-func (c *Connection) NativeResult(ctx context.Context, tool string, arguments any) (json.RawMessage, error) {
-	body, err := json.Marshal(map[string]any{
-		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-		"params": map[string]any{"name": tool, "arguments": arguments},
+// NativeBody builds a native tools/call request, adding the modern version mirror when needed.
+func (c *Connection) NativeBody(tool string, arguments any) ([]byte, error) {
+	params := map[string]any{"name": tool, "arguments": arguments}
+	if c.Era == "modern" {
+		mirrors, err := modern.BuildRequestMirrors(modern.ModernMin, "tools/call", params, nil)
+		if err != nil {
+			return nil, command.ErrConfig
+		}
+		params["_meta"] = mirrors.Meta
+	}
+	return json.Marshal(map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params,
 	})
+}
+
+func (c *Connection) NativeResult(ctx context.Context, tool string, arguments any) (json.RawMessage, error) {
+	body, err := c.NativeBody(tool, arguments)
 	if err != nil {
 		return nil, command.ErrConfig
 	}
