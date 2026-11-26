@@ -110,7 +110,7 @@ export function assertScenario5({ refusal = {}, bridgeResult = null, directAuthe
   return result(checks);
 }
 
-export function assertScenario6({ captures = [], downstreamDisconnected = false, noLateFrame = false, cancelled = true } = {}) {
+export function assertScenario6({ captures = [], downstreamDisconnected = false, noLateFrame = false, cancelled = true, jack = true } = {}) {
   const abortIndex = captures.findIndex((capture) => capture.direction === 'event' && capture.body === '[upstream-aborted]');
   const lateFrame = abortIndex < 0 ? false : captures.slice(abortIndex + 1).some((capture) => {
     if (!['event', 'response'].includes(capture.direction)) return false;
@@ -120,13 +120,15 @@ export function assertScenario6({ captures = [], downstreamDisconnected = false,
   });
   const abort = abortIndex >= 0;
   const methods = captures.filter((capture) => capture.direction === 'request').map((capture) => { try { return JSON.parse(capture.body).method; } catch { return null; } });
-  return result([
+  const checks = [
     expect(downstreamDisconnected, 'downstream disconnected', String(downstreamDisconnected)),
     expect(abort, 'proxy upstream-aborted capture', '[upstream-aborted] observed'),
     expect(noLateFrame && !lateFrame, 'no late frame', `late response/progress/data=${lateFrame}`),
     expect(cancelled, 'SDK cancellation observed', String(cancelled)),
-    expect(!methods.includes('notifications/cancelled'), 'no cancellation POST', JSON.stringify(methods)),
-  ]);
+  ];
+  // Jack path only: a direct SDK client posts notifications/cancelled itself (go-sdk v1.8.0 mcp/transport.go call() sends it from a goroutine after the context is done), racing the end of capture.
+  if (jack) checks.push(expect(!methods.includes('notifications/cancelled'), 'no cancellation POST', JSON.stringify(methods)));
+  return result(checks);
 }
 
 export function assertScenario7({ notificationDelivered = false, cleanEnd = false, optedIn = false, signedStreamVerified = false, clientOrder = [], jack = true } = {}) {
