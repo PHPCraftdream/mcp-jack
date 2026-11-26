@@ -1,0 +1,16 @@
+{
+  "name": "mcp-jack",
+  "version": "0.0.0",
+  "description": "Placeholder release that reserves the npm package name; the real releases come from the GitHub repository.",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PHPCraftdream/mcp-jack.git",
+    "directory": "tools/release/placeholder/npm"
+  },
+  "files": [
+    "README.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
+  ]
+}

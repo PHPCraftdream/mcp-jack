@@ -1,6 +1,6 @@
 # 05. Signed streams (`s1`)
 
-Status: modern profile of the 0.2.0 release for MCP revision 2026-07-28. Normative unless marked *informative*. This profile adds new identifiers only and never changes the frozen `mcp-jack/v1` wire bytes of [01-authentication.md](01-authentication.md).
+Status: modern profile of the 0.1.0 release for MCP revision 2026-07-28. Normative unless marked *informative*. This profile adds new identifiers only and never changes the frozen `mcp-jack/v1` wire bytes of [01-authentication.md](01-authentication.md).
 
 The key words MUST, MUST NOT, SHOULD, MAY are used as in RFC 2119.
 

@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/PHPCraftdream/mcp-jack/actions/workflows/ci.yml/badge.svg)](https://github.com/PHPCraftdream/mcp-jack/actions/workflows/ci.yml)
 
-mcp-jack is feature-complete for v0.2.0, which is unreleased. Nothing is published: no Go module tag, no npm package, no crates.io crate, no git tag, no GitHub Release. The code has not been independently audited. This README describes the repository as it is.
+mcp-jack is feature-complete for v0.1.0, the current, still-unreleased line. Nothing is published: no Go module tag, no npm package, no crates.io crate, no git tag, no GitHub Release. The code has not been independently audited. This README describes the repository as it is.
 
 Toolchain floors: Go 1.25.0 (`go.mod`), Rust 1.88 (MSRV, `rust/Cargo.toml`), Node >= 20 (TypeScript; CI runs Node 20 and 22).
 
@@ -41,7 +41,7 @@ Operations such as restart or a configuration change need more than "whoever rea
 
 ## Installation
 
-Nothing below is published yet. The Rust and TypeScript package manifests are at `0.2.0`; no Go module tag has been created.
+Nothing below is published yet. The Rust and TypeScript package manifests are at `0.1.0`; no Go module tag has been created.
 
 - **Go module** `github.com/PHPCraftdream/mcp-jack` — not in the Go module proxy. Use it as a source/replace dependency or vendor the checkout.
 - **Rust crate** `mcp-jack` — `publish = false`, not on crates.io. Depend on it by path or git.

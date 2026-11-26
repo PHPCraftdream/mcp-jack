@@ -11,9 +11,9 @@ Selected D2/D3 owner directions and separately maintained candidate details are 
 | [01-authentication.md](01-authentication.md) | Current authentication: signatures and in-memory replay checks |
 | [02-authorization.md](02-authorization.md) | Current registry, admin flag, dispatch and identity hand-off |
 | [03-user-management.md](03-user-management.md) | Current native user/invite tools, user-key rotation and state file |
-| [04-modern-profile.md](04-modern-profile.md) | Modern profile (MCP 2026-07-28): era decision, header rules, client rules; draft for the 0.2.0 line, `mcp-jack/v1` bytes unchanged |
-| [05-signed-streams.md](05-signed-streams.md) | Signed event streams `s1` (opt-in, new identifiers); draft for the 0.2.0 line |
-| [06-webhooks.md](06-webhooks.md) | MCP Events webhook delivery over Jack (Standard Webhooks plus `w1`, SSRF rules, Server Card keys); draft for the 0.2.0 line |
+| [04-modern-profile.md](04-modern-profile.md) | Modern profile (MCP 2026-07-28): era decision, header rules, client rules; draft for the 0.1.0 line, `mcp-jack/v1` bytes unchanged |
+| [05-signed-streams.md](05-signed-streams.md) | Signed event streams `s1` (opt-in, new identifiers); draft for the 0.1.0 line |
+| [06-webhooks.md](06-webhooks.md) | MCP Events webhook delivery over Jack (Standard Webhooks plus `w1`, SSRF rules, Server Card keys); draft for the 0.1.0 line |
 | [modern-pins.md](modern-pins.md) | Upstream revisions the modern-profile specs were written against |
 | `fixtures/modern/`, `tests/modern/` | Generated modern-profile vectors and case index (`tools/modern/gen-modern.mjs`, `spec fixtures` workflow); not part of the v0.1 top-level set |
 | `tools/modern/` | Modern-profile generators, independent reference implementations and self-tests |

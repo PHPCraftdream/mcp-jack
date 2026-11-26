@@ -1,0 +1,21 @@
+# Placeholder crate that reserves the crates.io name `mcp-jack` so that
+# Trusted Publishing can be configured for it. The real crate is rust/.
+[package]
+name = "mcp-jack"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.88"
+description = "Placeholder release that reserves the crates.io crate name; the real releases come from the GitHub repository."
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/PHPCraftdream/mcp-jack"
+include = [
+    "src/lib.rs",
+    "README.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE",
+]
+
+# Empty workspace: this placeholder is standalone and must never be absorbed
+# by the rust/ or interop/rust workspaces.
+[workspace]

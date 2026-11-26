@@ -389,7 +389,7 @@ type jsonrpcError struct {
 // modernClientInfo is the io.modelcontextprotocol/clientInfo object sent with
 // every modern-era request (C1).
 func modernClientInfo() map[string]any {
-	return map[string]any{"name": "mcp-jack", "version": "0.2.0"}
+	return map[string]any{"name": "mcp-jack", "version": "0.1.0"}
 }
 
 // marshalCallArguments renders arguments as the raw JSON of params.arguments;
