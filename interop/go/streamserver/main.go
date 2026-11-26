@@ -451,9 +451,10 @@ func main() {
 			emit(map[string]any{"jsonrpc": "2.0", "method": "notifications/progress", "params": map[string]any{"progress": 1, "message": "stream:first"}})
 			emit(final)
 		case "rotation-cutoff-reopen":
+			hold := *successorActivation > 0 && clock.Now() < *successorActivation && release != nil
 			emit(progress)
 			emit(final)
-			if *successorActivation > 0 && clock.Now() < *successorActivation && release != nil {
+			if hold {
 				select {
 				case <-r.Context().Done():
 					return
