@@ -49,10 +49,15 @@ func mappedError(err error, fallback string) error {
 
 // nilState reports whether the state is absent, including a typed nil.
 func nilState(store ClientTrustState) bool {
-	if store == nil {
+	return isNil(store)
+}
+
+// isNil also reports an interface that holds a nil pointer, map, slice, func or chan.
+func isNil(v any) bool {
+	if v == nil {
 		return true
 	}
-	value := reflect.ValueOf(store)
+	value := reflect.ValueOf(v)
 	switch value.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
 		return value.IsNil()
