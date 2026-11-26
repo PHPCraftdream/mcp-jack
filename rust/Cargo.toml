@@ -23,7 +23,7 @@ client-http = ["dep:http", "dep:bytes", "dep:http-body-util", "dep:hyper", "hype
 ed25519-dalek = { version = "2.2", features = ["std"] }
 curve25519-dalek = "5.0"
 sha2 = "0.10"
-hmac = "0.12"
+hmac = "0.13"
 base64 = "0.23"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
