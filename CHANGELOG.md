@@ -1,8 +1,8 @@
 # Changelog
 
-This file records repository history. The `0.1.0 (unreleased)` section describes what ships in the upcoming release. No release has been made, nothing is published, and entries here are not release authorization.
+This file records repository history. The dated `0.2.0` section below is the current version section; no release has been made, nothing is published, and entries here are not release authorization.
 
-## 0.2.0 (unreleased)
+## 0.2.0 (2026-11-26)
 
 - Adds Go CLI gateway profiles `legacy|modern|both`, bridge eras `legacy|modern|auto` with opt-in `s1` signed streams, and `jack events receive` with persisted receipt state; adds API `Client.Call`, `Client.CurrentEra`, `stream.ClientConfig.Consumer` and `ConsumerStdio`.
 

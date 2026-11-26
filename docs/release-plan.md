@@ -31,7 +31,7 @@ The historical gap list below is retained for provenance, with current interpret
 | G3 | No executables: no gateway, bridge or CLI. | Historical statement is stale: Go CLI/keygen/bootstrap/enroll/gateway/bridge source exists. This does not establish complete integration, exact CI receipts, broad MCP compatibility or release readiness. |
 | G4 | Real MCP compatibility untested, including streams, `Accept`, protocol/session headers. | Compatibility design is source research and proposed future acceptance; do not label official MCP interoperability complete. It is distinct from current Jack 3×3 request/response and credential-transfer matrices. |
 | G5 | Stale texts: fixtures/SDK migration pending; Q3 decision; SECURITY “policy checks”; old SDK README wording. | This document and the requested public docs are being reconciled; no claim is made about other historical G5 targets. Q3 direction is selected but not implemented/frozen. |
-| G6 | No release engineering; versions/publication still need decisions. | No version changes are approved and any separately authorized RC is artifact-only/no registry publication. Release engineering/version bumps/publication remain unapproved. |
+| G6 | No release engineering; versions/publication still need decisions. | The Rust and TypeScript package version bump to 0.2.0 is authorized; publication, tags, RCs and stable release remain unauthorized. |
 | G7 | Limited user/operator documentation. | This is not a complete operator guide or quickstart. Preserve the scope and tasks as future/historical planning, not delivered release artifacts. |
 | G8 | Security assurance gaps: differential fuzzing, independent review, vulnerability scanning. | Candidate acceptance/security gates remain distinct from current workflows. No new audit, scan, or differential-fuzz result is claimed. |
 
@@ -50,7 +50,7 @@ Not selected/currently deferred or unchanged:
 - Heavy sr1 generation/fork/quarantine proposal is not adopted as v0.1. The selected D3 direction is different and has no one-pending rule/cooldown.
 - Per-user server keys, delegation, policy engine, ordinary MCP authorization and human-approval flows are not added by this work.
 - Static server pins, profiles, credentials and user-key rotation remain unchanged unless the separately reviewed [protocol transition](protocol-transition.md) explicitly defines migration. No TOFU or silent `v1` reinterpretation.
-- No publication/version bump, registry RC, stable release, tag, GitHub Release or public announcement is approved. Artifact-only RC policy is not RC authorization.
+- Publication, registry RC, stable release, tag, GitHub Release, and public announcement remain unapproved; the separately authorized 0.2.0 package-version bump does not authorize those actions. Artifact-only RC policy is not RC authorization.
 
 ## 3. Decisions and superseded recommendations
 
@@ -61,7 +61,7 @@ The recommendations in these sections are historical, potentially broad or advic
 | D-1 | Ship Go gateway/bridge/CLI, not SDKs only. | Candidate release-scope direction; Go source exists, but this is not release authorization. |
 | D-2 | Reject `ts < server_start` as restart guard, retry with fresh `ts`. | **Superseded.** Durable authenticated nonce reservation before dispatch is selected. Unknown write outcome fails closed; never automatically retry. No timestamp startup floor. |
 | D-3 | Read-only `jack.server.key`, refreshed automatically on connect and periodically; one pending rotation. | **Superseded.** Arbitrarily many pending announcements, without cooldown or one-pending restriction; OLD remains in use until NEW takes over 48 hours after announcement. Candidate time-anchor/order/cutoff details are technical defaults, not additional owner decisions. Automatic refresh is not selected; implementation remains future work. |
-| D-4 | Set all component names/versions to 0.1.0 and verify registry name availability. | **Superseded.** No version changes yet; no name/tag/publication approval. Preserve checked-in values. |
+| D-4 | Set all component names/versions to 0.1.0 and verify registry name availability. | **Superseded.** Rust and TypeScript package versions are bumped to 0.2.0 as authorized; no publication, tag, RC or stable release is authorized. Preserve publication flags. |
 | D-5 | Publish RCs to npm/crates.io and use Go prerelease tag. | **Superseded.** Any separately authorized RC is artifact-only, without registry publication. No tag or release is authorized here. |
 
 ## 4. Work plan and task-ID provenance
@@ -140,7 +140,7 @@ This documentation portion does not add a full quickstart/operator guide. It fol
 
 | Task ID | Historical content | Current status |
 |---|---|---|
-| S7.1 | Set package metadata to release version and remove publication restrictions in release PR. | Not authorized; preserve current manifests and flags. |
+| S7.1 | Set package metadata to release version and remove publication restrictions in release PR. | Rust and TypeScript package versions are bumped to 0.2.0 as authorized; publication flags remain. No publication, tags, RC or stable release is authorized. |
 | S7.2 | Changelog and release notes. | Existing files may be present; no version/release approval follows. |
 | S7.3 | Publish artifacts/packages on tag. | Not authorized. Future artifact-only RC needs exact artifact/checksum/attestation receipts. |
 | S7.4 | Repository settings/publishing credentials. | No new authorization or account configuration implied. |
