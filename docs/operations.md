@@ -179,7 +179,7 @@ Retired seeds may be removed from the inventory once no longer required; retaine
 
 `jack server-key-status --config FILE` is offline inspection under the same exclusive owner (a concurrently serving owner blocks it). It prints public store, owner, clock, state, head and count/flag metadata only; it never clears dirty/unsafe flags and does not authorize a restart.
 
-Clients refresh explicitly: an SDK rotation client requests one `jack.server.key` page (single page, at most 16 records) and commits it. Ordinary traffic never triggers a refresh. There is no auto-refresh, no hidden retry, no fallback, and no TOFU. The Go rotation client takes the `ClientTrustState` interface rather than binding clients to the file store. The bbolt-backed `*durable.TrustStore` remains the qualified Linux reference backend; other platforms provide their own implementation.
+Clients refresh explicitly: an SDK rotation client requests one `jack.server.key` page (single page, at most 16 records) and commits it. Ordinary traffic never triggers a refresh. There is no auto-refresh, no hidden retry, no fallback, and no TOFU. The Go rotation client takes the `ClientTrustState` interface rather than binding clients to the file store. The bbolt-backed `*durable.TrustStore` remains the qualified Linux reference backend; other platforms provide their own implementation. `rotationclient.NewHTTPWithTransport` sends rotation calls and refreshes through a caller `http.RoundTripper` (for example an SSH tunnel), like `client.Transport.Base` for ordinary calls; the SDK still makes one attempt, refuses redirects and content encodings, bounds the body and verifies the signed response, while dialing, proxying and TLS belong to that transport.
 
 ## Modern profile deployment
 

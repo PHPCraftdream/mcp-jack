@@ -19,12 +19,13 @@ import (
 
 var ErrRequestUnavailable = errors.New("rotation client: request outcome unavailable; no retry performed")
 
-// HTTPClient does not own the store; the transport is created anew for each attempt.
+// HTTPClient does not own the store; without a caller transport it creates one anew for each attempt.
 type HTTPClient struct {
 	controller *Controller
 	signer     client.Signer
 	endpoint   *url.URL
 	timeout    time.Duration
+	base       http.RoundTripper
 }
 
 // Reply contains only the authenticated status/body after the final gate.
@@ -33,9 +34,25 @@ type Reply struct {
 	Body   []byte
 }
 
+// NewHTTP uses a built-in per-attempt transport: no proxy, TLS 1.2+, HTTP/1.1, no keep-alive.
 func NewHTTP(store ClientTrustState, signer client.Signer, timeout time.Duration) (*HTTPClient, error) {
+	return NewHTTPWithTransport(store, signer, timeout, nil)
+}
+
+// NewHTTPWithTransport sends every attempt through base, for example a caller's
+// tunnel; nil means the built-in transport of NewHTTP. The SDK still makes one
+// attempt with no retry, refuses redirects and content encodings, bounds the
+// body, applies timeout and verifies the signed response. Dialing, proxying,
+// TLS, connection reuse and header-size limits belong to base. A signing
+// *client.Transport or a typed nil base is refused.
+func NewHTTPWithTransport(store ClientTrustState, signer client.Signer, timeout time.Duration, base http.RoundTripper) (*HTTPClient, error) {
 	if timeout <= 0 || timeout > 30*time.Second {
 		return nil, localError("rotation_state_unknown")
+	}
+	if base != nil {
+		if _, signing := base.(*client.Transport); signing || isNil(base) {
+			return nil, localError("rotation_state_unknown")
+		}
 	}
 	controller, err := New(store)
 	if err != nil {
@@ -48,7 +65,7 @@ func NewHTTP(store ClientTrustState, signer client.Signer, timeout time.Duration
 	if err != nil {
 		return nil, localError("rotation_state_unknown")
 	}
-	return &HTTPClient{controller: controller, signer: signer, endpoint: endpoint, timeout: timeout}, nil
+	return &HTTPClient{controller: controller, signer: signer, endpoint: endpoint, timeout: timeout, base: base}, nil
 }
 
 func (sender *HTTPClient) exchange(ctx context.Context, body []byte, limit int, expected *rotation.TrustSnapshot) (Response, error) {
@@ -95,14 +112,21 @@ func (sender *HTTPClient) exchange(ctx context.Context, body []byte, limit int, 
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json, text/event-stream")
 	request.Header.Set("MCP-Protocol-Version", "2025-11-25")
-	transport := &http.Transport{
-		Proxy: nil, DialContext: (&net.Dialer{Timeout: sender.timeout}).DialContext,
-		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
-		TLSNextProto:    map[string]func(string, *tls.Conn) http.RoundTripper{}, ForceAttemptHTTP2: false,
-		DisableKeepAlives: true, DisableCompression: true,
-		TLSHandshakeTimeout: sender.timeout, ResponseHeaderTimeout: sender.timeout, MaxResponseHeaderBytes: 16384,
+	transport := sender.base
+	if transport == nil {
+		built := &http.Transport{
+			Proxy: nil, DialContext: (&net.Dialer{Timeout: sender.timeout}).DialContext,
+			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+			TLSNextProto:    map[string]func(string, *tls.Conn) http.RoundTripper{}, ForceAttemptHTTP2: false,
+			DisableKeepAlives: true, DisableCompression: true,
+			TLSHandshakeTimeout: sender.timeout, ResponseHeaderTimeout: sender.timeout, MaxResponseHeaderBytes: 16384,
+		}
+		defer built.CloseIdleConnections()
+		transport = built
+	} else {
+		// An explicit encoding stops a caller transport from decoding bodies transparently.
+		request.Header.Set("Accept-Encoding", "identity")
 	}
-	defer transport.CloseIdleConnections()
 	network := &http.Client{Transport: transport, Timeout: sender.timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	response, err := network.Do(request)
 	if err != nil {
