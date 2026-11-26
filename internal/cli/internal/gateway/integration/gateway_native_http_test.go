@@ -103,6 +103,82 @@ func testGatewayNativeAdminLifecycle(t *testing.T, config string) {
 	}
 }
 
+func TestGatewayModernNativeEnrollAndAdmin(t *testing.T) {
+	d := clitest.PrivateDir(t)
+	var upstreamCalls atomic.Int32
+	socket := clitest.UnixUpstream(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	listen := modernFreeLoopbackAddress(t)
+	gatewayPublic, serverKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, invite := filepath.Join(d, "state.json"), filepath.Join(d, "invite")
+	if err := keys.Bootstrap(state, invite); err != nil {
+		t.Fatal(err)
+	}
+	path := clitest.SaveJSON(t, d, "gateway-modern.json", gatewayconfig.Config{Version: 1, Aud: "svc", ServerSeedFile: clitest.Save(t, d, "server.seed", serverKey.Seed()), StateFile: state, Listen: listen, UpstreamSocket: socket, UpstreamURL: "http://upstream/mcp", CallTimeoutMS: 1000, MaxConcurrent: 4, Profile: "modern", NativeAdmin: true})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- gateway.Run(ctx, path, io.Discard) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Error(err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Error("gateway did not stop")
+		}
+	})
+	waitForModernGateway(t, listen)
+
+	issued, signer, err := userkey.IssueLocalPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientPath := clitest.SaveJSON(t, d, "client-modern.json", transport.Config{Version: 1, Endpoint: "http://" + listen + "/mcp", Aud: "svc", ServerPublicKey: jack.EncodeBase64URL(gatewayPublic), ServerKID: jack.KeyID(gatewayPublic), KeyFile: clitest.Save(t, d, "client.seed", issued.Secret()), KeyFormat: "raw-seed", CallTimeoutMS: 1000, Era: "modern"})
+	if err := keys.Enroll(ctx, clientPath, invite, "first-admin"); err != nil {
+		t.Fatal(err)
+	}
+	store, err := server.OpenFileState(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, ok := store.Lookup(signer.KID())
+	if !ok || entry.Name != "first-admin" || entry.PublicKey != jack.EncodeBase64URL(signer.PublicKey()) {
+		t.Fatalf("enrolled registry entry = %+v, found=%v", entry, ok)
+	}
+	conn, err := transport.LoadConnection(clientPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := conn.NativeResult(ctx, server.ToolAdminInviteList, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var listed struct {
+		Invites []client.InviteListEntry `json:"invites"`
+	}
+	if err := json.Unmarshal(result, &listed); err != nil {
+		t.Fatal(err)
+	}
+	freshIssued, _, err := userkey.IssueLocalPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshPath := clitest.SaveJSON(t, d, "client-modern-fresh.json", transport.Config{Version: 1, Endpoint: "http://" + listen + "/mcp", Aud: "svc", ServerPublicKey: jack.EncodeBase64URL(gatewayPublic), ServerKID: jack.KeyID(gatewayPublic), KeyFile: clitest.Save(t, d, "fresh.seed", freshIssued.Secret()), KeyFormat: "raw-seed", CallTimeoutMS: 1000, Era: "modern"})
+	if err := keys.Enroll(ctx, freshPath, invite, "again"); err == nil {
+		t.Fatal("consumed invite accepted for a fresh key")
+	}
+	if upstreamCalls.Load() != 0 {
+		t.Fatal("native enrollment/admin reached upstream")
+	}
+}
+
 func TestGatewayBootstrapEnrollNoNativeForward(t *testing.T) {
 	testGatewayBootstrapEnrollNoNativeForward(t, nil)
 }

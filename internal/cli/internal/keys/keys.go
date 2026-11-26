@@ -104,11 +104,8 @@ func Enroll(ctx context.Context, configPath, invitePath, name string) error {
 	if _, err := jack.DecodeBase64URLFixed(string(code), 32); err != nil {
 		return command.ErrConfig
 	}
-	body, err := json.Marshal(map[string]any{
-		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-		"params": map[string]any{"name": server.ToolEnroll, "arguments": map[string]string{
-			"code": string(code), "name": name, "public_key": jack.EncodeBase64URL(conn.Signer.PublicKey()),
-		}},
+	body, err := conn.NativeBody(server.ToolEnroll, map[string]string{
+		"code": string(code), "name": name, "public_key": jack.EncodeBase64URL(conn.Signer.PublicKey()),
 	})
 	if err != nil {
 		return command.ErrConfig
