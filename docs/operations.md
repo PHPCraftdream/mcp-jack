@@ -1,6 +1,6 @@
 # Operating mcp-jack
 
-This guide is the operator runbook for the Go CLI in the unreleased 0.2.0 release line (`jack`) and its modern-profile additions. The gateway defaults to legacy, and the bridge defaults to legacy; modern behavior is opt-in. For the project overview see [../README.md](../README.md); for the historical design reference see [design/cli.md](design/cli.md).
+This guide is the operator runbook for the Go CLI in the unreleased 0.1.0 release line (`jack`) and its modern-profile additions. The gateway defaults to legacy, and the bridge defaults to legacy; modern behavior is opt-in. For the project overview see [../README.md](../README.md); for the historical design reference see [design/cli.md](design/cli.md).
 
 ## Deployment shape
 
@@ -242,7 +242,7 @@ What fenced and dirty mean:
 
 ## Crash recovery runbook
 
-v0.2.0 ships NO operator command for serving release, tombstone disposition beyond the narrow reconcile below or ring recovery. A supported in-product recovery path is deferred to a later release. The `nonce-reconcile-terminal` caveat is unchanged: reconcile refuses on an expected-hash mismatch, a missing record keeps the fence, and success is not permission to restart. Operator nonce-recovery commands exist only in this Go CLI.
+v0.1.0 ships NO operator command for serving release, tombstone disposition beyond the narrow reconcile below or ring recovery. A supported in-product recovery path is deferred to a later release. The `nonce-reconcile-terminal` caveat is unchanged: reconcile refuses on an expected-hash mismatch, a missing record keeps the fence, and success is not permission to restart. Operator nonce-recovery commands exist only in this Go CLI.
 
 What failure looks like:
 
@@ -268,7 +268,7 @@ Consequences for clients: a new ring needs a checkpoint clients already trust or
 
 ## Operational limits to plan for
 
-- **Time source.** The nonce store, the server key ring and every client trust store keep a high-water mark of the clock. A sample below the persisted high-water mark or outside the supported time domain latches the store unsafe; a forward step followed by a return below the raised mark therefore latches, while the forward step alone does not. No 0.2.0 command clears the latch, so use fresh state as in the crash recovery runbook, and re-pin clients as required. Use a trusted, stable time source; never step the clock by hand, and watch for VM pauses and migrations.
+- **Time source.** The nonce store, the server key ring and every client trust store keep a high-water mark of the clock. A sample below the persisted high-water mark or outside the supported time domain latches the store unsafe; a forward step followed by a return below the raised mark therefore latches, while the forward step alone does not. No 0.1.0 command clears the latch, so use fresh state as in the crash recovery runbook, and re-pin clients as required. Use a trusted, stable time source; never step the clock by hand, and watch for VM pauses and migrations.
 - **Unauthenticated load.** The Go CLI gateway admits at most 64 calls per Unix second and 4096 nonce entries; Rust and TypeScript SDKs do not provide this 64/s rate limit. Every deployment must bound request rate and cache occupancy so `rate × (2 × window + 1) < cache capacity` (spec 01 §4); put a rate-limited front or firewall before SDK servers. A self-signed `jack.enroll` from an unknown key reserves a nonce only with a live invite. Keep the Go gateway's durable `window` at 30 seconds or less.
 - **Rotation ring.** Each signed response re-verifies the key ring, so keep it short. There is no spacing rule between announcements: up to 128 keys can be pending and every retired key counts towards the limit of 1024 retired keys, after which the gateway refuses to sign and clients refuse the ring; compaction is not implemented. To keep a ring from becoming unservable, an announcement is refused once the ring already holds more than 1024 keys, so a ring is good for at most 1024 rotations. Announce rarely, and treat the 48 hours as the overlap of one announcement, not as a limit on how often you may announce.
 - **Invites.** The gateway stores at most 1024 invites. Expired invites are removed in the same atomic state edit that creates, enrolls with or revokes an invite (and in first-admin bootstrap), so only live invites count towards the limit; an expired invite is reported as unknown. Unused invites that have not yet expired still count, so do not create invites in bulk.

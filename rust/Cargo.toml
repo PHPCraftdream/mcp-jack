@@ -1,6 +1,6 @@
 [package]
 name = "mcp-jack"
-version = "0.2.0"
+version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
 description = "Client and server SDK for authenticated MCP over HTTP, with verified caller identity, protocol admin tools, and audit."

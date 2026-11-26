@@ -54,7 +54,7 @@ Attestations are generated only for the exact final candidate artifacts. Verific
 
 ## Publication and registry ownership — deferred
 
-Registry publisher ownership and trusted-publisher decisions are **DEFERRED**. They are not an artifact-only RC prerequisite and are not authorized here. The authorized Rust and TypeScript package version bump to 0.2.0 is complete; publication flags remain. RC scope is artifact-only, with no registry publication. No publication, registry, token, account, trusted-publisher, or configuration steps are authorized. Do not create/configure credentials or publishers, make further version changes, publish, tag, create a GitHub Release, or announce a release. Future publication needs separate explicit owner authorization and review.
+Registry publisher ownership and trusted-publisher decisions are **DEFERRED**. They are not an artifact-only RC prerequisite and are not authorized here. The owner-ordered Rust and TypeScript package versions are 0.1.0; publication flags remain. RC scope is artifact-only, with no registry publication. No publication, registry, token, account, trusted-publisher, or configuration steps are authorized. Do not create/configure credentials or publishers, make further version changes, publish, tag, create a GitHub Release, or announce a release. Future publication needs separate explicit owner authorization and review.
 
 ### Trusted Publishing and the 0.1.0 release
 

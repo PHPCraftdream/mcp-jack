@@ -1,6 +1,6 @@
 # 04. Modern profile (MCP 2026-07-28)
 
-Status: v0.2 draft for the 0.2.0 release line, dated 2026-11-22. Normative unless marked *informative*. The `mcp-jack/v1` request and response signatures of [01-authentication.md](01-authentication.md) and the dispatch rules of [02-authorization.md](02-authorization.md) are unchanged: this document only adds request-level selection and header rules around those same signed bytes and never reinterprets a v1 signature. The era rules run strictly after authentication.
+Status: v0.2 draft for the 0.1.0 release line, dated 2026-11-22. Normative unless marked *informative*. The `mcp-jack/v1` request and response signatures of [01-authentication.md](01-authentication.md) and the dispatch rules of [02-authorization.md](02-authorization.md) are unchanged: this document only adds request-level selection and header rules around those same signed bytes and never reinterprets a v1 signature. The era rules run strictly after authentication.
 
 The key words MUST, MUST NOT, SHOULD, MAY are used as in RFC 2119.
 
@@ -536,7 +536,7 @@ Every numbered rule is either covered by at least one vector or listed here with
 
 | Rule | Why no vector | Carried by |
 |---|---|---|
-| `C7` | Native `jack.*` result shape is SDK behaviour in the merged 0.2.0 server | M1 per-SDK test `native_result_era_shape` |
+| `C7` | Native `jack.*` result shape is SDK behaviour in the merged 0.1.0 server | M1 per-SDK test `native_result_era_shape` |
 | `C8` | Cache binding is the 01 section 5 `request-sig` binding, already vector-tested | `cache-replay` by-reference entry below and M1 test `client_cache_private_only` |
 | `C10` | SHOULD-only retry flow | M1 test `client_header_resync` |
 | `C12` | SHOULD-only events retry flow | M1 test `client_events_resync` |

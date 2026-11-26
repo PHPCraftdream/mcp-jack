@@ -30,7 +30,7 @@ const PROTOCOL_VERSION_META = 'io.modelcontextprotocol/protocolVersion';
 const SERVER_INFO_META = 'io.modelcontextprotocol/serverInfo';
 const SERVER_NAME = 'mcp-jack-interop-modern';
 const SERVER_VERSION = '1.0.0';
-const NATIVE_SERVER_INFO = { name: 'mcp-jack', version: '0.2.0' };
+const NATIVE_SERVER_INFO = { name: 'mcp-jack', version: '0.1.0' };
 // spec 04 section 5 S1: the three mirror headers with at most one instance.
 const SINGLE_INSTANCE_HEADERS = ['mcp-protocol-version', 'mcp-method', 'mcp-name'];
 const MCP_PARAM_PREFIX = 'mcp-param-';

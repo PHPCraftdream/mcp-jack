@@ -1,8 +1,8 @@
 # Changelog
 
-This file records repository history. The dated `0.2.0` section below is the current version section; no release has been made, nothing is published, and entries here are not release authorization.
+This file records repository history. The dated `0.1.0` section below is the current version section; no release has been made, nothing is published, and entries here are not release authorization.
 
-## 0.2.0 (2026-11-26)
+## 0.1.0 (2026-11-26)
 
 - Adds Go CLI gateway profiles `legacy|modern|both`, bridge eras `legacy|modern|auto` with opt-in `s1` signed streams, and `jack events receive` with persisted receipt state; adds API `Client.Call`, `Client.CurrentEra`, `stream.ClientConfig.Consumer` and `ConsumerStdio`.
 
@@ -15,8 +15,6 @@ This file records repository history. The dated `0.2.0` section below is the cur
 - Adds configurable signed-stream server options `frameMaxBytes`, `maxConcurrentStreams`, `maxStreamDurationMs`, and `heartbeatMs` (spec 05), and webhook destination `allowedRanges` configuration (spec 06). These are configuration APIs, not Go CLI flags.
 - Keeps existing `mcp-jack/v1` request and JSON-response wire bytes unchanged; modern streams and webhooks use new identifiers.
 - See [modern compatibility](docs/compatibility.md), [operations](docs/operations.md), and [threat model](docs/threat-model.md). Interop and vector documents describe scope; this entry does not claim matrices passed.
-
-## 0.1.0 (unreleased)
 
 - Removed the panicking `HttpTransport` default and moved the Rust interop harness outside the SDK crate into its own unpublished crate.
 

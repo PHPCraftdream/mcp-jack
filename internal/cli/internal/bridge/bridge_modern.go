@@ -96,7 +96,7 @@ func probeBridgeEra(ctx context.Context, c *transport.Connection) error {
 	attempted := modern.ModernMin
 	for range 2 {
 		rm, err := modern.BuildRequestMirrors(attempted, "server/discover", nil,
-			map[string]any{"name": "mcp-jack", "version": "0.2.0"})
+			map[string]any{"name": "mcp-jack", "version": "0.1.0"})
 		if err != nil {
 			return command.ErrConfig
 		}

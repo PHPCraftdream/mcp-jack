@@ -575,7 +575,7 @@ jobs:
         with:
           name: consumer-ts-node${{ matrix.node }}-artifact
           path: |
-            tools/consumer/.scratch/ts-consumer/mcp-jack-0.2.0.tgz
+            tools/consumer/.scratch/ts-consumer/mcp-jack-0.1.0.tgz
             tools/consumer/.scratch/ts-consumer/inventory.json
           if-no-files-found: error
 
@@ -599,7 +599,7 @@ jobs:
         with:
           name: consumer-rust-artifact
           path: |
-            tools/consumer/.scratch/rust-consumer/mcp-jack-0.2.0.crate
+            tools/consumer/.scratch/rust-consumer/mcp-jack-0.1.0.crate
             tools/consumer/.scratch/rust-consumer/inventory.json
           if-no-files-found: error
 

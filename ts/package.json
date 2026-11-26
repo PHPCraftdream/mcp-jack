@@ -1,6 +1,6 @@
 {
   "name": "mcp-jack",
-  "version": "0.2.0",
+  "version": "0.1.0",
   "description": "MCP HTTP client and server SDK for signed messages, verified caller identity, protocol admin tools, and audit.",
   "keywords": ["mcp", "authentication", "ed25519", "client", "server"],
   "license": "MIT OR Apache-2.0",
