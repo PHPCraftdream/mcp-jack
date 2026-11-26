@@ -61,7 +61,7 @@ node ts/dist/interop/client.js --url <base-url> --seed-hex <64 hex> --server-pub
 
 ## Standalone package consumer (CI)
 
-The checkout remains `private: true` at version `0.1.0`; this task does not publish or make it publishable. The ordinary `npm run build` above is unchanged and continues to compile the interop executables for existing CI. The consumer artifact uses the separate library-only `npm run build:package` configuration, which excludes `src/interop/`.
+The checkout is version `0.1.0`; `private: true` was removed on the owner's order, and publication happens only through the owner-dispatched manual workflow. The ordinary `npm run build` above is unchanged and continues to compile the interop executables for existing CI. The consumer artifact uses the separate library-only `npm run build:package` configuration, which excludes `src/interop/`.
 
 From the repository root, prepare an npm tarball and its allowlisted member inventory, then verify it from an isolated consumer install:
 

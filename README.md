@@ -43,9 +43,9 @@ Operations such as restart or a configuration change need more than "whoever rea
 
 Nothing below is published yet. The Rust and TypeScript package manifests are at `0.1.0`; no Go module tag has been created.
 
-- **Go module** `github.com/PHPCraftdream/mcp-jack` — not in the Go module proxy. Use it as a source/replace dependency or vendor the checkout.
-- **Rust crate** `mcp-jack` — `publish = false`, not on crates.io. Depend on it by path or git.
-- **TypeScript package** `mcp-jack` — `private: true`, not on npm. Install from a checkout or tarball.
+- **Go module** `github.com/PHPCraftdream/mcp-jack` — not in the Go module proxy. Released only by a `v0.1.0` git tag whose creation is a separate owner decision; `go install github.com/PHPCraftdream/mcp-jack/cmd/jack@v0.1.0` works only after that tag exists — until then build from source. Use it as a source/replace dependency or vendor the checkout.
+- **Rust crate** `mcp-jack` — manifest at `0.1.0`; the `publish = false` guard was removed on the owner's order. Not yet on crates.io; publication happens only via the owner-dispatched manual workflow.
+- **TypeScript package** `mcp-jack` — manifest at `0.1.0`; the `private: true` guard was removed on the owner's order. Not yet on npm; publication happens only via the owner-dispatched manual workflow.
 - **CLI** `jack` — not distributed. Build from source with `go build ./cmd/jack`.
 
 ## Quickstart: Go CLI
