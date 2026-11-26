@@ -28,7 +28,7 @@ if (relativeStage === "" || relativeStage === ".." || relativeStage.startsWith(`
   throw new Error("Rust consumer stage directory must be inside tools/consumer/.scratch");
 }
 
-const artifact = path.join(stageDir, "mcp-jack-0.1.0.crate");
+const artifact = path.join(stageDir, "mcp-jack-0.2.0.crate");
 const inventoryPath = path.join(stageDir, "inventory.json");
 const inventory = JSON.parse(await readFile(inventoryPath, "utf8"));
 // .cargo_vcs_info.json is cargo's own generated VCS metadata; .gitignore is
@@ -36,7 +36,7 @@ const inventory = JSON.parse(await readFile(inventoryPath, "utf8"));
 // .gitignore). No other dotfiles are allowed here.
 const allowed = /^(?:Cargo\.toml|Cargo\.lock|Cargo\.toml\.orig|deny\.toml|\.gitignore|\.cargo_vcs_info\.json|README\.md|LICENSE-MIT|LICENSE-APACHE|src\/.+|tests\/.+)$/u;
 const forbidden = /(?:^|\/)(?:target\/|\.git(?:\/|$)|.*\.tgz$|.*\.crate$)/u;
-if (inventory.artifact !== "mcp-jack-0.1.0.crate" || inventory.version !== "0.1.0" || inventory.publish !== false) {
+if (inventory.artifact !== "mcp-jack-0.2.0.crate" || inventory.version !== "0.2.0" || inventory.publish !== false) {
   throw new Error("staged package identity/publish metadata changed");
 }
 if (!Array.isArray(inventory.members)) throw new Error("staged package inventory is incomplete");
@@ -54,10 +54,10 @@ const vendor = path.join(stageDir, "vendor");
 await mkdir(vendor);
 execFileSync("tar", ["-xzf", artifact, "-C", vendor], { stdio: "inherit", shell: process.platform === "win32" });
 const topEntries = (await readdir(vendor)).filter((name) => name !== ".");
-if (topEntries.length !== 1 || topEntries[0] !== "mcp-jack-0.1.0") {
-  throw new Error(`crate must extract to a single mcp-jack-0.1.0 top directory, got: ${topEntries.join(", ")}`);
+if (topEntries.length !== 1 || topEntries[0] !== "mcp-jack-0.2.0") {
+  throw new Error(`crate must extract to a single mcp-jack-0.2.0 top directory, got: ${topEntries.join(", ")}`);
 }
-const packageRoot = path.join(vendor, "mcp-jack-0.1.0");
+const packageRoot = path.join(vendor, "mcp-jack-0.2.0");
 
 async function enumerateFiles(directory, relative = "") {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -97,7 +97,7 @@ for (const [packagedLicense, rootLicense] of [["LICENSE-MIT", "LICENSE-MIT"], ["
 
 const packagedManifest = await readFile(path.join(packageRoot, "Cargo.toml"), "utf8");
 if (!/^publish\s*=\s*false$/m.test(packagedManifest)) throw new Error("packaged Cargo.toml lost publish = false");
-if (!/^version\s*=\s*"0\.1\.0"$/m.test(packagedManifest)) throw new Error('packaged Cargo.toml lost version "0.1.0"');
+if (!/^version\s*=\s*"0\.2\.0"$/m.test(packagedManifest)) throw new Error('packaged Cargo.toml lost version "0.2.0"');
 if (!/^rust-version\s*=\s*"1\.88"$/m.test(packagedManifest)) throw new Error('packaged Cargo.toml lost rust-version "1.88"');
 if (!/^license\s*=\s*"MIT OR Apache-2\.0"$/m.test(packagedManifest)) throw new Error('packaged Cargo.toml lost license "MIT OR Apache-2.0"');
 for (const feature of ["default", "http", "client-http"]) {
@@ -146,4 +146,4 @@ if (!consumerLock.equals(productLock)) {
 } else {
   throw new Error("consumer Cargo.lock is byte-identical to the product lockfile; fresh resolution is not proven");
 }
-console.log(`Rust consumer verified from mcp-jack-0.1.0.crate (${inventory.members.length} package members)`);
+console.log(`Rust consumer verified from mcp-jack-0.2.0.crate (${inventory.members.length} package members)`);
