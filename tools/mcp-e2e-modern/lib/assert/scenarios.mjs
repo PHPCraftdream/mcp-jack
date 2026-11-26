@@ -9,6 +9,20 @@ function result(checks) {
 function seqMatches(actual, expected) { return Array.isArray(actual) && Array.isArray(expected) && actual.length === expected.length && expected.every((value, index) => actual[index] === value); }
 function includesValue(value, needle) { try { const serialized = JSON.stringify(value); return typeof serialized === 'string' && serialized.includes(needle); } catch { return false; } }
 
+export function hopOffersModernDiscovery(captures, hop) {
+  for (const capture of captures ?? []) {
+    if (capture.direction !== 'event' || capture.hop !== hop) continue;
+    for (const line of String(capture.body).split(/\r?\n/)) {
+      if (!line.startsWith('data: ')) continue;
+      try {
+        const body = JSON.parse(line.slice(6));
+        if (body?.result?.supportedVersions?.includes('2026-07-28')) return true;
+      } catch { }
+    }
+  }
+  return false;
+}
+
 export function assertScenario1({ captures = [], bridgeDiscoverProbe = {}, clientResult, expectedPosts, postSequence, sentValue, sequenceOk = false, classifiedSequence = [] } = {}) {
   const requests = captures.filter((capture) => capture.direction === 'request');
   const methods = requests.map((capture) => {

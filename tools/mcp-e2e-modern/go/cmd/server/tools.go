@@ -115,6 +115,7 @@ func newServer(reg *callRegistry) *mcp.Server {
 					// Re-adding the same tool emits the SDK's tool-list-changed notification.
 					mcp.AddTool(srv, &mcp.Tool{Name: "echo", Description: "Return the supplied value unchanged"}, echo)
 				}
+				scenarioListenCancel.cancelLastListen()
 			}()
 			return result, nil
 		}

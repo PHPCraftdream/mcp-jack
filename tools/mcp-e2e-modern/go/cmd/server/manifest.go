@@ -53,7 +53,7 @@ func manifest() []capability {
 		{
 			ID:       "subscriptions_listen",
 			Status:   "supported",
-			Evidence: "ServerOptions.SubscribeHandler and UnsubscribeHandler enable resources/subscribe (mcp/server.go:109-111,1211-1222); subscriptions/listen registers subscriptions, sends subscriptions/acknowledged, then serves until client disconnect/context cancellation (mcp/server.go:1266-1338,1314-1320); stateless transport routes notifications to the open listen stream (mcp/streamable.go:1865-1877). No server-initiated graceful listen end: server.go:1314-1320 returns only on cancellation, so the driver must observe client disconnect as stream end.",
+			Evidence: "ServerOptions.SubscribeHandler and UnsubscribeHandler enable resources/subscribe (mcp/server.go:109-111,1211-1222); subscriptions/listen sends acknowledged then blocks on ctx.Done and returns a result (mcp/server.go:1314-1320). After notification delivery, the fixture cancels the listen request's child context; the SDK handler then returns its final result, but the SDK does not guarantee that result is written before the response closes because hangResponse selects ctx.Done and stream completion symmetrically (mcp/streamable.go:1267-1272), and the child context is also the response-wait context (mcp/streamable.go:1770). Therefore, the driver verifies observable delivery only.",
 		},
 		{
 			ID:       "server_discover",

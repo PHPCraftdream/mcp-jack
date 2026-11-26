@@ -11,7 +11,7 @@ import { verifyResponseSignature } from './signature/verify.mjs';
 import { verifyStreamFrames } from './signature/frames.mjs';
 import { redactText, redactRecord, fingerprint, bound } from './redact.mjs';
 import { makeCell, validateCell, attributionFor } from './ledger.mjs';
-import { assertScenario1, assertScenario2, assertScenario3, assertScenario4, assertScenario5, assertScenario6, assertScenario7, assertScenario8, scenario3MarkerPresent, scenario3SdkMetaPresent } from './assert/scenarios.mjs';
+import { assertScenario1, assertScenario2, assertScenario3, assertScenario4, assertScenario5, assertScenario6, assertScenario7, assertScenario8, scenario3MarkerPresent, scenario3SdkMetaPresent, hopOffersModernDiscovery } from './assert/scenarios.mjs';
 
 const checks = [];
 const TIMEOUT = Symbol('section-timeout');
@@ -31,10 +31,12 @@ async function proxyTests(section) {
 }
 async function tamperTest(section) {
   const sseText = 'event: message\ndata: {"ok":true}\njack: seq=0,ts=1234567890,sig=AAA\n\nevent: jack-end\ndata:\njack: seq=1,ts=1234567890,sig=BBB\n\n';
-  const upstream = createServer((req, res) => { if (req.url === '/sse') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(sseText); } else { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true,"result":{"note":"abcdefghij"}}'); } });
+  const upstreamText = '{"ok":true,"result":{"note":"\\u0eb4bcd\\tefghij"}}';
+  const upstream = createServer((req, res) => { if (req.url === '/sse') { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(sseText); } else { res.writeHead(200, { 'content-type': 'application/json' }); res.end(upstreamText); } });
   section.cleanup = () => { upstream.closeAllConnections?.(); upstream.closeIdleConnections?.(); upstream.close(() => {}); }; await aw(section, 'upstream listen', new Promise((ok) => upstream.listen(0, '127.0.0.1', ok)));
   const base = `http://127.0.0.1:${upstream.address().port}`;
-  const jsonText = '{"ok":true,"result":{"note":"abcdefghij"}}';
+  const jsonText = upstreamText;
+  const plainRunStart = jsonText.indexOf('bcd');
   for (const [path, target] of [['/sse', 'frame ts value'], ['/json', 'json string value after result member']]) {
     const proxy = await aw(section, `${path} proxy listen`, startTamperProxy({ upstream: base }));
     try {
@@ -46,9 +48,9 @@ async function tamperTest(section) {
         const text = response.body.toString();
         check('tamper flips covered frame timestamp and preserves SSE fields', proxy.flipped && info?.target === target && info.offset === offset && different === 1 && text.includes('event: message') && text.includes('data: {"ok":true}') && text.includes('jack: seq=0'));
       } else {
-        const stringStart = jsonText.indexOf('"abcdefghij"');
         const parsed = JSON.parse(response.body.toString());
-        check('tamper flips covered JSON string byte and preserves valid response', proxy.flipped && info?.target === target && different === 1 && info.offset > stringStart && info.offset < stringStart + '"abcdefghij"'.length - 1 && parsed.result.note !== 'abcdefghij' && response.status === 200 && response.body.length === expected.length);
+        const flippedText = response.body.toString();
+        check('tamper flips plain JSON string byte after escape and preserves valid response', proxy.flipped && info?.target === target && different === 1 && info.offset >= plainRunStart && info.offset < plainRunStart + 3 && JSON.parse(flippedText) && parsed.result.note.codePointAt(0) === 0x0eb4 && parsed.result.note[1] === 'c' && response.status === 200 && response.body.length === expected.length);
       }
     } finally { await aw(section, `${path} proxy stop`, proxy.stop()); }
   }
@@ -75,6 +77,8 @@ function assertionTests() {
   const requestMeta = { e2e: { case: 'scenario-3', marker: 'modern-e2e-deterministic' }, 'io.modelcontextprotocol/protocolVersion': '2026-07-28' }; const clientInfo = { name: 'client', version: '1' }; const clientCapabilities = { tools: {} }; const s3Hops = [requestMeta, { ...requestMeta, 'io.modelcontextprotocol/clientInfo': clientInfo, 'io.modelcontextprotocol/clientCapabilities': clientCapabilities }];
   const s1Captures = [cap('request', '{"method":"server/discover"}', { hop: 'probe' }), cap('response', '{"jsonrpc":"2.0","result":{"supportedVersions":["2026-07-28"]}}', { hop: 'probe', headers: { 'jack-auth': 'redacted-signature' } }), list, call];
   const s1Unattributed = cap('request', '{"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/clientInfo":{"name":"someone-else","version":"1"}}}}', { hop: 'hop-9' });
+  check('modern discovery found on requested event hop', hopOffersModernDiscovery([{ direction: 'event', hop: 'probe', body: 'data: {"jsonrpc":"2.0","result":{"supportedVersions":["2026-07-28"]}}' }], 'probe'));
+  check('modern discovery on later hop is ignored', !hopOffersModernDiscovery([{ direction: 'event', hop: 'probe', body: 'data: {"jsonrpc":"2.0","result":{"supportedVersions":["2025-11-25"]}}' }, { direction: 'event', hop: 'later', body: 'data: {"jsonrpc":"2.0","result":{"supportedVersions":["2026-07-28"]}}' }], 'probe'));
   const tests = [
     ['S1', assertScenario1({ captures: s1Captures, bridgeDiscoverProbe: { separate: true, hop: 'probe', signatureVerified: true, modernResponseVerified: true }, expectedPosts: 2, postSequence: ['tools/list', 'tools/call'], clientResult: result, sentValue: 'x', sequenceOk: true, classifiedSequence: [] }), assertScenario1({ captures: s1Captures, bridgeDiscoverProbe: { separate: true, hop: 'probe', signatureVerified: true, modernResponseVerified: true }, expectedPosts: 2, postSequence: ['initialize', 'tools/call'], clientResult: result, sentValue: 'x', sequenceOk: true, classifiedSequence: [] }), assertScenario1({ captures: [...s1Captures, s1Unattributed], bridgeDiscoverProbe: { separate: true, hop: 'probe', signatureVerified: true, modernResponseVerified: true }, expectedPosts: 2, postSequence: ['tools/list', 'tools/call'], clientResult: result, sentValue: 'x', sequenceOk: false, classifiedSequence: [{ origin: 'unattributed', hop: 'hop-9', method: 'server/discover' }] })],
     ['S2', assertScenario2({ captures: [], bridge: { exit_code: 1, stdout_bytes: 0 }, sdkErrorPresent: true, refusedCount: 1, fallbackCount: 0, scriptedControl: true, scriptedControlLabel: 'non-SDK scripted control' }), assertScenario2({ captures: [], bridge: { exit_code: 1, stdout_bytes: 0 }, sdkErrorPresent: true, refusedCount: 0, fallbackCount: 0, scriptedControl: true, scriptedControlLabel: 'non-SDK scripted control' })],
@@ -94,7 +98,7 @@ function signatureTests() {
   check('response signature verifies', verifyResponseSignature({ jackAuthHeader: header, status: 200, requestSig: 'reqsig', body, serverPublicKeyBase64Url: pubB64 }).ok);
   check('tampered body rejected', !verifyResponseSignature({ jackAuthHeader: header, status: 200, requestSig: 'reqsig', body: '{"ok":false}', serverPublicKeyBase64Url: pubB64 }).ok);
   check('request binding enforced', !verifyResponseSignature({ jackAuthHeader: header, status: 200, requestSig: 'other', body, serverPublicKeyBase64Url: pubB64 }).ok);
-  const keyId = Buffer.alloc(32, 7).toString('base64url'); const sid = Buffer.alloc(16, 8).toString('base64url'); const ts = '1234567890'; const requestSig = 'requestsig';
+  const keyId = Buffer.alloc(32, 7).toString('base64url'); const sid = Buffer.alloc(16, 8).toString('base64url'); const ts = '1234567890'; const requestHeader = `v1 kid=${keyId},ts=${ts},sig=requestsig`; const requestSig = /(?:^|[ ,])sig=([A-Za-z0-9_-]+)/.exec(requestHeader)?.[1];
   const openSigning = ['mcp-jack/stream1/open', '200', requestSig, keyId, ts, sid].join('\n'); const openSig = sign(null, Buffer.from(openSigning), privateKey).toString('base64url'); const openHeader = `s1 kid=${keyId},ts=${ts},sid=${sid},sig=${openSig}`;
   const frame = (seq, data, kind, prev) => { const hash = createHash('sha256').update(data, 'utf8').digest('base64url'); const signing = ['mcp-jack/stream1/frame', sid, String(seq), ts, prev, hash].join('\n'); const signature = sign(null, Buffer.from(signing), privateKey).toString('base64url'); return { text: `event: ${kind}\ndata: ${data}\njack: seq=${seq},ts=${ts},sig=${signature}`, sig: signature }; };
   const message = frame(0, '{"ok":true}', 'message', openSig); const end = frame(1, '', 'jack-end', message.sig); const frames = [message.text, end.text];
@@ -102,6 +106,9 @@ function signatureTests() {
   check('stream expected server key accepted', verifyStreamFrames({ openHeader, frames, requestSig, serverPublicKeyBase64Url: pubB64, expectedKid: keyId }).ok);
   check('stream unknown server key rejected', verifyStreamFrames({ openHeader, frames, requestSig, serverPublicKeyBase64Url: pubB64, expectedKid: Buffer.alloc(32, 9).toString('base64url') }).reason === 'unknown_server_key');
   check('stream data tamper rejected', verifyStreamFrames({ openHeader, frames: [frames[0].replace('{"ok":true}', '{"ok":false}'), frames[1]], requestSig, serverPublicKeyBase64Url: pubB64 }).reason === 'bad_signature');
+  const probeData = '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2026-07-28","supportedVersions":["2026-07-28"]}}'; const probeMessage = frame(0, probeData, 'message', openSig); const probeEnd = frame(1, '', 'jack-end', probeMessage.sig); const probeFrames = [probeMessage.text, probeEnd.text]; const probeVerify = (frames) => verifyStreamFrames({ openHeader, frames, requestSig, serverPublicKeyBase64Url: pubB64, expectedKid: keyId });
+  check('scenario-1 probe stream form verifies', probeVerify(probeFrames).ok);
+  const tamperedProbeFrame = probeFrames[0].replace(`ts=${ts}`, `ts=${ts.slice(0, -1)}${(Number(ts.at(-1)) + 1) % 10}`); check('scenario-1 probe stream form rejects tampered timestamp', probeVerify([tamperedProbeFrame, probeFrames[1]]).reason === 'bad_signature');
   const wrongSeq = frames[0].replace('seq=0', 'seq=2'); check('stream sequence order rejected', !verifyStreamFrames({ openHeader, frames: [wrongSeq, frames[1]], requestSig, serverPublicKeyBase64Url: pubB64 }).ok);
   check('stream missing jack line rejected', !verifyStreamFrames({ openHeader, frames: [frames[0].split('\n').slice(0, 2).join('\n'), frames[1]], requestSig, serverPublicKeyBase64Url: pubB64 }).ok);
   const badEnd = frame(1, 'x', 'jack-end', message.sig); check('stream non-empty terminal data rejected', !verifyStreamFrames({ openHeader, frames: [frames[0], badEnd.text], requestSig, serverPublicKeyBase64Url: pubB64 }).ok);

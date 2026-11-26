@@ -46,8 +46,18 @@ export function startTamperProxy({ port = 0, secrets = [], upstream, limits = {}
                 while ((value = valuePattern.exec(tail))) {
                   const after = tail.slice(value.index + value[0].length);
                   if (/^\s*:/.test(after)) continue;
-                  const letter = /[b-z]/.exec(value[0].slice(1, -1));
-                  if (letter) { valueOffset = resultMember.index + resultMember[0].length + value.index + 1 + letter.index; break; }
+                  const content = value[0].slice(1, -1);
+                  for (let i = 0; i < content.length; i += 1) {
+                    if (content[i] === '\\') {
+                      i += content[i + 1] === 'u' ? 5 : 1;
+                      continue;
+                    }
+                    if (/[b-z]/.test(content[i])) {
+                      valueOffset = resultMember.index + resultMember[0].length + value.index + 1 + i;
+                      break;
+                    }
+                  }
+                  if (valueOffset >= 0) break;
                 }
               }
               if (valueOffset >= 0) {

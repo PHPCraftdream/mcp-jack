@@ -28,10 +28,15 @@ const result = {
 };
 let client;
 let transport;
+let spawnedCount = 0;
+let currentChild = null;
+let bridgeExit = null;
+let bridgeCloseSignal = null;
+let bridgeClosed = false;
+let startWithoutChild = false;
 let bridgeBytes = 0;
 let bridgeStderr = '';
-let bridgeExit = null;
-let bridgeClosePromise = null;
+let bridgePid = null;
 let callId;
 let cancellation;
 try {
@@ -58,17 +63,26 @@ try {
     const config = value('--bridge-config');
     if (!bin || !config || value('--era') !== (scenario === 1 ? 'auto' : 'modern')) throw new Error('bridge mode requires matching era and config');
     result.bridge.spawned = true;
-    transport = new StdioClientTransport({ command: bin, args: ['bridge', '--config', config], stderr: 'pipe', env: process.env });
-    const startTransport = transport.start.bind(transport);
-    transport.start = async () => {
-      await startTransport();
-      const child = transport._process;
-      bridgeClosePromise = child ? new Promise((resolve) => {
-        child.once('close', (code, signal) => { bridgeExit = code; resolve({ code, signal, observed: true }); });
-      }) : Promise.resolve({ code: null, signal: null, observed: false });
-      child?.stdout?.on('data', (chunk) => { bridgeBytes += chunk.length; });
-      transport.stderr?.on('data', (chunk) => { bridgeStderr = (bridgeStderr + chunk.toString('utf8')).slice(-2000); });
-    };
+    class ObservedStdioTransport extends StdioClientTransport {
+      async start() {
+        await super.start();
+        const child = this._process; // Plain property in dist/stdio.mjs 2.4.0; readable from a subclass.
+        if (child) {
+          spawnedCount += 1;
+          currentChild = child;
+          bridgeExit = null;
+          bridgeCloseSignal = null;
+          bridgeClosed = false;
+          bridgeBytes = 0; // Negotiation sibling starts before the session child, so retain the last child.
+          child.stdout?.on('data', (c) => { bridgeBytes += c.length; });
+          child.once('close', (code, signal) => { bridgeExit = code; bridgeCloseSignal = signal; bridgeClosed = true; });
+        } else {
+          startWithoutChild = true;
+        }
+      }
+    }
+    transport = new ObservedStdioTransport({ command: bin, args: ['bridge', '--config', config], stderr: 'pipe', env: process.env });
+    transport.stderr.on('data', (chunk) => { bridgeStderr = (bridgeStderr + chunk.toString('utf8')).slice(-2000); });
   }
   client = new Client({ name: 'mcp-e2e-modern-ts-client', version: '1' }, {
     versionNegotiation: { mode: { pin: '2026-07-28' } },
@@ -80,6 +94,11 @@ try {
     throw Object.assign(new Error('unsupported-scenario-5'), { unsupported: true });
   }
   if (scenario !== 5) await client.connect(transport);
+  if (result.bridge.spawned) {
+    bridgePid = transport.pid ?? null;
+    // spawned_children indicates whether the SDK negotiation sibling used this subclass too.
+    result.bridge.transport_diagnostic = JSON.stringify({ spawned_children: spawnedCount, start_without_child: startWithoutChild, pid_after_start: bridgePid, closed: bridgeClosed });
+  }
   if (scenario === 7) {
     let notified;
     const gotNotification = new Promise((resolve) => { notified = resolve; });
@@ -138,22 +157,16 @@ try {
   }
   } finally {
   if (result.bridge.spawned && transport) {
-    const child = transport._process;
-    if (child?.stdin && !child.stdin.destroyed) {
-      // Stdin EOF initiates the fixture-owned stdio bridge shutdown.
-      child.stdin.end();
-    }
-    let bridgeOutcome = await bounded(bridgeClosePromise ?? Promise.resolve({ code: null, signal: null, observed: false }), 5000, 'bridge child close');
-    const initialObserved = !bridgeOutcome?.timeout && bridgeOutcome?.observed === true;
-    const closeOutcome = await bounded(Promise.resolve().then(() => client?.close()).catch((error) => { if (!result.sdk_error) result.sdk_error = String(error); }), 5000, 'client close');
-    if (closeOutcome?.timeout) result.sdk_error = `${result.sdk_error ? `${result.sdk_error}; ` : ''}client close timeout after 5000ms`;
-    if (!initialObserved) bridgeOutcome = await bounded(bridgeClosePromise ?? Promise.resolve({ code: null, signal: null, observed: false }), 2000, 'bridge final close');
-    const observed = initialObserved || (!bridgeOutcome?.timeout && bridgeOutcome?.observed === true);
-    result.bridge.exit_code = observed ? bridgeOutcome.code : (bridgeExit ?? (child?.exitCode !== null && child?.exitCode !== undefined ? child.exitCode : null));
-    result.bridge.close_observed = observed;
-    result.bridge.close_signal = observed ? bridgeOutcome.signal : null;
+    const closeOutcome = await bounded(Promise.resolve().then(() => transport.close()), 5000, 'bridge close');
+    if (closeOutcome?.timeout) result.sdk_error = `${result.sdk_error ? `${result.sdk_error}; ` : ''}bridge close timeout after 5000ms`;
+    const clientCloseOutcome = await bounded(Promise.resolve().then(() => client?.close()).catch((error) => { if (!result.sdk_error) result.sdk_error = String(error); }), 5000, 'client close');
+    if (clientCloseOutcome?.timeout) result.sdk_error = `${result.sdk_error ? `${result.sdk_error}; ` : ''}client close timeout after 5000ms`;
+    result.bridge.exit_code = currentChild ? bridgeExit : null;
+    result.bridge.close_observed = bridgeClosed;
+    result.bridge.close_signal = bridgeCloseSignal;
     result.bridge.stdout_bytes = bridgeBytes;
     result.bridge.stderr_tail = bridgeStderr.slice(-2000);
+    result.bridge.transport_diagnostic = JSON.stringify({ spawned_children: spawnedCount, start_without_child: startWithoutChild, pid_after_start: bridgePid, closed: bridgeClosed });
   } else {
     const closeOutcome = await bounded(Promise.resolve().then(() => client?.close()).catch((error) => { if (!result.sdk_error) result.sdk_error = String(error); }), 5000, 'client close');
     if (closeOutcome?.timeout) result.sdk_error = `${result.sdk_error ? `${result.sdk_error}; ` : ''}client close timeout after 5000ms`;
