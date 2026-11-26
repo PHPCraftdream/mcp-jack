@@ -83,7 +83,7 @@ For each required target, identify the artifact ID and SHA-256 above that the co
 |---|---|---|---|---|---|
 |  |  |  |  |  |  |
 
-The source-defined package wiring is described in [`package-inventory.md`](package-inventory.md), not an executed receipt. It names TypeScript `mcp-jack-0.2.0.tgz`, Rust `mcp-jack-0.2.0.crate`, and Go `go-module-snapshot.tgz`, with inventories. Go verification consumes its staged module **directory**, not the uploaded tarball; Rust verification extracts the crate; TypeScript verification installs the staged tarball. These are SDK consumer packages, not RC executables. Current workflow source does not produce RC binaries, per-file RC checksums, or build attestations.
+The source-defined package wiring is described in [`package-inventory.md`](package-inventory.md), not an executed receipt. It names TypeScript `mcp-jack-0.1.0.tgz`, Rust `mcp-jack-0.1.0.crate`, and Go `go-module-snapshot.tgz`, with inventories. Go verification consumes its staged module **directory**, not the uploaded tarball; Rust verification extracts the crate; TypeScript verification installs the staged tarball. These are SDK consumer packages, not RC executables. Current workflow source does not produce RC binaries, per-file RC checksums, or build attestations.
 
 ### Compatibility, security, and limitations review
 

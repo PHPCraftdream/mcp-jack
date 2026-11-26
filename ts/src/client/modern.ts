@@ -40,7 +40,7 @@ import type { HeaderPair } from "../modern/values.js";
 // ---------------------------------------------------------------------------
 
 /** Client identity advertised in `_meta` (C1): Jack's implementation name and version, as the server reports it in C7. */
-export const JACK_CLIENT_INFO: ClientInfo = { name: "mcp-jack", version: "0.2.0" };
+export const JACK_CLIENT_INFO: ClientInfo = { name: "mcp-jack", version: "0.1.0" };
 
 /** Protocol versions this client implements, modern first: the modern minimum and the 2025-11-25 legacy fallback a `-32022` retry may pick from. */
 export const CLIENT_PROTOCOL_VERSIONS: readonly string[] = [MODERN_MIN, "2025-11-25"];

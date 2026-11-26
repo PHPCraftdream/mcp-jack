@@ -1,6 +1,6 @@
 # 06. Webhooks
 
-Status: draft v0.2 for the 0.2.0 release line, 2026-11-22. Normative unless marked *informative*.
+Status: draft v0.2 for the 0.1.0 release line, 2026-11-22. Normative unless marked *informative*.
 
 The key words MUST, MUST NOT, SHOULD, MAY are used as in RFC 2119.
 

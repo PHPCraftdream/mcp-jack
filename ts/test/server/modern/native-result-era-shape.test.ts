@@ -44,7 +44,7 @@ test("native_result_era_shape", async () => {
   assert.equal(parsedModern.result.resultType, "complete", "C7: the modern result is complete");
   assert.deepEqual(parsedModern.result._meta?.["io.modelcontextprotocol/serverInfo"], {
     name: "mcp-jack",
-    version: "0.2.0",
+    version: "0.1.0",
   });
   assert.equal(parsedModern.result.structuredContent?.["kid"], aliceKid, "the structured caller kid is unchanged");
 

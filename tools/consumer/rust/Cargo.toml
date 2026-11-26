@@ -10,7 +10,7 @@ publish = false
 # The dependency points at the EXTRACTED .crate artifact staged by
 # verify-rust.mjs (never the live checkout), with the product lockfile
 # ignored: the consumer resolves its own graph fresh on Rust 1.88.
-mcp-jack = { path = "../vendor/mcp-jack-0.2.0", default-features = false }
+mcp-jack = { path = "../vendor/mcp-jack-0.1.0", default-features = false }
 
 # Harness-only supporting deps permitted by task scope; the SDK dep itself
 # stays the extracted crate. All are optional and only enabled by the
