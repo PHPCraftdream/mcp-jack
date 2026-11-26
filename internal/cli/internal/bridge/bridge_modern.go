@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/PHPCraftdream/mcp-jack/client"
+	"github.com/PHPCraftdream/mcp-jack/client/modern"
 	clientstream "github.com/PHPCraftdream/mcp-jack/client/stream"
 	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/command"
 	"github.com/PHPCraftdream/mcp-jack/internal/cli/internal/stdio"
@@ -90,30 +91,74 @@ func writeModernFrame(ctx context.Context, out io.Writer, body []byte) error {
 }
 
 func probeBridgeEra(ctx context.Context, c *transport.Connection) error {
-	base := transport.DirectTransport(c.Timeout)
-	defer base.CloseIdleConnections()
 	probeCtx, cancel := context.WithTimeout(ctx, 3*c.Timeout)
 	defer cancel()
-	sdk, err := client.NewClient(client.Config{
-		BaseURL: c.Endpoint, Aud: c.Aud, Signer: c.Signer, ServerKey: c.Pin,
-		HTTP: &http.Client{Transport: transport.NewOneShot(base), Timeout: 3 * c.Timeout},
-		Era:  client.EraAuto,
-	})
-	if err != nil {
-		return command.ErrConfig
-	}
-	if _, err := sdk.Call(probeCtx, "server/discover", map[string]any{}); err != nil {
+	attempted := modern.ModernMin
+	for range 2 {
+		rm, err := modern.BuildRequestMirrors(attempted, "server/discover", nil,
+			map[string]any{"name": "mcp-jack", "version": "0.2.0"})
+		if err != nil {
+			return command.ErrConfig
+		}
+		body, err := json.Marshal(bridgeProbeRequest{JSONRPC: "2.0", ID: 1, Method: "server/discover", Params: map[string]any{"_meta": rm.Meta}})
+		if err != nil {
+			return command.ErrProtocol
+		}
+		stream, reply, err := c.OpenEraProbe(probeCtx, body)
+		if err != nil {
+			return err
+		}
+		if stream != nil {
+			message, nextErr := stream.Next()
+			_ = stream.Close()
+			if nextErr != nil {
+				return command.ErrRemote
+			}
+			data := []byte(message)
+			if len(data) > wire.MaxBody || bytes.ContainsAny(data, "\r\n") {
+				return command.ErrProtocol
+			}
+			m, parseErr := wire.Object(data)
+			if parseErr != nil || wire.Text(m["jsonrpc"]) != "2.0" || len(m["result"]) == 0 && len(m["error"]) == 0 {
+				return command.ErrProtocol
+			}
+			c.Era = string(client.EraModern)
+			return nil
+		}
+		if reply == nil {
+			return command.ErrProtocol
+		}
+		decision := modern.DetectEraAttempt(reply.Status, true, reply.Body,
+			[]string{modern.ModernMin, wire.ProtocolVersion, "2025-06-18"}, attempted)
+		switch decision.Action {
+		case modern.ActionStayModern:
+			c.Era = string(client.EraModern)
+			return nil
+		case modern.ActionFallbackInitialize:
+			c.Era = string(client.EraLegacy)
+			return nil
+		case modern.ActionRetryWithSupported:
+			if len(decision.Supported) > 0 {
+				v := decision.Supported[0]
+				if v == modern.ModernMin {
+					attempted = v
+					continue
+				}
+				c.Era = string(client.EraLegacy)
+				return nil
+			}
+		}
 		return command.ErrRemote
 	}
-	switch sdk.CurrentEra() {
-	case client.EraLegacy:
-		c.Era = string(client.EraLegacy)
-	case client.EraModern:
-		c.Era = string(client.EraModern)
-	default:
-		return command.ErrProtocol
-	}
-	return nil
+	return command.ErrRemote
+}
+
+// bridgeProbeRequest is the wire shape of the auto-era discovery probe.
+type bridgeProbeRequest struct {
+	JSONRPC string         `json:"jsonrpc"`
+	ID      int64          `json:"id"`
+	Method  string         `json:"method"`
+	Params  map[string]any `json:"params"`
 }
 
 type modernBridge struct {
