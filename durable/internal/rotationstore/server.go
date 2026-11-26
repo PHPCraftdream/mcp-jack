@@ -170,7 +170,7 @@ func (store *ServerStore) advanceServerClock(expected []byte) (rotation.ClockTup
 	defer done()
 	var result rotation.ClockTuple
 	conflict := false
-	err = store.transact(func(tx *bolt.Tx) error {
+	err = store.write(func(tx *bolt.Tx) error {
 		guard, err := store.ownedGuard(tx)
 		if err != nil {
 			return err
@@ -235,7 +235,7 @@ func (store *ServerStore) Snapshot() (rotation.ServerSnapshot, rotation.ClockTup
 	defer done()
 	var snapshot rotation.ServerSnapshot
 	var guard trustGuard
-	err = store.db.View(func(tx *bolt.Tx) error {
+	err = store.viewChecked(func(tx *bolt.Tx) error {
 		var err error
 		snapshot, guard, err = store.validateRows(tx)
 		if err != nil {
@@ -274,7 +274,7 @@ func (store *ServerStore) CompareAndSwap(expected, desired rotation.ServerSnapsh
 		return err
 	}
 	defer done()
-	err = store.transact(func(tx *bolt.Tx) error {
+	err = store.write(func(tx *bolt.Tx) error {
 		guard, err := store.ownedGuard(tx)
 		if err != nil {
 			return err
@@ -389,6 +389,7 @@ type ServerOptions struct {
 // ServerStore does not own the nonce/client domain and does not permit serving without a provider.
 type ServerStore struct {
 	mu        sync.Mutex
+	check     sync.RWMutex
 	db        *bolt.DB
 	file      *os.File
 	options   ServerOptions
@@ -551,6 +552,20 @@ func (store *ServerStore) begin() (func(), error) {
 	return store.active.Done, nil
 }
 
+// read-only Check is unsafe while a writer commits (bbolt tx_check.go); the
+// write side serializes committing transactions against views that reach it.
+func (store *ServerStore) write(apply func(*bolt.Tx) error) error {
+	store.check.Lock()
+	defer store.check.Unlock()
+	return store.transact(apply)
+}
+
+func (store *ServerStore) viewChecked(apply func(*bolt.Tx) error) error {
+	store.check.RLock()
+	defer store.check.RUnlock()
+	return store.db.View(apply)
+}
+
 func (store *ServerStore) ownedGuard(tx *bolt.Tx) (trustGuard, error) {
 	bucket := tx.Bucket(serverBucket)
 	if bucket == nil {
@@ -584,7 +599,7 @@ func (store *ServerStore) Close() error {
 		store.mu.Unlock()
 		store.active.Wait()
 		if !store.fenced.Load() {
-			err := store.transact(func(tx *bolt.Tx) error {
+			err := store.write(func(tx *bolt.Tx) error {
 				if _, _, err := store.validateRows(tx); err != nil {
 					return err
 				}

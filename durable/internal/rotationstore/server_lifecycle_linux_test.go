@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -469,4 +470,40 @@ func TestServerInspectionRejectsInvalidSnapshotAndIncompatibleClock(t *testing.T
 			t.Fatalf("incompatible server clock returned %+v, %v", report, err)
 		}
 	})
+}
+
+// Regression: Tx.Check on a read-only view raced with committing writers and
+// could fence a healthy store. Without the check lock this fails under -race.
+func TestServerStoreSnapshotCheckRacesWithCommit(t *testing.T) {
+	store, _, _, now, _ := testServerOwner(t)
+	var stop sync.WaitGroup
+	stop.Add(3)
+	for reader := 0; reader < 2; reader++ {
+		go func() {
+			defer stop.Done()
+			for iteration := 0; iteration < 300; iteration++ {
+				_, clock, err := store.Snapshot()
+				if err != nil || clock.Unsafe {
+					t.Errorf("snapshot iteration %d: %v", iteration, err)
+					return
+				}
+			}
+		}()
+	}
+	go func() {
+		defer stop.Done()
+		for iteration := 0; iteration < 300; iteration++ {
+			now.Store(int64(1001 + iteration))
+			clock, err := store.AdvanceAndCheck()
+			if err != nil {
+				t.Errorf("advance iteration %d: %v", iteration, err)
+				return
+			}
+			_ = clock
+		}
+	}()
+	stop.Wait()
+	if store.fenced.Load() {
+		t.Fatal("healthy store fenced by concurrent Check")
+	}
 }

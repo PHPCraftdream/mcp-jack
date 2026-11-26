@@ -24,7 +24,6 @@
     "url": "git+https://github.com/PHPCraftdream/mcp-jack.git",
     "directory": "ts"
   },
-  "private": true,
   "type": "module",
   "engines": {
     "node": ">=20"

@@ -1,5 +1,6 @@
 // Package durable contains a transactional backend with a single lifetime owner.
 // Filesystem support and crash recovery require separate qualification gates.
+// Nonce-store tx.Check call sites run only under lifetime exclusivity (open, offline inspection, recovery), never beside a writer; only the rotation stores need a check lock.
 package durable
 
 import (

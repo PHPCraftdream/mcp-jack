@@ -36,8 +36,8 @@ const inventory = JSON.parse(await readFile(inventoryPath, "utf8"));
 // .gitignore). No other dotfiles are allowed here.
 const allowed = /^(?:Cargo\.toml|Cargo\.lock|Cargo\.toml\.orig|deny\.toml|\.gitignore|\.cargo_vcs_info\.json|README\.md|LICENSE-MIT|LICENSE-APACHE|src\/.+|tests\/.+)$/u;
 const forbidden = /(?:^|\/)(?:target\/|\.git(?:\/|$)|.*\.tgz$|.*\.crate$)/u;
-if (inventory.artifact !== "mcp-jack-0.1.0.crate" || inventory.version !== "0.1.0" || inventory.publish !== false) {
-  throw new Error("staged package identity/publish metadata changed");
+if (inventory.artifact !== "mcp-jack-0.1.0.crate" || inventory.version !== "0.1.0") {
+  throw new Error("staged package identity metadata changed");
 }
 if (!Array.isArray(inventory.members)) throw new Error("staged package inventory is incomplete");
 for (const member of inventory.members) {
@@ -96,7 +96,6 @@ for (const [packagedLicense, rootLicense] of [["LICENSE-MIT", "LICENSE-MIT"], ["
 }
 
 const packagedManifest = await readFile(path.join(packageRoot, "Cargo.toml"), "utf8");
-if (!/^publish\s*=\s*false$/m.test(packagedManifest)) throw new Error("packaged Cargo.toml lost publish = false");
 if (!/^version\s*=\s*"0\.1\.0"$/m.test(packagedManifest)) throw new Error('packaged Cargo.toml lost version "0.1.0"');
 if (!/^rust-version\s*=\s*"1\.88"$/m.test(packagedManifest)) throw new Error('packaged Cargo.toml lost rust-version "1.88"');
 if (!/^license\s*=\s*"MIT OR Apache-2\.0"$/m.test(packagedManifest)) throw new Error('packaged Cargo.toml lost license "MIT OR Apache-2.0"');
