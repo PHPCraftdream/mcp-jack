@@ -50,7 +50,6 @@ const manifestPath = path.join(rustRoot, "Cargo.toml");
 const manifest = await readFile(manifestPath, "utf8");
 // Exact raw-manifest assertions: these values are part of the packaged
 // boundary contract and must not drift silently.
-if (!/^publish\s*=\s*false$/m.test(manifest)) fail("rust/Cargo.toml must keep publish = false");
 if (!/^version\s*=\s*"0\.2\.0"$/m.test(manifest)) fail('rust/Cargo.toml version must be "0.2.0"');
 if (!/^rust-version\s*=\s*"1\.88"$/m.test(manifest)) fail('rust/Cargo.toml rust-version must remain "1.88"');
 if (!/^license\s*=\s*"MIT OR Apache-2\.0"$/m.test(manifest)) fail('rust/Cargo.toml license must remain "MIT OR Apache-2.0"');
@@ -87,7 +86,6 @@ const inventory = {
   artifact: "mcp-jack-0.2.0.crate",
   members,
   version: "0.2.0",
-  publish: false,
 };
 await writeFile(path.join(stageDir, "inventory.json"), `${JSON.stringify(inventory, null, 2)}\n`, "utf8");
 

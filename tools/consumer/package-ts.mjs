@@ -70,7 +70,6 @@ async function copyLibraryTree(source, destination, relative = "") {
 }
 
 const sourceManifest = JSON.parse(await readFile(path.join(tsRoot, "package.json"), "utf8"));
-if (sourceManifest.private !== true) fail("source package must retain private=true");
 if (sourceManifest.version !== "0.2.0") fail("source package version must be 0.2.0");
 if (sourceManifest.type !== "module" || sourceManifest.main !== "./dist/index.js" || sourceManifest.types !== "./dist/index.d.ts") {
   fail("source package ESM entry metadata is incomplete");

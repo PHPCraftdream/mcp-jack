@@ -1,0 +1,358 @@
+# Publishes registry artifacts certified by a release-candidate run via Trusted Publishing (OIDC, no long-lived tokens); no tags, no GitHub Releases.
+# UNVERIFIED: npm Trusted Publishing needs npm >= 11.5.1 / Node >= 22.14 and GitHub-hosted runners with id-token: write. Public-package provenance from a public repo is automatic, but --provenance is explicit; npm publish <tarball> is unverified until the first run.
+# crates.io RFC 3691 requires the crate to exist already and id-token: write; rust-lang/crates-io-auth-action exchanges OIDC for a 30-minute token. The job environment must match crates.io config.
+# UNVERIFIED: the v1 tag does not exist upstream; v1.0.6 is the latest v1-line tag (read-only gh api).
+
+name: publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full 40-character lowercase hex certified commit SHA
+        required: true
+        type: string
+      rc_run_id:
+        description: Successful release-candidate workflow run ID
+        required: true
+        type: string
+      version:
+        description: Registry package version
+        required: true
+        type: string
+      registries:
+        description: Registries to publish to
+        required: true
+        type: choice
+        options:
+          - npm
+          - crates
+          - both
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: publish-${{ inputs.sha }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: resolve candidate commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+      version: ${{ steps.resolve.outputs.version }}
+      registries: ${{ steps.resolve.outputs.registries }}
+      publish_npm: ${{ steps.resolve.outputs.publish_npm }}
+      publish_crates: ${{ steps.resolve.outputs.publish_crates }}
+    env:
+      RC_SHA: ${{ inputs.sha }}
+      VERSION: ${{ inputs.version }}
+      REGISTRIES: ${{ inputs.registries }}
+    steps:
+      - name: Require the default branch
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::publishing must be dispatched from refs/heads/main"
+            exit 1
+          fi
+      - name: Validate inputs
+        run: |
+          if ! printf '%s' "$RC_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::sha input must be a full 40-character lowercase hex commit SHA"
+            exit 1
+          fi
+          if [[ ! "$VERSION" =~ ^[0-9A-Za-z.+-]+$ ]]; then
+            echo "::error::version contains unsupported characters"
+            exit 1
+          fi
+          case "$REGISTRIES" in
+            npm|crates|both) ;;
+            *) echo "::error::registries must be npm, crates, or both"; exit 1 ;;
+          esac
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+      - name: Confirm HEAD and default-branch ancestry
+        run: |
+          resolved="$(git rev-parse HEAD)"
+          if [ "$resolved" != "$RC_SHA" ]; then
+            echo "::error::checkout HEAD $resolved does not match the requested sha"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$RC_SHA" origin/main; then
+            echo "::error::$RC_SHA is not an ancestor of the default branch (main)"
+            exit 1
+          fi
+      - name: Confirm package versions and record outputs
+        id: resolve
+        run: |
+          ts_version="$(jq -r .version ts/package.json)"
+          rust_version="$(awk -F '"' '/^version[[:space:]]*=/ { print $2; exit }' rust/Cargo.toml)"
+          if [ "$ts_version" != "$VERSION" ] || [ "$rust_version" != "$VERSION" ]; then
+            echo "::error::input version must match ts/package.json ($ts_version) and rust/Cargo.toml ($rust_version)"
+            exit 1
+          fi
+          publish_npm=false
+          publish_crates=false
+          case "$REGISTRIES" in
+            npm) publish_npm=true ;;
+            crates) publish_crates=true ;;
+            both) publish_npm=true; publish_crates=true ;;
+          esac
+          {
+            echo "sha=$RC_SHA"
+            echo "version=$VERSION"
+            echo "registries=$REGISTRIES"
+            echo "publish_npm=$publish_npm"
+            echo "publish_crates=$publish_crates"
+          } >> "$GITHUB_OUTPUT"
+
+  preflight:
+    name: verify certified RC bundle
+    runs-on: ubuntu-latest
+    needs: [resolve]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      tgz: ${{ steps.digests.outputs.tgz }}
+      crate: ${{ steps.digests.outputs.crate }}
+      manifest: ${{ steps.digests.outputs.manifest }}
+    env:
+      RC_SHA: ${{ needs.resolve.outputs.sha }}
+      RC_RUN_ID: ${{ inputs.rc_run_id }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: rc-bundle-${{ needs.resolve.outputs.sha }}
+          run-id: ${{ inputs.rc_run_id }}
+          github-token: ${{ github.token }}
+          path: rc
+      # head_sha is not checked: the RC checks out the dispatch input regardless of
+      # the dispatching tip; the attested rc-manifest.json naming this exact SHA is
+      # the binding between the run and the certified commit.
+      - name: Check the RC run metadata
+        run: |
+          run_json="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RC_RUN_ID")"
+          if [ "$(jq -r .path <<<"$run_json")" != ".github/workflows/release-candidate.yml" ] || \
+             [ "$(jq -r .conclusion <<<"$run_json")" != "success" ] || \
+             [ "$(jq -r .head_branch <<<"$run_json")" != "main" ]; then
+            echo "::error::run metadata does not identify a successful release-candidate run for this main commit"
+            exit 1
+          fi
+      - name: Check every artifact against SHA256SUMS
+        working-directory: rc
+        run: sha256sum -c SHA256SUMS
+      - name: Check the manifest names this commit and the same digests
+        working-directory: rc
+        run: |
+          if [ "$(jq -r .sha rc-manifest.json)" != "$RC_SHA" ]; then
+            echo "::error::rc-manifest.json does not name the certified commit"
+            exit 1
+          fi
+          if ! diff <(jq -r '.artifacts[] | "\(.sha256)  \(.name)"' rc-manifest.json) SHA256SUMS; then
+            echo "::error::rc-manifest.json and SHA256SUMS disagree"
+            exit 1
+          fi
+      - name: Require both registry artifacts
+        run: |
+          test -f "rc/mcp-jack-$VERSION.tgz" || { echo "::error::npm tarball is missing"; exit 1; }
+          test -f "rc/mcp-jack-$VERSION.crate" || { echo "::error::Rust crate is missing"; exit 1; }
+      - name: Verify attestations for published artifacts and bundle metadata
+        working-directory: rc
+        run: |
+          signer="$GITHUB_REPOSITORY/.github/workflows/release-candidate.yml@$GITHUB_REF"
+          for artifact in "mcp-jack-$VERSION.tgz" "mcp-jack-$VERSION.crate" rc-manifest.json SHA256SUMS; do
+            gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY" --signer-workflow "$signer"
+          done
+      - name: Summarize certified artifacts
+        id: digests
+        run: |
+          tgz_sum="$(sha256sum "rc/mcp-jack-$VERSION.tgz" | awk '{print $1}')"
+          crate_sum="$(sha256sum "rc/mcp-jack-$VERSION.crate" | awk '{print $1}')"
+          manifest_sum="$(sha256sum rc/rc-manifest.json | awk '{print $1}')"
+          {
+            echo "tgz=$tgz_sum"
+            echo "crate=$crate_sum"
+            echo "manifest=$manifest_sum"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### Certified publish artifacts for $VERSION"
+            echo "- npm tarball: $tgz_sum"
+            echo "- crates.io crate: $crate_sum"
+            echo "- RC manifest: $manifest_sum"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish-npm:
+    name: publish to npm
+    runs-on: ubuntu-latest
+    needs: [resolve, preflight]
+    if: needs.resolve.outputs.publish_npm == 'true'
+    environment: release
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      VERSION: ${{ needs.resolve.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_TGZ: ${{ needs.preflight.outputs.tgz }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: rc-bundle-${{ needs.resolve.outputs.sha }}
+          run-id: ${{ inputs.rc_run_id }}
+          github-token: ${{ github.token }}
+          path: rc
+      - name: Recheck the certified tarball digest and attestation
+        run: |
+          actual="$(sha256sum "rc/mcp-jack-$VERSION.tgz" | awk '{print $1}')"
+          if [ "$actual" != "$EXPECTED_TGZ" ]; then
+            echo "::error::downloaded tarball digest does not match the certified digest"
+            exit 1
+          fi
+          (cd rc && gh attestation verify "mcp-jack-$VERSION.tgz" --repo "$GITHUB_REPOSITORY" --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-candidate.yml@$GITHUB_REF")
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24
+      - name: Require npm 11.5.1 or newer
+        run: |
+          actual="$(npm --version)"
+          if [ "$(printf '%s\n%s\n' 11.5.1 "$actual" | sort -V | head -n1)" != "11.5.1" ]; then
+            echo "::error::npm $actual is older than required 11.5.1"
+            exit 1
+          fi
+      - name: Publish the certified tarball
+        run: npm publish "rc/mcp-jack-$VERSION.tgz" --provenance
+      - name: Confirm npm visibility
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if result="$(npm view "mcp-jack@$VERSION" version 2>/dev/null)" && [ "$result" = "$VERSION" ]; then
+              echo "npm reports version $VERSION"
+              exit 0
+            fi
+            if [ "$attempt" -lt 5 ]; then sleep 15; fi
+          done
+          echo "::error::npm version $VERSION did not become visible"
+          exit 1
+      - name: Summarize npm publication
+        run: |
+          echo "Published mcp-jack@$VERSION; tarball SHA256: $(sha256sum "rc/mcp-jack-$VERSION.tgz" | awk '{print $1}')." >> "$GITHUB_STEP_SUMMARY"
+
+  publish-crates:
+    name: publish to crates.io
+    runs-on: ubuntu-latest
+    needs: [resolve, preflight]
+    if: needs.resolve.outputs.publish_crates == 'true'
+    environment: release
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      VERSION: ${{ needs.resolve.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_CRATE: ${{ needs.preflight.outputs.crate }}
+      EXPECTED_MANIFEST: ${{ needs.preflight.outputs.manifest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@5445741acf05630efa19e221cc588ebe0842b13d # 1.88.0
+        with:
+          toolchain: 1.88.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: rc-bundle-${{ needs.resolve.outputs.sha }}
+          run-id: ${{ inputs.rc_run_id }}
+          github-token: ${{ github.token }}
+          path: rc
+      - name: Recheck the certified crate digest and attestation
+        run: |
+          actual="$(sha256sum "rc/mcp-jack-$VERSION.crate" | awk '{print $1}')"
+          if [ "$actual" != "$EXPECTED_CRATE" ]; then
+            echo "::error::downloaded crate digest does not match the certified digest"
+            exit 1
+          fi
+          manifest_actual="$(sha256sum rc/rc-manifest.json | awk '{print $1}')"
+          if [ "$manifest_actual" != "$EXPECTED_MANIFEST" ]; then
+            echo "::error::downloaded manifest digest does not match the certified digest"
+            exit 1
+          fi
+          (cd rc && gh attestation verify "mcp-jack-$VERSION.crate" --repo "$GITHUB_REPOSITORY" --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-candidate.yml@$GITHUB_REF")
+      - name: Repackage the crate
+        working-directory: rust
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/publish-cargo-target
+        run: cargo package --locked --all-features
+      - name: Compare RC and repackaged crate contents
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/publish-cargo-target
+        run: |
+          set -euo pipefail
+          rc_crate="rc/mcp-jack-$VERSION.crate"
+          repacked="$CARGO_TARGET_DIR/package/mcp-jack-$VERSION.crate"
+          test -f "$rc_crate"
+          test -f "$repacked"
+          tmp="$RUNNER_TEMP/crate-proof"
+          mkdir -p "$tmp/rc" "$tmp/repacked"
+          tar -xzf "$rc_crate" -C "$tmp/rc"
+          tar -xzf "$repacked" -C "$tmp/repacked"
+          tar -tzf "$rc_crate" | LC_ALL=C sort > "$tmp/rc-members"
+          tar -tzf "$repacked" | LC_ALL=C sort > "$tmp/repacked-members"
+          if ! diff -u "$tmp/rc-members" "$tmp/repacked-members"; then
+            echo "::error::crate archive member lists differ"
+            exit 1
+          fi
+          (cd "$tmp/rc" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum | sed 's#  \./#  #' | LC_ALL=C sort) > "$tmp/rc-hashes"
+          (cd "$tmp/repacked" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum | sed 's#  \./#  #' | LC_ALL=C sort) > "$tmp/repacked-hashes"
+          if ! diff -u "$tmp/rc-hashes" "$tmp/repacked-hashes"; then
+            echo "::error::crate extracted member bytes differ"
+            exit 1
+          fi
+          echo "Member-list and member-byte equality verified."
+      # Proves: the attested RC crate and the crate `cargo package` produces from
+      # the checked-out SHA contain the same member names and the same member
+      # bytes. Does not prove: archive framing equality, or what `cargo publish`
+      # repackages afterwards — the upload is a separate cargo repackage.
+      - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+        id: auth
+      - name: Publish the repackaged crate
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          CARGO_TARGET_DIR: ${{ runner.temp }}/publish-cargo-target
+        working-directory: rust
+        run: cargo publish --locked --all-features
+      - name: Confirm crates.io visibility
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if curl -sf https://index.crates.io/mc/p-/mcp-jack -o "$RUNNER_TEMP/crates-index" && grep -Fq '"vers":"'"$VERSION"'"' "$RUNNER_TEMP/crates-index"; then
+              echo "crates.io index reports version $VERSION"
+              exit 0
+            fi
+            if [ "$attempt" -lt 5 ]; then sleep 15; fi
+          done
+          echo "::error::crates.io version $VERSION did not become visible"
+          exit 1
+      - name: Summarize crates.io publication
+        run: |
+          echo "Published mcp-jack $VERSION to crates.io; RC crate SHA256: $(sha256sum "rc/mcp-jack-$VERSION.crate" | awk '{print $1}'). Before publishing, cargo package from the checked-out SHA matched the RC crate's member names and member bytes; the upload is a separate cargo repackage and is not byte-compared." >> "$GITHUB_STEP_SUMMARY"

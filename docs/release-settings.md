@@ -56,6 +56,32 @@ Attestations are generated only for the exact final candidate artifacts. Verific
 
 Registry publisher ownership and trusted-publisher decisions are **DEFERRED**. They are not an artifact-only RC prerequisite and are not authorized here. The authorized Rust and TypeScript package version bump to 0.2.0 is complete; publication flags remain. RC scope is artifact-only, with no registry publication. No publication, registry, token, account, trusted-publisher, or configuration steps are authorized. Do not create/configure credentials or publishers, make further version changes, publish, tag, create a GitHub Release, or announce a release. Future publication needs separate explicit owner authorization and review.
 
+### Trusted Publishing and the 0.1.0 release
+
+This is an owner checklist of values to enter, not verified settings. The document's top-level **UNVERIFIED** disclaimer applies: record actual values and approved read-only evidence; do not infer that any control is enabled.
+
+- [ ] Configure Registry Trusted Publishing for **both** npmjs.com and crates.io with repository `PHPCraftdream/mcp-jack`, workflow file `publish.yml`, and environment `release`.
+- [ ] npm: create the package first with the placeholder bootstrap `mcp-jack@0.0.0`. Confirm the packed `package.json` `repository.url` exactly matches the GitHub repository: `git+https://github.com/PHPCraftdream/mcp-jack.git` (package directory `ts`).
+- [ ] crates.io: create the crate first with the same placeholder bootstrap. The publishing job's `environment:` must match the environment configured on crates.io.
+- [ ] GitHub: under repo Settings → Environments, create `release` and require the owner as reviewer. The `publish-npm` and `publish-crates` jobs in `publish.yml` then wait for manual approval.
+- [ ] Dispatch inputs for `publish.yml`: `sha` is the full 40-character SHA and an ancestor of `main`; `rc_run_id` is the run ID of the successful `release-candidate` run for that SHA; `version` must equal the version in `ts/package.json`, `rust/Cargo.toml`, and the artifact names; `registries` is `npm`, `crates`, or `both`.
+- [ ] Order: run `release-candidate` on the final release SHA first and let it fully succeed; then dispatch `publish.yml` from `main`.
+- [ ] Partial failure: before re-dispatching, check on each registry which version is actually visible — a publish step can succeed while its later visibility check fails. A re-dispatch for a registry that already has the version fails closed; re-dispatch only the registry that lacks the version, with `registries` scoped to it, and never `both` unless neither registry succeeded.
+
+Machine facts from the workflow and registry protocols (not evidence that settings are configured):
+
+- npm requires npm >= 11.5.1 / Node >= 22.14. The workflow uses Node 24 and refuses older npm; use GitHub-hosted runners, `id-token: write` on publish jobs, and no `NODE_AUTH_TOKEN`/`NPM_TOKEN`.
+- crates.io RFC 3691: `id-token: write`; `rust-lang/crates-io-auth-action` exchanges the OIDC token for a 30-minute token. The workflow pins `v1.0.6` by full commit SHA because upstream has no `v1` tag.
+
+Unverified assumptions to resolve from the first real run:
+
+- [ ] `npm publish <tarball> --provenance` works on a pre-packed tarball. If not, fallback is publishing from a checked-out SHA after proving pack equality.
+- [ ] Provenance is automatic for a public package from a public repository; `--provenance` is passed explicitly for determinism.
+- [ ] Exact npm version shipped with Node 24 on runners; the workflow checks it at run time.
+- [ ] crates.io sparse-index propagation delay; the visibility check retries.
+- [ ] `cargo package` byte-identity across runs; the workflow compares member lists and member bytes of the attested RC crate and of the crate `cargo package` produces from the checked-out SHA instead. It does not compare archive framing or the separate repackage that `cargo publish` uploads.
+- [ ] crates.io Trusted Publishing requires the crate to already exist; the bootstrap above is intended to satisfy this.
+
 ## Maintainer evidence record
 
 Use approved read-only evidence only. If an item cannot be verified, leave it unchecked and mark `UNVERIFIED`; do not infer values from workflow source or successful CI.
