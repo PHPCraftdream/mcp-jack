@@ -24,6 +24,8 @@ type memStore struct {
 	snapshotErr, rawErr, clockErr *rotation.Error
 	casConflict                   bool
 	drift                         bool
+	lateClockErr                  bool
+	clockCalls                    int
 	raw                           int64
 }
 
@@ -47,6 +49,10 @@ func (s *memStore) Snapshot() (rotation.TrustSnapshot, rotation.ClockTuple, erro
 	return v, s.clock, nil
 }
 func (s *memStore) CheckSnapshotClock(expected rotation.TrustSnapshot) (rotation.ClockTuple, error) {
+	s.clockCalls++
+	if s.lateClockErr && s.clockCalls >= 3 { // New checks first, outer checks second, final checks third.
+		return rotation.ClockTuple{}, &rotation.Error{Code: "rotation_clock_unavailable"}
+	}
 	if s.clockErr != nil {
 		return rotation.ClockTuple{}, s.clockErr
 	}

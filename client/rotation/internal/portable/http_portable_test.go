@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -71,11 +72,11 @@ func TestPortableHTTPTimeoutAndStoreFailure(t *testing.T) {
 			portableCode(t, err, "rotation_state_unknown")
 		}
 	}
-	store.rawErr = &rotation.Error{Code: "rotation_clock_unavailable"}
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("request sent with raw clock error") }))
-	defer server.Close()
-	store.binding.Endpoint = server.URL + "/mcp" // initialized binding is immutable; make fresh valid state
 	anchor := portableKey(31)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		httpPortableResponse(w, r, anchor, []byte("raw clock refused"))
+	}))
+	defer server.Close()
 	binding := rotation.Binding{Endpoint: server.URL + "/mcp", Audience: "portable-test"}
 	cp := rotation.Checkpoint{Hash: "-", KID: anchor.KID()}
 	copy(cp.PublicKey[:], anchor.PublicKey())
@@ -92,22 +93,17 @@ func TestPortableHTTPTimeoutAndStoreFailure(t *testing.T) {
 func TestPortableHTTPRefreshConflictAndUnknownOutcome(t *testing.T) {
 	anchor, next := portableKey(51), portableKey(52)
 	binding := rotation.Binding{Audience: "portable-http-conflict"}
-	checkpoint := rotation.Checkpoint{Hash: "-", KID: anchor.KID()}
-	copy(checkpoint.PublicKey[:], anchor.PublicKey())
-	record, err := rotation.CreateRecord(binding, checkpoint, anchor, next, 1000)
-	if err != nil {
-		t.Fatal(err)
-	}
 	var store *memStore
+	var record rotation.Record
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		page := pageEnvelope(t, anchor, []rotation.Record{record}, rotation.ResultCursor{Ordinal: 1, Hash: record.Hash})
 		httpPortableResponse(w, r, anchor, page)
 	}))
 	defer server.Close()
 	binding.Endpoint = server.URL + "/mcp"
-	checkpoint = rotation.Checkpoint{Hash: "-", KID: anchor.KID()}
+	checkpoint := rotation.Checkpoint{Hash: "-", KID: anchor.KID()}
 	copy(checkpoint.PublicKey[:], anchor.PublicKey())
-	record, err = rotation.CreateRecord(binding, checkpoint, anchor, next, 1000)
+	record, err := rotation.CreateRecord(binding, checkpoint, anchor, next, 1000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,20 +123,85 @@ func TestPortableHTTPRefreshConflictAndUnknownOutcome(t *testing.T) {
 
 func TestPortableHTTPUnknownRefreshOutcome(t *testing.T) {
 	anchor := portableKey(54)
+	var calls atomic.Int32
+	hijacked := make(chan io.Closer, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _, _ = w.(http.Hijacker).Hijack()
+		calls.Add(1)
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			t.Error(err)
+			return
+		}
+		connection, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		hijacked <- connection
 	}))
 	defer server.Close()
+	// The hijacked socket is silent and server-owned: close it here, after the client gave up.
+	defer func() {
+		select {
+		case connection := <-hijacked:
+			_ = connection.Close()
+		default:
+		}
+	}()
 	binding := rotation.Binding{Endpoint: server.URL + "/mcp", Audience: "portable-http-unknown"}
 	checkpoint := rotation.Checkpoint{Hash: "-", KID: anchor.KID()}
 	copy(checkpoint.PublicKey[:], anchor.PublicKey())
 	store := newMemStore(binding, 30, checkpoint, anchor, 1200)
-	sender, err := rotationclient.NewHTTP(store, portableKey(55), 5*time.Second)
+	before := append([]byte(nil), store.encoded...)
+	sender, err := rotationclient.NewHTTP(store, portableKey(55), 300*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = sender.Refresh(context.Background())
+	if !errors.Is(err, context.DeadlineExceeded) { // The Call/Refresh context deadline or http.Client Timeout may fire; this accepts either.
+		t.Fatalf("unknown outcome: %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("request count: got %d want 1", calls.Load())
+	}
+	if !bytes.Equal(before, store.encoded) {
+		t.Fatal("unknown outcome modified snapshot")
+	}
+}
+
+func TestPortableHTTPLostResponse(t *testing.T) {
+	anchor := portableKey(56)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			t.Error(err)
+			return
+		}
+		connection, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		_ = connection.Close()
+	}))
+	defer server.Close()
+	binding := rotation.Binding{Endpoint: server.URL + "/mcp", Audience: "portable-http-lost-response"}
+	checkpoint := rotation.Checkpoint{Hash: "-", KID: anchor.KID()}
+	copy(checkpoint.PublicKey[:], anchor.PublicKey())
+	store := newMemStore(binding, 30, checkpoint, anchor, 1200)
+	before := append([]byte(nil), store.encoded...)
+	sender, err := rotationclient.NewHTTP(store, portableKey(57), 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = sender.Refresh(context.Background())
 	if !errors.Is(err, rotationclient.ErrRequestUnavailable) {
-		t.Fatalf("unknown outcome: %v", err)
+		t.Fatalf("lost response: got %v want ErrRequestUnavailable", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("request count: got %d want 1", calls.Load())
+	}
+	if !bytes.Equal(before, store.encoded) {
+		t.Fatal("lost response modified snapshot")
 	}
 }

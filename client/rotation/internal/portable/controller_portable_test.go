@@ -163,6 +163,20 @@ func TestPortableCASConflictAndClockErrors(t *testing.T) {
 	got, err := c.VerifyResponse(signedResponse(t, anchor, 1200, []byte("hidden")))
 	portableCode(t, err, "rotation_clock_unavailable")
 	if got != nil {
+		t.Fatal("returned body on refused outer clock check")
+	}
+}
+
+func TestPortableFinalGateRefusesBody(t *testing.T) {
+	s, anchor, _ := portableSetup(t)
+	c, err := rotationclient.New(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.lateClockErr = true // New is call 1; VerifyResponse outer is 2; final gate is 3.
+	got, err := c.VerifyResponse(signedResponse(t, anchor, 1200, []byte("hidden")))
+	portableCode(t, err, "rotation_clock_unavailable")
+	if got != nil {
 		t.Fatal("returned body on failed final gate")
 	}
 }
