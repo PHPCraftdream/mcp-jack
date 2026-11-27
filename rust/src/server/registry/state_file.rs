@@ -52,6 +52,20 @@ struct StateDocument {
 /// in the same directory, fsync, rename). Rollback semantics match
 /// [`super::state::MemoryState`]: an update error leaves both disk and memory
 /// untouched.
+///
+/// On Unix, temporary-file creation requests mode 0600; the effective mode can
+/// depend on platform policy. On Windows, a new temporary file inherits the
+/// containing directory's ACL. On other non-Unix platforms, the SDK sets no
+/// explicit permissions or ACL, and resulting behavior is platform-dependent.
+/// Same-directory rename replaces the target with the temporary file, so the
+/// resulting permissions/security descriptor come from the temporary file,
+/// not the old target. The file contains its document version, registered
+/// public keys and identity/admin/validity data, and invite metadata. For
+/// SDK-issued invites the invite ID is the base64url SHA-256 of the raw code
+/// and the SDK does not store the raw code. Invite records supplied by the
+/// caller are persisted as supplied and are not guaranteed to omit raw codes.
+/// On Windows, limiting the containing state directory to the service account
+/// is an operational recommendation, not an SDK guarantee.
 #[derive(Debug)]
 pub struct FileState {
     path: PathBuf,
