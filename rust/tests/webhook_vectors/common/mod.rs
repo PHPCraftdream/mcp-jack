@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use ed25519_dalek::SigningKey;
+use mcp_jack::user_key::ServerSigningKey;
 use mcp_jack::webhook::card::WebhookKeyRecord;
 use serde_json::Value;
 
@@ -50,7 +50,7 @@ pub fn identities() -> Value {
 ///
 /// The signing key is rebuilt from the `seed_hex` member, so a runner signs
 /// with exactly the key the other SDKs sign with.
-pub fn identity(name: &str) -> (String, String, SigningKey) {
+pub fn identity(name: &str) -> (String, String, ServerSigningKey) {
     let all = identities();
     let entry = all["keys"]
         .as_array()
@@ -61,7 +61,7 @@ pub fn identity(name: &str) -> (String, String, SigningKey) {
     let kid = text_of(&entry["kid"]);
     let public_key = text_of(&entry["public_key"]);
     let seed = seed_bytes(&text_of(&entry["seed_hex"]));
-    (kid, public_key, SigningKey::from_bytes(&seed))
+    (kid, public_key, ServerSigningKey::from_bytes(&seed))
 }
 
 /// Returns the public JWK of `name` (spec 06 R7.3).

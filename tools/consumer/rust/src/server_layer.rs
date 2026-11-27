@@ -85,9 +85,9 @@ pub(super) fn section_e(
     wrong_pin: &ClientSigningKey,
 ) -> Result<(), String> {
     use bytes::Bytes;
-    use ed25519_dalek::SigningKey;
     use http_body_util::Full;
     use mcp_jack::server::http::{HandlerConfig, JackLayer};
+    use mcp_jack::user_key::ServerSigningKey;
     use std::convert::Infallible;
     use tower::Layer as _;
 
@@ -96,8 +96,8 @@ pub(super) fn section_e(
     // key must come from its own randomness source.
     let mut seed = [0u8; 32];
     getrandom::getrandom(&mut seed).map_err(|e| format!("os seed failed: {e}"))?;
-    let service_key = SigningKey::from_bytes(&seed);
-    let service_pub = *service_key.verifying_key().as_bytes();
+    let service_key = ServerSigningKey::from_bytes(&seed);
+    let service_pub = service_key.verifying_key().to_bytes();
 
     let state = Arc::new(MemoryState::new());
     register(

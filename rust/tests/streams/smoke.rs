@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
-use ed25519_dalek::SigningKey;
 use http_body_util::{BodyExt, Full};
+use mcp_jack::user_key::ServerSigningKey;
 use tower::util::BoxCloneService;
 use tower::{Layer, ServiceExt};
 
@@ -88,7 +88,7 @@ fn build_verifier(state: MemoryState, now: i64) -> Arc<Verifier> {
 }
 
 /// The keys.json "svc" signing key (the server's response key).
-fn server_signing_key() -> SigningKey {
+fn server_signing_key() -> ServerSigningKey {
     let keys = fixtures::load_keys().expect("load keys.json");
     let svc = keys
         .keys
@@ -98,7 +98,7 @@ fn server_signing_key() -> SigningKey {
     let seed: [u8; 32] = harness::hex_bytes(&svc.seed_hex)
         .try_into()
         .expect("svc seed is 32 bytes");
-    SigningKey::from_bytes(&seed)
+    ServerSigningKey::from_bytes(&seed)
 }
 
 fn layer(profile: Profile, now: i64) -> StreamLayer {

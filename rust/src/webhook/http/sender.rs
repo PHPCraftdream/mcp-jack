@@ -27,7 +27,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ed25519_dalek::SigningKey;
+use crate::user_key::ServerSigningKey;
 
 use crate::webhook::delivery::{
     self, LastError, SenderAction, SenderAttempt, SenderDecision, ATTEMPT_TIMEOUT_SECONDS,
@@ -73,12 +73,12 @@ pub struct OutgoingMessage {
     pub secrets: Vec<WebhookSecret>,
     /// The `(kid, key)` pairs that sign `v1a` and `v2a`, current first
     /// (spec 06 R2.8).
-    pub signing_keys: Vec<(String, SigningKey)>,
+    pub signing_keys: Vec<(String, Arc<ServerSigningKey>)>,
     /// The Jack audience of `w1` (spec 06 R4.3).
     pub aud: Option<String>,
     /// The `(kid, key)` pair of `Jack-Webhook-Auth`, when configured
     /// (spec 06 R4.1).
-    pub jack_signing: Option<(String, SigningKey)>,
+    pub jack_signing: Option<(String, Arc<ServerSigningKey>)>,
     /// The subscription's grant expiry in Unix MILLISECONDS, `None` when the
     /// subscription has no expiry. No verification may outlive it, so the
     /// gate is handed the earlier of it and the sender's own TTL
@@ -620,7 +620,7 @@ pub fn delivery_headers(
             };
             headers.push((
                 "Jack-Webhook-Auth".to_owned(),
-                w1::sign(signing_key, kid, &parts),
+                w1::sign(signing_key.as_ref(), kid, &parts),
             ));
         }
     }
@@ -682,8 +682,9 @@ fn challenge_rejection(reason: &str) -> EchoVerdict {
 #[cfg(test)]
 mod header_name_tests {
     use super::{delivery_headers, OutgoingMessage};
+    use crate::user_key::ServerSigningKey;
     use crate::webhook::MessageKind;
-    use ed25519_dalek::SigningKey;
+    use std::sync::Arc;
 
     /// This observes only pre-transport names and does NOT assert wire spelling:
     /// `http::HeaderName` lowercases names, and Hyper's current choices cannot
@@ -699,7 +700,10 @@ mod header_name_tests {
             secrets: Vec::new(),
             signing_keys: Vec::new(),
             aud: Some("example".to_owned()),
-            jack_signing: Some(("kid".to_owned(), SigningKey::from_bytes(&[7; 32]))),
+            jack_signing: Some((
+                "kid".to_owned(),
+                Arc::new(ServerSigningKey::from_bytes(&[7; 32])),
+            )),
             expires_at_ms: None,
         };
 

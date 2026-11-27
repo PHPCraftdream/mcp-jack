@@ -10,11 +10,11 @@ use std::sync::Arc;
 use crate::common::fixtures::{
     load_load_vectors, load_registry, load_state_file_vectors, RegistryDocument,
 };
-use ed25519_dalek::SigningKey;
 use mcp_jack::encoding::{encode_b64url, key_id};
 use mcp_jack::error::JackError;
 use mcp_jack::server::state::{InviteRecord, RegistryEntry, StateEdit, StateStore};
 use mcp_jack::server::state_file::{FileState, CODE_STATE_CORRUPT};
+use mcp_jack::user_key::ServerSigningKey;
 use sha2::{Digest, Sha256};
 
 /// Temp directory removed on Drop, so cleanup survives panicking asserts.
@@ -50,7 +50,7 @@ impl Drop for TempDirGuard {
 /// is a real, valid Ed25519 point derived from `id` (Go: stateTestKey).
 fn state_test_key(id: &str, name: &str) -> RegistryEntry {
     let seed = Sha256::digest(id.as_bytes());
-    let signing = SigningKey::from_bytes(&seed.into());
+    let signing = ServerSigningKey::from_bytes(&seed.into());
     let public = signing.verifying_key().to_bytes();
     RegistryEntry {
         kid: key_id(&public),

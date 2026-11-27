@@ -1,5 +1,7 @@
+use std::sync::Arc;
+
 use crate::interop::hex_decode_32;
-use ed25519_dalek::SigningKey;
+use mcp_jack::user_key::ServerSigningKey;
 use mcp_jack::{
     encoding::key_id,
     webhook::{
@@ -18,12 +20,7 @@ use mcp_jack::{
     },
 };
 use serde::Serialize;
-use std::{
-    collections::HashMap,
-    fs,
-    net::IpAddr,
-    sync::{Arc, Mutex},
-};
+use std::{collections::HashMap, fs, net::IpAddr, sync::Mutex};
 fn usage(s: impl std::fmt::Display) -> ! {
     eprintln!("interop-client: {s}");
     std::process::exit(2)
@@ -305,13 +302,16 @@ fn run() {
         Arc::new(EndpointGate::new(a.all("allowlist"), Some(3600000))),
     );
     let sign = a.one("signing-seed-hex").map(|s| {
-        let k =
-            SigningKey::from_bytes(&hex_decode_32(s).unwrap_or_else(|_| fail("bad signing seed")));
-        (key_id(k.verifying_key().as_bytes()), k)
+        let k = ServerSigningKey::from_bytes(
+            &hex_decode_32(s).unwrap_or_else(|_| fail("bad signing seed")),
+        );
+        (key_id(k.verifying_key().as_bytes()), Arc::new(k))
     });
     let jack = a.one("jack-seed-hex").map(|s| {
-        let k = SigningKey::from_bytes(&hex_decode_32(s).unwrap_or_else(|_| fail("bad jack seed")));
-        (key_id(k.verifying_key().as_bytes()), k)
+        let k = ServerSigningKey::from_bytes(
+            &hex_decode_32(s).unwrap_or_else(|_| fail("bad jack seed")),
+        );
+        (key_id(k.verifying_key().as_bytes()), Arc::new(k))
     });
     let messages = a
         .one("messages")

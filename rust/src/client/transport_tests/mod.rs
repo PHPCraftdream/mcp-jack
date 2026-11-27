@@ -2,7 +2,7 @@ use super::*;
 use crate::auth_header::{format_response_auth, parse_request_auth, RequestAuth, ResponseAuth};
 use crate::encoding::{encode_b64url, key_id};
 use crate::signing::response_signing_string;
-use ed25519_dalek::{Signer as DalekSigner, SigningKey};
+use crate::user_key::ServerSigningKey;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Mutex;
 
@@ -71,7 +71,7 @@ fn with_handler(
 /// Builds a response signed by `server` over the request signature's
 /// exact bytes (the request sig binds the response signing string).
 fn signed_response(
-    server: &SigningKey,
+    server: &ServerSigningKey,
     request_sig_b64: &str,
     status: u16,
     body: &[u8],
@@ -83,7 +83,7 @@ fn signed_response(
     let header = format_response_auth(&ResponseAuth {
         kid,
         ts,
-        sig: encode_b64url(&sig.to_bytes()),
+        sig: encode_b64url(&sig),
     });
     HttpResponse {
         status,
@@ -95,8 +95,8 @@ fn signed_response(
     }
 }
 
-fn svc_signing_key() -> SigningKey {
-    SigningKey::from_bytes(&hex_bytes(SVC_SEED_HEX))
+fn svc_signing_key() -> ServerSigningKey {
+    ServerSigningKey::from_bytes(&hex_bytes(SVC_SEED_HEX))
 }
 
 #[test]
@@ -224,7 +224,7 @@ fn tampered_body_is_bad_signature() {
             let header = format_response_auth(&ResponseAuth {
                 kid,
                 ts: FIXED_TS,
-                sig: encode_b64url(&sig.to_bytes()),
+                sig: encode_b64url(&sig),
             });
             Ok(HttpResponse {
                 status: 200,
@@ -253,7 +253,7 @@ fn tampered_body_is_bad_signature() {
 fn unpinned_server_key_rejected() {
     let alice = signer_from_hex(ALICE_SEED_HEX);
     let svc = svc_signing_key();
-    let root = SigningKey::from_bytes(&hex_bytes(ROOT_SEED_HEX));
+    let root = ServerSigningKey::from_bytes(&hex_bytes(ROOT_SEED_HEX));
     // Pinned to ROOT, signed by SVC.
     let t = server(alice, *root.verifying_key().as_bytes());
     let t = with_handler(

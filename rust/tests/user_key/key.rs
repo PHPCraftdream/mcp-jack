@@ -5,7 +5,9 @@
 
 use mcp_jack::client::signer::Signer;
 use mcp_jack::encoding::{decode_b64url, decode_b64url_fixed, encode_b64url};
-use mcp_jack::user_key::{ClientSigningKey, IssuedClientKey, ServerPublicKey, UserKeyPublic};
+use mcp_jack::user_key::{
+    ClientSigningKey, IssuedClientKey, ServerPublicKey, ServerSigningKey, UserKeyPublic,
+};
 
 /// Hex-decodes into an exact 32-byte array (panics on anything else; the
 /// constants below are compile-time-pinned).
@@ -533,6 +535,28 @@ fn representations_do_not_leak_secrets() {
     let alice_round: UserKeyPublic = serde_json::from_str(&alice_json).expect("deserializable");
     assert_eq!(alice_round.public_key, ALICE_PUBLIC_B64U);
     assert_eq!(alice_round.kid, ALICE_KID);
+}
+
+#[test]
+fn server_signing_key_debug_is_redacted_and_seed_length_is_checked() {
+    let seed = seed32(ALICE_SEED_HEX);
+    let key = ServerSigningKey::from_seed(&seed).expect("32-byte seed");
+    let rendered = format!("{key:?}");
+    assert!(!rendered.contains(ALICE_SEED_HEX));
+    assert!(!rendered.contains(&encode_b64url(&seed)));
+    assert_eq!(key.public_key().len(), 32);
+    assert_eq!(key.kid(), mcp_jack::encoding::key_id(&key.public_key()));
+    assert_eq!(key.sign(b"same"), key.sign(b"same"));
+    assert_ne!(key.sign(b"same"), key.sign(b"other"));
+    assert_eq!(
+        ServerSigningKey::generate()
+            .expect("OS entropy")
+            .public_key()
+            .len(),
+        32
+    );
+    assert!(ServerSigningKey::from_seed(&[0; 31]).is_err());
+    assert!(ServerSigningKey::from_seed(&[0; 33]).is_err());
 }
 
 #[test]

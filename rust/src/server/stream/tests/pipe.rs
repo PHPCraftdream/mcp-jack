@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use ed25519_dalek::SigningKey;
+use crate::user_key::ServerSigningKey;
 
 use crate::client::rotation_auth::RotationResponseKey;
 use crate::server::stream::{
@@ -37,7 +37,7 @@ fn hex_seed() -> [u8; 32] {
 
 fn signer() -> Arc<StaticStreamSigner> {
     Arc::new(StaticStreamSigner::new(
-        SigningKey::from_bytes(&hex_seed()),
+        ServerSigningKey::from_bytes(&hex_seed()),
         None,
     ))
 }

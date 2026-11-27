@@ -56,14 +56,118 @@ use crate::encoding::{encode_b64url, key_id};
 /// Length of an Ed25519 seed in bytes (RFC 8032).
 const SEED_LEN: usize = 32;
 
+/// The general-purpose server-signing key for response, stream and webhook signatures.
+/// Construct from an explicit 32-byte seed with `from_seed`; it is not a
+/// `server.seed` loader. `generate` uses operating-system entropy, and signing
+/// is deterministic RFC 8032 Ed25519.
+///
+/// It cannot be cloned or serialized:
+///
+/// ```compile_fail
+/// use mcp_jack::user_key::ServerSigningKey;
+/// fn duplicate(key: &ServerSigningKey) -> ServerSigningKey { key.clone() }
+/// ```
+///
+/// ```compile_fail
+/// use mcp_jack::user_key::ServerSigningKey;
+/// fn serialize(key: &ServerSigningKey) -> String {
+///     serde_json::to_string(key).expect("serialize")
+/// }
+/// ```
+/// The supplied seed is copied into Dalek's signing key, whose stored seed is
+/// best-effort zeroized on drop. Input and temporary seed copies are not
+/// explicitly zeroized, including those involved in `from_seed`, `from_bytes`,
+/// and `generate`; dropping this type is not a secure-erasure guarantee.
+pub struct ServerSigningKey {
+    signing_key: SigningKey,
+    public_key: [u8; 32],
+    kid: String,
+}
+
+impl ServerSigningKey {
+    /// Creates a key from exactly 32 seed bytes; wrong lengths are reported safely.
+    pub fn from_seed(seed: &[u8]) -> Result<Self, UserKeyError> {
+        let seed = <[u8; SEED_LEN]>::try_from(seed).map_err(|_| {
+            UserKeyError::new(format!(
+                "seed must be exactly {SEED_LEN} bytes, got {}",
+                seed.len()
+            ))
+        })?;
+        Ok(Self::from_seed_array(seed))
+    }
+
+    /// Creates a key from OS entropy.
+    pub fn generate() -> Result<Self, UserKeyError> {
+        let mut seed = [0u8; SEED_LEN];
+        getrandom::fill(&mut seed)
+            .map_err(|e| UserKeyError::new(format!("generating seed: {e}")))?;
+        Ok(Self::from_seed_array(seed))
+    }
+
+    /// Constructs from a statically sized 32-byte seed.
+    pub fn from_bytes(seed: &[u8; SEED_LEN]) -> Self {
+        Self::from_seed_array(*seed)
+    }
+
+    fn from_seed_array(seed: [u8; SEED_LEN]) -> Self {
+        let signing_key = SigningKey::from_bytes(&seed);
+        let public_key = *signing_key.verifying_key().as_bytes();
+        let kid = key_id(&public_key);
+        Self {
+            signing_key,
+            public_key,
+            kid,
+        }
+    }
+
+    /// Raw 32-byte public key.
+    pub fn public_key(&self) -> [u8; 32] {
+        self.public_key
+    }
+    /// Key identifier derived from the raw public key.
+    pub fn kid(&self) -> &str {
+        &self.kid
+    }
+    /// Deterministic signature of the exact message bytes.
+    pub fn sign(&self, message: &[u8]) -> [u8; 64] {
+        self.signing_key.sign(message).to_bytes()
+    }
+    /// Dalek-compatible public-key view.
+    pub fn verifying_key(&self) -> ServerVerifyingKey {
+        ServerVerifyingKey(self.public_key)
+    }
+}
+
+/// Public half of a [`ServerSigningKey`].
+#[derive(Clone, Copy)]
+pub struct ServerVerifyingKey([u8; 32]);
+impl ServerVerifyingKey {
+    /// Raw key bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+    /// Raw key bytes by value.
+    pub fn to_bytes(self) -> [u8; 32] {
+        self.0
+    }
+}
+impl fmt::Debug for ServerSigningKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ServerSigningKey {{ kid: {} }}", self.kid)
+    }
+}
+
 /// A software Ed25519 signing key held in process memory (client role).
 /// Constructed with [`ClientSigningKey::generate`] (OS entropy) or
 /// [`ClientSigningKey::from_seed`]; signing is deterministic RFC 8032
 /// Ed25519.
 ///
 /// The 32-byte seed is the whole signing capability: it is held in
-/// plaintext for the life of the key. The client type exposes NO seed
-/// accessor or private serializer.
+/// plaintext for the life of the key. Construction copies it into Dalek's
+/// signing key, whose stored seed is best-effort zeroized on drop. Input and
+/// temporary seed copies are not explicitly zeroized, including those involved
+/// in `from_seed` and `generate`; dropping this key is not a secure-erasure
+/// guarantee. The client type exposes NO seed accessor or private serializer.
 ///
 /// # Role guard
 ///

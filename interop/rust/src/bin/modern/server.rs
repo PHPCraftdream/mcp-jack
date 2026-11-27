@@ -166,7 +166,7 @@ pub fn run() -> ! {
     let state = FileState::open(&flags.state).unwrap_or_else(|e| fail(format!("--state: {e}")));
     let seed = crate::interop::hex_decode_32(&flags.seed_hex)
         .unwrap_or_else(|_| fail("--server-seed-hex must be 64 hex chars (32 bytes)"));
-    let server_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+    let server_key = mcp_jack::user_key::ServerSigningKey::from_bytes(&seed);
 
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -193,7 +193,7 @@ pub fn run() -> ! {
 async fn serve(
     flags: Flags,
     state: FileState,
-    server_key: ed25519_dalek::SigningKey,
+    server_key: mcp_jack::user_key::ServerSigningKey,
 ) -> Result<(), String> {
     let Flags {
         profile,

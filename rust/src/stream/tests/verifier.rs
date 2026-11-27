@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use ed25519_dalek::SigningKey;
+use crate::user_key::ServerSigningKey;
 
 use crate::client::rotation_auth::RotationResponseKey;
 use crate::client::transport::Clock;
@@ -43,7 +43,7 @@ fn hex_seed() -> [u8; 32] {
 }
 
 fn signer() -> StaticStreamSigner {
-    StaticStreamSigner::new(SigningKey::from_bytes(&hex_seed()), None)
+    StaticStreamSigner::new(ServerSigningKey::from_bytes(&hex_seed()), None)
 }
 
 /// Scripted clock: `samples[0]` is the open sample, then one per frame; the
@@ -319,7 +319,7 @@ fn open_header_codes_and_order() {
         known_cutoff: None,
     };
     open_err(&[value_ref], with_key(&samples, invalid), UnknownServerKey);
-    let other_key = SigningKey::from_bytes(&[3u8; 32])
+    let other_key = ServerSigningKey::from_bytes(&[3u8; 32])
         .verifying_key()
         .to_bytes();
     let mismatch = RotationResponseKey {

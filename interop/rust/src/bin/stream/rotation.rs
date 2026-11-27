@@ -116,7 +116,7 @@ pub(super) fn setup(
         std::process::exit(1)
     });
     let store_path = std::path::Path::new(rotation_store_path.as_deref().unwrap());
-    let server_key = ed25519_dalek::SigningKey::from_bytes(seed);
+    let server_key = mcp_jack::user_key::ServerSigningKey::from_bytes(seed);
     let kid0 = mcp_jack::encoding::key_id(server_key.verifying_key().as_bytes());
     let checkpoint = Checkpoint {
         ordinal: 0,

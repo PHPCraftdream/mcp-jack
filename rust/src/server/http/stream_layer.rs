@@ -23,6 +23,7 @@ use crate::server::modern::Profile;
 use crate::server::response_keys::ResponseKeys;
 use crate::server::stream::{StreamOptions, StreamRegistry};
 use crate::server::verify::Verifier;
+use crate::user_key::ServerSigningKey;
 
 /// The response body of the stream layer: a buffered answer or a live signed stream.
 pub type StreamBody = http_body_util::Channel<Bytes, std::convert::Infallible>;
@@ -30,7 +31,7 @@ pub type StreamBody = http_body_util::Channel<Bytes, std::convert::Infallible>;
 /// Configures [`StreamLayer::new`]: the static signing profile plus the 3.8 stream options.
 pub struct StreamConfig {
     pub verifier: Arc<Verifier>,
-    pub server_key: ed25519_dalek::SigningKey,
+    pub server_key: ServerSigningKey,
     pub max_body_bytes: usize,
     pub max_response_bytes: usize,
     pub streams: crate::server::stream::StreamOptions,

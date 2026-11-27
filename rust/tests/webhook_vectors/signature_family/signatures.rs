@@ -8,8 +8,8 @@
 //! single receiver pipeline: grammar, schemes, decoding, HMAC, freshness and
 //! the asymmetric step.
 
-use ed25519_dalek::SigningKey;
 use mcp_jack::encoding::encode_b64url;
+use mcp_jack::user_key::ServerSigningKey;
 use mcp_jack::webhook::card::WebhookKeyRecord;
 use mcp_jack::webhook::codes;
 use mcp_jack::webhook::encoding::{decode_b64_std_strict, encode_b64_std, WebhookSecret};
@@ -256,7 +256,7 @@ fn emission(input: &Value) -> Value {
         })
         .collect();
 
-    let key_values: Vec<(String, SigningKey, bool)> = input["keys"]
+    let key_values: Vec<(String, ServerSigningKey, bool)> = input["keys"]
         .as_array()
         .expect("emission keys")
         .iter()
@@ -313,14 +313,14 @@ fn fixture_secret(value: &Value) -> WebhookSecret {
 }
 
 /// Returns the kid and the signing key of one fixture identity name.
-fn fixture_key(value: &Value) -> (String, SigningKey) {
+fn fixture_key(value: &Value) -> (String, ServerSigningKey) {
     let (kid, _, key) = identity(&text_of(value));
     (kid, key)
 }
 
 /// Builds a signing key from a `whsk_` value: the standard base64 of the
 /// 32-byte Ed25519 seed (spec 06 R2.6 upstream example).
-fn seed_key(value: &Value, case_id: &str) -> SigningKey {
+fn seed_key(value: &Value, case_id: &str) -> ServerSigningKey {
     let text = text_of(value);
     let body = text
         .strip_prefix("whsk_")
@@ -331,7 +331,7 @@ fn seed_key(value: &Value, case_id: &str) -> SigningKey {
         .as_slice()
         .try_into()
         .unwrap_or_else(|_| panic!("{case_id}: private_key does not decode to a 32-byte seed"));
-    SigningKey::from_bytes(&seed)
+    ServerSigningKey::from_bytes(&seed)
 }
 
 /// Renders a JSON number or string as its decimal text (a timestamp).

@@ -14,7 +14,7 @@ use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use ed25519_dalek::{Signer, SigningKey};
+use mcp_jack::user_key::ServerSigningKey;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -226,9 +226,9 @@ fn operation(kid_name: &str, nonce_name: &str) -> [u8; 16] {
 }
 
 /// Registry signing key for a kid name (Go: vectorRegisteredKey seed).
-fn signing_key(kid_name: &str) -> SigningKey {
+fn signing_key(kid_name: &str) -> ServerSigningKey {
     let seed = digest(&format!("candidate-vector/key/{kid_name}"));
-    SigningKey::from_bytes(&seed)
+    ServerSigningKey::from_bytes(&seed)
 }
 
 /// Splits a seed-row key on ':'; single-name capacity rows fall back to a
@@ -622,7 +622,7 @@ fn build_request(
         &nonce_value,
         &body,
     );
-    let sig = encode_b64url(&key.sign(signing.as_bytes()).to_bytes());
+    let sig = encode_b64url(&key.sign(signing.as_bytes()));
     let target = if event.authenticated {
         target.to_owned()
     } else {

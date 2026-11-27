@@ -8,7 +8,7 @@ use crate::client::signer::InMemorySigner;
 use crate::client::transport::{Clock, NonceSource, Transport, TransportError};
 use crate::encoding::{decode_b64url_fixed, encode_b64url, key_id};
 use crate::signing::{request_signing_string, response_signing_string};
-use ed25519_dalek::{Signer as DalekSigner, SigningKey};
+use crate::user_key::ServerSigningKey;
 use std::sync::{Arc, Mutex};
 
 // keys.json seeds, the conformance fixture is the oracle.
@@ -34,13 +34,13 @@ fn alice() -> Arc<dyn Signer> {
 }
 
 fn alice_pub() -> [u8; 32] {
-    *SigningKey::from_bytes(&hex_bytes(ALICE_SEED_HEX))
+    *ServerSigningKey::from_bytes(&hex_bytes(ALICE_SEED_HEX))
         .verifying_key()
         .as_bytes()
 }
 
-fn svc_signing_key() -> SigningKey {
-    SigningKey::from_bytes(&hex_bytes(SVC_SEED_HEX))
+fn svc_signing_key() -> ServerSigningKey {
+    ServerSigningKey::from_bytes(&hex_bytes(SVC_SEED_HEX))
 }
 
 fn svc_key() -> [u8; 32] {
@@ -150,7 +150,7 @@ impl Transport for StubTransport {
                 format_response_auth(&ResponseAuth {
                     kid,
                     ts: FIXED_TS,
-                    sig: encode_b64url(&sig.to_bytes()),
+                    sig: encode_b64url(&sig),
                 }),
             ),
             ("Content-Type".to_owned(), "application/json".to_owned()),

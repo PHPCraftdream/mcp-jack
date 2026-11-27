@@ -543,7 +543,7 @@ fn build_verifier(
 
 fn build_stream_layer(
     verifier: Verifier,
-    key: ed25519_dalek::SigningKey,
+    key: mcp_jack::user_key::ServerSigningKey,
     options: mcp_jack::server::stream::StreamOptions,
     profile: Profile,
 ) -> StreamLayer {
@@ -662,7 +662,7 @@ pub fn run() -> ! {
         controls: controls.clone(),
         tasks: tasks.clone(),
     };
-    let key = ed25519_dalek::SigningKey::from_bytes(&seed);
+    let key = mcp_jack::user_key::ServerSigningKey::from_bytes(&seed);
     let public_key = mcp_jack::encoding::encode_b64url(key.verifying_key().as_bytes());
     let server_kid = mcp_jack::encoding::key_id(key.verifying_key().as_bytes());
     #[cfg(target_os = "linux")]

@@ -11,7 +11,7 @@
 //! Unlike the Standard Webhooks values of section 2, the Jack values are
 //! canonical unpadded base64url (spec 06 R4.1, R4.2).
 
-use ed25519_dalek::{Signer, SigningKey};
+use crate::user_key::ServerSigningKey;
 
 use crate::encoding::{body_hash, decode_b64url_fixed, encode_b64url};
 use crate::webhook::signatures::ServerKey;
@@ -112,13 +112,10 @@ pub fn signing_string(parts: &JackSigningParts<'_>) -> String {
 /// signature is rendered as canonical unpadded base64url, which always gives
 /// the 86 characters R4.1 requires; the result is
 /// `"w1 kid=<kid>,sig=<sig>"` (spec 06 R4.1, R4.2).
-pub fn sign(key: &SigningKey, kid: &str, parts: &JackSigningParts<'_>) -> String {
+pub fn sign(key: &ServerSigningKey, kid: &str, parts: &JackSigningParts<'_>) -> String {
     let message = signing_string(parts);
     let signature = key.sign(message.as_bytes());
-    format!(
-        "{W1_SCHEME} kid={kid},sig={}",
-        encode_b64url(&signature.to_bytes())
-    )
+    format!("{W1_SCHEME} kid={kid},sig={}", encode_b64url(&signature))
 }
 
 /// The two parameters of a parsed `Jack-Webhook-Auth` value (spec 06 R4.1).

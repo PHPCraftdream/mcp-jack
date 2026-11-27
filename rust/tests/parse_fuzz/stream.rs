@@ -123,9 +123,9 @@ fn signed_stream_mutations() {
         );
     });
 
-    use ed25519_dalek::SigningKey;
     use mcp_jack::stream::{StaticStreamSigner, StreamBuilder};
-    let signer = StaticStreamSigner::new(SigningKey::from_bytes(&[7; 32]), None);
+    use mcp_jack::user_key::ServerSigningKey;
+    let signer = StaticStreamSigner::new(ServerSigningKey::from_bytes(&[7; 32]), None);
 
     // LF is preserved as message data but rejected by the stdio line consumer.
     let (_, open) = StreamBuilder::open(

@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use ed25519_dalek::{Signer as DalekSigner, SigningKey};
+use mcp_jack::user_key::ServerSigningKey;
 
 use super::fixtures::load_keys;
 use mcp_jack::auth_header::{format_response_auth, parse_request_auth};
@@ -58,11 +58,11 @@ pub fn hex_bytes(s: &str) -> Vec<u8> {
         .collect()
 }
 
-fn signing_key(seed_hex: &str) -> SigningKey {
+fn signing_key(seed_hex: &str) -> ServerSigningKey {
     let seed: [u8; 32] = hex_bytes(seed_hex)
         .try_into()
         .unwrap_or_else(|_| panic!("seed hex {seed_hex} must be 32 bytes"));
-    SigningKey::from_bytes(&seed)
+    ServerSigningKey::from_bytes(&seed)
 }
 
 /// InMemorySigner from a seed hex string (Go: seedSignerFromTestKey).
@@ -151,7 +151,7 @@ pub type Handler =
 /// The fake server: verifies requests per spec 01 section 4 and signs
 /// responses with its own key (Go: testServer).
 pub struct TestServer {
-    key: SigningKey,
+    key: ServerSigningKey,
     /// 32-byte server public key (Go: s.Pub).
     pub pub_key: [u8; 32],
     /// key_id(&pub_key) (Go: s.Kid).
@@ -213,7 +213,7 @@ impl TestServer {
         format_response_auth(&ResponseAuth {
             kid: self.kid.clone(),
             ts: self.now,
-            sig: encode_b64url(&sig.to_bytes()),
+            sig: encode_b64url(&sig),
         })
     }
 

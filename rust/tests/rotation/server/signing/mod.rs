@@ -18,8 +18,8 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use bytes::Bytes;
-use ed25519_dalek::SigningKey;
 use http_body_util::Full;
+use mcp_jack::user_key::ServerSigningKey;
 use tower::{Layer as _, ServiceExt};
 
 use mcp_jack::auth_header::parse_response_auth;
@@ -404,7 +404,7 @@ fn new_harness(
         }
         Profile::Static => JackLayer::new(HandlerConfig {
             verifier: Arc::new(verifier),
-            server_key: SigningKey::from_bytes(&STATIC_SEED),
+            server_key: ServerSigningKey::from_bytes(&STATIC_SEED),
             max_body_bytes: 0,
             max_response_bytes: 0,
         }),

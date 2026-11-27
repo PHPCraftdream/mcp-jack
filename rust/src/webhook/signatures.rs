@@ -8,7 +8,7 @@
 //! neither a secret nor a header byte can reach an error (spec 06 section 3,
 //! R2.3).
 
-use ed25519_dalek::{Signer, SigningKey};
+use crate::user_key::ServerSigningKey;
 
 use crate::webhook::encoding::{
     constant_time_eq, decode_b64_std_strict, encode_b64_std, hmac_sha256, sha256, WebhookSecret,
@@ -105,9 +105,9 @@ pub fn v1_sign(secret: &WebhookSecret, content: &SignatureContent<'_>) -> String
 /// Ed25519 signs the raw content — no hash and no endpoint id — and the
 /// 64-byte signature is rendered as canonical padded standard base64
 /// (spec 06 R2.5).
-pub fn v1a_sign(key: &SigningKey, content: &SignatureContent<'_>) -> String {
+pub fn v1a_sign(key: &ServerSigningKey, content: &SignatureContent<'_>) -> String {
     let signature = key.sign(&content.to_bytes());
-    format!("v1a,{}", encode_b64_std(&signature.to_bytes()))
+    format!("v1a,{}", encode_b64_std(&signature))
 }
 
 /// Renders the `v2a,<value>` header entry of spec 06 R2.6.
@@ -115,9 +115,13 @@ pub fn v1a_sign(key: &SigningKey, content: &SignatureContent<'_>) -> String {
 /// Ed25519 signs the SHA-256 digest of `v2a_digest`, i.e.
 /// `endpoint_id "." webhook-id "." timestamp "." body`, and the 64-byte
 /// signature is rendered as canonical padded standard base64 (spec 06 R2.6).
-pub fn v2a_sign(key: &SigningKey, endpoint_id: &str, content: &SignatureContent<'_>) -> String {
+pub fn v2a_sign(
+    key: &ServerSigningKey,
+    endpoint_id: &str,
+    content: &SignatureContent<'_>,
+) -> String {
     let signature = key.sign(&v2a_digest(endpoint_id, content));
-    format!("v2a,{}", encode_b64_std(&signature.to_bytes()))
+    format!("v2a,{}", encode_b64_std(&signature))
 }
 
 /// The signature schemes of spec 06 section 2 (R2.2, R2.5, R2.6).
@@ -370,7 +374,7 @@ pub struct EmissionKey<'a> {
     /// (spec 06 R2.6, R2.8).
     pub kid: &'a str,
     /// The Ed25519 signing key that signs `v1a` and `v2a` (spec 06 R2.5, R2.6).
-    pub signing_key: &'a ed25519_dalek::SigningKey,
+    pub signing_key: &'a ServerSigningKey,
     /// `true` for the current signing key, `false` for the previous one still
     /// published by the rotation of section 8 (spec 06 R2.8).
     pub current: bool,

@@ -1,16 +1,15 @@
 use super::*;
 use crate::server::state::MemoryState;
-use ed25519_dalek::Signer;
-use ed25519_dalek::SigningKey;
+use crate::user_key::ServerSigningKey;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 const NOW: i64 = 1_767_225_600;
 const AUD: &str = "aud";
 
 /// Deterministic key material derived from `id` (Go: stateTestKey).
-fn test_signing(id: &str) -> SigningKey {
+fn test_signing(id: &str) -> ServerSigningKey {
     let seed = Sha256::digest(id.as_bytes());
-    SigningKey::from_bytes(&seed.into())
+    ServerSigningKey::from_bytes(&seed.into())
 }
 
 fn test_key(id: &str, name: &str) -> RegistryEntry {

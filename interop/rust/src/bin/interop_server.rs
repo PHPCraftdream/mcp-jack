@@ -330,7 +330,7 @@ async fn run() -> Result<(), String> {
         Ok(seed) => seed,
         Err(_) => fail("--server-seed-hex must be 64 hex chars (32 bytes)"),
     };
-    let server_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+    let server_key = mcp_jack::user_key::ServerSigningKey::from_bytes(&seed);
     let kid = key_id(server_key.verifying_key().as_bytes());
     let pub_b64 = encode_b64url(server_key.verifying_key().as_bytes());
 

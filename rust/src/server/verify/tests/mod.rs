@@ -3,8 +3,7 @@ use crate::encoding::encode_b64url;
 use crate::server::audit::MemoryAuditSink;
 use crate::server::native::{Native, NativeOptions};
 use crate::server::state::{InviteRecord, MemoryState, StateEdit};
-use ed25519_dalek::Signer;
-use ed25519_dalek::SigningKey;
+use crate::user_key::ServerSigningKey;
 use sha2::{Digest, Sha256};
 
 const NOW: i64 = 1_767_225_600;
@@ -13,9 +12,9 @@ const PING: &str = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
 
 /// Deterministic test key pair derived from a fixed id (mirrors
 /// state.rs state_test_key).
-fn test_key(id: &str) -> (SigningKey, RegistryEntry) {
+fn test_key(id: &str) -> (ServerSigningKey, RegistryEntry) {
     let seed = Sha256::digest(id.as_bytes());
-    let signing = SigningKey::from_bytes(&seed.into());
+    let signing = ServerSigningKey::from_bytes(&seed.into());
     let public = signing.verifying_key().to_bytes();
     (
         signing,
@@ -31,7 +30,7 @@ fn test_key(id: &str) -> (SigningKey, RegistryEntry) {
 }
 
 /// Like `test_key` but with the admin flag set.
-fn admin_key(id: &str) -> (SigningKey, RegistryEntry) {
+fn admin_key(id: &str) -> (ServerSigningKey, RegistryEntry) {
     let (key, mut entry) = test_key(id);
     entry.admin = true;
     (key, entry)
@@ -114,13 +113,13 @@ fn signed(
     method: &str,
     target: &str,
     body: &[u8],
-    key: &SigningKey,
+    key: &ServerSigningKey,
     kid: &str,
     ts: i64,
     nonce: &str,
 ) -> Request {
     let signing = request_signing_string(method, target, AUD, kid, ts, nonce, body);
-    let sig = encode_b64url(&key.sign(signing.as_bytes()).to_bytes());
+    let sig = encode_b64url(&key.sign(signing.as_bytes()));
     Request {
         method: method.to_owned(),
         target: target.to_owned(),
@@ -139,7 +138,7 @@ fn nonce(n: u64) -> String {
 fn post_call(
     tool: &str,
     arguments: Option<&str>,
-    key: &SigningKey,
+    key: &ServerSigningKey,
     kid: &str,
     nonce: &str,
 ) -> Request {
@@ -147,7 +146,7 @@ fn post_call(
     signed("POST", "/mcp", body.as_bytes(), key, kid, NOW, nonce)
 }
 
-fn get(key: &SigningKey, kid: &str, ts: i64, nonce: &str) -> Request {
+fn get(key: &ServerSigningKey, kid: &str, ts: i64, nonce: &str) -> Request {
     signed("GET", "/mcp", b"", key, kid, ts, nonce)
 }
 

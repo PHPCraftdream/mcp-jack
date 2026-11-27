@@ -310,7 +310,7 @@ impl StateStore for MemoryState {
 mod tests {
     use super::*;
     use crate::encoding::{encode_b64url, key_id};
-    use ed25519_dalek::SigningKey;
+    use crate::user_key::ServerSigningKey;
     use sha2::{Digest, Sha256};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -325,7 +325,7 @@ mod tests {
     /// validation later.
     fn state_test_key(id: &str, name: &str) -> RegistryEntry {
         let seed = Sha256::digest(id.as_bytes());
-        let signing = SigningKey::from_bytes(&seed.into());
+        let signing = ServerSigningKey::from_bytes(&seed.into());
         let public = signing.verifying_key().to_bytes();
         RegistryEntry {
             kid: key_id(&public),
