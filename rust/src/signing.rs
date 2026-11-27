@@ -139,7 +139,7 @@ pub fn verify_response(
 mod tests {
     use super::*;
     use crate::encoding::encode_b64url;
-    use ed25519_dalek::{Signer, SigningKey};
+    use crate::user_key::ServerSigningKey;
 
     const RFC_SEED_HEX: &str = "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60";
     const TS: i64 = 1767225600;
@@ -165,13 +165,13 @@ mod tests {
     /// stand-in whose value is irrelevant: it is only bound into the signing
     /// string, never itself verified.
     fn fixture(seed: [u8; 32]) -> Fixture {
-        let signing = SigningKey::from_bytes(&seed);
+        let signing = ServerSigningKey::from_bytes(&seed);
         let server_pub = *signing.verifying_key().as_bytes();
         let kid = key_id(&server_pub);
         let req_sig = "a".repeat(86);
         let body = br#"{"jsonrpc":"2.0","id":1}"#;
         let msg = response_signing_string(200, &req_sig, &kid, TS, body);
-        let sig = encode_b64url(&signing.sign(msg.as_bytes()).to_bytes());
+        let sig = encode_b64url(&signing.sign(msg.as_bytes()));
         let header = format!("v1 kid={kid},ts={TS},sig={sig}");
         Fixture {
             server_pub,

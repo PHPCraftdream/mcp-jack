@@ -1,4 +1,3 @@
-use ed25519_dalek::{Signer, SigningKey};
 use mcp_jack::client::{ClientError, InMemorySigner, Signer as JackSigner};
 use mcp_jack::encoding::{body_hash, decode_b64url, decode_b64url_fixed, encode_b64url, key_id};
 use mcp_jack::rotation::{self, Binding, Checkpoint};

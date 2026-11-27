@@ -13,7 +13,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use ed25519_dalek::SigningKey;
+use crate::user_key::ServerSigningKey;
 
 use crate::webhook::delivery::{LastError, MAX_BODY_BYTES};
 use crate::webhook::encoding::WebhookSecret;
@@ -462,7 +462,10 @@ pub(super) fn message(url: &str) -> OutgoingMessage {
         kind: MessageKind::Verification,
         body: br#"{"type":"verification"}"#.to_vec(),
         secrets: vec![WebhookSecret::parse(SECRET).expect("the test secret is valid")],
-        signing_keys: vec![("kid-1".to_owned(), SigningKey::from_bytes(&KEY_SEED))],
+        signing_keys: vec![(
+            "kid-1".to_owned(),
+            Arc::new(ServerSigningKey::from_bytes(&KEY_SEED)),
+        )],
         aud: None,
         jack_signing: None,
         expires_at_ms: None,

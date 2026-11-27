@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use bytes::Bytes;
-use ed25519_dalek::SigningKey;
 use http_body_util::Full;
+use mcp_jack::user_key::ServerSigningKey;
 use tower::{Layer, ServiceExt};
 
 use mcp_jack::client::auth::sign_request;
@@ -144,7 +144,7 @@ fn build_verifier(
 }
 
 /// The keys.json "svc" signing key (the server's response key).
-fn server_signing_key() -> SigningKey {
+fn server_signing_key() -> ServerSigningKey {
     let keys = fixtures::load_keys().expect("load keys.json");
     let svc = keys
         .keys
@@ -154,7 +154,7 @@ fn server_signing_key() -> SigningKey {
     let seed: [u8; 32] = harness::hex_bytes(&svc.seed_hex)
         .try_into()
         .expect("svc seed is 32 bytes");
-    SigningKey::from_bytes(&seed)
+    ServerSigningKey::from_bytes(&seed)
 }
 
 /// The harness around one `Modern`-profile service: the counting native tool,

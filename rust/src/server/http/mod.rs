@@ -45,7 +45,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use bytes::{Buf, BufMut, Bytes};
-use ed25519_dalek::Signer as _;
 use http::header::CONTENT_TYPE;
 use http::{HeaderValue, Method, StatusCode};
 use http_body_util::{BodyExt, Full};
@@ -61,6 +60,7 @@ use crate::server::modern::{
 };
 use crate::server::response_keys::{ReleaseGuard, ResponseKeyRequest, ResponseKeys};
 use crate::server::verify::{Authentication, Verifier, VerifyResult};
+use crate::user_key::ServerSigningKey;
 
 mod forward;
 mod modern;
@@ -96,7 +96,7 @@ const DEFAULT_MAX_RESPONSE_BYTES: usize = 1 << 20;
 enum SigningProfile {
     /// Static Ed25519 key; the existing current-v1 behavior.
     Static {
-        key: Box<ed25519_dalek::SigningKey>,
+        key: Arc<ServerSigningKey>,
         kid: String,
     },
     /// Rotating authorization profile (Go: HandlerConfig.ResponseKeys).
@@ -109,7 +109,7 @@ pub struct HandlerConfig {
     /// Authenticates and authorizes every request.
     pub verifier: Arc<Verifier>,
     /// Signs responses (spec 01 section 5); clients pin its public key.
-    pub server_key: ed25519_dalek::SigningKey,
+    pub server_key: ServerSigningKey,
     /// Bounds the request body; zero means 1 MiB (Go: limit <= 0). The body
     /// must be read in full to be hashed, so the limit is a DoS guard.
     pub max_body_bytes: usize,
@@ -157,8 +157,7 @@ pub struct RotatingHandlerConfig {
 
 /// Tower layer wrapping an unmodified MCP server (Go: `handler` + NewHandler).
 /// Only authenticated and authorized requests reach the inner service and every
-/// verified answer is signed. No `Debug`/`Display`: `SigningKey`'s derived
-/// forms would print key material.
+/// verified answer is signed. Its signing key has a redacted `Debug` form.
 ///
 /// ```ignore
 /// use bytes::Bytes;
@@ -204,8 +203,8 @@ impl JackLayer {
         };
         Self {
             signing: SigningProfile::Static {
-                kid: key_id(cfg.server_key.verifying_key().as_bytes()),
-                key: Box::new(cfg.server_key),
+                kid: cfg.server_key.kid().to_owned(),
+                key: Arc::new(cfg.server_key),
             },
             verifier: cfg.verifier,
             limit,
@@ -745,7 +744,7 @@ where
                     now,
                     &body,
                 );
-                let sig = key.sign(signing.as_bytes()).to_bytes();
+                let sig = key.sign(signing.as_bytes());
                 let auth = format_response_auth(&ResponseAuth {
                     kid: kid.clone(),
                     ts: now,

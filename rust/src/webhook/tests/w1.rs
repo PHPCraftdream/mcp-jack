@@ -5,7 +5,7 @@
 //! expected header is the KAT of `webhook-w1-vectors.json`; nothing here
 //! reads a file at run time.
 
-use ed25519_dalek::SigningKey;
+use crate::user_key::ServerSigningKey;
 
 use crate::encoding::{body_hash, encode_b64url};
 use crate::webhook::encoding::sha256;
@@ -40,13 +40,13 @@ const WINDOW: i64 = 30;
 const SERVER_KID: &str = "wltl591LbtvQV2vee3U5IpVRhqVxpnEeuh1NZh_mL88";
 
 /// Returns the deterministic signing key of the `newbie` test key.
-fn webhook_signing_key() -> SigningKey {
-    SigningKey::from_bytes(&sha256(b"mcp-jack test key: newbie"))
+fn webhook_signing_key() -> ServerSigningKey {
+    ServerSigningKey::from_bytes(&sha256(b"mcp-jack test key: newbie"))
 }
 
 /// Returns the `kid` of a signing key, `base64url(SHA-256(public key))`
 /// (spec 06 R4.5).
-fn kid_of(key: &SigningKey) -> String {
+fn kid_of(key: &ServerSigningKey) -> String {
     encode_b64url(&sha256(key.verifying_key().as_bytes()))
 }
 
@@ -71,7 +71,7 @@ struct LocalKey {
 
 impl LocalKey {
     /// Builds the accepted key of one signing key (spec 06 R4.5).
-    fn from_signing(key: &SigningKey) -> Self {
+    fn from_signing(key: &ServerSigningKey) -> Self {
         Self {
             kid: kid_of(key),
             public_key: *key.verifying_key().as_bytes(),
@@ -154,7 +154,7 @@ fn the_six_failure_codes_are_checked_in_order() {
     let honest_header = sign(&signing, &kid, &in_window);
     let malformed = "w1 kid=short,sig=short";
     let server_header = format!("w1 kid={SERVER_KID},sig={}", "A".repeat(SIG_LEN));
-    let other_signing = SigningKey::from_bytes(&sha256(b"mcp-jack test key: mallory"));
+    let other_signing = ServerSigningKey::from_bytes(&sha256(b"mcp-jack test key: mallory"));
     let unknown_header = sign(&other_signing, &kid_of(&other_signing), &in_window);
     let stale = parts("1700000000");
     let stale_header = sign(&signing, &kid, &stale);
@@ -217,7 +217,7 @@ fn the_first_failing_check_wins() {
     let stale_header = sign(&signing, &kid, &stale);
     let malformed = "w1 kid=short,sig=short";
     let server_header = format!("w1 kid={SERVER_KID},sig={}", "A".repeat(SIG_LEN));
-    let unknown_signing = SigningKey::from_bytes(&sha256(b"mcp-jack test key: mallory"));
+    let unknown_signing = ServerSigningKey::from_bytes(&sha256(b"mcp-jack test key: mallory"));
     let unknown_header = sign(&unknown_signing, &kid_of(&unknown_signing), &stale);
 
     // Presence beats every later check.

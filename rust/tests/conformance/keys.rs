@@ -58,7 +58,7 @@ fn keys_json_derivation() {
         let seed: [u8; 32] = seed.try_into().unwrap_or_else(|_| {
             panic!("key {}: seed_hex is not 32 bytes", key.name);
         });
-        let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
+        let signing = mcp_jack::user_key::ServerSigningKey::from_bytes(&seed);
         let derived = signing.verifying_key().as_bytes().to_vec();
         let fixture_pub = mcp_jack::encoding::decode_b64url_fixed(key.public_key.as_str(), 32)
             .unwrap_or_else(|e| panic!("key {}: bad public_key b64u: {:?}", key.name, e));

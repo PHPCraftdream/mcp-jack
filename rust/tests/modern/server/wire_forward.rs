@@ -19,9 +19,9 @@ use std::sync::{Arc, Mutex};
 use crate::server::common::fixtures;
 use crate::server::common::harness::{self, FIXTURE_AUD, FIXTURE_NOW};
 use bytes::Bytes;
-use ed25519_dalek::SigningKey;
 use http::HeaderValue;
 use http_body_util::Full;
+use mcp_jack::user_key::ServerSigningKey;
 use tower::{Layer, ServiceExt};
 
 use mcp_jack::client::auth::sign_request;
@@ -157,7 +157,7 @@ fn build_verifier(state: MemoryState) -> Arc<Verifier> {
 }
 
 /// The keys.json "svc" signing key (the server's response key).
-fn server_signing_key() -> SigningKey {
+fn server_signing_key() -> ServerSigningKey {
     let keys = fixtures::load_keys().expect("load keys.json");
     let svc = keys
         .keys
@@ -167,7 +167,7 @@ fn server_signing_key() -> SigningKey {
     let seed: [u8; 32] = harness::hex_bytes(&svc.seed_hex)
         .try_into()
         .expect("svc seed is 32 bytes");
-    SigningKey::from_bytes(&seed)
+    ServerSigningKey::from_bytes(&seed)
 }
 
 /// Fixture verifier, the keys.json "svc" server key, `profile`, and an inner

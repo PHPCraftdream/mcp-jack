@@ -200,7 +200,7 @@ pub fn run() -> ! {
         Ok(seed) => seed,
         Err(_) => fatal("--server-seed-hex must be 64 hex chars (32 bytes)"),
     };
-    let server_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+    let server_key = mcp_jack::user_key::ServerSigningKey::from_bytes(&seed);
     let kid0 = key_id(server_key.verifying_key().as_bytes());
     let pub0: [u8; 32] = *server_key.verifying_key().as_bytes();
     let pub0_b64 = encode_b64url(&pub0);

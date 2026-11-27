@@ -119,7 +119,7 @@ fn rotate_preserves_admin() {
     let new_signing = test_signing("newroot");
     let new_pub_key = test_key("newroot", "root");
     let proof_string = rotate_proof_string(AUD, &caller.kid, &new_pub_key.kid, NOW);
-    let old_key_proof = encode_b64url(&old_signing.sign(proof_string.as_bytes()).to_bytes());
+    let old_key_proof = encode_b64url(&old_signing.sign(proof_string.as_bytes()));
 
     let mut invalid_call = make_call(
         TOOL_ROTATE_KEY,
@@ -141,7 +141,7 @@ fn rotate_preserves_admin() {
 
     // The new key signs the exact same rotate proof bytes; that proof is
     // valid for possession of the submitted replacement key.
-    let new_key_proof = encode_b64url(&new_signing.sign(proof_string.as_bytes()).to_bytes());
+    let new_key_proof = encode_b64url(&new_signing.sign(proof_string.as_bytes()));
     let mut valid_call = make_call(
         TOOL_ROTATE_KEY,
         raw_args(&format!(

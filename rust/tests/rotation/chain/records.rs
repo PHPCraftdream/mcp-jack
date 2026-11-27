@@ -70,7 +70,7 @@ fn positive_exact_bytes_proofs_overlap_and_tie() {
                 format!("mcp-jack test key: candidate-server-next{}", index + 1).as_bytes(),
             )
             .into();
-            let key = SigningKey::from_bytes(&seed);
+            let key = mcp_jack::user_key::ServerSigningKey::from_bytes(&seed);
             let proof = key.sign(
                 format!(
                     "{}/next-proof\n{}",
@@ -79,7 +79,7 @@ fn positive_exact_bytes_proofs_overlap_and_tie() {
                 )
                 .as_bytes(),
             );
-            assert_eq!(encode_b64url(&proof.to_bytes()), lines[10]);
+            assert_eq!(encode_b64url(&proof), lines[10]);
         }
         assert_eq!(
             rotation::selected_ordinal(&records, 173_799).expect("time"),

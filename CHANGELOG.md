@@ -15,6 +15,7 @@ This file records repository history. The dated `0.1.0` section below is the cur
 - Adds `notifications/events/list_changed` delivery on opted-in `subscriptions/listen` subscriptions.
 - Adds configurable signed-stream server options `frameMaxBytes`, `maxConcurrentStreams`, `maxStreamDurationMs`, and `heartbeatMs` (spec 05), and webhook destination `allowedRanges` configuration (spec 06). These are configuration APIs, not Go CLI flags.
 - Keeps existing `mcp-jack/v1` request and JSON-response wire bytes unchanged; modern streams and webhooks use new identifiers.
+- Adds SDK-owned `ServerSigningKey` for response, stream, and webhook signing while preserving signature bytes.
 - See [modern compatibility](docs/compatibility.md), [operations](docs/operations.md), and [threat model](docs/threat-model.md). Interop and vector documents describe scope; this entry does not claim matrices passed.
 
 - Removed the panicking `HttpTransport` default and moved the Rust interop harness outside the SDK crate into its own unpublished crate.

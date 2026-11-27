@@ -2,12 +2,12 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use ed25519_dalek::SigningKey;
 use mcp_jack::client::RotationResponseKey;
 use mcp_jack::encoding::{decode_b64url, encode_b64url};
 use mcp_jack::stream::{
     StaticStreamSigner, StreamBuilder, StreamConsumer, StreamVerifier, StreamVerifierConfig,
 };
+use mcp_jack::user_key::ServerSigningKey;
 use serde_json::Value;
 
 const CLIENT_CASES: usize = 80;
@@ -381,7 +381,7 @@ fn run_build_corpus() {
         .find(|key| key["name"] == "svc")
         .expect("svc seed");
     let signer = StaticStreamSigner::new(
-        SigningKey::from_bytes(&seed_from_hex(text(&svc["seed_hex"], "svc seed_hex"))),
+        ServerSigningKey::from_bytes(&seed_from_hex(text(&svc["seed_hex"], "svc seed_hex"))),
         None,
     );
     let cases = load(&fixture_root.join("modern/stream-build-vectors.json"))["cases"]

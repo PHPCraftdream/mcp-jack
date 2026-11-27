@@ -358,7 +358,7 @@ where
             SigningProfile::Static { key, kid } => {
                 // 3.1: the open header and every frame use the same static key.
                 let signer: Arc<dyn StreamSigner> =
-                    Arc::new(StaticStreamSigner::new((**key).clone(), None));
+                    Arc::new(StaticStreamSigner::from_shared(Arc::clone(key), None));
                 let Some((_, open)) =
                     StreamBuilder::open(200, &res.request_sig, kid, open_ts, &sid, &*signer)
                 else {
@@ -669,7 +669,7 @@ mod tests {
 
     #[test]
     fn pump_blocked_capacity_one_send_observes_duration_and_releases_slot() {
-        use ed25519_dalek::SigningKey;
+        use crate::user_key::ServerSigningKey;
 
         let registry = Arc::new(StreamRegistry::new());
         let slot = registry.try_acquire("identity", 1).expect("slot");
@@ -679,8 +679,10 @@ mod tests {
             0xf8, 0x0a, 0x2b, 0xb8, 0xe7, 0xb1, 0xaa, 0x4c, 0x04, 0xbf, 0x07, 0x6f, 0x33, 0xe0,
             0xaa, 0xd2, 0xc9, 0x01,
         ];
-        let concrete_signer =
-            Arc::new(StaticStreamSigner::new(SigningKey::from_bytes(&seed), None));
+        let concrete_signer = Arc::new(StaticStreamSigner::new(
+            ServerSigningKey::from_bytes(&seed),
+            None,
+        ));
         let signer: Arc<dyn StreamSigner> = concrete_signer.clone();
         let open = StreamBuilder::open(
             200,

@@ -7,7 +7,7 @@ mod verified;
 
 use std::sync::{Arc, Mutex};
 
-use ed25519_dalek::SigningKey;
+use crate::user_key::ServerSigningKey;
 
 use crate::client::transport::Clock;
 use crate::stream::{SignedOpen, StaticStreamSigner, StreamBuilder, StreamVerifierConfig};
@@ -39,7 +39,7 @@ fn hex_seed(seed_hex: &str) -> [u8; 32] {
 
 /// The fixture `svc` stream key (TEST ONLY).
 fn svc_signer() -> StaticStreamSigner {
-    StaticStreamSigner::new(SigningKey::from_bytes(&hex_seed(SVC_SEED_HEX)), None)
+    StaticStreamSigner::new(ServerSigningKey::from_bytes(&hex_seed(SVC_SEED_HEX)), None)
 }
 
 /// The signed open header of a stream bound to `request_sig`.

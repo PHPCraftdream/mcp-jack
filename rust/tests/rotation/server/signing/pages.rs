@@ -484,9 +484,7 @@ async fn static_profile_still_signs_with_static_key() {
         anchor_hook: None,
         profile: Profile::Static,
     });
-    let static_pub = SigningKey::from_bytes(&STATIC_SEED)
-        .verifying_key()
-        .to_bytes();
+    let static_pub = ServerSigningKey::from_bytes(&STATIC_SEED).public_key();
     let sent = signed_request(&h.caller, "POST", "/mcp", PING_BODY);
     let got = inspect(
         send(&h.service, build_request(&sent, "POST", "/mcp", PING_BODY))

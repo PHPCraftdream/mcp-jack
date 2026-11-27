@@ -351,9 +351,7 @@ fn failed_tool_calls_mutate_nothing() {
     //    mid-closure key_exists BEFORE remove_key/put_key (spec 03
     //    section 3.1 order: arguments, new key, proof, existence).
     let proof = encode_b64url(
-        &bob_signing
-            .sign(rotate_proof_string(AUD, &alice.kid, &bob.kid, NOW).as_bytes())
-            .to_bytes(),
+        &bob_signing.sign(rotate_proof_string(AUD, &alice.kid, &bob.kid, NOW).as_bytes()),
     );
     let before = state.view();
     let err = call(

@@ -46,7 +46,7 @@ pub(crate) struct CardKey {
 /// Returns the deterministic card key of `name` (spec 06 R7.3).
 pub(crate) fn card_key(name: &str) -> CardKey {
     let seed = sha256(format!("mcp-jack test key: {name}").as_bytes());
-    let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
+    let signing = crate::user_key::ServerSigningKey::from_bytes(&seed);
     let verifying = signing.verifying_key();
     let public_key = verifying.as_bytes();
     CardKey {

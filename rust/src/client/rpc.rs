@@ -385,7 +385,7 @@ mod tests {
     use crate::client::transport::{HttpRequest, HttpResponse, TransportError};
     use crate::encoding::{decode_b64url_fixed, encode_b64url, key_id};
     use crate::signing::{request_signing_string, response_signing_string};
-    use ed25519_dalek::{Signer as DalekSigner, SigningKey};
+    use crate::user_key::ServerSigningKey;
     use std::sync::Mutex;
 
     // keys.json seeds, the conformance fixture is the oracle.
@@ -410,13 +410,13 @@ mod tests {
     }
 
     fn svc_key() -> [u8; 32] {
-        *SigningKey::from_bytes(&hex_bytes(SVC_SEED_HEX))
+        *ServerSigningKey::from_bytes(&hex_bytes(SVC_SEED_HEX))
             .verifying_key()
             .as_bytes()
     }
 
-    fn svc_signing_key() -> SigningKey {
-        SigningKey::from_bytes(&hex_bytes(SVC_SEED_HEX))
+    fn svc_signing_key() -> ServerSigningKey {
+        ServerSigningKey::from_bytes(&hex_bytes(SVC_SEED_HEX))
     }
 
     struct UnreachableTransport;
@@ -428,7 +428,7 @@ mod tests {
     }
 
     fn signed_response(
-        server: &SigningKey,
+        server: &ServerSigningKey,
         request_sig_b64: &str,
         status: u16,
         body: &[u8],
@@ -440,7 +440,7 @@ mod tests {
         let header = format_response_auth(&ResponseAuth {
             kid,
             ts,
-            sig: encode_b64url(&sig.to_bytes()),
+            sig: encode_b64url(&sig),
         });
         (header, body.to_vec())
     }
@@ -627,7 +627,7 @@ mod tests {
 
     #[test]
     fn call_tool_raw_happy_path_over_canned_transport() {
-        let alice_signing = SigningKey::from_bytes(&hex_bytes(ALICE_SEED_HEX));
+        let alice_signing = ServerSigningKey::from_bytes(&hex_bytes(ALICE_SEED_HEX));
         let alice_pub = *alice_signing.verifying_key().as_bytes();
         let svc = svc_signing_key();
         let captured_id: Arc<Mutex<Option<i64>>> = Arc::new(Mutex::new(None));

@@ -18,7 +18,7 @@ use crate::client::transport::{
 use crate::encoding::{encode_b64url, key_id};
 use crate::signing::response_signing_string;
 use crate::stream::StreamBuilder;
-use ed25519_dalek::{Signer as DalekSigner, SigningKey};
+use crate::user_key::ServerSigningKey;
 
 use super::{
     frame_bytes, hex_seed, svc_signer, ALICE_SEED_HEX, AUD, MSG_A, MSG_B, OPEN_TS, ROOT_SEED_HEX,
@@ -325,7 +325,7 @@ fn open_stream_refuses_a_redirect() {
 #[test]
 fn open_stream_routes_signed_501_to_verified_response() {
     let body = br#"{"error":{"code":"streaming_unsupported","message":"no"}}"#;
-    let server = SigningKey::from_bytes(&hex_seed(super::SVC_SEED_HEX));
+    let server = ServerSigningKey::from_bytes(&hex_seed(super::SVC_SEED_HEX));
     let responder: Responder = Box::new(move |req: &HttpRequest| {
         let auth = parse_request_auth(&[req.header("Jack-Auth").expect("signed request")])
             .expect("request auth");
@@ -335,7 +335,7 @@ fn open_stream_routes_signed_501_to_verified_response() {
         let header = format_response_auth(&ResponseAuth {
             kid,
             ts: OPEN_TS,
-            sig: encode_b64url(&sig.to_bytes()),
+            sig: encode_b64url(&sig),
         });
         stream_response(
             501,

@@ -48,9 +48,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
-use ed25519_dalek::SigningKey;
 use http::{HeaderName, HeaderValue, Method};
 use http_body_util::{BodyExt, Full};
+use mcp_jack::user_key::ServerSigningKey;
 use serde_json::Value;
 use tower::{Layer, ServiceExt};
 
@@ -114,8 +114,8 @@ struct Deployment {
     aud: String,
     now: i64,
     window_seconds: i64,
-    /// The `keys.json` "svc" signing key (the layer's response key).
-    server_key: SigningKey,
+    /// The original `keys.json` "svc" seed used to reconstruct this test key.
+    server_seed: [u8; 32],
     /// The matching 32-byte public key the client verifier pins.
     server_pub: [u8; 32],
 }
@@ -133,13 +133,14 @@ impl Deployment {
             window_seconds, 30,
             "modern-request-vectors.json: the corpus clock and the verifier window agree"
         );
-        let server_key = server_signing_key();
-        let server_pub = *server_key.verifying_key().as_bytes();
+        let server_seed = server_seed();
+        let server_key = ServerSigningKey::from_bytes(&server_seed);
+        let server_pub = server_key.public_key();
         Self {
             aud,
             now,
             window_seconds,
-            server_key,
+            server_seed,
             server_pub,
         }
     }
@@ -182,7 +183,7 @@ fn classify_case(case: &Value) -> ModernOutcome {
 }
 
 /// The keys.json "svc" signing key (the layer's response key).
-fn server_signing_key() -> SigningKey {
+fn server_seed() -> [u8; 32] {
     let keys = load_keys().expect("load keys.json");
     let svc = keys
         .keys
@@ -192,7 +193,7 @@ fn server_signing_key() -> SigningKey {
     let seed: [u8; 32] = harness::hex_bytes(&svc.seed_hex)
         .try_into()
         .expect("svc seed is 32 bytes");
-    SigningKey::from_bytes(&seed)
+    seed
 }
 
 /// Seeds the fixture registry into a fresh in-memory state.
@@ -289,7 +290,7 @@ fn new_service(profile: Profile, deploy: &Deployment, seen: Arc<Seen>) -> JackSe
     );
     let layer = JackLayer::new(HandlerConfig {
         verifier,
-        server_key: deploy.server_key.clone(),
+        server_key: ServerSigningKey::from_bytes(&deploy.server_seed),
         max_body_bytes: 0,
         max_response_bytes: 0,
     })

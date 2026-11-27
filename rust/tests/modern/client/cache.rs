@@ -2,7 +2,7 @@
 //! key is the exact request, and the result it stores is bound to that request
 //! because a Jack response is signed over the request signature it answers.
 
-use ed25519_dalek::{Signer, SigningKey};
+use mcp_jack::user_key::ServerSigningKey;
 use serde_json::json;
 
 use mcp_jack::auth_header::{format_response_auth, ResponseAuth};
@@ -70,7 +70,7 @@ fn client_cache_private_only() {
     // answering request's signature (spec 01 section 5), so a result bound to
     // request A cannot answer request B — which is exactly what forbids a
     // shared or HTTP-level cache (spec 04 `C8`).
-    let signing = SigningKey::from_bytes(&seed());
+    let signing = ServerSigningKey::from_bytes(&seed());
     let server_pub = *signing.verifying_key().as_bytes();
     let kid = key_id(&server_pub);
     assert_eq!(kid.len(), 43);
@@ -86,7 +86,7 @@ fn client_cache_private_only() {
     let header = format_response_auth(&ResponseAuth {
         kid: kid.clone(),
         ts: TS,
-        sig: encode_b64url(&signing.sign(msg.as_bytes()).to_bytes()),
+        sig: encode_b64url(&signing.sign(msg.as_bytes())),
     });
     let headers = [header.as_str()];
 

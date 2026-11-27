@@ -2,7 +2,7 @@
 //! `spec/fixtures/modern/stream-build-vectors.json`, `resume` and a refusing
 //! signer.
 
-use ed25519_dalek::SigningKey;
+use crate::user_key::ServerSigningKey;
 
 use crate::encoding::decode_b64url;
 use crate::stream::{SignedFrame, StaticStreamSigner, StreamBuilder, StreamSigner};
@@ -350,7 +350,7 @@ fn hex_seed() -> [u8; 32] {
 }
 
 fn signer() -> StaticStreamSigner {
-    StaticStreamSigner::new(SigningKey::from_bytes(&hex_seed()), None)
+    StaticStreamSigner::new(ServerSigningKey::from_bytes(&hex_seed()), None)
 }
 
 fn assert_frame(case: &Case, index: usize, frame: &SignedFrame) {

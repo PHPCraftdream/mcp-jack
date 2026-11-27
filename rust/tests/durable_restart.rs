@@ -9,7 +9,7 @@ use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use ed25519_dalek::{Signer, SigningKey};
+use mcp_jack::user_key::ServerSigningKey;
 use sha2::{Digest, Sha256};
 
 use mcp_jack::auth_header::{format_request_auth, RequestAuth};
@@ -133,7 +133,7 @@ fn options() -> DurableStoreOptions {
 /// Registers the synthetic signing key and returns the signed GET request.
 fn signed_get(state: &Arc<MemoryState>, ts: i64, nonce_name: &str) -> Request {
     let seed = digest("candidate-vector/key/kid-alice");
-    let key = SigningKey::from_bytes(&seed);
+    let key = ServerSigningKey::from_bytes(&seed);
     let public = key.verifying_key().to_bytes();
     let kid = encode_b64url(&digest("candidate-vector/kid/kid-alice"));
     state
@@ -151,7 +151,7 @@ fn signed_get(state: &Arc<MemoryState>, ts: i64, nonce_name: &str) -> Request {
         .unwrap();
     let nonce = encode_b64url(&digest(&format!("candidate-vector/nonce/{nonce_name}"))[..16]);
     let signing = request_signing_string("GET", "/mcp", AUD, &kid, ts, &nonce, &[]);
-    let sig = encode_b64url(&key.sign(signing.as_bytes()).to_bytes());
+    let sig = encode_b64url(&key.sign(signing.as_bytes()));
     Request {
         method: "GET".to_owned(),
         target: "/mcp".to_owned(),
@@ -435,7 +435,7 @@ fn durable_child(
     state: &Arc<MemoryState>,
 ) -> (Arc<MutatingState>, Request) {
     let seed = digest(kid_name);
-    let key = SigningKey::from_bytes(&seed);
+    let key = ServerSigningKey::from_bytes(&seed);
     let public = key.verifying_key().to_bytes();
     let kid = encode_b64url(&digest(&format!("candidate-vector/kid/{kid_name}")));
     let entry = RegistryEntry {
@@ -454,7 +454,7 @@ fn durable_child(
         .unwrap();
     let nonce = encode_b64url(&digest(&format!("candidate-vector/nonce/{nonce_name}"))[..16]);
     let signing = request_signing_string("GET", "/mcp", AUD, &kid, ts, &nonce, &[]);
-    let sig = encode_b64url(&key.sign(signing.as_bytes()).to_bytes());
+    let sig = encode_b64url(&key.sign(signing.as_bytes()));
     let request = Request {
         method: "GET".to_owned(),
         target: "/mcp".to_owned(),
@@ -557,7 +557,7 @@ fn reservation_refuses_when_enrollment_kid_becomes_registered() {
     let (_sandbox, store) = open_store(&clock);
     let inner = Arc::new(MemoryState::new());
     let seed = digest("enroll-key");
-    let signing = SigningKey::from_bytes(&seed);
+    let signing = ServerSigningKey::from_bytes(&seed);
     let public = signing.verifying_key().to_bytes();
     let kid = key_id(&public);
     let raw_code: [u8; 32] = Sha256::digest(b"invite-code").into();
@@ -583,7 +583,7 @@ fn reservation_refuses_when_enrollment_kid_becomes_registered() {
     .into_bytes();
     let nonce = encode_b64url(&digest("candidate-vector/nonce/enroll")[..16]);
     let request_signing = request_signing_string("POST", "/mcp", AUD, &kid, 100, &nonce, &body);
-    let sig = encode_b64url(&signing.sign(request_signing.as_bytes()).to_bytes());
+    let sig = encode_b64url(&signing.sign(request_signing.as_bytes()));
     let request = Request {
         method: "POST".to_owned(),
         target: "/mcp".to_owned(),

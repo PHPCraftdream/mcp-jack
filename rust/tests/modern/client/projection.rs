@@ -150,7 +150,7 @@ fn seed_registry(state: &MemoryState) {
 }
 
 /// The keys.json "svc" signing key (the layer's response key).
-fn server_signing_key() -> ed25519_dalek::SigningKey {
+fn server_signing_key() -> mcp_jack::user_key::ServerSigningKey {
     let keys = fixtures::load_keys().expect("load keys.json");
     let svc = keys
         .keys
@@ -160,7 +160,7 @@ fn server_signing_key() -> ed25519_dalek::SigningKey {
     let seed: [u8; 32] = harness::hex_bytes(&svc.seed_hex)
         .try_into()
         .expect("svc seed is 32 bytes");
-    ed25519_dalek::SigningKey::from_bytes(&seed)
+    mcp_jack::user_key::ServerSigningKey::from_bytes(&seed)
 }
 
 /// The wrapped modern upstream: it answers the probe, the two catalogs and the

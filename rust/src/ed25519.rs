@@ -86,7 +86,7 @@ fn key_rejected(message: &'static str) -> JackError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::{Signer, SigningKey};
+    use crate::user_key::ServerSigningKey;
 
     fn hex_bytes(s: &str) -> Vec<u8> {
         s.as_bytes()
@@ -122,7 +122,7 @@ mod tests {
         assert_eq!(128, RFC_SIG_HEX.len()); // the hex constant is complete
         assert_eq!(64, rfc_sig.len()); // an Ed25519 signature is 64 bytes
                                        // Consistency oracle: a typo in either constant fails here.
-        let signing = SigningKey::from_bytes(&seed);
+        let signing = ServerSigningKey::from_bytes(&seed);
         assert_eq!(signing.verifying_key().as_bytes(), &rfc_public);
 
         assert!(validate_public_key(&rfc_public).is_ok());
@@ -138,10 +138,10 @@ mod tests {
     fn dalek_round_trip_and_strict_s() {
         let seed: [u8; 32] = hex_bytes(RFC_SEED_HEX).try_into().expect("32 bytes");
         let pub_bytes: [u8; 32] = hex_bytes(RFC_PUBLIC_HEX).try_into().expect("32 bytes");
-        let signing = SigningKey::from_bytes(&seed);
+        let signing = ServerSigningKey::from_bytes(&seed);
         let msg = b"mcp-jack test message";
         let sig = signing.sign(msg);
-        let sig_bytes = sig.to_bytes();
+        let sig_bytes = sig;
 
         assert!(verify(&pub_bytes, msg, &sig_bytes));
         assert!(!verify(&pub_bytes, b"other message", &sig_bytes));
@@ -227,18 +227,18 @@ mod tests {
         );
 
         // An ordinary signature over the same message still verifies.
-        let signing = SigningKey::from_bytes(&seed);
-        let ordinary = signing.sign(message).to_bytes();
+        let signing = ServerSigningKey::from_bytes(&seed);
+        let ordinary = signing.sign(message);
         assert!(verify(&public, message, &ordinary));
     }
 
     #[test]
     fn rejects_wrong_lengths() {
         let seed: [u8; 32] = hex_bytes(RFC_SEED_HEX).try_into().expect("32 bytes");
-        let signing = SigningKey::from_bytes(&seed);
+        let signing = ServerSigningKey::from_bytes(&seed);
         let pub_bytes = *signing.verifying_key().as_bytes();
         let msg = b"mcp-jack test message";
-        let sig = signing.sign(msg).to_bytes();
+        let sig = signing.sign(msg);
 
         assert!(!verify(&pub_bytes[..31], msg, &sig));
         assert!(!verify(&pub_bytes, msg, &sig[..63]));
