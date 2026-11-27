@@ -1,5 +1,7 @@
 # Design candidate: durable restart replay protection
 
+**Current implementation:** The optional Linux-only durable nonce profile is implemented and documented in [operations](../operations.md). The text below is the design baseline the profile was built from; statements below that nonce storage is volatile or that no backend is selected describe that baseline, not the current state.
+
 **Status:** Task 52 design-only reconciliation. The supplied owner direction accepts **durable authenticated nonce reservation before dispatch** for D2 and approves the Go operator gateway's backend direction: investigate/select a vetted transaction library, not a custom journal. No particular library/version, dependency, API, error contract, migration procedure, platform guarantee, or operational policy is approved. See [durable nonce backend feasibility](durable-nonce-backend.md). This is not normative, implemented, or evidence of a durable guarantee.
 
 **Baseline and provenance:** checked worktree HEAD is `3398e7bde8aef1ae4d76ac55e482a06265fb5922`. The user supplies parent-verified full-PR and green post-merge CI provenance for this baseline; it was not independently fetched here and is not evidence for these candidate changes. Earlier external design/release records are historical and do not override the supplied D2 choice.
