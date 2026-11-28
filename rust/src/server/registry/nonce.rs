@@ -6,7 +6,58 @@
 //! which keeps tests deterministic (spec 01 section 4).
 
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::{Mutex, MutexGuard};
+
+/// The result of atomically admitting one `(kid, nonce)` pair.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NonceDecision {
+    Recorded,
+    Replay,
+}
+
+/// Failure to determine a successful nonce admission.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NonceAdmissionError {
+    /// Admission was unavailable and no record was committed.
+    Unavailable,
+    /// The commit outcome could not be determined; callers must not retry or dispatch.
+    OutcomeUnknown,
+}
+
+impl fmt::Display for NonceAdmissionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unavailable => f.write_str("nonce admission unavailable; no record committed"),
+            Self::OutcomeUnknown => f.write_str("nonce admission commit outcome unknown"),
+        }
+    }
+}
+
+impl std::error::Error for NonceAdmissionError {}
+
+/// Synchronous atomic admission of authenticated nonces.
+///
+/// Implementations must atomically check and insert `(kid, nonce)` and must
+/// use only the caller-supplied times, never reading a clock. An entry is live
+/// while `now <= retain_until`, and must be retained at least through the
+/// inclusive `retain_until` boundary; a replay must not extend its retention,
+/// and no live entry may be evicted. Only `Recorded` permits dispatch; a replay
+/// or any error refuses the request and must never be dispatched. If an
+/// implementation cannot tell whether it recorded the pair, it must return
+/// [`NonceAdmissionError::OutcomeUnknown`], not `Recorded`. This method is
+/// called synchronously on the request path, so a slow backend blocks the
+/// caller's thread.
+pub trait NonceAdmission: Send + Sync {
+    fn admit_nonce(
+        &self,
+        kid: &str,
+        nonce: &str,
+        now: i64,
+        retain_until: i64,
+    ) -> Result<NonceDecision, NonceAdmissionError>;
+}
 
 /// Replay protection: remembers `(kid, nonce)` pairs until their retention
 /// expires so a repeated live pair is detected as a replay.
@@ -92,6 +143,22 @@ impl NonceStore {
     }
 }
 
+impl NonceAdmission for NonceStore {
+    fn admit_nonce(
+        &self,
+        kid: &str,
+        nonce: &str,
+        now: i64,
+        retain_until: i64,
+    ) -> Result<NonceDecision, NonceAdmissionError> {
+        Ok(if self.check_and_record(kid, nonce, now, retain_until) {
+            NonceDecision::Replay
+        } else {
+            NonceDecision::Recorded
+        })
+    }
+}
+
 impl Default for NonceStore {
     fn default() -> Self {
         Self::new()
@@ -118,6 +185,28 @@ mod tests {
         });
         assert_eq!(wins.load(Ordering::SeqCst), 1);
         assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn trait_adapter_is_atomic_under_concurrency() {
+        let store = NonceStore::new();
+        let wins = AtomicUsize::new(0);
+        std::thread::scope(|s| {
+            for _ in 0..64 {
+                s.spawn(|| {
+                    if store.admit_nonce("kidA", "nonceX", 100, 130) == Ok(NonceDecision::Recorded)
+                    {
+                        wins.fetch_add(1, Ordering::SeqCst);
+                    }
+                });
+            }
+        });
+        assert_eq!(wins.load(Ordering::SeqCst), 1);
+        assert_eq!(store.len(), 1);
+        assert_eq!(
+            store.admit_nonce("kidA", "nonceX", 100, 130),
+            Ok(NonceDecision::Replay)
+        );
     }
 
     #[test]

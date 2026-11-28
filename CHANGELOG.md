@@ -4,6 +4,8 @@ This file records repository history. The dated `0.1.0` section below is the cur
 
 ## 0.1.0 (2026-11-26)
 
+- Adds synchronous `NonceAdmission` for volatile verifier storage and typed verifier configuration errors; admission failures fail closed as `503 durability_unavailable`.
+
 - Adds Go CLI gateway profiles `legacy|modern|both`, bridge eras `legacy|modern|auto` with opt-in `s1` signed streams, and `jack events receive` with persisted receipt state; adds API `Client.Call`, `Client.CurrentEra`, `stream.ClientConfig.Consumer` and `ConsumerStdio`.
 - Go client rotation accepts a portable `ClientTrustState` interface instead of the Linux-only file store; `*durable.TrustStore` remains the Linux reference implementation, and Windows and macOS consumers provide their own. `NewHTTPWithTransport` routes rotation calls and refreshes through a caller `http.RoundTripper` (for example a tunnel); `NewHTTP` keeps the built-in transport.
 

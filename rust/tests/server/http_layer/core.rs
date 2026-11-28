@@ -1,4 +1,73 @@
 use super::*;
+use mcp_jack::server::nonce::{NonceAdmissionError, NonceDecision};
+
+#[derive(Clone, Copy)]
+enum AdmissionMode {
+    Recorded,
+    Replay,
+    Unavailable,
+    OutcomeUnknown,
+}
+
+struct CustomAdmission(AdmissionMode);
+
+impl NonceAdmission for CustomAdmission {
+    fn admit_nonce(
+        &self,
+        _kid: &str,
+        _nonce: &str,
+        _now: i64,
+        _retain_until: i64,
+    ) -> Result<NonceDecision, NonceAdmissionError> {
+        match self.0 {
+            AdmissionMode::Recorded => Ok(NonceDecision::Recorded),
+            AdmissionMode::Replay => Ok(NonceDecision::Replay),
+            AdmissionMode::Unavailable => Err(NonceAdmissionError::Unavailable),
+            AdmissionMode::OutcomeUnknown => Err(NonceAdmissionError::OutcomeUnknown),
+        }
+    }
+}
+
+#[tokio::test]
+async fn custom_nonce_admission_recorded_allows_and_rejections_fail_closed() {
+    let alice = harness::signer_by_name("alice");
+    for mode in [
+        AdmissionMode::Recorded,
+        AdmissionMode::Replay,
+        AdmissionMode::Unavailable,
+        AdmissionMode::OutcomeUnknown,
+    ] {
+        let admission: Arc<dyn NonceAdmission> = Arc::new(CustomAdmission(mode));
+        let h = new_harness_using(0, 0, InnerResponse::ok_json(INNER_OK_BODY), admission);
+        let signed = signed_request(&alice, "POST", "/mcp", STATUS_BODY);
+        let got = inspect(
+            send(
+                &h.service,
+                build_request(&signed, "POST", "/mcp", STATUS_BODY),
+            )
+            .await
+            .expect("no inner error"),
+        )
+        .await;
+        match mode {
+            AdmissionMode::Recorded => {
+                assert_eq!(got.status, 200);
+                assert_eq!(h.inner.calls(), 1);
+                assert_signed(&got, &signed.request_sig, &h.server_pub);
+            }
+            AdmissionMode::Replay => {
+                assert_eq!(got.status, 401);
+                assert_eq!(error_code(&got.body), "replayed_nonce");
+                assert_eq!(h.inner.calls(), 0);
+            }
+            AdmissionMode::Unavailable | AdmissionMode::OutcomeUnknown => {
+                assert_eq!(got.status, 503);
+                assert_eq!(error_code(&got.body), "durability_unavailable");
+                assert_eq!(h.inner.calls(), 0);
+            }
+        }
+    }
+}
 
 /// Go TestMiddlewareForwardsAndSigns: an authorized alice tool call reaches
 /// the inner service and the answer is signed.

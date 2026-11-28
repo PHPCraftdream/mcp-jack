@@ -358,7 +358,7 @@ fn new_harness(
     let verifier = Verifier::new(Config {
         aud: AUD.into(),
         state: Arc::new(state),
-        nonces: Arc::clone(&nonces),
+        nonces: nonces.clone(),
         audit: None,
         native: Some(Arc::new(CountingNative {
             calls: Arc::clone(&ordinary_native_calls),

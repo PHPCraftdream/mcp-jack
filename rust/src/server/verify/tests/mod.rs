@@ -2,6 +2,7 @@ use super::*;
 use crate::encoding::encode_b64url;
 use crate::server::audit::MemoryAuditSink;
 use crate::server::native::{Native, NativeOptions};
+use crate::server::nonce::{NonceAdmission, NonceStore};
 use crate::server::state::{InviteRecord, MemoryState, StateEdit};
 use crate::user_key::ServerSigningKey;
 use sha2::{Digest, Sha256};
@@ -82,10 +83,19 @@ fn enroll_args(public_key: &str) -> String {
 }
 
 fn config(now: i64, state: Arc<dyn StateStore>, native: Option<Arc<dyn NativeTools>>) -> Config {
+    config_with_nonces(now, state, native, Arc::new(NonceStore::new()))
+}
+
+fn config_with_nonces(
+    now: i64,
+    state: Arc<dyn StateStore>,
+    native: Option<Arc<dyn NativeTools>>,
+    nonces: Arc<dyn NonceAdmission>,
+) -> Config {
     Config {
         aud: AUD.to_owned(),
         state,
-        nonces: Arc::new(NonceStore::new()),
+        nonces,
         audit: None,
         native,
         window_seconds: 30,

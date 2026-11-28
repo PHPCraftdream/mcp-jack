@@ -19,13 +19,14 @@ use bytes::Bytes;
 use http_body_util::Full;
 use mcp_jack::server::http::{HandlerConfig, JackLayer};
 use tower::Layer as _;
+use mcp_jack::server::nonce::NonceStore;
 use mcp_jack::server::verify::{Config, Verifier};
 use std::sync::Arc;
 
 let verifier = Verifier::new(Config {
     aud: "https://mcp.example/mcp".to_owned(),
     state: Arc::new(state_store),
-    nonces: Arc::new(nonce_store),
+    nonces: Arc::new(NonceStore::new()),
     audit: None,
     native: Some(Arc::new(native_tools)),
     window_seconds: 0,

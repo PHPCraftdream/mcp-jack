@@ -24,7 +24,7 @@ use mcp_jack::server::http::{HandlerConfig, JackLayer, JackService};
 use mcp_jack::server::identity::VerifiedIdentity;
 use mcp_jack::server::modern::Profile;
 use mcp_jack::server::native::{Native, NativeOptions};
-use mcp_jack::server::nonce::NonceStore;
+use mcp_jack::server::nonce::{NonceAdmission, NonceStore};
 use mcp_jack::server::state::{MemoryState, RegistryEntry, StateStore};
 use mcp_jack::server::verify::{Clock, Config, Verifier};
 
@@ -176,12 +176,20 @@ fn seed_registry(state: &MemoryState) {
 }
 
 fn build_verifier(state: MemoryState, sink: Option<Arc<MemoryAuditSink>>) -> Arc<Verifier> {
+    build_verifier_with_nonces(state, sink, Arc::new(NonceStore::new()))
+}
+
+fn build_verifier_with_nonces(
+    state: MemoryState,
+    sink: Option<Arc<MemoryAuditSink>>,
+    nonces: Arc<dyn NonceAdmission>,
+) -> Arc<Verifier> {
     let now_clock: Clock = Arc::new(move || FIXTURE_NOW);
     Arc::new(
         Verifier::new(Config {
             aud: FIXTURE_AUD.to_string(),
             state: Arc::new(state),
-            nonces: Arc::new(NonceStore::new()),
+            nonces,
             audit: sink.map(|s| Arc::clone(&s) as Arc<dyn AuditSink>),
             native: Some(Arc::new(Native::new(NativeOptions::default()))),
             window_seconds: 30,
@@ -217,10 +225,24 @@ fn new_harness_with(
     max_response_bytes: usize,
     response: InnerResponse,
 ) -> TestHarness {
+    new_harness_using(
+        max_body_bytes,
+        max_response_bytes,
+        response,
+        Arc::new(NonceStore::new()),
+    )
+}
+
+fn new_harness_using(
+    max_body_bytes: usize,
+    max_response_bytes: usize,
+    response: InnerResponse,
+    nonces: Arc<dyn NonceAdmission>,
+) -> TestHarness {
     let state = MemoryState::new();
     seed_registry(&state);
     let sink = Arc::new(MemoryAuditSink::new());
-    let verifier = build_verifier(state, Some(sink.clone()));
+    let verifier = build_verifier_with_nonces(state, Some(sink.clone()), nonces);
     let server_key = server_signing_key();
     let server_pub = *server_key.verifying_key().as_bytes();
 

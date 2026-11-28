@@ -4,8 +4,8 @@ use super::*;
 fn replay_only_after_signature() {
     let (key, entry) = test_key("alice");
     let state = seeded_state(&[&entry]);
-    let cfg = config(NOW, state, None);
-    let nonces = Arc::clone(&cfg.nonces);
+    let nonces = Arc::new(NonceStore::new());
+    let cfg = config_with_nonces(NOW, state, None, nonces.clone());
     nonces.check_and_record(&entry.kid, &nonce(1), 0, NOW + 10);
 
     // (a) Valid signature but replayed nonce. The reuse here IS the
@@ -21,8 +21,8 @@ fn replay_only_after_signature() {
     // (b) Bad signature with a replayed nonce: bad_signature wins, and
     // nothing was inserted. Step 6 passes (|NOW-NOW| = 0); ends at step 7.
     let state = seeded_state(&[&entry]);
-    let cfg = config(NOW, state, None);
-    let nonces = Arc::clone(&cfg.nonces);
+    let nonces = Arc::new(NonceStore::new());
+    let cfg = config_with_nonces(NOW, state, None, nonces.clone());
     nonces.check_and_record(&entry.kid, &nonce(2), 0, NOW + 10);
     let v = verifier(cfg);
     let mut req = get(&key, &entry.kid, NOW, &nonce(2));
