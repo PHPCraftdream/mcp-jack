@@ -22,7 +22,7 @@ use crate::server::durable_admission::{
 };
 use crate::server::identity::VerifiedIdentity;
 use crate::server::native::invite_id_of;
-use crate::server::nonce::NonceStore;
+use crate::server::nonce::{NonceAdmission, NonceDecision};
 use crate::server::state::{RegistryEntry, StateStore};
 use crate::server::webhook_key::TOOL_SERVER_WEBHOOK_KEY;
 use crate::signing::{request_signing_string, DEFAULT_WINDOW_SECONDS};
@@ -148,7 +148,7 @@ pub struct Config {
     /// Registry and invite store.
     pub state: Arc<dyn StateStore>,
     /// Records seen (kid, nonce) pairs.
-    pub nonces: Arc<NonceStore>,
+    pub nonces: Arc<dyn NonceAdmission>,
     /// Audit sink for protocol-native calls; optional.
     pub audit: Option<Arc<dyn AuditSink>>,
     /// Implements the jack.* tools; None denies every jack.* tool.
@@ -162,6 +162,31 @@ pub struct Config {
     /// timestamps use the raw sample.
     pub now: Clock,
 }
+
+/// Invalid verifier configuration.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VerifierConfigError {
+    EmptyAudience,
+    AudienceControlCharacter,
+    InvalidWindow,
+}
+
+impl std::fmt::Display for VerifierConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptyAudience => f.write_str("server: Config.Aud must be non-empty"),
+            Self::AudienceControlCharacter => {
+                f.write_str("server: Config.Aud must not contain control characters")
+            }
+            Self::InvalidWindow => f.write_str(
+                "server: window must be 0 (default 30) or an integer between 1 and 120 seconds",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for VerifierConfigError {}
 
 /// Authenticates and authorizes requests (spec 01 section 4, spec 02
 /// section 4).
@@ -197,18 +222,15 @@ static NEXT_ISSUER: AtomicU64 = AtomicU64::new(1);
 impl Verifier {
     /// Validates cfg (Go: NewVerifier). In addition to aud, the window can be
     /// invalid; the other Go checks are types here (Arc is non-null by construction).
-    pub fn new(mut cfg: Config) -> Result<Self, String> {
+    pub fn new(mut cfg: Config) -> Result<Self, VerifierConfigError> {
         if cfg.aud.is_empty() {
-            return Err("server: Config.Aud must be non-empty".to_owned());
+            return Err(VerifierConfigError::EmptyAudience);
         }
         if crate::client::auth::has_control(&cfg.aud) {
-            return Err("server: Config.Aud must not contain control characters".to_owned());
+            return Err(VerifierConfigError::AudienceControlCharacter);
         }
         if cfg.window_seconds < 0 || cfg.window_seconds > 120 {
-            return Err(
-                "server: window must be 0 (default 30) or an integer between 1 and 120 seconds"
-                    .to_owned(),
-            );
+            return Err(VerifierConfigError::InvalidWindow);
         }
         if cfg.window_seconds == 0 {
             cfg.window_seconds = DEFAULT_WINDOW_SECONDS;
@@ -430,18 +452,28 @@ impl Verifier {
 
         // Step 8: the nonce is recorded only after the signature verified, so
         // requests that fail verification cannot fill the cache (spec 01 section 4).
-        // Store polarity: true means a live REPLAY.
-        if self
+        match self
             .cfg
             .nonces
-            .check_and_record(&auth.kid, &auth.nonce, effective, auth.ts + window)
+            .admit_nonce(&auth.kid, &auth.nonce, effective, auth.ts + window)
         {
-            return Authentication::Refused(fail(
-                VerifyResult::default(),
-                401,
-                codes::REPLAYED_NONCE,
-                "nonce was already used",
-            ));
+            Ok(NonceDecision::Recorded) => {}
+            Ok(NonceDecision::Replay) => {
+                return Authentication::Refused(fail(
+                    VerifyResult::default(),
+                    401,
+                    codes::REPLAYED_NONCE,
+                    "nonce was already used",
+                ));
+            }
+            Err(_) => {
+                return Authentication::Refused(fail(
+                    VerifyResult::default(),
+                    503,
+                    "durability_unavailable",
+                    "nonce admission unavailable",
+                ));
+            }
         }
 
         let res = VerifyResult {

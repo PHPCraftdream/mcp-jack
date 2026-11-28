@@ -207,8 +207,8 @@ fn enrollment_exception_requires_live_invite() {
         if let Some(expires_at) = expires_at {
             add_invite(&state, expires_at);
         }
-        let cfg = config(NOW, state, Some(stub()));
-        let nonces = Arc::clone(&cfg.nonces);
+        let nonces_store = Arc::new(NonceStore::new());
+        let cfg = config_with_nonces(NOW, state, Some(stub()), nonces_store.clone());
         let (req, _) = enroll_request(&args, 1);
         let res = verifier(cfg).verify(&req);
         assert_eq!(res.http_status, 401, "{label}");
@@ -217,7 +217,10 @@ fn enrollment_exception_requires_live_invite() {
         assert!(res.audit.is_none(), "{label}");
         // The nonce is still unused: the rejection never touched the store.
         let (kid, n) = (test_key("carol").1.kid, nonce(1));
-        assert!(!nonces.check_and_record(&kid, &n, NOW, NOW + 60), "{label}");
+        assert!(
+            !nonces_store.check_and_record(&kid, &n, NOW, NOW + 60),
+            "{label}"
+        );
     }
 }
 

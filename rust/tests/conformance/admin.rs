@@ -219,8 +219,9 @@ fn run_case(case: &fixtures::AdminCase) {
     check_seeded_ids(case);
     seed_state(&state, case);
 
-    let nonces = Arc::new(NonceStore::new());
-    seed_nonces(case, &nonces);
+    let nonces_store = Arc::new(NonceStore::new());
+    seed_nonces(case, &nonces_store);
+    let nonces: Arc<dyn mcp_jack::server::nonce::NonceAdmission> = nonces_store;
     let sink = Arc::new(MemoryAuditSink::new());
     let native = Arc::new(Native::new(NativeOptions::default()));
     let now = case.state.now;
@@ -229,7 +230,7 @@ fn run_case(case: &fixtures::AdminCase) {
     let verifier = make_verifier(
         case,
         state_trait,
-        Arc::clone(&nonces),
+        nonces.clone(),
         Arc::clone(&sink),
         native,
         Arc::clone(&now_clock),
@@ -249,7 +250,7 @@ fn seed_nonces(case: &fixtures::AdminCase, nonces: &NonceStore) {
 fn make_verifier(
     case: &fixtures::AdminCase,
     state: Arc<dyn StateStore>,
-    nonces: Arc<NonceStore>,
+    nonces: Arc<dyn mcp_jack::server::nonce::NonceAdmission>,
     sink: Arc<MemoryAuditSink>,
     native: Arc<Native>,
     now_clock: Clock,
@@ -344,8 +345,9 @@ fn run_file_case(case: &fixtures::AdminCase) {
         case.id
     );
 
-    let nonces = Arc::new(NonceStore::new());
-    seed_nonces(case, &nonces);
+    let nonces_store = Arc::new(NonceStore::new());
+    seed_nonces(case, &nonces_store);
+    let nonces: Arc<dyn mcp_jack::server::nonce::NonceAdmission> = nonces_store;
     let sink = Arc::new(MemoryAuditSink::new());
     let native = Arc::new(Native::new(NativeOptions::default()));
     let now = case.state.now;
@@ -356,7 +358,7 @@ fn run_file_case(case: &fixtures::AdminCase) {
         let verifier = make_verifier(
             case,
             state_trait,
-            Arc::clone(&nonces),
+            nonces.clone(),
             Arc::clone(&sink),
             Arc::clone(&native),
             Arc::clone(&now_clock),

@@ -13,10 +13,25 @@ fn new_rejects_control_characters_in_aud() {
             Ok(_) => panic!("control-character aud must be rejected: {bad:?}"),
         };
         assert_eq!(
-            err, "server: Config.Aud must not contain control characters",
+            err,
+            VerifierConfigError::AudienceControlCharacter,
+            "aud {bad:?}"
+        );
+        assert_eq!(
+            err.to_string(),
+            "server: Config.Aud must not contain control characters",
             "aud {bad:?}"
         );
     }
+    let mut empty = config(NOW, Arc::new(MemoryState::new()), None);
+    empty.aud.clear();
+    let error = match Verifier::new(empty) {
+        Err(error) => error,
+        Ok(_) => panic!("empty audience must be rejected"),
+    };
+    assert_eq!(error, VerifierConfigError::EmptyAudience);
+    assert_eq!(error.to_string(), "server: Config.Aud must be non-empty");
+
     // An ordinary value is still accepted.
     let mut cfg = config(NOW, Arc::new(MemoryState::new()), None);
     cfg.aud = "https://svc.example.test".to_owned();
@@ -76,11 +91,12 @@ fn rollback_cannot_revive_an_expired_enrollment_invite() {
     let state: Arc<dyn StateStore> = Arc::new(MemoryState::new());
     add_invite(&state, NOW + 30);
     let clock = Arc::new(AtomicI64::new(NOW + 40));
+    let nonces = Arc::new(NonceStore::new());
     let mut cfg = stepping_config(&clock, Arc::clone(&state));
+    cfg.nonces = nonces.clone();
     let audit = Arc::new(MemoryAuditSink::new());
     cfg.audit = Some(audit.clone());
     cfg.native = Some(stub());
-    let nonces = Arc::clone(&cfg.nonces);
     let v = verifier(cfg);
     let body = call_body(TOOL_ENROLL, Some(&enroll_args(&carol.public_key)));
     let req_high = signed(
@@ -190,8 +206,9 @@ fn constructor_validates_window_and_accepts_boundaries() {
             Err(error) => error,
             Ok(_) => panic!("invalid window {invalid} must be rejected"),
         };
+        assert_eq!(error, VerifierConfigError::InvalidWindow);
         assert_eq!(
-            error,
+            error.to_string(),
             "server: window must be 0 (default 30) or an integer between 1 and 120 seconds"
         );
     }

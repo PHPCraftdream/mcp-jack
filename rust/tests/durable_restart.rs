@@ -652,6 +652,10 @@ fn durable_window_out_of_bounds_rejected_at_construction() {
     };
     assert_eq!(
         error,
+        mcp_jack::server::verify::VerifierConfigError::InvalidWindow
+    );
+    assert_eq!(
+        error.to_string(),
         "server: window must be 0 (default 30) or an integer between 1 and 120 seconds"
     );
     store.close().expect("close unused durable store");
