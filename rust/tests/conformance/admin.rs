@@ -15,7 +15,7 @@ use mcp_jack::server::native::{Native, NativeOptions};
 use mcp_jack::server::nonce::NonceStore;
 use mcp_jack::server::state::{InviteRecord, MemoryState, RegistryEntry, StateStore};
 use mcp_jack::server::state_file::FileState;
-use mcp_jack::server::verify::{Clock, Config, Request, Verifier};
+use mcp_jack::server::verify::{Clock, Request, Verifier, VerifierBuilder};
 use sha2::{Digest, Sha256};
 
 /// The generator's seeded invite codes: base64url(SHA-256("seeded invite <label>")).
@@ -256,16 +256,14 @@ fn make_verifier(
     now_clock: Clock,
 ) -> Verifier {
     let audit: Arc<dyn AuditSink> = sink;
-    Verifier::new(Config {
-        aud: case.state.aud.clone(),
-        state,
-        nonces,
-        audit: Some(audit),
-        native: Some(native),
-        window_seconds: case.state.window_seconds,
-        now: now_clock,
-    })
-    .expect("verifier")
+    VerifierBuilder::new(case.state.aud.clone(), state)
+        .nonces(nonces)
+        .audit(Some(audit))
+        .native_tools(Some(native))
+        .window_seconds(case.state.window_seconds)
+        .now(now_clock)
+        .try_build()
+        .expect("verifier")
 }
 
 static TEMP_DIR_SEQUENCE: AtomicUsize = AtomicUsize::new(0);

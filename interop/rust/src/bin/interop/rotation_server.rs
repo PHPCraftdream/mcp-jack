@@ -14,12 +14,12 @@ use mcp_jack::rotation::{
     Checkpoint, OwnedBinding, RotationError, RotationServerKey, RotationServerProvider,
     RotationServerStore, RotationServerStoreOptions,
 };
-use mcp_jack::server::http::{JackLayer, RotatingHandlerConfig};
+use mcp_jack::server::http::RotatingHandlerBuilder;
 use mcp_jack::server::native::{Native, NativeOptions};
 use mcp_jack::server::nonce::NonceStore;
 use mcp_jack::server::server_key::ServerKeyTool;
 use mcp_jack::server::state_file::FileState;
-use mcp_jack::server::verify::{Clock, Config, Verifier};
+use mcp_jack::server::verify::{Clock, VerifierBuilder};
 use tower_layer::Layer as _;
 
 use super::hex_decode_32;
@@ -267,35 +267,29 @@ pub fn run() -> ! {
         Err(e) => fatal(format!("rotation provider: {}", e.code)),
     };
 
-    let verifier = match Verifier::new(Config {
-        aud: flags.aud.clone(),
+    let verifier = VerifierBuilder::new(flags.aud.clone(), Arc::new(state))
+        .nonces(Arc::new(NonceStore::new()))
+        .audit(None)
+        .native_tools(Some(Arc::new(Native::new(NativeOptions::default()))))
         // window 0: the spec default 30 s, same as the static profile.
-        state: Arc::new(state),
-        nonces: Arc::new(NonceStore::new()),
-        audit: None,
-        native: Some(Arc::new(Native::new(NativeOptions::default()))),
-        window_seconds: 0,
-        now: {
+        .window_seconds(0)
+        .now({
             let clock = clock.clone();
             let now: Clock = Arc::new(move || clock.now_i64());
             now
-        },
-    }) {
-        Ok(verifier) => verifier,
-        Err(e) => fatal(format!("verifier: {e}")),
-    };
-    let verifier = verifier.with_server_keys(Arc::new(ServerKeyTool::new(
-        Arc::clone(&store),
-        Arc::clone(&provider),
-    )));
+        })
+        .server_keys(Arc::new(ServerKeyTool::new(
+            Arc::clone(&store),
+            Arc::clone(&provider),
+        )))
+        .try_build()
+        .unwrap_or_else(|e| fatal(format!("verifier: {e}")));
 
-    let layer = JackLayer::rotating(RotatingHandlerConfig {
-        verifier: Arc::new(verifier),
-        response_keys: provider.clone(),
+    let layer = RotatingHandlerBuilder::new(Arc::new(verifier), provider.clone())
         // 0 means the SDK default 1 MiB body/response limits.
-        max_body_bytes: 0,
-        max_response_bytes: 0,
-    });
+        .max_body_bytes(0)
+        .max_response_bytes(0)
+        .build();
     let service = layer.layer(crate::mcp::TrivialService);
 
     let rt = match tokio::runtime::Builder::new_multi_thread()

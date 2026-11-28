@@ -35,7 +35,7 @@ use mcp_jack::encoding::{encode_b64url, key_id};
 use mcp_jack::server::identity::VerifiedIdentity;
 use mcp_jack::server::nonce::NonceStore;
 use mcp_jack::server::state::{MemoryState, RegistryEntry, StateEdit, StateStore};
-use mcp_jack::server::verify::{Config as VerifierConfig, Request as VerifyRequest, Verifier};
+use mcp_jack::server::verify::{Request as VerifyRequest, Verifier, VerifierBuilder};
 use mcp_jack::signing::response_signing_string;
 use mcp_jack::user_key::{
     ClientSigningKey, ConnectionData, ExpectedIdentity, UserKeyError, client as uk_client,
@@ -167,16 +167,14 @@ fn register(state: &Arc<MemoryState>, entry: RegistryEntry) -> Result<(), String
 }
 
 fn verifier_for(state: Arc<MemoryState>) -> Result<Verifier, String> {
-    Verifier::new(VerifierConfig {
-        aud: AUD.to_string(),
-        state,
-        nonces: Arc::new(NonceStore::new()),
-        audit: None,
-        native: None,
-        window_seconds: 0,
-        now: Arc::new(|| NOW),
-    })
-    .map_err(|e| format!("verifier config rejected: {e}"))
+    VerifierBuilder::new(AUD, state)
+        .nonces(Arc::new(NonceStore::new()))
+        .audit(None)
+        .native_tools(None)
+        .window_seconds(0)
+        .now(Arc::new(|| NOW))
+        .try_build()
+        .map_err(|e| format!("verifier config rejected: {e}"))
 }
 
 fn registry_entry(kid: String, public_key: String) -> RegistryEntry {

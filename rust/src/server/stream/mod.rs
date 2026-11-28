@@ -19,5 +19,6 @@ mod tests;
 
 pub use close::{events_stream_result, is_final_response};
 pub use options::{StreamLimits, StreamOptions};
-pub use pipe::{PipeStop, StreamPipe, StreamPipeConfig};
+pub(crate) use pipe::StreamPipeConfig;
+pub use pipe::{PipeStop, StreamPipe, StreamPipeBuilder};
 pub use registry::{StreamRegistry, StreamSlot};

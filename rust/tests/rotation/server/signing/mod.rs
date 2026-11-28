@@ -33,12 +33,12 @@ use mcp_jack::rotation::{
     decode_result, Checkpoint, OwnedBinding, Record, RotationError, RotationServerKey,
     RotationServerProvider, RotationServerStore, RotationServerStoreOptions,
 };
-use mcp_jack::server::http::{HandlerConfig, JackLayer, JackService, RotatingHandlerConfig};
+use mcp_jack::server::http::{HandlerBuilder, JackService, RotatingHandlerBuilder};
 use mcp_jack::server::nonce::NonceStore;
 use mcp_jack::server::response_keys::{ResponseKeyRequest, ResponseKeys};
 use mcp_jack::server::server_key::ServerKeyTool;
 use mcp_jack::server::state::{MemoryState, RegistryEntry, StateStore};
-use mcp_jack::server::verify::{Clock, Config, NativeCall, NativeResult, NativeTools, Verifier};
+use mcp_jack::server::verify::{Clock, NativeCall, NativeResult, NativeTools, VerifierBuilder};
 use mcp_jack::signing::response_signing_string;
 
 /// The boxed inner service behind every harness (same shape as http_layer.rs;
@@ -355,18 +355,13 @@ fn new_harness(
     let nonces = Arc::new(NonceStore::new());
     let ordinary_native_calls = Arc::new(AtomicUsize::new(0));
     let now_clock: Clock = Arc::new(|| NOW);
-    let verifier = Verifier::new(Config {
-        aud: AUD.into(),
-        state: Arc::new(state),
-        nonces: nonces.clone(),
-        audit: None,
-        native: Some(Arc::new(CountingNative {
+    let verifier_builder = VerifierBuilder::new(AUD, Arc::new(state))
+        .nonces(nonces.clone())
+        .native_tools(Some(Arc::new(CountingNative {
             calls: Arc::clone(&ordinary_native_calls),
-        })),
-        window_seconds: WINDOW_SECONDS,
-        now: now_clock,
-    })
-    .expect("verifier");
+        })))
+        .window_seconds(WINDOW_SECONDS)
+        .now(now_clock);
 
     let layer = match options.profile {
         Profile::Rotating {
@@ -390,24 +385,18 @@ fn new_harness(
                     mode,
                 }),
             };
-            let verifier = Arc::new(if with_server_keys {
-                verifier.with_server_keys(tool)
+            let verifier_builder = if with_server_keys {
+                verifier_builder.with_server_keys(tool)
             } else {
-                verifier
-            });
-            JackLayer::rotating(RotatingHandlerConfig {
-                verifier,
-                response_keys: provider.clone(),
-                max_body_bytes: 0,
-                max_response_bytes: 0,
-            })
+                verifier_builder
+            };
+            let verifier = Arc::new(verifier_builder.try_build().expect("verifier"));
+            RotatingHandlerBuilder::new(verifier, provider.clone()).build()
         }
-        Profile::Static => JackLayer::new(HandlerConfig {
-            verifier: Arc::new(verifier),
-            server_key: ServerSigningKey::from_bytes(&STATIC_SEED),
-            max_body_bytes: 0,
-            max_response_bytes: 0,
-        }),
+        Profile::Static => {
+            let verifier = Arc::new(verifier_builder.try_build().expect("verifier"));
+            HandlerBuilder::new(verifier, ServerSigningKey::from_bytes(&STATIC_SEED)).build()
+        }
     };
 
     let inner_calls = Arc::new(AtomicUsize::new(0));

@@ -26,12 +26,12 @@ use tower::{Layer, ServiceExt};
 
 use mcp_jack::client::auth::sign_request;
 use mcp_jack::client::signer::InMemorySigner;
-use mcp_jack::server::http::{HandlerConfig, JackLayer, JackService};
+use mcp_jack::server::http::{HandlerBuilder, JackService};
 use mcp_jack::server::modern::Profile;
 use mcp_jack::server::native::{Native, NativeOptions};
 use mcp_jack::server::nonce::NonceStore;
 use mcp_jack::server::state::{MemoryState, RegistryEntry, StateStore};
-use mcp_jack::server::verify::{Clock, Config, Verifier};
+use mcp_jack::server::verify::{Clock, Verifier, VerifierBuilder};
 
 /// The boxed inner service behind the harness (S::Error = String).
 type InnerBox =
@@ -143,16 +143,14 @@ fn seed_registry(state: &MemoryState) {
 fn build_verifier(state: MemoryState) -> Arc<Verifier> {
     let now_clock: Clock = Arc::new(move || FIXTURE_NOW);
     Arc::new(
-        Verifier::new(Config {
-            aud: FIXTURE_AUD.to_string(),
-            state: Arc::new(state),
-            nonces: Arc::new(NonceStore::new()),
-            audit: None,
-            native: Some(Arc::new(Native::new(NativeOptions::default()))),
-            window_seconds: 30,
-            now: now_clock,
-        })
-        .expect("verifier"),
+        VerifierBuilder::new(FIXTURE_AUD.to_string(), Arc::new(state))
+            .nonces(Arc::new(NonceStore::new()))
+            .audit(None)
+            .native_tools(Some(Arc::new(Native::new(NativeOptions::default()))))
+            .window_seconds(30)
+            .now(now_clock)
+            .try_build()
+            .expect("verifier"),
     )
 }
 
@@ -175,13 +173,9 @@ fn server_signing_key() -> ServerSigningKey {
 fn new_harness(profile: Profile, seen: Arc<Seen>) -> JackService<InnerBox> {
     let state = MemoryState::new();
     seed_registry(&state);
-    let layer = JackLayer::new(HandlerConfig {
-        verifier: build_verifier(state),
-        server_key: server_signing_key(),
-        max_body_bytes: 0,
-        max_response_bytes: 0,
-    })
-    .with_profile(profile);
+    let layer = HandlerBuilder::new(build_verifier(state), server_signing_key())
+        .with_profile(profile)
+        .build();
     layer.layer(tower::util::BoxCloneService::new(tower::service_fn(
         move |req: http::Request<Full<Bytes>>| {
             let seen = Arc::clone(&seen);

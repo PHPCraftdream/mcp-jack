@@ -2,7 +2,7 @@
 //! key ring (Go: server/rotation/native.go `Provider.Call`; TS:
 //! server/server-key-tool.ts). Read-only candidate route: NOT part of the
 //! closed set of 11 current-v1 native tools (`is_native_tool` stays false;
-//! registration goes through `Verifier::with_server_keys`) and it NEVER
+//! through `VerifierBuilder::server_keys`), and it NEVER
 //! forwards a request. Refusal classes, in check order: 403 operation_denied
 //! (wrong route or no caller), 400 invalid_params (undecodable arguments), 503
 //! rotation_state_unavailable (serving lease, snapshot, audience, fresh

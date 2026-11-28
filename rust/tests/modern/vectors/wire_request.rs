@@ -56,14 +56,14 @@ use tower::{Layer, ServiceExt};
 
 use mcp_jack::client::auth::sign_request;
 use mcp_jack::client::signer::InMemorySigner;
-use mcp_jack::server::http::{HandlerConfig, JackLayer, JackService};
+use mcp_jack::server::http::{HandlerBuilder, JackService};
 use mcp_jack::server::modern::{
     classify_request, HeaderField, ModernOutcome, ModernRequest, Profile,
 };
 use mcp_jack::server::native::{Native, NativeOptions};
 use mcp_jack::server::nonce::NonceStore;
 use mcp_jack::server::state::{MemoryState, RegistryEntry, StateStore};
-use mcp_jack::server::verify::{Clock, Config, Verifier};
+use mcp_jack::server::verify::{Clock, VerifierBuilder};
 use mcp_jack::signing::verify_response;
 
 use super::fixtures::*;
@@ -277,24 +277,17 @@ fn new_service(profile: Profile, deploy: &Deployment, seen: Arc<Seen>) -> JackSe
     let now = deploy.now;
     let now_clock: Clock = Arc::new(move || now);
     let verifier = Arc::new(
-        Verifier::new(Config {
-            aud: deploy.aud.clone(),
-            state: Arc::new(state),
-            nonces: Arc::new(NonceStore::new()),
-            audit: None,
-            native: Some(Arc::new(Native::new(NativeOptions::default()))),
-            window_seconds: deploy.window_seconds,
-            now: now_clock,
-        })
-        .expect("verifier"),
+        VerifierBuilder::new(deploy.aud.clone(), Arc::new(state))
+            .nonces(Arc::new(NonceStore::new()))
+            .native_tools(Some(Arc::new(Native::new(NativeOptions::default()))))
+            .window_seconds(deploy.window_seconds)
+            .now(now_clock)
+            .try_build()
+            .expect("verifier"),
     );
-    let layer = JackLayer::new(HandlerConfig {
-        verifier,
-        server_key: ServerSigningKey::from_bytes(&deploy.server_seed),
-        max_body_bytes: 0,
-        max_response_bytes: 0,
-    })
-    .with_profile(profile);
+    let layer = HandlerBuilder::new(verifier, ServerSigningKey::from_bytes(&deploy.server_seed))
+        .with_profile(profile)
+        .build();
     layer.layer(tower::util::BoxCloneService::new(tower::service_fn(
         move |req: http::Request<Full<Bytes>>| {
             let seen = Arc::clone(&seen);

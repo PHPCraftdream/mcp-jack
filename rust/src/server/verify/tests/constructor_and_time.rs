@@ -6,9 +6,7 @@ fn new_rejects_control_characters_in_aud() {
     // aud with control characters would make it ambiguous (Go:
     // audHasControl in NewVerifier).
     for bad in ["a\nb", "a\rb", "a\0b", "a\tb", "a\u{7f}b"] {
-        let mut cfg = config(NOW, Arc::new(MemoryState::new()), None);
-        cfg.aud = bad.to_owned();
-        let err = match Verifier::new(cfg) {
+        let err = match VerifierBuilder::new(bad, Arc::new(MemoryState::new())).try_build() {
             Err(err) => err,
             Ok(_) => panic!("control-character aud must be rejected: {bad:?}"),
         };
@@ -23,9 +21,7 @@ fn new_rejects_control_characters_in_aud() {
             "aud {bad:?}"
         );
     }
-    let mut empty = config(NOW, Arc::new(MemoryState::new()), None);
-    empty.aud.clear();
-    let error = match Verifier::new(empty) {
+    let error = match VerifierBuilder::new("", Arc::new(MemoryState::new())).try_build() {
         Err(error) => error,
         Ok(_) => panic!("empty audience must be rejected"),
     };
@@ -33,9 +29,9 @@ fn new_rejects_control_characters_in_aud() {
     assert_eq!(error.to_string(), "server: Config.Aud must be non-empty");
 
     // An ordinary value is still accepted.
-    let mut cfg = config(NOW, Arc::new(MemoryState::new()), None);
-    cfg.aud = "https://svc.example.test".to_owned();
-    Verifier::new(cfg).expect("ordinary aud must be accepted");
+    VerifierBuilder::new("https://svc.example.test", Arc::new(MemoryState::new()))
+        .try_build()
+        .expect("ordinary aud must be accepted");
 }
 
 #[test]
@@ -93,10 +89,13 @@ fn rollback_cannot_revive_an_expired_enrollment_invite() {
     let clock = Arc::new(AtomicI64::new(NOW + 40));
     let nonces = Arc::new(NonceStore::new());
     let mut cfg = stepping_config(&clock, Arc::clone(&state));
-    cfg.nonces = nonces.clone();
     let audit = Arc::new(MemoryAuditSink::new());
-    cfg.audit = Some(audit.clone());
-    cfg.native = Some(stub());
+    cfg = Config {
+        nonces: nonces.clone(),
+        audit: Some(audit.clone()),
+        native: Some(stub()),
+        ..cfg
+    };
     let v = verifier(cfg);
     let body = call_body(TOOL_ENROLL, Some(&enroll_args(&carol.public_key)));
     let req_high = signed(
@@ -174,35 +173,23 @@ fn rollback_uses_effective_time_for_native_calls_and_audit() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn durable_builder_still_latches_invalid_window_refusal() {
+fn durable_builder_keeps_window_validation() {
     let (_sandbox, store) = durable_test_store();
-    for (invalid, nonce_id) in [(-1, 27), (121, 28)] {
-        let (key, entry) = test_key("alice");
-        let mut v = verifier(config(NOW, seeded_state(&[&entry]), None));
-        // Simulate pre-validation invalid configs internally: public
-        // construction rejects both, but the infallible durable builder
-        // must retain its fail-closed latch and R9 message.
-        v.cfg.window_seconds = invalid;
-        let v = v.with_durable_nonces(Arc::clone(&store));
-        assert!(v.durable_window_invalid);
-        let result = v.verify(&get(&key, &entry.kid, NOW, &nonce(nonce_id)));
-        assert_eq!(result.http_status, 500);
-        assert_eq!(result.code, "internal_error");
-        assert_eq!(
-            result.message,
-            "server: durable window must be between 1 and 120 seconds"
-        );
-        assert!(!result.nonce_recorded);
-    }
+    let result = VerifierBuilder::new(AUD, Arc::new(MemoryState::new()))
+        .window_seconds(121)
+        .with_durable_nonces(Arc::clone(&store))
+        .try_build();
+    assert_eq!(result.err(), Some(VerifierConfigError::InvalidWindow));
     store.close().expect("close durable test store");
 }
 
 #[test]
 fn constructor_validates_window_and_accepts_boundaries() {
     for invalid in [-1, 121] {
-        let mut cfg = config(NOW, Arc::new(MemoryState::new()), None);
-        cfg.window_seconds = invalid;
-        let error = match Verifier::new(cfg) {
+        let error = match VerifierBuilder::new(AUD, Arc::new(MemoryState::new()))
+            .window_seconds(invalid)
+            .try_build()
+        {
             Err(error) => error,
             Ok(_) => panic!("invalid window {invalid} must be rejected"),
         };
@@ -213,10 +200,11 @@ fn constructor_validates_window_and_accepts_boundaries() {
         );
     }
 
-    let mut zero = config(NOW, Arc::new(MemoryState::new()), None);
-    zero.window_seconds = 0;
     assert_eq!(
-        Verifier::new(zero).expect("zero selects default").window(),
+        VerifierBuilder::new(AUD, Arc::new(MemoryState::new()))
+            .try_build()
+            .expect("zero selects default")
+            .window(),
         30
     );
 

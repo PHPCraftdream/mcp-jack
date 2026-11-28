@@ -6,12 +6,12 @@ use super::{durable, rotation};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Channel};
 use mcp_jack::server::{
-    http::{StreamCancellation, StreamConfig, StreamHeartbeat, StreamLayer},
+    http::{StreamCancellation, StreamHeartbeat, StreamLayer, StreamLayerBuilder},
     modern::Profile,
     native::{Native, NativeOptions},
     nonce::NonceStore,
     state_file::FileState,
-    verify::{Config, Verifier},
+    verify::{Verifier, VerifierBuilder},
 };
 use std::{
     convert::Infallible,
@@ -523,22 +523,20 @@ fn build_verifier(
     clock_file: &str,
     window_seconds: i64,
 ) -> Verifier {
-    Verifier::new(Config {
-        aud: audience.to_owned(),
-        state: Arc::new(state),
-        nonces: Arc::new(NonceStore::new()),
-        audit: None,
-        native: Some(Arc::new(Native::new(NativeOptions::default()))),
-        window_seconds,
-        now: {
+    VerifierBuilder::new(audience.to_owned(), Arc::new(state))
+        .nonces(Arc::new(NonceStore::new()))
+        .audit(None)
+        .native_tools(Some(Arc::new(Native::new(NativeOptions::default()))))
+        .window_seconds(window_seconds)
+        .now({
             let clock_path = clock_file.to_owned();
             Arc::new(move || read_clock(&clock_path).unwrap_or(0))
-        },
-    })
-    .unwrap_or_else(|error| {
-        eprintln!("stream server: verifier: {error}");
-        std::process::exit(1)
-    })
+        })
+        .try_build()
+        .unwrap_or_else(|error| {
+            eprintln!("stream server: verifier: {error}");
+            std::process::exit(1)
+        })
 }
 
 fn build_stream_layer(
@@ -547,14 +545,12 @@ fn build_stream_layer(
     options: mcp_jack::server::stream::StreamOptions,
     profile: Profile,
 ) -> StreamLayer {
-    StreamLayer::new(StreamConfig {
-        verifier: Arc::new(verifier),
-        server_key: key,
-        max_body_bytes: 0,
-        max_response_bytes: 0,
-        streams: options,
-    })
-    .with_profile(profile)
+    StreamLayerBuilder::new(Arc::new(verifier), key)
+        .max_body_bytes(0)
+        .max_response_bytes(0)
+        .streams(options)
+        .profile(profile)
+        .build()
 }
 
 pub fn run() -> ! {
@@ -624,12 +620,36 @@ pub fn run() -> ! {
     });
     #[cfg(target_os = "linux")]
     let verifier = Arc::new(if let Some((store, provider, _)) = &rotation {
-        build_verifier(&audience, state, &clock_file, 0).with_server_keys(Arc::new(
-            rotation::server_key_tool(Arc::clone(store), Arc::clone(provider)),
-        ))
+        let clock_path = clock_file.clone();
+        VerifierBuilder::new(audience.clone(), Arc::new(state))
+            .nonces(Arc::new(NonceStore::new()))
+            .audit(None)
+            .native_tools(Some(Arc::new(Native::new(NativeOptions::default()))))
+            .window_seconds(0)
+            .now(Arc::new(move || read_clock(&clock_path).unwrap_or(0)))
+            .server_keys(Arc::new(rotation::server_key_tool(
+                Arc::clone(store),
+                Arc::clone(provider),
+            )))
+            .try_build()
+            .unwrap_or_else(|error| {
+                eprintln!("stream server: verifier: {error}");
+                std::process::exit(1)
+            })
     } else if let Some(setup) = &durable_setup {
-        build_verifier(&audience, state, &clock_file, setup.window)
-            .with_durable_nonces(Arc::clone(&setup.store))
+        let clock_path = clock_file.clone();
+        VerifierBuilder::new(audience.clone(), Arc::new(state))
+            .nonces(Arc::new(NonceStore::new()))
+            .audit(None)
+            .native_tools(Some(Arc::new(Native::new(NativeOptions::default()))))
+            .window_seconds(setup.window)
+            .now(Arc::new(move || read_clock(&clock_path).unwrap_or(0)))
+            .durable_nonces(Arc::clone(&setup.store))
+            .try_build()
+            .unwrap_or_else(|error| {
+                eprintln!("stream server: verifier: {error}");
+                std::process::exit(1)
+            })
     } else {
         build_verifier(&audience, state, &clock_file, 0)
     });
@@ -667,12 +687,12 @@ pub fn run() -> ! {
     let server_kid = mcp_jack::encoding::key_id(key.verifying_key().as_bytes());
     #[cfg(target_os = "linux")]
     let layer = Arc::new(if let Some((_, provider, _)) = &rotation {
-        StreamLayer::rotating(rotation::rotating_config(
-            verifier.clone(),
-            provider.clone(),
-            options,
-        ))
-        .with_profile(profile)
+        StreamLayerBuilder::rotating(verifier.clone(), provider.clone())
+            .max_body_bytes(0)
+            .max_response_bytes(0)
+            .streams(options)
+            .profile(profile)
+            .build()
     } else {
         build_stream_layer(
             Arc::try_unwrap(verifier).unwrap_or_else(|_| unreachable!()),

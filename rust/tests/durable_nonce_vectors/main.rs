@@ -30,7 +30,7 @@ use mcp_jack::server::durable_recovery::{inspect_recovery, reconcile_unknown};
 use mcp_jack::server::durable_store::{DurableAdmission, DurableNonceStore, DurableStoreOptions};
 use mcp_jack::server::nonce::NonceStore;
 use mcp_jack::server::state::{MemoryState, RegistryEntry, StateStore};
-use mcp_jack::server::verify::{Clock, Config, NativeTools, Request, Verifier, VerifyResult};
+use mcp_jack::server::verify::{Clock, NativeTools, Request, VerifierBuilder, VerifyResult};
 use mcp_jack::signing::request_signing_string;
 
 const FIXTURE_FORMAT: &str = "mcp-jack-candidate-durable-nonce-v1";
@@ -657,18 +657,14 @@ fn drive_event(harness: &Harness, event: &VectorEvent, target: &str) -> VerifyRe
     } else {
         None
     };
-    let config = Config {
-        aud: AUD.to_owned(),
-        state: Arc::clone(&harness.state) as Arc<dyn StateStore>,
-        nonces: Arc::new(NonceStore::new()),
-        audit: None,
-        native,
-        window_seconds: event.window,
-        now: harness.clock.verifier_clock(),
-    };
-    let verifier = Verifier::new(config)
-        .expect("verifier config")
-        .with_durable_nonces(Arc::clone(&harness.store));
+    let verifier = VerifierBuilder::new(AUD, Arc::clone(&harness.state) as Arc<dyn StateStore>)
+        .nonces(Arc::new(NonceStore::new()))
+        .native_tools(native)
+        .window_seconds(event.window)
+        .now(harness.clock.verifier_clock())
+        .with_durable_nonces(Arc::clone(&harness.store))
+        .try_build()
+        .expect("verifier config");
     let result = verifier.verify(&request);
     if result.accepted {
         harness.counters.lock().unwrap().accepted += 1;

@@ -19,12 +19,14 @@ use mcp_jack::client::auth::sign_request;
 use mcp_jack::client::signer::InMemorySigner;
 use mcp_jack::error::JackError;
 use mcp_jack::server::audit::{AuditSink, MemoryAuditSink};
-use mcp_jack::server::http::{HandlerConfig, JackLayer, JackService};
+use mcp_jack::server::http::{HandlerBuilder, JackService};
 use mcp_jack::server::modern::Profile;
 use mcp_jack::server::native::{Native, NativeOptions};
 use mcp_jack::server::nonce::NonceStore;
 use mcp_jack::server::state::{MemoryState, RegistryEntry, StateStore};
-use mcp_jack::server::verify::{Clock, Config, NativeCall, NativeResult, NativeTools, Verifier};
+use mcp_jack::server::verify::{
+    Clock, NativeCall, NativeResult, NativeTools, Verifier, VerifierBuilder,
+};
 
 use crate::server::common::fixtures;
 use crate::server::common::harness::{self, FIXTURE_AUD, FIXTURE_NOW};
@@ -130,16 +132,14 @@ fn build_verifier(
 ) -> Arc<Verifier> {
     let now: Clock = Arc::new(move || FIXTURE_NOW);
     Arc::new(
-        Verifier::new(Config {
-            aud: FIXTURE_AUD.to_string(),
-            state: Arc::new(state),
-            nonces: Arc::new(NonceStore::new()),
-            audit: Some(audit),
-            native: Some(native),
-            window_seconds: 30,
-            now,
-        })
-        .expect("verifier"),
+        VerifierBuilder::new(FIXTURE_AUD.to_string(), Arc::new(state))
+            .nonces(Arc::new(NonceStore::new()))
+            .audit(Some(audit))
+            .native_tools(Some(native))
+            .window_seconds(30)
+            .now(now)
+            .try_build()
+            .expect("verifier"),
     )
 }
 
@@ -206,13 +206,9 @@ fn modern_harness() -> TestHarness {
             }
         },
     ));
-    let layer = JackLayer::new(HandlerConfig {
-        verifier,
-        server_key: server_signing_key(),
-        max_body_bytes: 0,
-        max_response_bytes: 0,
-    })
-    .with_profile(Profile::Modern);
+    let layer = HandlerBuilder::new(verifier, server_signing_key())
+        .with_profile(Profile::Modern)
+        .build();
     TestHarness {
         service: layer.layer(inner),
         native_calls,

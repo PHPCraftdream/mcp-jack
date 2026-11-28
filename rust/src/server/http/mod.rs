@@ -5,10 +5,9 @@
 //! signs every verified answer. Because responses are buffered before signing,
 //! streaming responses are refused with 501 (v0.1, spec README Q1).
 //!
-//! Both buffers are bounded: requests by [`HandlerConfig::max_body_bytes`]
-//! (413 on overflow) and inner responses by
-//! [`HandlerConfig::max_response_bytes`] (signed 502 `response_too_large` on
-//! overflow). Limits of the response cap: it bounds bytes read, not time, and
+//! Both buffers are bounded: requests by the builder's body limit (413 on
+//! overflow) and inner responses by its response limit (signed 502
+//! `response_too_large` on overflow). Limits of the response cap: it bounds bytes read, not time, and
 //! the body is dropped on overflow. A body that never yields a frame, or yields
 //! only empty frames, is not stopped by it (empty frames add no bytes and are
 //! not retained, but the loop keeps awaiting). A deadline on the inner service
@@ -19,16 +18,17 @@
 //! responsibility; this crate has no timeout option. The inner service's own
 //! allocations before it returns its response are not bounded either.
 //!
-//! When the layer is built with [`JackLayer::rotating`], every verified answer
+//! When built with [`RotatingHandlerBuilder`], every verified answer
 //! (including signed rejections) is signed by the provider-selected rotating
 //! key: the signer is chosen before the signature is computed and a fresh
 //! completion-sample final gate re-confirms eligibility, and any authorization
 //! or final-gate failure answers with the unsigned 503
 //! `rotation_state_unavailable` — no other key is ever used. The static
 //! profile is unchanged. The `jack.server.key` tool itself is dispatched
-//! through `Verifier::with_server_keys` (verify.rs), not here.
+//! through the verifier builder's server-key option (verify.rs), not here.
 //!
-//! With [`JackLayer::with_profile`] set to [`Profile::Modern`] or
+//! With the profile set on [`HandlerBuilder::with_profile`] or
+//! [`RotatingHandlerBuilder::with_profile`] to [`Profile::Modern`] or
 //! [`Profile::Both`] the layer decides the request era after verification
 //! (spec 04 section 3) and applies the header rules `S1`-`S12`: mirror headers
 //! are validated, session headers are stripped, and a violation is refused with
@@ -69,9 +69,7 @@ mod stream_layer;
 mod wire;
 
 pub use stream::{StreamCancellation, StreamHeartbeat};
-pub use stream_layer::{
-    RotatingStreamConfig, StreamBody, StreamConfig, StreamLayer, StreamService,
-};
+pub use stream_layer::{StreamBody, StreamLayer, StreamLayerBuilder, StreamService};
 
 use modern::header_fields;
 use wire::{error_body, CallToolResult, RpcResponse, ServerInfo, ServerInfoMeta, TextContent};
@@ -80,18 +78,15 @@ use wire::{error_body, CallToolResult, RpcResponse, ServerInfo, ServerInfoMeta, 
 /// is not nameable because the `http-body` crate is not a direct dependency.
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-/// Default body limit applied when [`HandlerConfig::max_body_bytes`] is zero
+/// Default body limit applied when the handler builder's body limit is zero
 /// (Go: defaultMaxBodyBytes).
 const DEFAULT_MAX_BODY_BYTES: usize = 1 << 20;
 
-/// Default inner-response limit applied when
-/// [`HandlerConfig::max_response_bytes`] is zero; matches the client buffer
-/// default.
+/// Default inner-response limit applied when the handler builder's response limit is zero;
+/// matches the client buffer default.
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 1 << 20;
 
-/// One response-signing profile; the Go handler refuses any mixing, the two
-/// constructors here make mixing unrepresentable (Go: HandlerConfig.ServerKey
-/// vs ResponseKeys).
+/// One response-signing profile; the Go handler refuses any mixing, the two builders make mixing unrepresentable (Go: HandlerConfig.ServerKey vs ResponseKeys).
 #[derive(Clone)]
 enum SigningProfile {
     /// Static Ed25519 key; the existing current-v1 behavior.
@@ -103,78 +98,119 @@ enum SigningProfile {
     Rotating { keys: Arc<dyn ResponseKeys> },
 }
 
-/// Configures [`JackLayer::new`] (Go: HandlerConfig). Infallible in Rust: the
-/// Go nil/length checks are unrepresentable (Arc, typed key).
-pub struct HandlerConfig {
-    /// Authenticates and authorizes every request.
-    pub verifier: Arc<Verifier>,
-    /// Signs responses (spec 01 section 5); clients pin its public key.
-    pub server_key: ServerSigningKey,
-    /// Bounds the request body; zero means 1 MiB (Go: limit <= 0). The body
-    /// must be read in full to be hashed, so the limit is a DoS guard.
-    pub max_body_bytes: usize,
-    /// Bounds the buffered inner response, independently of
-    /// `max_body_bytes`; zero means 1 MiB. Exactly this many bytes pass; one
-    /// more is answered with a signed 502 `response_too_large` and the inner
-    /// body is dropped. It bounds bytes read, not time: a body that never
-    /// yields a frame (or only empty frames) is not stopped by it. A timeout on
-    /// the inner service covers only obtaining the response; a deadline
-    /// including body consumption must wrap the whole `JackService` produced by
-    /// `JackLayer` (caller's responsibility; no timeout option here). The inner
-    /// service's own pre-return allocations are not bounded (see module docs).
-    pub max_response_bytes: usize,
+/// Builds the static signing profile. The former config literal constructor is replaced because
+/// this crate is unpublished.
+pub struct HandlerBuilder {
+    verifier: Arc<Verifier>,
+    server_key: ServerSigningKey,
+    max_body_bytes: usize,
+    max_response_bytes: usize,
+    profile: Profile,
+}
+impl HandlerBuilder {
+    pub fn new(verifier: Arc<Verifier>, server_key: ServerSigningKey) -> Self {
+        Self {
+            verifier,
+            server_key,
+            max_body_bytes: 0,
+            max_response_bytes: 0,
+            profile: Profile::default(),
+        }
+    }
+    pub fn max_body_bytes(mut self, v: usize) -> Self {
+        self.max_body_bytes = v;
+        self
+    }
+    pub fn max_response_bytes(mut self, v: usize) -> Self {
+        self.max_response_bytes = v;
+        self
+    }
+    pub fn with_profile(mut self, v: Profile) -> Self {
+        self.profile = v;
+        self
+    }
+    pub fn build(self) -> JackLayer {
+        JackLayer::from_parts(
+            self.verifier,
+            SigningProfile::Static {
+                kid: self.server_key.kid().to_owned(),
+                key: Arc::new(self.server_key),
+            },
+            self.max_body_bytes,
+            self.max_response_bytes,
+            self.profile,
+        )
+    }
 }
 
-/// Configures [`JackLayer::rotating`] (Go: HandlerConfig with ResponseKeys
-/// set and ServerKey unset; the two constructors make the mixing Go refuses
-/// unrepresentable). Infallible in Rust: the Go nil/length checks are
-/// unrepresentable (Arc, trait object).
-pub struct RotatingHandlerConfig {
-    /// Authenticates and authorizes every request.
-    pub verifier: Arc<Verifier>,
-    /// Selects and authorizes the response signer per response (Go:
-    /// HandlerConfig.ResponseKeys). The gateway must pair it with
-    /// `Verifier::with_server_keys` so `jack.server.key` is reachable; the
-    /// library cannot enforce that pairing (see Verifier::with_server_keys).
-    /// Signing performs the provider's synchronous durable-store work (no
-    /// network I/O under a state lock) exactly where the static profile
-    /// computes its signature.
-    pub response_keys: Arc<dyn ResponseKeys>,
-    /// Bounds the request body; zero means 1 MiB (Go: limit <= 0). The body
-    /// must be read in full to be hashed, so the limit is a DoS guard.
-    pub max_body_bytes: usize,
-    /// Bounds the buffered inner response, independently of
-    /// `max_body_bytes`; zero means 1 MiB. Exactly this many bytes pass; one
-    /// more is answered with a signed 502 `response_too_large` and the inner
-    /// body is dropped. It bounds bytes read, not time: a body that never
-    /// yields a frame (or only empty frames) is not stopped by it. A timeout on
-    /// the inner service covers only obtaining the response; a deadline
-    /// including body consumption must wrap the whole `JackService` produced by
-    /// `JackLayer` (caller's responsibility; no timeout option here). The inner
-    /// service's own pre-return allocations are not bounded (see module docs).
-    pub max_response_bytes: usize,
+/// Replaces `RotatingHandlerConfig` literals and `JackLayer::rotating` because
+/// this crate is unpublished.
+pub struct RotatingHandlerBuilder {
+    verifier: Arc<Verifier>,
+    response_keys: Arc<dyn ResponseKeys>,
+    max_body_bytes: usize,
+    max_response_bytes: usize,
+    profile: Profile,
+}
+impl RotatingHandlerBuilder {
+    pub fn new(verifier: Arc<Verifier>, response_keys: Arc<dyn ResponseKeys>) -> Self {
+        Self {
+            verifier,
+            response_keys,
+            max_body_bytes: 0,
+            max_response_bytes: 0,
+            profile: Profile::default(),
+        }
+    }
+    pub fn max_body_bytes(mut self, v: usize) -> Self {
+        self.max_body_bytes = v;
+        self
+    }
+    pub fn max_response_bytes(mut self, v: usize) -> Self {
+        self.max_response_bytes = v;
+        self
+    }
+    pub fn with_profile(mut self, v: Profile) -> Self {
+        self.profile = v;
+        self
+    }
+    pub fn build(self) -> JackLayer {
+        JackLayer::from_parts(
+            self.verifier,
+            SigningProfile::Rotating {
+                keys: self.response_keys,
+            },
+            self.max_body_bytes,
+            self.max_response_bytes,
+            self.profile,
+        )
+    }
 }
 
 /// Tower layer wrapping an unmodified MCP server (Go: `handler` + NewHandler).
 /// Only authenticated and authorized requests reach the inner service and every
 /// verified answer is signed. Its signing key has a redacted `Debug` form.
 ///
-/// ```ignore
-/// use bytes::Bytes;
-/// use http_body_util::Full;
-/// use tower::Layer as _;
-/// use mcp_jack::server::http::{HandlerConfig, JackLayer};
+/// Build the static profile with [`HandlerBuilder`]:
 ///
-/// let layer = JackLayer::new(HandlerConfig {
-///     verifier,
-///     server_key,
-///     max_body_bytes: 0,
-///     max_response_bytes: 0,
-/// });
-/// let service = layer.layer(tower::service_fn(|req: http::Request<Full<Bytes>>| async move {
-///     Ok::<_, std::convert::Infallible>(http::Response::new(Full::new(Bytes::new())))
-/// }));
+/// ```rust,ignore
+/// use std::sync::Arc;
+/// use mcp_jack::server::http::HandlerBuilder;
+/// use mcp_jack::server::verify::VerifierBuilder;
+///
+/// let verifier = VerifierBuilder::new("https://mcp.example/mcp", Arc::new(state_store))
+///     .try_build()?;
+/// let layer = HandlerBuilder::new(Arc::new(verifier), server_key)
+///     .max_body_bytes(0)
+///     .max_response_bytes(0)
+///     .build();
 /// ```
+/// A zero request-body or response-body limit selects its 1 MiB default; a nonzero value is used
+/// as the limit, and a response exactly at the limit is accepted. Request overflow returns 413;
+/// response overflow returns a signed 502 `response_too_large` and drops the inner body.
+/// The response limit bounds bytes read, not time; empty frames do not count and are ignored
+/// while awaiting further frames. The former config literals and `JackLayer::new` constructors
+/// are replaced by builders because this crate is unpublished.
 pub struct JackLayer {
     verifier: Arc<Verifier>,
     signing: SigningProfile,
@@ -186,67 +222,28 @@ pub struct JackLayer {
 }
 
 impl JackLayer {
-    /// Wraps an inner service so requests are verified and answers signed
-    /// (Go: NewHandler). The Go nil checks are unrepresentable here, so this
-    /// is infallible.
-    pub fn new(cfg: HandlerConfig) -> Self {
-        // Go: limit <= 0 means the default; 0 in usize covers that exactly.
-        let limit = if cfg.max_body_bytes == 0 {
-            DEFAULT_MAX_BODY_BYTES
-        } else {
-            cfg.max_body_bytes
-        };
-        let response_limit = if cfg.max_response_bytes == 0 {
-            DEFAULT_MAX_RESPONSE_BYTES
-        } else {
-            cfg.max_response_bytes
-        };
+    fn from_parts(
+        verifier: Arc<Verifier>,
+        signing: SigningProfile,
+        max_body_bytes: usize,
+        max_response_bytes: usize,
+        profile: Profile,
+    ) -> Self {
         Self {
-            signing: SigningProfile::Static {
-                kid: cfg.server_key.kid().to_owned(),
-                key: Arc::new(cfg.server_key),
+            signing,
+            verifier,
+            limit: if max_body_bytes == 0 {
+                DEFAULT_MAX_BODY_BYTES
+            } else {
+                max_body_bytes
             },
-            verifier: cfg.verifier,
-            limit,
-            response_limit,
-            profile: Profile::default(),
-        }
-    }
-
-    /// Wraps an inner service with the rotating response profile (Go:
-    /// NewHandler with HandlerConfig.ResponseKeys; ServerKey must be unset —
-    /// unrepresentable here).
-    pub fn rotating(cfg: RotatingHandlerConfig) -> Self {
-        // Go: limit <= 0 means the default; 0 in usize covers that exactly.
-        let limit = if cfg.max_body_bytes == 0 {
-            DEFAULT_MAX_BODY_BYTES
-        } else {
-            cfg.max_body_bytes
-        };
-        let response_limit = if cfg.max_response_bytes == 0 {
-            DEFAULT_MAX_RESPONSE_BYTES
-        } else {
-            cfg.max_response_bytes
-        };
-        Self {
-            signing: SigningProfile::Rotating {
-                keys: cfg.response_keys,
+            response_limit: if max_response_bytes == 0 {
+                DEFAULT_MAX_RESPONSE_BYTES
+            } else {
+                max_response_bytes
             },
-            verifier: cfg.verifier,
-            limit,
-            response_limit,
-            profile: Profile::default(),
+            profile,
         }
-    }
-
-    /// Selects the modern-profile deployment setting (spec 04 section 1): under
-    /// [`Profile::Modern`] or [`Profile::Both`] the layer decides the era per
-    /// request after verification and applies the header rules of section 5,
-    /// refusing with the signed JSON-RPC shape of `S10`. [`Profile::Legacy`],
-    /// the default, is byte-identical to 0.1.x.
-    pub fn with_profile(mut self, profile: Profile) -> Self {
-        self.profile = profile;
-        self
     }
 }
 

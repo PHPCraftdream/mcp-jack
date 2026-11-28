@@ -29,6 +29,51 @@ impl NonceAdmission for CustomAdmission {
 }
 
 #[tokio::test]
+async fn request_body_zero_limit_accepts_one_mib_and_rejects_one_byte_over() {
+    // new_harness builds HandlerBuilder with max_body_bytes(0), without a profile override.
+    let h = new_harness(0, InnerResponse::ok_json(INNER_OK_BODY));
+    let base = r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{"pad":""}}"#;
+    let body = format!(
+        r#"{{"jsonrpc":"2.0","id":1,"method":"ping","params":{{"pad":"{}"}}}}"#,
+        "x".repeat((1 << 20) - base.len())
+    )
+    .into_bytes();
+    assert_eq!(body.len(), 1 << 20);
+
+    let alice = harness::signer_by_name("alice");
+    let signed = signed_request(&alice, "POST", "/mcp", &body);
+    let got = inspect(
+        send(&h.service, build_request(&signed, "POST", "/mcp", &body))
+            .await
+            .expect("no inner error"),
+    )
+    .await;
+    assert_eq!(got.status, 200, "exactly 1 MiB is accepted");
+    assert_signed(&got, &signed.request_sig, &h.server_pub);
+    assert_eq!(h.inner.seen_bodies(), vec![body]);
+
+    let body = format!(
+        r#"{{"jsonrpc":"2.0","id":1,"method":"ping","params":{{"pad":"{}"}}}}"#,
+        "x".repeat((1 << 20) + 1 - base.len())
+    )
+    .into_bytes();
+    assert_eq!(body.len(), (1 << 20) + 1);
+    let signed = signed_request(&alice, "POST", "/mcp", &body);
+    let got = inspect(
+        send(&h.service, build_request(&signed, "POST", "/mcp", &body))
+            .await
+            .expect("no inner error"),
+    )
+    .await;
+    assert_eq!(got.status, 413, "one byte over 1 MiB is rejected");
+    assert_eq!(
+        h.inner.calls(),
+        1,
+        "oversized body never reaches inner service"
+    );
+}
+
+#[tokio::test]
 async fn custom_nonce_admission_recorded_allows_and_rejections_fail_closed() {
     let alice = harness::signer_by_name("alice");
     for mode in [
@@ -442,13 +487,9 @@ async fn head_refusal_has_no_body_and_signs_the_empty_body() {
     seed_registry(&state);
     let server_key = server_signing_key();
     let server_pub = *server_key.verifying_key().as_bytes();
-    let layer = JackLayer::new(HandlerConfig {
-        verifier: build_verifier(state, None),
-        server_key,
-        max_body_bytes: 0,
-        max_response_bytes: 0,
-    })
-    .with_profile(Profile::Modern);
+    let layer = HandlerBuilder::new(build_verifier(state, None), server_key)
+        .with_profile(Profile::Modern)
+        .build();
     let svc = layer.layer(tower::service_fn(
         |_req: http::Request<Full<Bytes>>| async move {
             Ok::<http::Response<Full<Bytes>>, String>(http::Response::new(Full::new(Bytes::new())))
@@ -558,12 +599,7 @@ async fn answers_native_tools_itself() {
 async fn inner_service_error_propagates() {
     let state = MemoryState::new();
     seed_registry(&state);
-    let layer = JackLayer::new(HandlerConfig {
-        verifier: build_verifier(state, None),
-        server_key: server_signing_key(),
-        max_body_bytes: 0,
-        max_response_bytes: 0,
-    });
+    let layer = HandlerBuilder::new(build_verifier(state, None), server_signing_key()).build();
     let svc = layer.layer(tower::service_fn(
         |_req: http::Request<Full<Bytes>>| async move {
             Err::<http::Response<Full<Bytes>>, _>("boom".to_string())

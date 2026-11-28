@@ -56,7 +56,7 @@ The only documented public SDK concept names in the checked API docs are:
 | Language | Modern API concepts evidenced in SDK docs |
 |---|---|
 | Go | `client/modern` package: `BuildRequestMirrors`, `ValidateAnnotations`, `FilterDefinitions`, `ProjectArguments`, `DetectEra`, `ResultCache`; server profile types `server.ProfileLegacy`, `server.ProfileModern`, `server.ProfileBoth` (`client/modern/modern.go`, `server/middleware.go`). |
-| Rust | `Client::with_era`, `ClientEra`, `client::modern::{build_mirrors, add_client_info}`, `detect_era`, `ToolCatalog`, `EventCatalog`, `project_arguments`, `Resync`, `PrivateResultCache`; server `JackLayer::with_profile` and `Profile::{Legacy, Modern, Both}` (`rust/README.md` §§4-5). |
+| Rust | `Client::with_era`, `ClientEra`, `client::modern::{build_mirrors, add_client_info}`, `detect_era`, `ToolCatalog`, `EventCatalog`, `project_arguments`, `Resync`, `PrivateResultCache`; server `VerifierBuilder`, `HandlerBuilder`, `RotatingHandlerBuilder`, `HandlerBuilder::with_profile` and `Profile::{Legacy, Modern, Both}` (`rust/README.md` §§4-5; `rust/src/server/verify/mod.rs`, `rust/src/server/http/mod.rs`). |
 | TypeScript | `jackFetchHandler` profile option, `Client` era, `client.ModernClient`, `detectEra`, `buildRequestMirrors`, and mirror/annotation helper exports (`ts/README.md` §Modern profile). |
 
 These are conceptual/API names as documented, not a claim that each language has identical helper shapes. Webhook receiver APIs have language-specific names: Go exports `webhook.Receiver` (`webhook/receiver.go`), Rust defines `Receiver` (`rust/src/webhook/receiver/state.rs`), and TypeScript defines `WebhookReceiver` (`ts/src/webhook/receiver/core.ts`). This table does not assert live Server Card fetching in interop.
@@ -67,7 +67,7 @@ Concepts are shared across languages, while exported names and feature gates dif
 
 | Concept | Go | Rust | TypeScript |
 |---|---|---|---|
-| Stream signer/server | `server.StreamOptions`, `server.StreamFromContext` (`server/middleware.go`) | `server::http::StreamLayer`, `StreamConfig`, `RotatingStreamConfig`, `server::stream::StreamOptions` | `jackStream`, `StreamServerOptions` |
+| Stream signer/server | `server.StreamOptions`, `server.StreamFromContext` (`server/middleware.go`) | `server::http::StreamLayerBuilder::new` (static) / `StreamLayerBuilder::rotating`, `.streams(StreamOptions)`, `server::http::StreamLayer`, `server::stream::StreamOptions` | `jackStream`, `StreamServerOptions` |
 | Verified stream/client | Go `client/stream.Verifier`, `client/stream.Stream` | `client::stream::VerifiedStream` | `client.openSignedStream`, `client.SignedStreamSession` |
 | Webhook sender | `webhook.Sender` | `webhook::http::Sender` (requires `http`; concrete HTTPS dialer via `client-http`) | `WebhookSender` |
 | Webhook receiver | `webhook.Receiver` | `webhook::receiver::Receiver` | `WebhookReceiver` |

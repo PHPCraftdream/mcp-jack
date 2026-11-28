@@ -6,12 +6,12 @@
 use std::sync::Arc;
 
 use mcp_jack::encoding::{encode_b64url, key_id};
-use mcp_jack::server::http::{HandlerConfig, JackLayer};
+use mcp_jack::server::http::HandlerBuilder;
 use mcp_jack::server::modern::Profile;
 use mcp_jack::server::native::{Native, NativeOptions};
 use mcp_jack::server::nonce::NonceStore;
 use mcp_jack::server::state_file::FileState;
-use mcp_jack::server::verify::{Clock, Config, Verifier};
+use mcp_jack::server::verify::{Clock, VerifierBuilder};
 use tower_layer::Layer as _;
 
 use super::handler::{DiscoverMode, ModernHandler};
@@ -210,17 +210,15 @@ async fn serve(
     // and a file that went bad after startup fails the process instead of
     // reusing a stale timestamp.
     let now: Clock = Arc::new(move || proto::clock_or_exit(&clock_file, "modern-server"));
-    let verifier = Verifier::new(Config {
-        aud,
-        state: Arc::new(state),
-        nonces: Arc::new(NonceStore::new()),
-        audit: None,
-        native: Some(Arc::new(Native::new(NativeOptions::default()))),
+    let verifier = VerifierBuilder::new(aud, Arc::new(state))
+        .nonces(Arc::new(NonceStore::new()))
+        .audit(None)
+        .native_tools(Some(Arc::new(Native::new(NativeOptions::default()))))
         // 0 selects the SDK default 30 s freshness window.
-        window_seconds: 0,
-        now,
-    })
-    .map_err(|e| format!("verifier: {e}"))?;
+        .window_seconds(0)
+        .now(now)
+        .try_build()
+        .map_err(|e| format!("verifier: {e}"))?;
 
     let public_key = encode_b64url(server_key.verifying_key().as_bytes());
     let kid = key_id(server_key.verifying_key().as_bytes());
@@ -228,13 +226,11 @@ async fn serve(
     let handler = ModernHandler::new(profile, supported_versions, discover_mode, request_log);
     // Contract 3.6: the profile is the ONLY era switch; the wrapper owns the
     // era handling, mirror validation, refusals and forwarding.
-    let layer = JackLayer::new(HandlerConfig {
-        verifier: Arc::new(verifier),
-        server_key,
-        max_body_bytes: 0,
-        max_response_bytes: 0,
-    })
-    .with_profile(profile);
+    let layer = HandlerBuilder::new(Arc::new(verifier), server_key)
+        .max_body_bytes(0)
+        .max_response_bytes(0)
+        .with_profile(profile)
+        .build();
     let service = layer.layer(handler);
 
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))

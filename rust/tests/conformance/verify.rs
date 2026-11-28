@@ -10,7 +10,7 @@ use mcp_jack::server::audit::{AuditSink, MemoryAuditSink};
 use mcp_jack::server::native::{Native, NativeOptions};
 use mcp_jack::server::nonce::NonceStore;
 use mcp_jack::server::state::{MemoryState, RegistryEntry, StateStore};
-use mcp_jack::server::verify::{Clock, Config, Request, Verifier};
+use mcp_jack::server::verify::{Clock, Request, VerifierBuilder};
 
 fn seed_registry(state: &MemoryState, registry: &fixtures::RegistryDocument) {
     // Entries pass through verbatim: admin defaults to false when absent
@@ -124,18 +124,16 @@ fn run_case(
     let audit: Arc<dyn AuditSink> = sink.clone();
     let now = case.state.now;
     let now_clock: Clock = Arc::new(move || now);
-    let verifier = Verifier::new(Config {
-        aud: case.state.aud.clone(),
-        state: Arc::new(state),
-        nonces: Arc::new(nonces),
-        audit: Some(audit),
+    let verifier = VerifierBuilder::new(case.state.aud.clone(), Arc::new(state))
+        .nonces(Arc::new(nonces))
+        .audit(Some(audit))
         // The real jack.* tools; OS randomness is fine here because the
         // expectations use the "<b64u43>" placeholder, never a literal code.
-        native: Some(Arc::new(Native::new(NativeOptions::default()))),
-        window_seconds: case.state.window_seconds,
-        now: now_clock,
-    })
-    .expect("verifier");
+        .native_tools(Some(Arc::new(Native::new(NativeOptions::default()))))
+        .window_seconds(case.state.window_seconds)
+        .now(now_clock)
+        .try_build()
+        .expect("verifier");
 
     // Header names are case-insensitive per the runner rules.
     let auth_values: Vec<String> = case
