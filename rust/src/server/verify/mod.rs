@@ -50,7 +50,7 @@ pub const TOOL_WHOAMI: &str = "jack.whoami";
 pub const TOOL_ROTATE_KEY: &str = "jack.key.rotate";
 /// Candidate native tool: one published page of the server key ring (Go: ToolServerKey). NOT part
 /// of the closed current-v1 set (`is_native_tool` stays false); reachable only through a
-/// separately configured rotation handler (`Verifier::with_server_keys`).
+/// separately configured rotation handler (`VerifierBuilder::server_keys`).
 pub const TOOL_SERVER_KEY: &str = "jack.server.key";
 /// Protocol-native admin tool (spec 03 section 6).
 pub const TOOL_ADMIN_USER_LIST: &str = "jack.admin.user.list";
@@ -96,8 +96,8 @@ fn audited_tool(name: &str) -> bool {
     name == TOOL_ENROLL || name == TOOL_ROTATE_KEY || name.starts_with("jack.admin.")
 }
 
-/// The verifier clock: Unix seconds. The verifier NEVER reads a wall clock;
-/// callers inject their time source (spec 01 section 4 runner rules).
+/// The verifier clock: Unix seconds. Defaults to the system clock; callers may inject a time source
+/// with [`VerifierBuilder::now`] (spec 01 section 4 runner rules).
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 
 /// What a protocol-native tool handler receives (Go: NativeCall).
@@ -140,27 +140,25 @@ pub trait NativeTools: Send + Sync {
     fn call(&self, c: &mut NativeCall) -> Result<NativeResult, JackError>;
 }
 
-/// Verifier configuration (Go: Config).
-pub struct Config {
-    /// Audience signed into every request; compared with this value, never with the Host header
-    /// (spec 01 section 3.1).
-    pub aud: String,
-    /// Registry and invite store.
-    pub state: Arc<dyn StateStore>,
-    /// Records seen (kid, nonce) pairs.
-    pub nonces: Arc<dyn NonceAdmission>,
-    /// Audit sink for protocol-native calls; optional.
-    pub audit: Option<Arc<dyn AuditSink>>,
-    /// Implements the jack.* tools; None denies every jack.* tool.
-    pub native: Option<Arc<dyn NativeTools>>,
-    /// Timestamp window seconds; zero selects DEFAULT_WINDOW_SECONDS, and nonzero values must be in
-    /// 1..=120 (Go: Config.Window).
-    pub window_seconds: i64,
-    /// Verifier clock, Unix seconds. Initial key/invite checks and freshness use the highest sample
-    /// seen so far; authorization (including native-tool and audit time) shares it in the volatile
-    /// profile. Durable post-commit authorization keeps its store-sampled finalNow; response
-    /// timestamps use the raw sample.
-    pub now: Clock,
+/// Verifier construction settings, corresponding to the Go `server.Config` public fields:
+/// `aud` maps to `Config.Aud`, `window_seconds` to `Config.Window`, `now` to `Config.Now`,
+/// `server_keys` to `Config.ServerKeys`, and `durable_nonces` to `Config.DurableNonces`.
+/// Configure these through [`VerifierBuilder`]: `new` requires `aud` and `state`; `nonces`,
+/// `audit`, `native_tools`, `window_seconds`, and `now` customize the corresponding settings.
+/// By default, nonces use a fresh in-memory store, audit and native tools are absent, and `now`
+/// uses `system_clock()`. The audience must be nonempty and contain no control characters.
+/// `window_seconds(0)` selects 30 seconds; accepted values are 0 or 1..=120. The system clock
+/// returns Unix seconds; authorization uses the highest sample seen so far in the volatile
+/// profile. `server_keys` maps to Go `Config.ServerKeys`, `webhook_keys` maps to
+/// `Config.WebhookKeys`, and `durable_nonces` maps to `Config.DurableNonces`.
+struct Config {
+    aud: String,
+    state: Arc<dyn StateStore>,
+    nonces: Arc<dyn NonceAdmission>,
+    audit: Option<Arc<dyn AuditSink>>,
+    native: Option<Arc<dyn NativeTools>>,
+    window_seconds: i64,
+    now: Clock,
 }
 
 /// Invalid verifier configuration.
@@ -219,67 +217,124 @@ pub struct Verifier {
 /// zero-initialised value can never match a real issuer.
 static NEXT_ISSUER: AtomicU64 = AtomicU64::new(1);
 
-impl Verifier {
-    /// Validates cfg (Go: NewVerifier). In addition to aud, the window can be
-    /// invalid; the other Go checks are types here (Arc is non-null by construction).
-    pub fn new(mut cfg: Config) -> Result<Self, VerifierConfigError> {
-        if cfg.aud.is_empty() {
-            return Err(VerifierConfigError::EmptyAudience);
-        }
-        if crate::client::auth::has_control(&cfg.aud) {
-            return Err(VerifierConfigError::AudienceControlCharacter);
-        }
-        if cfg.window_seconds < 0 || cfg.window_seconds > 120 {
-            return Err(VerifierConfigError::InvalidWindow);
-        }
-        if cfg.window_seconds == 0 {
-            cfg.window_seconds = DEFAULT_WINDOW_SECONDS;
-        }
-        Ok(Self {
-            cfg,
+/// Builds a verifier from required audience and state plus optional policy settings.
+/// The former `Config` literal and `Verifier::new(config)` API are replaced because this crate is
+/// unpublished; construction and validation now happen through this builder.
+pub struct VerifierBuilder {
+    cfg: Config,
+    server_keys: Option<Arc<dyn NativeTools>>,
+    webhook_keys: Option<Arc<dyn NativeTools>>,
+    #[cfg(target_os = "linux")]
+    durable: Option<Arc<SharedDurableNonceStore>>,
+}
+
+impl VerifierBuilder {
+    /// Starts a verifier for the audience (Go: `Config.Aud`) and registry/invite state.
+    /// The audience must be nonempty and contain no control characters; `try_build` validates it.
+    /// Defaults are a fresh in-memory nonce store, no audit sink or native-tools handler, a
+    /// 30-second window (`window_seconds(0)`), and the system clock (`system_clock()`).
+    pub fn new(aud: impl Into<String>, state: Arc<dyn StateStore>) -> Self {
+        Self {
+            cfg: Config {
+                aud: aud.into(),
+                state,
+                nonces: Arc::new(crate::server::nonce::NonceStore::new()),
+                audit: None,
+                native: None,
+                window_seconds: 0,
+                now: crate::client::transport::system_clock(),
+            },
             server_keys: None,
             webhook_keys: None,
             #[cfg(target_os = "linux")]
             durable: None,
+        }
+    }
+    /// Sets the nonce admission store; the default is a fresh in-memory store.
+    pub fn nonces(mut self, v: Arc<dyn NonceAdmission>) -> Self {
+        self.cfg.nonces = v;
+        self
+    }
+    /// Sets the optional audit sink; `None` is the default.
+    pub fn audit(mut self, v: Option<Arc<dyn AuditSink>>) -> Self {
+        self.cfg.audit = v;
+        self
+    }
+    /// Sets the optional protocol-native tool handler; `None` is the default and denies native tools.
+    pub fn native_tools(mut self, v: Option<Arc<dyn NativeTools>>) -> Self {
+        self.cfg.native = v;
+        self
+    }
+    /// Sets the timestamp window in seconds (Go: `Config.Window`). Zero selects the 30-second
+    /// default; `try_build` accepts only zero or 1..=120.
+    pub fn window_seconds(mut self, v: i64) -> Self {
+        self.cfg.window_seconds = v;
+        self
+    }
+    /// Injects the verifier clock (Go: `Config.Now`), which returns Unix seconds. The default is
+    /// `system_clock()`.
+    pub fn now(mut self, v: Clock) -> Self {
+        self.cfg.now = v;
+        self
+    }
+    /// Configures the `jack.server.key` handler (Go: `Config.ServerKeys`); used for the
+    /// separately configured rotation route.
+    pub fn with_server_keys(mut self, v: Arc<dyn NativeTools>) -> Self {
+        self.server_keys = Some(v);
+        self
+    }
+    pub fn server_keys(self, v: Arc<dyn NativeTools>) -> Self {
+        self.with_server_keys(v)
+    }
+    /// Configures the `jack.server.webhook_key` handler; absent by default.
+    pub fn with_webhook_keys(mut self, v: Arc<dyn NativeTools>) -> Self {
+        self.webhook_keys = Some(v);
+        self
+    }
+    pub fn webhook_keys(self, v: Arc<dyn NativeTools>) -> Self {
+        self.with_webhook_keys(v)
+    }
+    /// Configures a durable nonce store (Go: `Config.DurableNonces`) instead of the default
+    /// fresh in-memory store. This builder option is available on Linux only.
+    #[cfg(target_os = "linux")]
+    pub fn with_durable_nonces(mut self, v: Arc<SharedDurableNonceStore>) -> Self {
+        self.durable = Some(v);
+        self
+    }
+    #[cfg(target_os = "linux")]
+    pub fn durable_nonces(self, v: Arc<SharedDurableNonceStore>) -> Self {
+        self.with_durable_nonces(v)
+    }
+    pub fn try_build(mut self) -> Result<Verifier, VerifierConfigError> {
+        if self.cfg.aud.is_empty() {
+            return Err(VerifierConfigError::EmptyAudience);
+        }
+        if crate::client::auth::has_control(&self.cfg.aud) {
+            return Err(VerifierConfigError::AudienceControlCharacter);
+        }
+        if self.cfg.window_seconds < 0 || self.cfg.window_seconds > 120 {
+            return Err(VerifierConfigError::InvalidWindow);
+        }
+        if self.cfg.window_seconds == 0 {
+            self.cfg.window_seconds = DEFAULT_WINDOW_SECONDS;
+        }
+        #[cfg(target_os = "linux")]
+        let (durable, durable_window_invalid) = (self.durable, false);
+        Ok(Verifier {
+            cfg: self.cfg,
+            server_keys: self.server_keys,
+            webhook_keys: self.webhook_keys,
             #[cfg(target_os = "linux")]
-            durable_window_invalid: false,
+            durable,
+            #[cfg(target_os = "linux")]
+            durable_window_invalid,
             high_water: AtomicI64::new(i64::MIN),
             issuer: NEXT_ISSUER.fetch_add(1, Ordering::SeqCst),
         })
     }
-
-    /// Routes `jack.server.key` to this handler (Go: Config.ServerKeys). The
-    /// caller must pair it with a rotating response profile at the HTTP
-    /// layer; the library cannot enforce that pairing without breaking the
-    /// infallible static constructor.
-    pub fn with_server_keys(mut self, server_keys: Arc<dyn NativeTools>) -> Self {
-        self.server_keys = Some(server_keys);
-        self
-    }
-
-    /// Routes `jack.server.webhook_key` to this handler (spec 06 rule R7.6).
-    /// The tool is read-only, so no rotating response profile is needed; None
-    /// keeps the route answering 403 operation_denied.
-    pub fn with_webhook_keys(mut self, webhook_keys: Arc<dyn NativeTools>) -> Self {
-        self.webhook_keys = Some(webhook_keys);
-        self
-    }
-
-    /// Selects the candidate durable nonce profile (Go: Config.DurableNonces).
-    /// The volatile nonce store is not used while one is configured; every
-    /// refusal maps to the candidate storage statuses and codes (spec section
-    /// 5). Linux-gated together with the durable store.
-    #[cfg(target_os = "linux")]
-    pub fn with_durable_nonces(mut self, durable: Arc<SharedDurableNonceStore>) -> Self {
-        // Preserve the durable-profile R9 refusal as a second fail-closed
-        // guard; this infallible builder rechecks windows rejected by new().
-        self.durable_window_invalid = self.cfg.window_seconds < 0 || self.cfg.window_seconds > 120;
-        self.durable = Some(durable);
-        self
-    }
-
-    /// Effective window: zero selects the default (Go: `if cfg.Window == 0`;
-    /// construction rejects negative and over-limit values before this is used).
+}
+impl Verifier {
+    /// Effective window: zero selects the default (Go: `if cfg.Window == 0`; construction rejects invalid values).
     fn window(&self) -> i64 {
         if self.cfg.window_seconds == 0 {
             DEFAULT_WINDOW_SECONDS

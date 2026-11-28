@@ -17,27 +17,23 @@ The crate's current minimum supported Rust version is **1.88**. This is required
 ```rust,ignore
 use bytes::Bytes;
 use http_body_util::Full;
-use mcp_jack::server::http::{HandlerConfig, JackLayer};
+use mcp_jack::server::http::{HandlerBuilder, JackLayer};
 use tower::Layer as _;
 use mcp_jack::server::nonce::NonceStore;
-use mcp_jack::server::verify::{Config, Verifier};
+use mcp_jack::server::verify::{Verifier, VerifierBuilder};
 use std::sync::Arc;
 
-let verifier = Verifier::new(Config {
-    aud: "https://mcp.example/mcp".to_owned(),
-    state: Arc::new(state_store),
-    nonces: Arc::new(NonceStore::new()),
-    audit: None,
-    native: Some(Arc::new(native_tools)),
-    window_seconds: 0,
-    now: Arc::new(|| unix_seconds()),
-})?;
-let layer = JackLayer::new(HandlerConfig {
-    verifier: Arc::new(verifier),
-    server_key,
-    max_body_bytes: 0,
-    max_response_bytes: 0,
-});
+let verifier = VerifierBuilder::new("https://mcp.example/mcp", Arc::new(state_store))
+    .nonces(Arc::new(NonceStore::new()))
+    .audit(None)
+    .native_tools(Some(Arc::new(native_tools)))
+    .window_seconds(0)
+    .now(Arc::new(|| unix_seconds()))
+    .try_build()?;
+let layer = HandlerBuilder::new(Arc::new(verifier), server_key)
+    .max_body_bytes(0)
+    .max_response_bytes(0)
+    .build();
 let service = layer.layer(tower::service_fn(
     |req: http::Request<Full<Bytes>>| async move {
         Ok::<_, std::convert::Infallible>(http::Response::new(Full::new(Bytes::new())))
@@ -49,12 +45,14 @@ let service = layer.layer(tower::service_fn(
 
 Spec 04 selects a per-request era (`legacy` = `2025-11-25`/`2025-06-18`, `modern` = `2026-07-28` and later) and adds request-metadata mirror headers around the unchanged `mcp-jack/v1` request and response signatures.
 
-**Server.** `JackLayer::with_profile` takes `mcp_jack::server::modern::Profile::{Legacy, Modern, Both}`. `Legacy` is the default and byte-identical to 0.1.x (no rule of spec 04 section 5 runs); `Modern` serves every request as modern; `Both` decides per request with `decide_era`. In the modern era `classify_request` applies `S1`-`S12`: mirror headers are validated against the signed body, `Mcp-Param-*` is forwarded unchecked, `Mcp-Session-Id` and `Last-Event-ID` are stripped, and a violation becomes a signed JSON-RPC error (`400`/`405`, code `-32020`/`-32600`, `Content-Type: application/json`, nonce consumed). Native `jack.*` results in a modern-era request carry `resultType: "complete"` and `_meta["io.modelcontextprotocol/serverInfo"]`; legacy-era results are unchanged. The engine is pure (`mcp_jack::server::modern::{ModernRequest, ModernOutcome, Refusal, RefusalReason}`) and can be driven without HTTP, which is what the vector runner does.
+**Server.** `HandlerBuilder::with_profile` takes `mcp_jack::server::modern::Profile::{Legacy, Modern, Both}`; call it on `HandlerBuilder` (static signing) or `RotatingHandlerBuilder` (rotating signing) before `build()`. `Legacy` is the default and byte-identical to 0.1.x (no rule of spec 04 section 5 runs); `Modern` serves every request as modern; `Both` decides per request with `decide_era`. In the modern era `classify_request` applies `S1`-`S12`: mirror headers are validated against the signed body, `Mcp-Param-*` is forwarded unchecked, `Mcp-Session-Id` and `Last-Event-ID` are stripped, and a violation becomes a signed JSON-RPC error (`400`/`405`, code `-32020`/`-32600`, `Content-Type: application/json`, nonce consumed). Native `jack.*` results in a modern-era request carry `resultType: "complete"` and `_meta["io.modelcontextprotocol/serverInfo"]`; legacy-era results are unchanged. The engine is pure (`mcp_jack::server::modern::{ModernRequest, ModernOutcome, Refusal, RefusalReason}`) and can be driven without HTTP, which is what the vector runner does.
 
 **Client.** `ClientEra` (`Legacy` default, `Modern`) is selected on `Client::with_era`. `mcp_jack::client::modern::{build_mirrors, add_client_info}` build `params._meta` and the `MCP-Protocol-Version`/`Mcp-Method`/`Mcp-Name` headers in `C2` order; `mcp_jack::modern::{encode_header_value, decode_header_value}` are the RFC 4648 base64 sentinel codec of section 4; `validate_annotations`/`collect_annotations` implement `x-mcp-header` validation (`C5`), `ToolCatalog`/`EventCatalog` filter a `tools/list`/`events/list` result (`C5`, `C11`), `project_arguments` projects arguments onto `Mcp-Param-*` (`C6`), `detect_era` implements the era detection and fallback of `C9` with the closed `{era, action, reason}` vocabulary, `Resync` implements the `tools/list` and `events/list` resync flows (`C10`, `C12`), and `PrivateResultCache` is the private-only result cache of `C8` (keyed by the exact request, bounded by `ttlMs`, never shared because a response is signed over one request's signature).
 
 ```rust,ignore
-let layer = JackLayer::new(cfg).with_profile(Profile::Both);
+let layer = HandlerBuilder::new(Arc::new(verifier), server_key)
+    .with_profile(Profile::Both)
+    .build();
 let client = Client::new(cfg)?.with_era(ClientEra::Modern);
 ```
 
@@ -317,7 +315,7 @@ node tools/consumer/verify-rust.mjs tools/consumer/.scratch/rust-consumer
 
 The stage is a fresh direct child of `tools/consumer/.scratch/`; both drivers are restricted to GitHub Actions. The packaged `.crate` contains the product SDK crate sources (`src/`), the tests, this README, and byte-exact copies of `LICENSE-MIT` and `LICENSE-APACHE` committed under `rust/`; the separate Rust interop harness is not part of this SDK package. CI byte-compares the packaged licence files against the repository root copies, so licence-text drift fails the run.
 
-The consumer is a standalone edition-2024, rust-version-1.88 crate whose SDK dependency is only the extracted `.crate` — never the checkout (the adapter-driving harness crates named below are optional, feature-gated supporting dependencies). It resolves its dependency graph FRESH on Rust 1.88: no product lockfile is copied in, and the consumer-generated `Cargo.lock` must exist and differ byte-wise from the product `rust/Cargo.lock`, proving independent resolution (Cargo ignores a path-dependency's own lockfile). The feature matrix: the default features build first; `client-http` runs a real signed loopback request over a socket, and an unsigned 401 from the server must surface as `Unauthenticated`; `server-http` drives the real packaged adapter — the consumer constructs `JackLayer` from `HandlerConfig`, wraps an in-process inner service, and drives it through the SDK client, with wrong-pin and tampered-body refusals running through the same adapter. The adapter-only supporting crates `ed25519-dalek`/`getrandom`/`http`/`bytes`/`http-body-util`/`tower`/`futures` are optional harness-only deps behind the consumer's own `server-http` feature; the SDK dependency itself remains only the extracted `.crate`. CI uploads the `.crate` and inventory.json as workflow artifacts for parent inspection. This consumer run validates the packaged artifact on the declared MSRV with a fresh dependency resolution; it does not prove vulnerability-free dependencies or replace the locked product CI graph.
+The consumer is a standalone edition-2024, rust-version-1.88 crate whose SDK dependency is only the extracted `.crate` — never the checkout (the adapter-driving harness crates named below are optional, feature-gated supporting dependencies). It resolves its dependency graph FRESH on Rust 1.88: no product lockfile is copied in, and the consumer-generated `Cargo.lock` must exist and differ byte-wise from the product `rust/Cargo.lock`, proving independent resolution (Cargo ignores a path-dependency's own lockfile). The feature matrix: the default features build first; `client-http` runs a real signed loopback request over a socket, and an unsigned 401 from the server must surface as `Unauthenticated`; `server-http` drives the real packaged adapter — the consumer builds `JackLayer` with `HandlerBuilder`, wraps an in-process inner service, and drives it through the SDK client, with wrong-pin and tampered-body refusals running through the same adapter. The adapter-only supporting crates `ed25519-dalek`/`getrandom`/`http`/`bytes`/`http-body-util`/`tower`/`futures` are optional harness-only deps behind the consumer's own `server-http` feature; the SDK dependency itself remains only the extracted `.crate`. CI uploads the `.crate` and inventory.json as workflow artifacts for parent inspection. This consumer run validates the packaged artifact on the declared MSRV with a fresh dependency resolution; it does not prove vulnerability-free dependencies or replace the locked product CI graph.
 
 ## Candidate Linux client trust store
 
@@ -548,8 +546,7 @@ produced only after the exact durable ACK of that single CAS.
 
 `RotationServerProvider` implements
 `mcp_jack::server::response_keys::ResponseKeys`, and
-`JackLayer::rotating(RotatingHandlerConfig { verifier, response_keys,
-max_body_bytes, max_response_bytes })` replaces the static key for every
+`RotatingHandlerBuilder` replaces the static key for every
 verified answer, including signed rejections. The signer is selected before the
 signature is computed, and a fresh completion-sample final gate re-confirms
 eligibility: a key retired or a ring/head changed meanwhile discards the
@@ -559,15 +556,15 @@ adapter re-verifies the signature under the pinned public key before the final
 gate runs. A `jack.server.key` 200 answer additionally carries a parity gate
 against the committed snapshot: current kid and public key, head, and the exact
 contiguous records. The static-key path is byte-for-byte unchanged
-(`JackLayer::new`).
+(`HandlerBuilder`).
 
 `mcp_jack::server::server_key::ServerKeyTool` implements the candidate native
 tool `jack.server.key`; it is not part of the closed 11-name current-v1
 allowlist (`is_native_tool` stays false), never forwards, and the verifier
 denies the route (403, no audit event) unless a handler is registered. It is
-reachable only through `Verifier::with_server_keys`, and the gateway must pair
+reachable only through `VerifierBuilder::server_keys`, and the gateway must pair
 that verifier with the rotating handler profile: Go enforces the pairing at
-NewHandler, the Rust constructors make mixing unrepresentable, but the library
+NewHandler, the Rust builders make mixing unrepresentable, but the library
 cannot cross-check the verifier and the layer. The check order is audience,
 cursor, fresh server ClockGuard, then signer. Refusals are exactly 403
 `operation_denied`, 400 `invalid_params`, 409 `rotation_checkpoint_unavailable`

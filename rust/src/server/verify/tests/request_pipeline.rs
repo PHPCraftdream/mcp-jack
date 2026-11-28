@@ -62,6 +62,41 @@ fn replay_only_after_signature() {
 }
 
 #[test]
+fn builder_default_nonce_store_rejects_authenticated_replay() {
+    let (key, entry) = test_key("alice");
+    let verifier = VerifierBuilder::new(AUD, seeded_state(&[&entry]))
+        .now(Arc::new(|| NOW))
+        .try_build()
+        .expect("default builder configuration is valid");
+    let request = get(&key, &entry.kid, NOW, &nonce(900));
+
+    assert!(verifier.verify(&request).accepted);
+    let replay = verifier.verify(&request);
+    assert_eq!(replay.http_status, 401);
+    assert_eq!(replay.code, codes::REPLAYED_NONCE);
+    assert!(!replay.nonce_recorded);
+}
+
+#[test]
+fn builder_defaults_deny_native_route_without_handler_or_audit_sink() {
+    let (key, entry) = admin_key("alice");
+    let verifier = VerifierBuilder::new(AUD, seeded_state(&[&entry]))
+        .now(Arc::new(|| NOW))
+        .try_build()
+        .expect("default builder configuration is valid");
+    let request = post_call(TOOL_WHOAMI, None, &key, &entry.kid, &nonce(901));
+
+    let result = verifier.verify(&request);
+    assert_eq!(result.http_status, 403);
+    assert_eq!(result.code, codes::OPERATION_DENIED);
+    assert!(result.native, "the call is classified as a native route");
+    assert!(
+        result.audit.is_none(),
+        "no audit event is emitted without a configured sink"
+    );
+}
+
+#[test]
 fn invalid_utf8_checked_before_json() {
     let (key, entry) = test_key("alice");
     let body: &[u8] = b"{\"jsonrpc\":\"2.0\",\"method\":\"p\xffng\"}";

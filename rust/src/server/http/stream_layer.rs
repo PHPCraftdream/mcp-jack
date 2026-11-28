@@ -18,7 +18,7 @@ use tower_layer::Layer;
 use tower_service::Service;
 
 use super::stream::{channel_body, spawn_stream, StreamCancellation, StreamHeartbeat, StreamSeam};
-use super::{BoxError, HandlerConfig, JackLayer, JackService, RotatingHandlerConfig};
+use super::{BoxError, HandlerBuilder, JackLayer, JackService, RotatingHandlerBuilder};
 use crate::server::modern::Profile;
 use crate::server::response_keys::ResponseKeys;
 use crate::server::stream::{StreamOptions, StreamRegistry};
@@ -28,23 +28,76 @@ use crate::user_key::ServerSigningKey;
 /// The response body of the stream layer: a buffered answer or a live signed stream.
 pub type StreamBody = http_body_util::Channel<Bytes, std::convert::Infallible>;
 
-/// Configures [`StreamLayer::new`]: the static signing profile plus the 3.8 stream options.
-pub struct StreamConfig {
-    pub verifier: Arc<Verifier>,
-    pub server_key: ServerSigningKey,
-    pub max_body_bytes: usize,
-    pub max_response_bytes: usize,
-    pub streams: crate::server::stream::StreamOptions,
+/// Static or rotating signed-stream layer builder. Configuration formerly used public config
+/// literals; the crate is unpublished, so builders replace those constructors.
+pub struct StreamLayerBuilder {
+    verifier: Arc<Verifier>,
+    signing: StreamSigning,
+    max_body_bytes: usize,
+    max_response_bytes: usize,
+    streams: StreamOptions,
+    profile: Profile,
 }
-
-/// Configures [`StreamLayer::rotating`]: the rotating response profile plus the 3.8 stream
-/// options.
-pub struct RotatingStreamConfig {
-    pub verifier: Arc<Verifier>,
-    pub response_keys: Arc<dyn ResponseKeys>,
-    pub max_body_bytes: usize,
-    pub max_response_bytes: usize,
-    pub streams: crate::server::stream::StreamOptions,
+enum StreamSigning {
+    Static(Box<ServerSigningKey>),
+    Rotating(Arc<dyn ResponseKeys>),
+}
+impl StreamLayerBuilder {
+    pub fn new(verifier: Arc<Verifier>, key: ServerSigningKey) -> Self {
+        Self::base(verifier, StreamSigning::Static(Box::new(key)))
+    }
+    pub fn rotating(verifier: Arc<Verifier>, keys: Arc<dyn ResponseKeys>) -> Self {
+        Self::base(verifier, StreamSigning::Rotating(keys))
+    }
+    fn base(verifier: Arc<Verifier>, signing: StreamSigning) -> Self {
+        Self {
+            verifier,
+            signing,
+            max_body_bytes: 0,
+            max_response_bytes: 0,
+            streams: StreamOptions::default(),
+            profile: Profile::default(),
+        }
+    }
+    pub fn max_body_bytes(mut self, v: usize) -> Self {
+        self.max_body_bytes = v;
+        self
+    }
+    pub fn max_response_bytes(mut self, v: usize) -> Self {
+        self.max_response_bytes = v;
+        self
+    }
+    pub fn streams(mut self, v: StreamOptions) -> Self {
+        self.streams = v;
+        self
+    }
+    pub fn with_profile(mut self, v: Profile) -> Self {
+        self.profile = v;
+        self
+    }
+    pub fn profile(self, v: Profile) -> Self {
+        self.with_profile(v)
+    }
+    pub fn build(self) -> StreamLayer {
+        let jack = match self.signing {
+            StreamSigning::Static(key) => HandlerBuilder::new(self.verifier, *key)
+                .max_body_bytes(self.max_body_bytes)
+                .max_response_bytes(self.max_response_bytes)
+                .with_profile(self.profile)
+                .build(),
+            StreamSigning::Rotating(keys) => RotatingHandlerBuilder::new(self.verifier, keys)
+                .max_body_bytes(self.max_body_bytes)
+                .max_response_bytes(self.max_response_bytes)
+                .with_profile(self.profile)
+                .build(),
+        };
+        StreamLayer {
+            jack,
+            options: self.streams,
+            registry: Arc::new(StreamRegistry::new()),
+            profile: self.profile,
+        }
+    }
 }
 
 /// A [`JackLayer`] plus the signed-stream profile: every request keeps the exact `JackLayer`
@@ -58,44 +111,6 @@ pub struct StreamLayer {
 }
 
 impl StreamLayer {
-    /// Static signing profile (see [`JackLayer::new`]).
-    pub fn new(cfg: StreamConfig) -> Self {
-        StreamLayer {
-            jack: JackLayer::new(HandlerConfig {
-                verifier: cfg.verifier,
-                server_key: cfg.server_key,
-                max_body_bytes: cfg.max_body_bytes,
-                max_response_bytes: cfg.max_response_bytes,
-            }),
-            options: cfg.streams,
-            registry: Arc::new(StreamRegistry::new()),
-            profile: Profile::default(),
-        }
-    }
-
-    /// Rotating response profile (see [`JackLayer::rotating`]).
-    pub fn rotating(cfg: RotatingStreamConfig) -> Self {
-        StreamLayer {
-            jack: JackLayer::rotating(RotatingHandlerConfig {
-                verifier: cfg.verifier,
-                response_keys: cfg.response_keys,
-                max_body_bytes: cfg.max_body_bytes,
-                max_response_bytes: cfg.max_response_bytes,
-            }),
-            options: cfg.streams,
-            registry: Arc::new(StreamRegistry::new()),
-            profile: Profile::default(),
-        }
-    }
-
-    /// Selects the modern-profile deployment setting exactly like
-    /// [`JackLayer::with_profile`].
-    pub fn with_profile(mut self, profile: Profile) -> Self {
-        self.jack = self.jack.with_profile(profile);
-        self.profile = profile;
-        self
-    }
-
     /// The 3.3 registry shared by every service this layer produces.
     pub fn registry(&self) -> Arc<StreamRegistry> {
         Arc::clone(&self.registry)

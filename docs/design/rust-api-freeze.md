@@ -2,7 +2,7 @@
 
 ## Premise and scope
 
-`mcp-jack` is unpublished (`rust/Cargo.toml:1-5`); there are no external users or semver promise to preserve yet (task premise). Make the breaking public-API changes now, within unpublished 0.1.0, to reduce avoidable breaks after first release. This is an API-shape proposal only: no wire-format, signature-byte, fixture, or protocol changes. The document-only task did not change source.
+`mcp-jack` is unpublished (`rust/Cargo.toml:1-5`); there are no external users or semver promise to preserve yet (task premise). Make breaking public-API changes within unpublished 0.1.0 to reduce avoidable breaks after first release. This is an API-shape document only: no wire-format, signature-byte, fixture, or protocol changes. Task #300 concerns server-side input/config builders only; #301/#302 remain non-goals here. The six selected server-side records are `server::verify::Config`, `HandlerConfig`, `RotatingHandlerConfig`, `StreamConfig`, `RotatingStreamConfig`, and `StreamPipeConfig`. Other input, output, enum, and implementor-trait recommendations below are separate recommendations, not work claimed by #300.
 
 ## Compatibility classes and inventory
 
@@ -10,138 +10,104 @@ A declaration's visibility does not alone prove default-feature/root-export reac
 
 | Class | Examples and source locations | Compatibility rule to target |
 |---|---|---|
-| Input/config struct | The 11 in-scope structs in the next table. Other examples: `NativeCall`/`NativeResult` (`rust/src/server/verify/mod.rs:104,131`), `StreamVerifierConfig` (`rust/src/stream/verifier.rs:42`), `SenderConfig` (`rust/src/webhook/http/sender.rs:123`). | `#[non_exhaustive]` prevents downstream struct literals (and requires a constructor/builder); it does not make existing literals legal. Pair it with a usable `new`/builder. Private fields plus builder likewise require call-site migration now. |
+| Input/config struct | The six selected server-side structs in the next table. Other examples: `NativeCall`/`NativeResult` (`rust/src/server/verify/mod.rs`), `StreamVerifierConfig` (`rust/src/stream/verifier.rs`), `SenderConfig` (`rust/src/webhook/http/sender.rs`). | `#[non_exhaustive]` prevents downstream struct literals (and requires a constructor/builder); pair it with a usable `new`/builder. Other input recommendations remain recommendations, not work claimed for task #300. |
 | SDK output struct | `VerifyResult` (`rust/src/server/verify/mod.rs:668`), `PendingRequest` (`rust/src/server/verify/pending.rs:40`), `VerifiedIdentity` (`rust/src/server/identity.rs:22`), `HttpResponse` (`rust/src/client/transport.rs:70`), `ToolCatalog` (`rust/src/client/modern/projection.rs:222`), `DurableReceipt` (`rust/src/server/durable/durable_format.rs:76`). | Non-exhaustive output prevents downstream exhaustive destructuring; expose accessors, not an assumption all output values are non-constructible. Per-item annotations still require confirming actual consumption/export. |
 | Matched enum | `Authentication`, `Profile`, `RefusalReason`, `ModernOutcome` (`rust/src/server/verify/pending.rs:17`; `rust/src/server/modern/mod.rs:15,76,211`); `PipeStop` (`rust/src/server/stream/pipe.rs:20`); `ClientError` (`rust/src/client/error.rs:197`); `StreamCode` (`rust/src/stream/mod.rs:60`). | A downstream exhaustive match can break on a new variant. `#[non_exhaustive]` requires wildcard matches and must be chosen per enum now; it does not prevent constructing existing variants. |
 | Implementor trait | `NativeTools` (`rust/src/server/verify/mod.rs:139-141`), `StateStore` (`rust/src/server/registry/state.rs:166-189`), `Transport` (`rust/src/client/transport.rs:203-220`), `Signer` (`rust/src/client/request_signing/signer.rs:18-27`), `ResponseKeys` (`rust/src/server/response_keys.rs:86`), `AuditSink` (`rust/src/server/audit.rs:41`). | Adding a required method breaks implementors. Use a semantically sound default method or companion trait; sealing forecloses downstream implementations and is a deliberate policy choice, not a blanket fix. Preserve object safety where trait objects are used. |
 
-This is a relevant-item audit, not a claim that every public type is exhaustive. Draft's broad inventory includes many public values but no use-site proof for each; complete generated/exported/feature-gated inventory remains **UNVERIFIED**.
+This is a relevant-item audit, not a claim that every public type is exhaustive. Task #300 implements Option B only for the six selected server-side input/config structs; it does not implement the recommendations for client, stream-verifier, or webhook configurations, output structs, enums, or implementor traits. Draft's broad inventory includes many public values but no use-site proof for each; complete generated/exported/feature-gated inventory remains **UNVERIFIED**.
 
-| Input type | Declaration / actual fields / documented Go name or default | `#[non_exhaustive]` now? |
+| Input type | Declaration / scope | Option B construction |
 |---|---|---|
-| `server::verify::Config` | `rust/src/server/verify/mod.rs:143-164`; `aud`, `state`, `nonces`, `audit`, `native`, `window_seconds`, `now`; docs map window to Go `Config.Window`, audience to `Config.Aud`. `window_seconds == 0` becomes default 30; allowed nonzero 1..=120. | Yes. Caller input; add constructor/builder in same breaking API migration. |
-| `HandlerConfig` | `rust/src/server/http/mod.rs:106-126`; `verifier`, `server_key`, `max_body_bytes`, `max_response_bytes`; Go `HandlerConfig`; each byte limit zero means 1 MiB. | Yes; new builder/constructor, avoid forcing literals after release. |
-| `RotatingHandlerConfig` | `rust/src/server/http/mod.rs:128-156`; `verifier`, `response_keys`, `max_body_bytes`, `max_response_bytes`; Go `HandlerConfig.ResponseKeys`; both limits zero mean 1 MiB. | Yes; separate rotating construction remains clear. |
-| `StreamConfig` | `rust/src/server/http/stream_layer.rs:30-37`; `verifier`, `server_key`, `max_body_bytes`, `max_response_bytes`, `streams`; no explicit Go name/default comment at declaration. HTTP limit meanings as above. | Yes; pair with builder. |
-| `RotatingStreamConfig` | `rust/src/server/http/stream_layer.rs:39-47`; `verifier`, `response_keys`, `max_body_bytes`, `max_response_bytes`, `streams`; no explicit Go name/default comment. | Yes; preserve static/rotating distinction. |
-| `StreamPipeConfig` | `rust/src/server/stream/pipe.rs:36-58`; `sid`, `open_sig`, `open_ts`, `limits`, `request_id`, `method`, `cutoff`, `started_ms`, `signer`; docs associate stream IDs/signature/limits with spec clauses, no Go field name/default documented. | Yes; internal-looking low-level public input still warrants evolution room, with constructor/builder. |
-| `StreamVerifierConfig` | `rust/src/stream/verifier.rs:40-58`; `keys`, `request_sig`, `window_seconds`, `frame_max_bytes`, `stream_idle_ms`, `consumer`, `now`; documented defaults: window <=0 means 30, frame cap 0 means default cap, idle <=0 means default. | Yes; constructor plus builder options. |
-| `client::rpc::Config` | `rust/src/client/rpc.rs:14-36`; `base_url`, `aud`, `signer`, `server_key`, `transport`, `now`, `nonce`, `window_seconds`; no Go `Config` name cited. `now` and `nonce` default to system time and OS randomness; response tolerance <=0 selects default window. | Yes; builder/new API instead of literals. |
-| `SenderConfig` | `rust/src/webhook/http/sender.rs:121-134`; `allowed_ranges`, `max_body_bytes`, `verification_ttl_ms`; no Go name/default specified there. | Yes; builder. |
-| `ReceiverConfig` | `rust/src/webhook/receiver/config.rs:87-148`; `window`, `max_body`, `dedup_retention`, `enforce_server_identity`, `mcp_server_kid`, `mcp_server_public_key`, `keys`, `key_source`, `require_webhook_key_check`, `webhook_key_tool`, `jack`, `secrets`, `routed`; defaults 300s, 262144 bytes, 1200s; others false/empty/None (`:150-169`). | Yes; `Default` plus builder retains those defaults. |
-| `JackConfig` | `rust/src/webhook/receiver/config.rs:36-56`; `aud`, `window`, `callback_urls`; default empty audience, 30s window, no callback URLs (`:58-67`). | Yes; builder preserves `Default`. |
+| `server::verify::Config` | `rust/src/server/verify/mod.rs`; six selected server-side types | `VerifierBuilder::new(aud, state) ... try_build()`; config is internal |
+| `HandlerConfig` | `rust/src/server/http/mod.rs`; static signing profile | `HandlerBuilder::new(verifier, server_key)...build() -> JackLayer` |
+| `RotatingHandlerConfig` | `rust/src/server/http/mod.rs`; rotating signing profile remains distinct | `RotatingHandlerBuilder::new(verifier, response_keys)...build() -> JackLayer` |
+| `StreamConfig` | `rust/src/server/http/stream_layer.rs`; static signing profile | `StreamLayerBuilder::new(...).build() -> StreamLayer` |
+| `RotatingStreamConfig` | `rust/src/server/http/stream_layer.rs`; rotating signing profile remains distinct | `StreamLayerBuilder::rotating(...).build() -> StreamLayer` |
+| `StreamPipeConfig` | `rust/src/server/stream/pipe.rs`; low-level pipe settings | `StreamPipeBuilder::new(required fields)...build() -> StreamPipe` |
 
-### Target API alternatives and recommendation
+The six selected configuration records are internal construction details, not public literal APIs. Their former public-field/config-record constructors are replaced because the crate is unpublished; any equivalent records retained internally are private implementation details. In particular, `StreamPipeConfig` is a private `pub(crate)` record used internally; callers construct `StreamPipe` with `StreamPipeBuilder`. #301/#302 remain non-goals.
 
-**A — public fields + `#[non_exhaustive]` + `new(required...)` + setters:** consumers cannot use literals; constructors/setters must cover every field and invalid combinations. Downstream field reads remain possible, but the API still exposes field-level evolution and is awkward for required trait objects / numerous settings. **B — private fields + builder + `build`/`try_build`:** explicit, discoverable configuration, coherent validation and easier later evolution; requires migrating field reads/writes and construction now. Recommend B for all 11; use `try_build` where validation can fail and `build` otherwise. Do not layer new escape hatches onto obsolete literals: `with_server_keys`, `with_webhook_keys`, Linux `with_durable_nonces`, and `with_profile` become ordinary verifier/layer builder options. Keep existing semantics and static/rotating distinction. Also reconcile the existing proposal signature sketches below with those APIs before coding.
+### Implemented builder surface
 
-Document-only signature sketch; aliases such as `Clock`, `StreamOptions`, `StreamLimits`, and `RotationResponseKey` retain the exact existing source types:
+These are the observed public construction entry points (omitted fields/methods are not implied). Defaults and static/rotating distinctions remain as implemented.
 
 ```rust
-// Builder type names and field-level methods remain proposal-specific; current calls remain the source reference.
-pub struct VerifierBuilder { /* private */ }
-impl VerifierBuilder {
-    pub fn new(aud: impl Into<String>, state: Arc<dyn StateStore>) -> Self;
-    pub fn nonces(self, v: Arc<dyn NonceAdmission>) -> Self;
-    pub fn audit(self, v: Option<Arc<dyn AuditSink>>) -> Self;
-    pub fn native_tools(self, v: Option<Arc<dyn NativeTools>>) -> Self;
-    pub fn window_seconds(self, v: i64) -> Self; // 0 => 30; valid 0 or 1..=120
-    pub fn now(self, v: Clock) -> Self;
-    pub fn server_keys(self, v: Arc<dyn NativeTools>) -> Self;
-    pub fn webhook_keys(self, v: Arc<dyn NativeTools>) -> Self;
-    #[cfg(target_os = "linux")] pub fn durable_nonces(self, v: Arc<SharedDurableNonceStore>) -> Self;
-    pub fn try_build(self) -> Result<Verifier, VerifierConfigError>;
-}
-impl Verifier {
-    pub fn new(config: Config) -> Result<Self, VerifierConfigError>;
-}
-pub struct HandlerBuilder { /* verifier, static signer, limits private */ }
-impl HandlerBuilder { pub fn new(verifier: Arc<Verifier>, server_key: ServerSigningKey) -> Self;
-    pub fn max_body_bytes(self, n: usize) -> Self; // 0 => 1 MiB
-    pub fn max_response_bytes(self, n: usize) -> Self; // 0 => 1 MiB
-    pub fn build(self) -> JackLayer; }
-pub struct RotatingHandlerBuilder { /* private */ }
-impl RotatingHandlerBuilder { pub fn new(verifier: Arc<Verifier>, keys: Arc<dyn ResponseKeys>) -> Self;
-    pub fn max_body_bytes(self, n: usize) -> Self; pub fn max_response_bytes(self, n: usize) -> Self;
-    pub fn build(self) -> JackLayer; }
-pub struct StreamLayerBuilder { /* static/rotating profile, verifier, signer/provider, limits, streams */ }
-impl StreamLayerBuilder { pub fn new(verifier: Arc<Verifier>, key: ServerSigningKey) -> Self;
-    pub fn rotating(verifier: Arc<Verifier>, keys: Arc<dyn ResponseKeys>) -> Self;
-    pub fn max_body_bytes(self, n: usize) -> Self; pub fn max_response_bytes(self, n: usize) -> Self;
-    pub fn streams(self, v: StreamOptions) -> Self; pub fn profile(self, v: Profile) -> Self;
-    pub fn build(self) -> StreamLayer; }
-pub struct StreamPipeBuilder { /* private */ }
-impl StreamPipeBuilder { pub fn new(sid: String, open_sig: String, open_ts: i64,
-    limits: StreamLimits, method: String, started_ms: i64, signer: Arc<dyn StreamSigner>) -> Self;
-    pub fn request_id(self, v: Option<String>) -> Self; pub fn cutoff(self, v: Option<i64>) -> Self;
-    pub fn build(self) -> StreamPipe; }
-pub struct StreamVerifierBuilder { /* keys, request_sig required; other fields private */ }
-impl StreamVerifierBuilder { pub fn new(keys: BTreeMap<String, RotationResponseKey>, request_sig: impl Into<String>) -> Self;
-    pub fn window_seconds(self, v: i64) -> Self; pub fn frame_max_bytes(self, v: usize) -> Self;
-    pub fn stream_idle_ms(self, v: i64) -> Self; pub fn consumer(self, v: StreamConsumer) -> Self;
-    pub fn now(self, v: Clock) -> Self; pub fn build(self) -> StreamVerifier; }
-pub struct RpcClientBuilder { /* private */ }
-impl RpcClientBuilder { pub fn new(base_url: impl Into<String>, aud: impl Into<String>, signer: Arc<dyn Signer>,
-    server_key: [u8; 32], transport: Arc<dyn Transport>) -> Self;
-    pub fn now(self, v: Clock) -> Self; pub fn nonce(self, v: NonceSource) -> Self;
-    pub fn window_seconds(self, v: i64) -> Self; pub fn try_build(self) -> Result<Client, ClientError>; }
-pub struct SenderBuilder { /* private */ }
-impl SenderBuilder { pub fn new(transport: Arc<dyn WebhookTransport>, resolver: Arc<dyn HostResolver>,
-    clock: Arc<dyn Clock>, gate: Arc<dyn EndpointVerifier>) -> Self; pub fn allowed_ranges(self, v: Vec<String>) -> Self;
-    pub fn max_body_bytes(self, v: usize) -> Self; pub fn verification_ttl_ms(self, v: Option<i64>) -> Self;
-    pub fn build(self) -> Sender; }
-pub struct ReceiverBuilder { /* private; Default-equivalent initial state */ }
-impl ReceiverBuilder { pub fn new() -> Self; pub fn window(self, v: i64) -> Self; pub fn max_body(self, v: usize) -> Self;
-    pub fn dedup_retention(self, v: i64) -> Self; pub fn enforce_server_identity(self, v: bool) -> Self;
-    pub fn mcp_server_kid(self, v: Option<String>) -> Self; pub fn mcp_server_public_key(self, v: Option<String>) -> Self;
-    pub fn keys(self, v: Vec<WebhookKeyRecord>) -> Self; pub fn key_source(self, v: Option<Arc<dyn KeySource>>) -> Self;
-    pub fn require_webhook_key_check(self, v: bool) -> Self; pub fn webhook_key_tool(self, v: Option<Value>) -> Self;
-    pub fn jack(self, v: Option<JackConfig>) -> Self; pub fn secrets(self, v: Vec<ReceiverSecret>) -> Self;
-    pub fn routed(self, v: Vec<String>) -> Self; pub fn try_build(self) -> Result<Receiver, WebhookError>; }
-pub struct JackConfigBuilder { /* private */ }
-impl JackConfigBuilder { pub fn new() -> Self; pub fn aud(self, v: impl Into<String>) -> Self;
-    pub fn window(self, v: i64) -> Self; pub fn callback_urls(self, v: BTreeMap<String, String>) -> Self;
-    pub fn build(self) -> JackConfig; }
+VerifierBuilder::new(aud, state)
+    .nonces(...).audit(...).native_tools(...).window_seconds(...).now(...)
+    .with_server_keys(...).with_webhook_keys(...)
+    // Linux only:
+    .with_durable_nonces(...)
+    .try_build() -> Result<Verifier, VerifierConfigError>
+
+HandlerBuilder::new(verifier, server_key)
+    .max_body_bytes(...).max_response_bytes(...).with_profile(...).build() -> JackLayer
+RotatingHandlerBuilder::new(verifier, response_keys)
+    .max_body_bytes(...).max_response_bytes(...).with_profile(...).build() -> JackLayer
+
+StreamLayerBuilder::new(verifier, server_key)       // static
+StreamLayerBuilder::rotating(verifier, response_keys) // rotating
+    .max_body_bytes(...).max_response_bytes(...).streams(...).with_profile(...)
+    .build() -> StreamLayer
+
+StreamPipeBuilder::new(sid, open_sig, open_ts, limits, method, started_ms, signer)
+    .request_id(...).cutoff(...).build() -> StreamPipe
 ```
 
-`SenderBuilder` is initialized with the transport, resolver, clock, and required endpoint-verification gate that current `Sender::new` requires; its `build` returns the configured `Sender`. `ReceiverBuilder::try_build` returns a validated `Receiver`, not the config record. `JackConfigBuilder::build` returns the public nested `JackConfig` value. `Verifier::new` uses the actual source config item, `server::verify::Config`, whose source name within that module is `Config`; `VerifierConfig` is not a source type. Other `build` results in the sketch are the configured SDK type (`JackLayer`, `StreamLayer`, `StreamPipe`, `StreamVerifier`, or `Client`) rather than a private configuration record. Sketch signatures are proposals and must be reconciled with the source entry points and dependencies before implementation.
+`StreamLayerBuilder` has `profile` as an alias for `with_profile`; handler builders expose `with_profile`. The records produced/consumed internally are not public construction surfaces. The old `Verifier::new(config)` and layer/config-record construction APIs were replaced in the unpublished crate.
 
+## Per-struct construction-site counts
 
-`ReceiverConfig` defaults and Jack defaults above must remain unchanged. `max_body_bytes`/`max_response_bytes` zero remains 1 MiB; verifier zero remains default 30 (constructor rejects outside 0..=120); stream verifier <=0/zero defaults retain documented meanings.
+The required acceptance metric is the count of original legacy struct-literal expressions at baseline HEAD, grouped by exact requested directories. Counts include every actual selected record literal, including internal `StreamLayer` implementation temporaries and the internal HTTP `StreamPipeConfig` literal; they are not limited to downstream construction sites.
 
-## Per-struct call-site counts
-
-Method: narrow, separate per-type/per-directory searches were reviewed against candidate contexts based on returned independent evidence. Counts include only literal value expressions constructing the target struct; declarations, patterns, function return/type signatures, and unrelated `Config` values are excluded. Rust README examples/doctests count when they contain a literal construction. Constructor and builder invocations are not counted. These are manually inspected literal-expression counts, not raw search-match totals.
-
-`rust/src` counts include inline test and doc examples as well as other source-tree code. `rust/tests` contains standalone integration tests. The six requested directories appear in the specified order; totals are computed across those columns.
-
-| Type | rust/src | rust/tests | interop/rust | tools/consumer/rust | tools/mcp-e2e/rust | rust/README.md | Total |
+| Original legacy struct literal (baseline HEAD) | `rust/src` | `rust/tests` | `interop/rust` | `tools/consumer/rust` | `tools/mcp-e2e/rust` | `rust/README.md` | Total |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `server::verify::Config` | 1 | 15 | 4 | 0 | 0 | 1 | 21 |
-| `HandlerConfig` | 2 | 14 | 2 | 1 | 0 | 1 | 20 |
+| `server::verify::Config` (including aliases `VerifierConfig`) | 2 | 15 | 4 | 1 | 0 | 1 | 23 |
+| `HandlerConfig` | 1 | 14 | 2 | 1 | 0 | 1 | 19 |
 | `RotatingHandlerConfig` | 1 | 1 | 1 | 0 | 0 | 1 | 4 |
 | `StreamConfig` | 0 | 1 | 1 | 0 | 0 | 0 | 2 |
 | `RotatingStreamConfig` | 0 | 0 | 1 | 0 | 0 | 0 | 1 |
 | `StreamPipeConfig` | 2 | 0 | 0 | 0 | 0 | 0 | 2 |
-| `StreamVerifierConfig` | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
-| `client::rpc::Config` | 6 | 4 | 1 | 7 | 0 | 1 | 19 |
-| `SenderConfig` | 6 | 0 | 1 | 0 | 0 | 0 | 7 |
-| `ReceiverConfig` | 2 | 0 | 0 | 0 | 0 | 0 | 2 |
-| `JackConfig` | 0 | 1 | 1 | 0 | 0 | 0 | 2 |
 
-For verification, the `server::verify::Config` source literal is `rust/src/server/verify/tests/mod.rs:86`; integration examples include `rust/tests/durable_restart.rs:173,415,640`, `conformance/verify.rs:127`, `conformance/admin.rs:258`, `durable_nonce_vectors/main.rs:660`, `streams/smoke.rs:77`, `server/webhook_key_tool.rs:213`, `modern/server/wire_forward.rs:146`, `native_result.rs:127`, `mirror_refusal.rs:133`, `modern/vectors/wire_request.rs:279`, `server/http_layer/identity.rs:205`, `server/http_layer/mod.rs:181`, and `rotation/server/signing/mod.rs:358`. Interop examples are `interop/rust/src/bin/interop_server.rs:542`, `modern/server.rs:213`, `rotation_server.rs:270`, and `stream/server.rs:526`; README example is `rust/README.md:21`.
+Count literal expressions only: include aliases, assigned literals, and nested literals wherever they occur in the listed directories, including tests, interop, and documentation; exclude declarations, patterns, type/return positions, imports, comments, and unrelated `Config` types. The counts were manually inspected against baseline HEAD candidates after narrow searches. Current builder-call counts are listed separately for context; they are not a 1:1 migration measure because builder calls also occur in helpers and documentation, and builder methods differ from legacy struct literals.
 
-Other candidate/context checks included `HandlerConfig` source in `rust/src/server/http/stream_layer.rs` and the code example in `rust/src/server/http/mod.rs`; `RotatingHandlerConfig` construction in `stream_layer.rs` (the declaration in `http/mod.rs` is excluded); source `StreamConfig`/`RotatingStreamConfig` declarations only (no constructions); `StreamPipeConfig` constructions in `server/http/stream.rs` and `server/stream/tests/pipe.rs` (declaration in `server/stream/pipe.rs` excluded); and the `StreamVerifierConfig` literal in `stream/verifier.rs` (candidates in `client/stream/tests/mod.rs` and `stream/tests/verifier.rs` are declaration/return-type contexts). For `SenderConfig`, source literals are in `webhook/http/tests/verification.rs` (2), `rebinding.rs` (3), and `deadline.rs` (1), excluding the `sender.rs` declaration. For `ReceiverConfig`, source literals are in `receiver/tests/mod.rs` and `receiver/tests/dispatch.rs`; `rust/tests/webhook_vectors/receiver_family/receiver.rs` is a return type and excluded. `rust/tests/webhook_vectors/receiver_family/receiver.rs` and `interop/rust/src/bin/webhook/receiver.rs` contain the two `JackConfig` literals. The remaining per-directory literal counts are shown in the authoritative table above.
+| Current builder call | `rust/src` | `rust/tests` | `interop/rust` | `tools/consumer/rust` | `tools/mcp-e2e/rust` | `rust/README.md` | Total |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `VerifierBuilder::new` | 8 | 18 | 6 | 1 | 0 | 1 | 34 |
+| `HandlerBuilder::new` | 1 | 15 | 2 | 1 | 0 | 2 | 21 |
+| `RotatingHandlerBuilder::new` | 1 | 1 | 1 | 0 | 0 | 0 | 3 |
+| `StreamLayerBuilder::new` (static) | 0 | 1 | 1 | 0 | 0 | 0 | 2 |
+| `StreamLayerBuilder::rotating` | 0 | 0 | 1 | 0 | 0 | 0 | 1 |
+| `StreamPipeBuilder::new` | 2 | 0 | 0 | 0 | 0 | 0 | 2 |
 
-**Test migration impact:** `rust/tests` integration literal sites by input type are: `server::verify::Config` 15, `HandlerConfig` 14, `RotatingHandlerConfig` 1, `StreamConfig` 1, `RotatingStreamConfig` 0, `StreamPipeConfig` 0, `StreamVerifierConfig` 0, `client::rpc::Config` 4, `SenderConfig` 0, `ReceiverConfig` 0, and `JackConfig` 1. In addition, `rust/src` has literal sites in test/doc contexts; all literal construction sites in these contexts and in the integration tests must migrate to builders. These counts do not imply one distinct test file per construction.
+The separate searches used were `VerifierBuilder::new`, `HandlerBuilder::new`, `RotatingHandlerBuilder::new`, `StreamLayerBuilder::new`, `StreamLayerBuilder::rotating`, and `StreamPipeBuilder::new` in each listed directory. No Cargo command, test, build, lint, or other check was run for this documentation edit.
 
-Limitations: searches covered only the named source-tree paths, not macro-generated constructions or external consumers. Counts observe literal syntax only; constructor/builder use is intentionally outside scope. They are reviewed literal-expression counts, not raw match counts, and are approximate: for example a raw search for `HandlerConfig {` in `rust/tests` returns 17 matches against the 14 reviewed literal sites above (the difference is not itemised here). The implementation task recounts per struct before it starts; the numbers here only size the work (tens of call sites per main struct, a few dozen files).
+### Linux-gated candidate inventory
 
-### Per-item `#[non_exhaustive]` decisions
+Inventory procedure: search `target_os = "linux"` in `rust/tests`, `rust/src`, and `interop/rust`, then inspect Linux-gated files for the selected server builders/configs, constructor or `with_*` use, and verifier references. The following are the exact affected files; paths are repository-relative. Details distinguish actual selected API construction/configuration from other verifier mentions:
 
-The decisions apply to downstream-facing types if their declarations are included in the supported public/export surface; export/feature completeness is not inferred from visibility alone. “Now” means before first release. For inputs, the selected private-field builder recommendation already blocks struct literals; annotation is still chosen explicitly as an API evolution signal where applicable.
+- `rust/tests/rotation/server/signing/mod.rs` — builds `VerifierBuilder` with server-key configuration, then constructs both `HandlerBuilder` and `RotatingHandlerBuilder`; the profile-specific harness branches select static versus rotating signing.
+- `rust/tests/durable_restart.rs` — constructs verifiers with `VerifierBuilder::new` in durable restart scenarios; no handler/stream builder construction.
+- `rust/tests/durable_nonce_vectors/main.rs` — constructs a verifier with `VerifierBuilder::new` and `.with_durable_nonces(...)`.
+- `rust/src/server/verify/tests/mod.rs` — defines the shared verifier helper using `VerifierBuilder::new`; its Linux-gated additions create a durable test store, not another selected builder/config API.
+- `rust/src/server/verify/tests/constructor_and_time.rs` — Linux-gated test constructs `VerifierBuilder`, sets `.window_seconds(...)`, `.with_durable_nonces(...)`, and calls `.try_build()` to check durable-option window validation.
+- `rust/src/server/verify/mod.rs` — declares the verifier builder API and Linux-only durable nonce method; the gated references are API implementation/configuration, not downstream construction sites.
+- `rust/src/server/verify/pending.rs` — Linux-gated durable-admission cleanup in `PendingRequest::drop`; verifier context only, no selected builder/config construction.
+- `interop/rust/src/bin/interop_server.rs` — Linux-gated verifier configuration includes `.with_durable_nonces(...)`; also builds the verifier and static `HandlerBuilder` layer.
+- `interop/rust/src/bin/stream/server.rs` — builds verifiers and uses `StreamLayerBuilder::new` (static) and `StreamLayerBuilder::rotating` (rotating); no selected config-record literals.
+- `interop/rust/src/bin/stream/mod.rs` — Linux-gated `durable` submodule declaration and `StreamVerifierConfig`/`StreamVerifier` use; the latter is the separate stream verifier configuration, not a selected server builder/config.
+- `interop/rust/src/bin/interop/mod.rs` — Linux-gated `rotation_server` module declaration; no selected server builder/config or verifier use in this file itself.
+- `interop/rust/src/bin/interop/rotation_server.rs` — included by the Linux-gated module above; constructs/configures a `VerifierBuilder` and a `RotatingHandlerBuilder` for rotating response signing.
 
-| Item | Class | Source declaration | Decision | Rationale |
+Other Linux-gated files in these trees were not included: their inspected gated content did not reference the selected server APIs, a relevant constructor/`with_*` call, or a verifier. In particular, `rust/tests/server/key_tool.rs` exercises `NativeTools` directly (no verifier construction), and the Linux-only rotation-state/property test code concerns rotation stores rather than these server builder/config APIs. No successful build or test check is claimed.
+
+### Historical `#[non_exhaustive]` recommendations (not task #300 scope)
+
+The decisions below are prior recommendations for downstream-facing types. Task #300 changes only the six server-side input/config construction APIs above. It does not implement output, enum, client, stream-verifier, webhook, or implementor-trait recommendations. Export/feature completeness remains unverified.
+
+The following table is historical recommendation inventory, not implementation evidence for task #300.
+
+| Item | Class | Source declaration | Historical decision | Rationale |
 |---|---|---|---|---|
 | `server::verify::Config` | input | `rust/src/server/verify/mod.rs:144` | Now | Evolution room; accompany with builder/constructor. |
 | `HandlerConfig` | input | `rust/src/server/http/mod.rs:108` | Now | Can gain fields; replace literals with builder. |
@@ -187,7 +153,7 @@ The decisions apply to downstream-facing types if their declarations are include
 | `StreamBody` | implementor trait | `rust/src/client/stream/source.rs:24` | Not applicable / do not add | Implementor contract; use defaults/companion methods. |
 | `StreamSource` | implementor trait | `rust/src/client/stream/source.rs:32` | Not applicable / do not add | Implementor contract; use defaults/companion methods. |
 
-External input/config structs other than the 11-item builder scope identified in this pass include `NativeCall`, `NativeResult`, `StreamOptions`, `StreamLimits`, `NativeOptions`, and `DurableStoreOptions` (itemized above). `NativeOptions` and `DurableStoreOptions` are configuration-shaped declarations; downstream construction/export reachability is **UNVERIFIED**, so the Now recommendation is conditional on their inclusion in the supported surface. Traits are not annotated `#[non_exhaustive]`; adding compatible default methods or a companion trait is the extension mechanism, while new required methods break implementors. This relevant-item inventory is not an exhaustive export/use-site audit; completeness remains **UNVERIFIED**.
+- **Historical recommendation only:** external input/config structs outside the six-item builder scope and the output/enum/trait recommendations below are unchanged by #300. `NativeOptions` and `DurableStoreOptions` downstream construction/export reachability remains **UNVERIFIED**. This relevant-item inventory is not an exhaustive export/use-site audit; completeness remains **UNVERIFIED**.
 
 
 ## Nonce admission design
@@ -206,9 +172,9 @@ Current verifier/registry/durable calls are synchronous (`rust/src/server/verify
 
 Go already has an admission abstraction and durable reserve seam (`server/verify.go:90-101`; `server/internal/verify/admission.go:34-77`); TS has synchronous `checkAndRecord` (`ts/src/server/registry/nonce.ts:18`) and a distinct durable admission (`ts/src/server/durable/admission.ts:124`). Recommend semantic parity (atomic admission, retention, fail-closed) but **not** force Rust to mirror Go/TS signatures or storage formats; Rust's richer durable receipt/lease lifecycle needs its own seam. Whether cross-SDK abstraction parity is desired: owner decision.
 
-## Typed verifier error
+## Historical verifier error discussion
 
-Current `Verifier::new` returns `Result<Self, String>` and validates empty/control-character audience and window outside 0..=120, then maps zero to default (`rust/src/server/verify/mod.rs:197-215`). Proposed replacement in the breaking pre-release API:
+The source-defined verifier error is unchanged by task #300; this section records prior review context only.
 
 ```rust
 #[non_exhaustive]
@@ -223,29 +189,24 @@ impl std::error::Error for VerifierConfigError {}
 impl Verifier { pub fn new(config: Config) -> Result<Self, VerifierConfigError>; }
 ```
 
-This replaces, rather than preserves, the `String` result. Hand-writing `Display`/`Error` adds no dependency. `rust/Cargo.toml:21-29` has no `thiserror`; adding it requires owner approval. The source search for public `Result<_, String>` and public borrowed-string errors found only `Verifier::new`; other `Result<String, Error>` / `Result<&str, Error>` use typed errors (e.g. `rust/src/user_key/transfer.rs:395`). Private `Receiver::verify -> Result<Verified, &'static str>` is not public API (`rust/src/webhook/receiver/state.rs:534`). Search was textual, not compiler-derived; additional macro-generated results **UNVERIFIED**.
+This section's verifier API examples are historical and superseded by task #300's builder constructor. Error-contract recommendations here are not additional task #300 changes.
 
 ## Invariants
 
-No wire-byte or signature-byte change: builder migration only changes Rust construction, not protocol input or serialization. Preserve exact defaults and zero conventions listed above, including `max_body_bytes`/response limit zero => 1 MiB and verifier zero window => default. Keep cross-language fixture bytes and values unchanged; fixture source is outside this documentation change. Preserve verification ordering: signature before nonce admission, replay before dispatch (`rust/src/server/verify/mod.rs:365-394,431-453`; `spec/01-authentication.md:66-90`). These are design requirements; this task did not execute runtime or fixture validation.
+This change documents builder-based Rust server construction only. It does not change wire bytes or protocol behavior. Preserve the existing defaults and zero conventions, including body/response limit zero => 1 MiB and verifier window zero => default. No runtime or fixture checks are claimed here.
 
-## Recommendation and ordered review plan
+## Historical recommendation and review-plan context
 
-**Five-line recommendation**
-1. Make all 11 input structs private-field builder APIs before first publication.
-2. Mark each selected input/output/enum non-exhaustive now, with constructor/accessor/wildcard rationale.
-3. Replace verifier string error with non-exhaustive typed error; keep default nonce storage in memory.
-4. Add a separate synchronous nonce-admission trait; retain Linux durable leases/recovery as explicit opt-in.
-5. Preserve every wire byte, signature byte, default, zero rule and shared fixture.
+The active construction recommendation for task #300 is complete: builders are used for the six selected server-side input/config types. Other historical recommendation items listed here are not part of task #300.
 
-| Order/task | Files to review/change if approved | Recommendation / owner question |
+| Order/task | Files to review/change if approved | Context (historical unless task #300 noted) |
 |---|---|---|
 | 1. Confirm API/export and counts | `rust/src/**`, `rust/tests/**`, `interop/rust/**`, `tools/consumer/rust/**`, `tools/mcp-e2e/rust/**`, `rust/README.md` | Independently spot-check counts and export coverage; external consumers are unknown. |
-| 2. Builder shape (#283 after #286) | The 11 declaration files named in input inventory and their constructor/call sites | **Recommendation / owner question:** use private fields plus builders (B; recommend) or public fields plus `#[non_exhaustive]`, required constructor and setters (A)? Approve names and validation. `ServerSigningKey` is intended from parallel work; compilation/signature details pending. |
-| 3. Non-exhaustive policy | Public enum/output declarations cited above and each of 11 inputs | **Recommendation / owner question:** apply `#[non_exhaustive]` to each listed input, output (`VerifyResult`, `PendingRequest`, `VerifiedIdentity`, `HttpResponse`, `ToolCatalog`, `DurableReceipt`) and matched enum (`Authentication`, `Profile`, `RefusalReason`, `ModernOutcome`, `PipeStop`, `ClientError`, `StreamCode`) as itemized above, or select a narrower set? The table says `Now` individually for each named input/output/enum. |
-| 4. Nonce abstraction (#286 first) | `rust/src/server/verify/mod.rs`, `rust/src/server/registry/nonce.rs`, `rust/src/server/durable/**` | **Recommendation / owner question:** implement atomic admission trait only, leaving rotation/lease stores and durable lifecycle separate (recommend), or include rotation stores/leases in the new abstraction? |
-| 5. Execution model/parity | Same Rust nonce files; compare `server/internal/verify/admission.go`, `ts/src/server/**` | **Recommendation / owner question:** synchronous (recommend for the current pipeline) or async? Separately, mirror Go/TS APIs/signatures or match semantics only (recommend)? |
-| 6. Error contract | `rust/src/server/verify/mod.rs`, `rust/Cargo.toml` only if dependency proposed | Approve typed variants and hand-written `Display`/`Error`; `thiserror` requires owner approval. |
+| 2. Builder shape (#283 after #286) | The six selected server-side declarations and their call sites | Task #300 implements Option B for `server::verify::Config`, `HandlerConfig`, `RotatingHandlerConfig`, `StreamConfig`, `RotatingStreamConfig`, and `StreamPipeConfig`. The former public configuration-record construction APIs are replaced in this unpublished crate; any equivalent internal records are private. Static and rotating forms remain distinct. |
+| 3. Non-exhaustive policy | Public enum/output declarations and selected inputs | Historical recommendations apply per item in the table; task #300 does not change output or enum policy. |
+| 4. Nonce abstraction (#286 first) | `rust/src/server/verify/mod.rs`, `rust/src/server/registry/nonce.rs`, `rust/src/server/durable/**` | **Historical recommendations / owner questions:** implement atomic admission trait only, leaving rotation/lease stores and durable lifecycle separate (recommend), or include rotation stores/leases in the new abstraction? |
+| 5. Execution model/parity | Same Rust nonce files; compare `server/internal/verify/admission.go`, `ts/src/server/**` | **Historical recommendations / owner questions:** synchronous (recommend for the current pipeline) or async? Separately, mirror Go/TS APIs/signatures or match semantics only (recommend)? |
+| 6. Error contract | `rust/src/server/verify/mod.rs`, `rust/Cargo.toml` only if dependency proposed | Historical proposal to approve typed variants and hand-written `Display`/`Error`; `thiserror` requires owner approval. |
 | 7. Acceptance after implementation | Rust tests, interop/consumer suites, cross-language fixtures, release CI | #286 precedes #283 per task direction; RC re-runs each applicable suite and approved layout lint. Exact RC matrix **UNVERIFIED**. |
 
 ## Unverified items

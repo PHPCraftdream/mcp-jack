@@ -5,19 +5,15 @@ use mcp_jack::rotation::{
     Checkpoint, OwnedBinding, RotationServerKey, RotationServerProvider, RotationServerStore,
     RotationServerStoreOptions,
 };
-use mcp_jack::server::http::RotatingStreamConfig;
 use mcp_jack::server::server_key::ServerKeyTool;
 
-#[allow(dead_code)]
 type StoreClock = Box<dyn FnMut() -> Result<u64, mcp_jack::rotation::RotationError> + Send>;
 
-#[allow(dead_code)]
 #[derive(Clone)]
 struct RotationClockFile {
     path: String,
 }
 
-#[allow(dead_code)]
 impl RotationClockFile {
     fn new(path: &str) -> Self {
         Self {
@@ -35,12 +31,10 @@ impl RotationClockFile {
     }
 }
 
-#[allow(dead_code)]
 fn rotation_clock_fn(clock: RotationClockFile) -> StoreClock {
     Box::new(move || clock.sample())
 }
 
-#[allow(dead_code)]
 pub(super) type RotationSetup = (
     Arc<Mutex<RotationServerStore<StoreClock>>>,
     Arc<RotationServerProvider<StoreClock>>,
@@ -218,18 +212,4 @@ pub(super) fn server_key_tool(
     provider: Arc<RotationServerProvider<StoreClock>>,
 ) -> ServerKeyTool<StoreClock> {
     ServerKeyTool::new(store, provider)
-}
-
-pub(super) fn rotating_config(
-    verifier: Arc<mcp_jack::server::verify::Verifier>,
-    provider: Arc<RotationServerProvider<StoreClock>>,
-    streams: mcp_jack::server::stream::StreamOptions,
-) -> RotatingStreamConfig {
-    RotatingStreamConfig {
-        verifier,
-        response_keys: provider,
-        max_body_bytes: 0,
-        max_response_bytes: 0,
-        streams,
-    }
 }

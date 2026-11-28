@@ -4,6 +4,8 @@ This file records repository history. The dated `0.1.0` section below is the cur
 
 ## 0.1.0 (2026-11-26)
 
+- Rust server-side configuration for six selected types now uses private fields and builder construction, replacing the unpublished config-record constructors.
+
 - Adds synchronous `NonceAdmission` for volatile verifier storage and typed verifier configuration errors; admission failures fail closed as `503 durability_unavailable`.
 
 - Adds Go CLI gateway profiles `legacy|modern|both`, bridge eras `legacy|modern|auto` with opt-in `s1` signed streams, and `jack events receive` with persisted receipt state; adds API `Client.Call`, `Client.CurrentEra`, `stream.ClientConfig.Consumer` and `ConsumerStdio`.

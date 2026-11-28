@@ -104,7 +104,14 @@ fn config_with_nonces(
 }
 
 fn verifier(cfg: Config) -> Verifier {
-    Verifier::new(cfg).expect("test config is valid")
+    VerifierBuilder::new(cfg.aud, cfg.state)
+        .nonces(cfg.nonces)
+        .audit(cfg.audit)
+        .native_tools(cfg.native)
+        .window_seconds(cfg.window_seconds)
+        .now(cfg.now)
+        .try_build()
+        .expect("test config is valid")
 }
 
 fn call_body(tool: &str, arguments: Option<&str>) -> String {

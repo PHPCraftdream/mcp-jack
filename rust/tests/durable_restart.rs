@@ -20,7 +20,7 @@ use mcp_jack::server::durable_recovery::{inspect_recovery, reconcile_unknown};
 use mcp_jack::server::durable_store::{DurableNonceStore, DurableStoreOptions};
 use mcp_jack::server::nonce::NonceStore;
 use mcp_jack::server::state::{MemoryState, RegistryEntry, StateStore};
-use mcp_jack::server::verify::{Clock, Config, Request, Verifier};
+use mcp_jack::server::verify::{Clock, Request, VerifierBuilder};
 use mcp_jack::signing::request_signing_string;
 
 const AUD: &str = "candidate-vector-test";
@@ -170,18 +170,15 @@ fn verifier(
     state: &Arc<MemoryState>,
     clock: &ScriptedClock,
 ) -> Verifier {
-    let config = Config {
-        aud: AUD.to_owned(),
-        state: Arc::clone(state) as Arc<dyn StateStore>,
-        nonces: Arc::new(NonceStore::new()),
-        audit: None,
-        native: None,
-        window_seconds: WINDOW,
-        now: clock.verifier_clock(),
-    };
-    Verifier::new(config)
+    VerifierBuilder::new(AUD.to_owned(), Arc::clone(state) as Arc<dyn StateStore>)
+        .nonces(Arc::new(NonceStore::new()))
+        .audit(None)
+        .native_tools(None)
+        .window_seconds(WINDOW)
+        .now(clock.verifier_clock())
+        .durable_nonces(Arc::clone(store))
+        .try_build()
         .expect("verifier config")
-        .with_durable_nonces(Arc::clone(store))
 }
 
 #[test]
@@ -412,18 +409,15 @@ fn verifier_with_state(
     clock: &ScriptedClock,
     native: Option<Arc<dyn NativeTools>>,
 ) -> Verifier {
-    let config = Config {
-        aud: AUD.to_owned(),
-        state,
-        nonces: Arc::new(NonceStore::new()),
-        audit: None,
-        native,
-        window_seconds: WINDOW,
-        now: clock.verifier_clock(),
-    };
-    Verifier::new(config)
+    VerifierBuilder::new(AUD.to_owned(), state)
+        .nonces(Arc::new(NonceStore::new()))
+        .audit(None)
+        .native_tools(native)
+        .window_seconds(WINDOW)
+        .now(clock.verifier_clock())
+        .durable_nonces(Arc::clone(store))
+        .try_build()
         .expect("verifier config")
-        .with_durable_nonces(Arc::clone(store))
 }
 
 fn durable_child(
@@ -637,19 +631,18 @@ fn durable_window_out_of_bounds_rejected_at_construction() {
     let clock = ScriptedClock::new(&[100]);
     let (_sandbox, store) = open_store(&clock);
     let state = Arc::new(MemoryState::new());
-    let config = Config {
-        aud: AUD.to_owned(),
-        state: Arc::clone(&state) as Arc<dyn StateStore>,
-        nonces: Arc::new(NonceStore::new()),
-        audit: None,
-        native: None,
-        window_seconds: 121,
-        now: clock.verifier_clock(),
-    };
-    let error = match Verifier::new(config) {
-        Err(error) => error,
-        Ok(_) => panic!("out-of-range window must be rejected"),
-    };
+    let error =
+        match VerifierBuilder::new(AUD.to_owned(), Arc::clone(&state) as Arc<dyn StateStore>)
+            .nonces(Arc::new(NonceStore::new()))
+            .audit(None)
+            .native_tools(None)
+            .window_seconds(121)
+            .now(clock.verifier_clock())
+            .try_build()
+        {
+            Err(error) => error,
+            Ok(_) => panic!("out-of-range window must be rejected"),
+        };
     assert_eq!(
         error,
         mcp_jack::server::verify::VerifierConfigError::InvalidWindow

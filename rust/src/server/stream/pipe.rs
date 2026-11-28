@@ -3,10 +3,9 @@
 //! maximum duration and the key cutoff, and always ends with the 2.16 end
 //! frame.
 //!
-//! The caller signs the open header (2.5); [`StreamPipeConfig::open_sig`] is
-//! the chain root and [`StreamPipeConfig::open_ts`] the first frame's floor.
-//! Every method takes the arrival time from the caller, so the pump is
-//! deterministic and holds no clock.
+//! The caller signs the open header (2.5); the builder's `open_sig` is the chain root and its
+//! `open_ts` is the first frame's floor. Every method takes the arrival time from the caller, so
+//! the pump is deterministic and holds no clock.
 
 use std::sync::Arc;
 
@@ -33,28 +32,79 @@ pub enum PipeStop {
     HandlerInvalid,
 }
 
-/// Everything the pipe needs after the caller has signed the open header.
-pub struct StreamPipeConfig {
-    /// 2.4 stream id, also the first line after the domain of every frame
-    /// signing string.
-    pub sid: String,
-    /// Open header signature: the chain root (2.15).
-    pub open_sig: String,
-    /// Open header timestamp: the floor of the first frame's `ts` (2.15).
-    pub open_ts: i64,
-    /// Resolved 3.2-3.5 limits.
-    pub limits: StreamLimits,
-    /// The opening request's JSON-RPC id lexeme (6.3).
-    pub request_id: Option<String>,
-    /// The opening request's JSON-RPC method (6.3).
-    pub method: String,
-    /// Successor activation `A` of the stream key (5.1); no frame is signed at
-    /// or after it.
-    pub cutoff: Option<i64>,
-    /// Arrival time of the opening request in milliseconds (3.4).
-    pub started_ms: i64,
-    /// The stream key that signed the open header (3.1).
-    pub signer: Arc<dyn StreamSigner>,
+pub(crate) struct StreamPipeConfig {
+    pub(crate) sid: String,
+    pub(crate) open_sig: String,
+    pub(crate) open_ts: i64,
+    pub(crate) limits: StreamLimits,
+    pub(crate) request_id: Option<String>,
+    pub(crate) method: String,
+    pub(crate) cutoff: Option<i64>,
+    pub(crate) started_ms: i64,
+    pub(crate) signer: Arc<dyn StreamSigner>,
+}
+
+/// Replaces `StreamPipeConfig` literals and `StreamPipe::new(config)` because
+/// this crate is unpublished.
+pub struct StreamPipeBuilder {
+    sid: String,
+    open_sig: String,
+    open_ts: i64,
+    limits: StreamLimits,
+    request_id: Option<String>,
+    method: String,
+    cutoff: Option<i64>,
+    started_ms: i64,
+    signer: Arc<dyn StreamSigner>,
+}
+impl StreamPipeBuilder {
+    pub fn new(
+        sid: String,
+        open_sig: String,
+        open_ts: i64,
+        limits: StreamLimits,
+        method: String,
+        started_ms: i64,
+        signer: Arc<dyn StreamSigner>,
+    ) -> Self {
+        Self {
+            sid,
+            open_sig,
+            open_ts,
+            limits,
+            request_id: None,
+            method,
+            cutoff: None,
+            started_ms,
+            signer,
+        }
+    }
+    pub fn request_id(mut self, v: Option<String>) -> Self {
+        self.request_id = v;
+        self
+    }
+    pub fn cutoff(mut self, v: Option<i64>) -> Self {
+        self.cutoff = v;
+        self
+    }
+    pub fn build(self) -> StreamPipe {
+        let builder = StreamBuilder::resume(&self.sid, &self.open_sig);
+        StreamPipe {
+            builder,
+            reader: SseReader::with_max_pending_bytes(self.limits.frame_max_bytes),
+            limits: self.limits,
+            request_id: self.request_id,
+            method: self.method,
+            cutoff: self.cutoff,
+            started_ms: self.started_ms,
+            signer: self.signer,
+            last_ts: self.open_ts,
+            frames_written: 0,
+            stopped: None,
+            ended: false,
+            last_message_is_final: false,
+        }
+    }
 }
 
 /// The frame pump of one stream. Feed it handler bytes with
@@ -79,25 +129,20 @@ pub struct StreamPipe {
 }
 
 impl StreamPipe {
-    pub fn new(config: StreamPipeConfig) -> Self {
-        let builder = StreamBuilder::resume(&config.sid, &config.open_sig);
-        StreamPipe {
-            builder,
-            reader: SseReader::with_max_pending_bytes(config.limits.frame_max_bytes),
-            limits: config.limits,
-            request_id: config.request_id,
-            method: config.method,
-            cutoff: config.cutoff,
-            started_ms: config.started_ms,
-            signer: config.signer,
-            last_ts: config.open_ts,
-            frames_written: 0,
-            stopped: None,
-            ended: false,
-            last_message_is_final: false,
-        }
+    pub(crate) fn new(config: StreamPipeConfig) -> Self {
+        StreamPipeBuilder::new(
+            config.sid,
+            config.open_sig,
+            config.open_ts,
+            config.limits,
+            config.method,
+            config.started_ms,
+            config.signer,
+        )
+        .request_id(config.request_id)
+        .cutoff(config.cutoff)
+        .build()
     }
-
     /// Feeds handler SSE bytes that arrived at `now_ms` and appends signed
     /// events to `out`. Returns true while the stream may continue (false once
     /// stopped).

@@ -20,12 +20,12 @@ use tower::{Layer, ServiceExt};
 
 use mcp_jack::client::auth::sign_request;
 use mcp_jack::client::signer::{InMemorySigner, Signer};
-use mcp_jack::server::http::{HandlerConfig, JackLayer, JackService};
+use mcp_jack::server::http::{HandlerBuilder, JackLayer, JackService};
 use mcp_jack::server::modern::Profile;
 use mcp_jack::server::native::{Native, NativeOptions};
 use mcp_jack::server::nonce::NonceStore;
 use mcp_jack::server::state::{MemoryState, RegistryEntry, StateStore};
-use mcp_jack::server::verify::{Clock, Config, Verifier};
+use mcp_jack::server::verify::{Clock, VerifierBuilder};
 
 /// The boxed inner service behind the harness (S::Error = String).
 type InnerBox =
@@ -121,22 +121,6 @@ fn seed_registry(state: &MemoryState) {
         .expect("seed registry");
 }
 
-fn build_verifier(state: MemoryState) -> Arc<Verifier> {
-    let now_clock: Clock = Arc::new(move || FIXTURE_NOW);
-    Arc::new(
-        Verifier::new(Config {
-            aud: FIXTURE_AUD.to_string(),
-            state: Arc::new(state),
-            nonces: Arc::new(NonceStore::new()),
-            audit: None,
-            native: Some(Arc::new(Native::new(NativeOptions::default()))),
-            window_seconds: 30,
-            now: now_clock,
-        })
-        .expect("verifier"),
-    )
-}
-
 /// The keys.json "svc" signing key (the server's response key).
 fn server_signing_key() -> ServerSigningKey {
     let keys = fixtures::load_keys().expect("load keys.json");
@@ -178,27 +162,32 @@ fn new_harness(layer: JackLayer) -> TestHarness {
     }
 }
 
-fn handler_config() -> HandlerConfig {
+fn handler_config() -> HandlerBuilder {
     let state = MemoryState::new();
     seed_registry(&state);
-    HandlerConfig {
-        verifier: build_verifier(state),
-        server_key: server_signing_key(),
-        max_body_bytes: 0,
-        max_response_bytes: 0,
-    }
+    let now: Clock = Arc::new(move || FIXTURE_NOW);
+    let verifier = Arc::new(
+        VerifierBuilder::new(FIXTURE_AUD, Arc::new(state))
+            .nonces(Arc::new(NonceStore::new()))
+            .native_tools(Some(Arc::new(Native::new(NativeOptions::default()))))
+            .window_seconds(30)
+            .now(now)
+            .try_build()
+            .expect("verifier"),
+    );
+    HandlerBuilder::new(verifier, server_signing_key())
 }
 
-/// Default profile: `JackLayer::new(cfg)` without `with_profile`, i.e. the
+/// Default profile: `HandlerBuilder::new(...).build()` without a profile option, i.e. the
 /// 0.1.x behaviour (spec 04 section 1).
 fn legacy_harness() -> TestHarness {
-    new_harness(JackLayer::new(handler_config()))
+    new_harness(handler_config().build())
 }
 
 /// Modern profile: era rules of spec 04 section 5 apply, the era is always
 /// modern.
 fn modern_harness() -> TestHarness {
-    new_harness(JackLayer::new(handler_config()).with_profile(Profile::Modern))
+    new_harness(handler_config().with_profile(Profile::Modern).build())
 }
 
 /// Sends `req` through the layered service.

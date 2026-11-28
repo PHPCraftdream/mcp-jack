@@ -20,13 +20,13 @@ use tower::{Layer, ServiceExt};
 use mcp_jack::client::auth::sign_request;
 use mcp_jack::client::signer::{InMemorySigner, Signer};
 use mcp_jack::server::audit::{AuditSink, MemoryAuditSink};
-use mcp_jack::server::http::{HandlerConfig, JackLayer, JackService};
+use mcp_jack::server::http::{HandlerBuilder, JackService};
 use mcp_jack::server::identity::VerifiedIdentity;
 use mcp_jack::server::modern::Profile;
 use mcp_jack::server::native::{Native, NativeOptions};
 use mcp_jack::server::nonce::{NonceAdmission, NonceStore};
 use mcp_jack::server::state::{MemoryState, RegistryEntry, StateStore};
-use mcp_jack::server::verify::{Clock, Config, Verifier};
+use mcp_jack::server::verify::{Clock, Verifier, VerifierBuilder};
 
 /// The boxed inner service behind every harness (S::Error = String).
 type InnerBox =
@@ -186,16 +186,14 @@ fn build_verifier_with_nonces(
 ) -> Arc<Verifier> {
     let now_clock: Clock = Arc::new(move || FIXTURE_NOW);
     Arc::new(
-        Verifier::new(Config {
-            aud: FIXTURE_AUD.to_string(),
-            state: Arc::new(state),
-            nonces,
-            audit: sink.map(|s| Arc::clone(&s) as Arc<dyn AuditSink>),
-            native: Some(Arc::new(Native::new(NativeOptions::default()))),
-            window_seconds: 30,
-            now: now_clock,
-        })
-        .expect("verifier"),
+        VerifierBuilder::new(FIXTURE_AUD.to_string(), Arc::new(state))
+            .nonces(nonces)
+            .audit(sink.map(|s| Arc::clone(&s) as Arc<dyn AuditSink>))
+            .native_tools(Some(Arc::new(Native::new(NativeOptions::default()))))
+            .window_seconds(30)
+            .now(now_clock)
+            .try_build()
+            .expect("verifier"),
     )
 }
 
@@ -247,12 +245,10 @@ fn new_harness_using(
     let server_pub = *server_key.verifying_key().as_bytes();
 
     let inner = InnerConfig::new();
-    let layer = JackLayer::new(HandlerConfig {
-        verifier,
-        server_key,
-        max_body_bytes,
-        max_response_bytes,
-    });
+    let layer = HandlerBuilder::new(verifier, server_key)
+        .max_body_bytes(max_body_bytes)
+        .max_response_bytes(max_response_bytes)
+        .build();
     let recorder = inner.clone();
     let service = layer.layer(tower::util::BoxCloneService::new(tower::service_fn(
         move |req: http::Request<Full<Bytes>>| {

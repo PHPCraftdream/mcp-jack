@@ -202,24 +202,16 @@ async fn identity_snapshot_lifecycle_across_registry_change() {
     let verifier = {
         let now_clock: Clock = Arc::new(move || FIXTURE_NOW);
         Arc::new(
-            Verifier::new(Config {
-                aud: FIXTURE_AUD.to_string(),
-                state: state.clone() as Arc<dyn StateStore>,
-                nonces: Arc::new(NonceStore::new()),
-                audit: None,
-                native: Some(Arc::new(Native::new(NativeOptions::default()))),
-                window_seconds: 30,
-                now: now_clock,
-            })
-            .expect("verifier"),
+            VerifierBuilder::new(FIXTURE_AUD, state.clone() as Arc<dyn StateStore>)
+                .nonces(Arc::new(NonceStore::new()))
+                .native_tools(Some(Arc::new(Native::new(NativeOptions::default()))))
+                .window_seconds(30)
+                .now(now_clock)
+                .try_build()
+                .expect("verifier"),
         )
     };
-    let layer = JackLayer::new(HandlerConfig {
-        verifier,
-        server_key: server_signing_key(),
-        max_body_bytes: 0,
-        max_response_bytes: 0,
-    });
+    let layer = HandlerBuilder::new(verifier, server_signing_key()).build();
 
     let entered: Arc<Mutex<Option<tokio::sync::oneshot::Sender<Option<VerifiedIdentity>>>>> =
         Arc::new(Mutex::new(None));

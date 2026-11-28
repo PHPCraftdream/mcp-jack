@@ -22,12 +22,12 @@ use mcp_jack::client::url::request_target;
 use mcp_jack::client::{
     Client, ClientEra, Config, HttpRequest, HttpResponse, Transport, TransportError,
 };
-use mcp_jack::server::http::{HandlerConfig, JackLayer, JackService};
+use mcp_jack::server::http::{HandlerBuilder, JackService};
 use mcp_jack::server::modern::Profile;
 use mcp_jack::server::native::{Native, NativeOptions};
 use mcp_jack::server::nonce::NonceStore;
 use mcp_jack::server::state::{MemoryState, RegistryEntry, StateStore};
-use mcp_jack::server::verify::{Clock, Config as VerifyConfig, Verifier};
+use mcp_jack::server::verify::{Clock, VerifierBuilder};
 
 use crate::server::common::fixtures;
 use crate::server::common::harness::{self, FIXTURE_AUD, FIXTURE_NOW};
@@ -212,33 +212,25 @@ fn inner_service() -> InnerBox {
     ))
 }
 
-fn handler_config() -> HandlerConfig {
+fn handler_config() -> HandlerBuilder {
     let state = MemoryState::new();
     seed_registry(&state);
     let now: Clock = Arc::new(move || FIXTURE_NOW);
     let verifier = Arc::new(
-        Verifier::new(VerifyConfig {
-            aud: FIXTURE_AUD.to_string(),
-            state: Arc::new(state),
-            nonces: Arc::new(NonceStore::new()),
-            audit: None,
-            native: Some(Arc::new(Native::new(NativeOptions::default()))),
-            window_seconds: 30,
-            now,
-        })
-        .expect("verifier"),
+        VerifierBuilder::new(FIXTURE_AUD, Arc::new(state))
+            .nonces(Arc::new(NonceStore::new()))
+            .native_tools(Some(Arc::new(Native::new(NativeOptions::default()))))
+            .window_seconds(30)
+            .now(now)
+            .try_build()
+            .expect("verifier"),
     );
-    HandlerConfig {
-        verifier,
-        server_key: server_signing_key(),
-        max_body_bytes: 0,
-        max_response_bytes: 0,
-    }
+    HandlerBuilder::new(verifier, server_signing_key())
 }
 
 /// An `Auto` client wired to a real `Both` profile layer through the loopback.
 fn both_client(runtime: tokio::runtime::Runtime) -> (Client, Arc<LoopbackTransport>) {
-    let layer = JackLayer::new(handler_config()).with_profile(Profile::Both);
+    let layer = handler_config().with_profile(Profile::Both).build();
     let transport = Arc::new(LoopbackTransport {
         runtime,
         service: Mutex::new(layer.layer(inner_service())),

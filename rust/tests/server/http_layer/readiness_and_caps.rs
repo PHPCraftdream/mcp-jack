@@ -59,12 +59,7 @@ impl tower::Service<http::Request<Full<Bytes>>> for NeedsReady {
 async fn readiness_ready_instance_is_called() {
     let state = MemoryState::new();
     seed_registry(&state);
-    let layer = JackLayer::new(HandlerConfig {
-        verifier: build_verifier(state, None),
-        server_key: server_signing_key(),
-        max_body_bytes: 0,
-        max_response_bytes: 0,
-    });
+    let layer = HandlerBuilder::new(build_verifier(state, None), server_signing_key()).build();
     let calls = Arc::new(AtomicUsize::new(0));
     let svc = layer.layer(NeedsReady {
         calls: Arc::clone(&calls),
@@ -132,12 +127,7 @@ async fn inner_jack_auth_is_replaced_not_appended() {
 async fn refuses_endless_stream_without_buffering() {
     let state = MemoryState::new();
     seed_registry(&state);
-    let layer = JackLayer::new(HandlerConfig {
-        verifier: build_verifier(state, None),
-        server_key: server_signing_key(),
-        max_body_bytes: 0,
-        max_response_bytes: 0,
-    });
+    let layer = HandlerBuilder::new(build_verifier(state, None), server_signing_key()).build();
     let (mut sender, body) = http_body_util::Channel::<Bytes>::new(1);
     let cell = Arc::new(Mutex::new(Some(body)));
     let svc = layer.layer(tower::service_fn(
@@ -430,12 +420,10 @@ async fn send_streamed(
 ) -> Streamed {
     let state = MemoryState::new();
     seed_registry(&state);
-    let layer = JackLayer::new(HandlerConfig {
-        verifier: build_verifier(state, None),
-        server_key: server_signing_key(),
-        max_body_bytes: 0,
-        max_response_bytes,
-    });
+    let layer = HandlerBuilder::new(build_verifier(state, None), server_signing_key())
+        .max_body_bytes(0)
+        .max_response_bytes(max_response_bytes)
+        .build();
     let (mut sender, channel) =
         http_body_util::Channel::<Bytes, std::io::Error>::new(frames.len() + 1);
     for frame in frames {

@@ -2,7 +2,7 @@
 //! key set and egress ranges a webhook receiver may cross-check against the
 //! Server Card. Read-only candidate route: NOT part of the closed set of 11
 //! current-v1 native tools (`is_native_tool` stays false; registration goes
-//! through `Verifier::with_webhook_keys`), it takes no arguments, changes no
+//! through `VerifierBuilder::webhook_keys`), it takes no arguments, changes no
 //! state and writes no audit event. Refusal classes, in check order: 403
 //! operation_denied (wrong route or no caller), 400 invalid_params (any
 //! argument payload other than absent, `null` or `{}`).
@@ -16,7 +16,7 @@ use crate::server::verify::{NativeCall, NativeResult, NativeTools};
 /// Candidate native tool: the webhook key set and egress ranges published on
 /// the Server Card (spec 06 rule R7.6). NOT part of the closed current-v1 set
 /// (`is_native_tool` stays false); reachable only through a separately
-/// configured handler (`Verifier::with_webhook_keys`).
+/// configured handler (`VerifierBuilder::webhook_keys`).
 pub const TOOL_SERVER_WEBHOOK_KEY: &str = "jack.server.webhook_key";
 
 /// Builds the single 403 refusal of the tool: a wrong route and an

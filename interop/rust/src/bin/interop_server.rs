@@ -32,12 +32,12 @@ mod webhook_receiver;
 mod stream;
 
 use mcp_jack::encoding::{decode_b64url, decode_b64url_fixed, encode_b64url, key_id};
-use mcp_jack::server::http::{HandlerConfig, JackLayer};
+use mcp_jack::server::http::HandlerBuilder;
 use mcp_jack::server::native::{bootstrap_admin, Native, NativeOptions};
 use mcp_jack::server::nonce::NonceStore;
 use mcp_jack::server::state::StateStore as _;
 use mcp_jack::server::state_file::FileState;
-use mcp_jack::server::verify::{Clock, Config, Verifier};
+use mcp_jack::server::verify::{Clock, Verifier, VerifierBuilder};
 use std::sync::Arc;
 use tower_layer::Layer as _;
 
@@ -384,13 +384,11 @@ async fn run() -> Result<(), String> {
     );
     #[cfg(not(target_os = "linux"))]
     let verifier = build_verifier(&flags.aud, state, Arc::clone(&clock), window_seconds);
-    let layer = JackLayer::new(HandlerConfig {
-        verifier: Arc::new(verifier),
-        server_key,
+    let layer = HandlerBuilder::new(Arc::new(verifier), server_key)
         // 0 means the SDK default 1 MiB body limit.
-        max_body_bytes: 0,
-        max_response_bytes: 0,
-    });
+        .max_body_bytes(0)
+        .max_response_bytes(0)
+        .build();
     let service = layer.layer(mcp::TrivialService);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -539,23 +537,19 @@ fn build_verifier(
         Arc<mcp_jack::server::durable_admission::SharedDurableNonceStore>,
     >,
 ) -> Verifier {
-    let verifier = match Verifier::new(Config {
-        aud: aud.to_owned(),
-        state: Arc::new(state),
+    let builder = VerifierBuilder::new(aud.to_owned(), Arc::new(state))
         // Kept alongside the durable store; the Rust verifier allows both.
-        nonces: Arc::new(NonceStore::new()),
-        audit: None,
-        native: Some(Arc::new(Native::new(NativeOptions::default()))),
-        window_seconds,
-        now,
-    }) {
-        Ok(v) => v,
-        Err(e) => fail(format!("verifier: {e}")),
-    };
+        .nonces(Arc::new(NonceStore::new()))
+        .audit(None)
+        .native_tools(Some(Arc::new(Native::new(NativeOptions::default()))))
+        .window_seconds(window_seconds)
+        .now(now);
     #[cfg(target_os = "linux")]
-    let verifier = match durable {
-        Some(store) => verifier.with_durable_nonces(store),
-        None => verifier,
+    let builder = match durable {
+        Some(store) => builder.durable_nonces(store),
+        None => builder,
     };
-    verifier
+    builder
+        .try_build()
+        .unwrap_or_else(|e| fail(format!("verifier: {e}")))
 }

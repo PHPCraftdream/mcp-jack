@@ -8,7 +8,7 @@ use crate::user_key::ServerSigningKey;
 
 use crate::client::rotation_auth::RotationResponseKey;
 use crate::server::stream::{
-    events_stream_result, PipeStop, StreamLimits, StreamOptions, StreamPipe, StreamPipeConfig,
+    events_stream_result, PipeStop, StreamLimits, StreamOptions, StreamPipe, StreamPipeBuilder,
 };
 use crate::stream::{
     parse_frame, signal_data, FrameKind, SignedOpen, SseReader, StaticStreamSigner, StreamBuilder,
@@ -67,17 +67,18 @@ fn pipe(
     let open = open(signer.as_ref());
     let concrete = Arc::clone(signer);
     let signer: Arc<dyn StreamSigner> = concrete;
-    let pipe = StreamPipe::new(StreamPipeConfig {
-        sid: SID.to_string(),
-        open_sig: open.sig.clone(),
-        open_ts: OPEN_TS,
+    let pipe = StreamPipeBuilder::new(
+        SID.to_string(),
+        open.sig.clone(),
+        OPEN_TS,
         limits,
-        request_id: request_id.map(str::to_string),
-        method: method.to_string(),
-        cutoff,
-        started_ms: ms(0),
+        method.to_string(),
+        ms(0),
         signer,
-    });
+    )
+    .request_id(request_id.map(str::to_string))
+    .cutoff(cutoff)
+    .build();
     (pipe, open)
 }
 
@@ -127,6 +128,34 @@ fn frames(out: &[u8]) -> Vec<crate::stream::JackFrame> {
         .iter()
         .map(|event| parse_frame(&event.lines).expect("frame grammar"))
         .collect()
+}
+
+#[test]
+fn default_builder_omits_request_id_and_cutoff() {
+    let signer = signer();
+    let open = open(signer.as_ref());
+    let concrete = Arc::clone(&signer);
+    let signer: Arc<dyn StreamSigner> = concrete;
+    let mut pipe = StreamPipeBuilder::new(
+        SID.to_string(),
+        open.sig.clone(),
+        OPEN_TS,
+        limits(),
+        "events/stream".to_string(),
+        ms(0),
+        signer,
+    )
+    .build();
+    let mut out = Vec::new();
+    assert!(pipe.push(format!("data: {FINAL}\n\n").as_bytes(), ms(0), &mut out));
+    assert!(!pipe.last_message_is_final());
+    assert!(pipe.tick(ms(2), &mut out), "no cutoff was configured");
+    pipe.finish(ms(3), &mut out);
+
+    let (messages, terminal, frames_verified) = verified(&open, &out, None);
+    assert_eq!(messages, vec![FINAL.to_string()]);
+    assert_eq!(terminal, None);
+    assert_eq!(frames_verified, 2);
 }
 
 #[test]

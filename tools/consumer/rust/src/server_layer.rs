@@ -86,7 +86,7 @@ pub(super) fn section_e(
 ) -> Result<(), String> {
     use bytes::Bytes;
     use http_body_util::Full;
-    use mcp_jack::server::http::{HandlerConfig, JackLayer};
+    use mcp_jack::server::http::HandlerBuilder;
     use mcp_jack::user_key::ServerSigningKey;
     use std::convert::Infallible;
     use tower::Layer as _;
@@ -122,12 +122,10 @@ pub(super) fn section_e(
         },
     )?;
     let verifier = Arc::new(verifier_for(Arc::clone(&state))?);
-    let layer = JackLayer::new(HandlerConfig {
-        verifier,
-        server_key: service_key,
-        max_body_bytes: 0,
-        max_response_bytes: 0,
-    });
+    let layer = HandlerBuilder::new(verifier, service_key)
+        .max_body_bytes(0)
+        .max_response_bytes(0)
+        .build();
     // The layer verifies and forwards; the wrapped application owns ordinary
     // MCP authorization and reads the immutable verified identity extension.
     let expected_kid = client_signer.kid().to_string();

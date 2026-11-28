@@ -20,14 +20,14 @@ use mcp_jack::client::auth::{sign_request, SignedRequest};
 use mcp_jack::client::signer::InMemorySigner;
 use mcp_jack::encoding::key_id;
 use mcp_jack::server::http::{
-    StreamBody, StreamCancellation, StreamConfig, StreamHeartbeat, StreamLayer,
+    StreamBody, StreamCancellation, StreamHeartbeat, StreamLayer, StreamLayerBuilder,
 };
 use mcp_jack::server::modern::Profile;
 use mcp_jack::server::native::{Native, NativeOptions};
 use mcp_jack::server::nonce::NonceStore;
 use mcp_jack::server::state::{MemoryState, RegistryEntry, StateStore};
 use mcp_jack::server::stream::StreamOptions;
-use mcp_jack::server::verify::{Clock, Config, Verifier};
+use mcp_jack::server::verify::{Clock, Verifier, VerifierBuilder};
 use mcp_jack::stream::{StreamVerifier, StreamVerifierConfig};
 
 /// Process-wide nonce source (the same idiom as the other HTTP harnesses).
@@ -74,16 +74,14 @@ fn seed_registry(state: &MemoryState) {
 fn build_verifier(state: MemoryState, now: i64) -> Arc<Verifier> {
     let now_clock: Clock = Arc::new(move || now);
     Arc::new(
-        Verifier::new(Config {
-            aud: FIXTURE_AUD.to_string(),
-            state: Arc::new(state),
-            nonces: Arc::new(NonceStore::new()),
-            audit: None,
-            native: Some(Arc::new(Native::new(NativeOptions::default()))),
-            window_seconds: 30,
-            now: now_clock,
-        })
-        .expect("verifier"),
+        VerifierBuilder::new(FIXTURE_AUD.to_string(), Arc::new(state))
+            .nonces(Arc::new(NonceStore::new()))
+            .audit(None)
+            .native_tools(Some(Arc::new(Native::new(NativeOptions::default()))))
+            .window_seconds(30)
+            .now(now_clock)
+            .try_build()
+            .expect("verifier"),
     )
 }
 
@@ -108,14 +106,12 @@ fn layer(profile: Profile, now: i64) -> StreamLayer {
 fn layer_with_options(profile: Profile, now: i64, streams: StreamOptions) -> StreamLayer {
     let state = MemoryState::new();
     seed_registry(&state);
-    StreamLayer::new(StreamConfig {
-        verifier: build_verifier(state, now),
-        server_key: server_signing_key(),
-        max_body_bytes: 0,
-        max_response_bytes: 0,
-        streams,
-    })
-    .with_profile(profile)
+    StreamLayerBuilder::new(build_verifier(state, now), server_signing_key())
+        .streams(streams)
+        .max_body_bytes(0)
+        .max_response_bytes(0)
+        .profile(profile)
+        .build()
 }
 
 /// The boxed inner service behind the harness (S::Error = String).
@@ -334,6 +330,96 @@ async fn notification_at_capacity_gets_202_without_stream_slot() {
     );
     assert_eq!(registry.active("alice"), 1, "notification took no slot");
     drop(held);
+}
+
+#[tokio::test]
+async fn default_builder_keeps_signed_501_for_opted_in_stream_response() {
+    let now = FIXTURE_NOW;
+    let state = MemoryState::new();
+    seed_registry(&state);
+    let layer = StreamLayerBuilder::new(build_verifier(state, now), server_signing_key()).build();
+    let seen = Arc::new(Seen::default());
+    let service = layer.layer(inner(Arc::clone(&seen)));
+    let alice = harness::signer_by_name("alice");
+    let signed = signed_request(&alice, now);
+
+    let response = service
+        .oneshot(build_request(&signed, true))
+        .await
+        .expect("no inner error");
+    assert_eq!(response.status().as_u16(), 501);
+    let auth = response
+        .headers()
+        .get("Jack-Auth")
+        .and_then(|value| value.to_str().ok())
+        .expect("the 501 is signed");
+    assert!(auth.starts_with("v1 "), "legacy refusal, not stream open");
+    assert_eq!(
+        body_bytes(response.into_body()).await.as_ref(),
+        STREAMING_501
+    );
+    assert_eq!(seen.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(*seen.heartbeat.lock().expect("heartbeat mutex"), None);
+    assert_eq!(*seen.cancellation.lock().expect("cancellation mutex"), None);
+}
+
+#[tokio::test]
+async fn default_builder_uses_one_mib_http_body_limits() {
+    let now = FIXTURE_NOW;
+    let state = MemoryState::new();
+    seed_registry(&state);
+    let layer = StreamLayerBuilder::new(build_verifier(state, now), server_signing_key()).build();
+    let seen = Arc::new(Seen::default());
+    let service = layer.layer(inner(Arc::clone(&seen)));
+    let alice = harness::signer_by_name("alice");
+    let signed = signed_request(&alice, now);
+    let mut request = build_request(&signed, false);
+    *request.body_mut() = Full::new(Bytes::from(vec![b'x'; (1 << 20) + 1]));
+
+    let response = service
+        .oneshot(request)
+        .await
+        .expect("body overflow is an HTTP response");
+    assert_eq!(response.status().as_u16(), 413);
+    assert_eq!(
+        seen.calls.load(Ordering::SeqCst),
+        0,
+        "oversized body is rejected before dispatch"
+    );
+}
+
+#[tokio::test]
+async fn default_builder_uses_one_mib_response_limit() {
+    let now = FIXTURE_NOW;
+    let state = MemoryState::new();
+    seed_registry(&state);
+    let layer = StreamLayerBuilder::new(build_verifier(state, now), server_signing_key()).build();
+    let large_response = BoxCloneService::new(tower::service_fn(
+        |_req: http::Request<Full<Bytes>>| async move {
+            Ok::<_, String>(
+                http::Response::builder()
+                    .status(200)
+                    .header("Content-Type", "application/json")
+                    .body(Full::new(Bytes::from(vec![b'x'; (1 << 20) + 1])))
+                    .expect("large response parts"),
+            )
+        },
+    ));
+    let service = layer.layer(large_response);
+    let alice = harness::signer_by_name("alice");
+    let signed = signed_request(&alice, now);
+
+    let response = service
+        .oneshot(build_request(&signed, false))
+        .await
+        .expect("response overflow is an HTTP response");
+    assert_eq!(response.status().as_u16(), 502);
+    let auth = response
+        .headers()
+        .get("Jack-Auth")
+        .and_then(|value| value.to_str().ok())
+        .expect("the response-limit refusal is signed");
+    assert!(auth.starts_with("v1 "));
 }
 
 #[tokio::test]

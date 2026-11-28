@@ -13,7 +13,7 @@ use mcp_jack::error::JackError;
 use mcp_jack::server::nonce::NonceStore;
 use mcp_jack::server::state::{MemoryState, RegistryEntry, StateEdit, StateStore};
 use mcp_jack::server::verify::{
-    is_native_tool, Clock, Config, NativeCall, NativeTools, Request, Verifier, TOOL_SERVER_KEY,
+    is_native_tool, Clock, NativeCall, NativeTools, Request, VerifierBuilder, TOOL_SERVER_KEY,
 };
 use mcp_jack::server::webhook_key::{WebhookKeyTool, TOOL_SERVER_WEBHOOK_KEY};
 use serde_json::{json, Value};
@@ -210,17 +210,15 @@ fn verifier_routes_webhook_key_and_keeps_server_key_denied() {
         })
         .expect("seed registry");
     let now: Clock = Arc::new(|| NOW);
-    let verifier = Verifier::new(Config {
-        aud: AUD.to_owned(),
-        state: Arc::new(state),
-        nonces: Arc::new(NonceStore::new()),
-        audit: None,
-        native: None,
-        window_seconds: 30,
-        now,
-    })
-    .expect("test config is valid")
-    .with_webhook_keys(Arc::new(webhook_tool()));
+    let verifier = VerifierBuilder::new(AUD.to_owned(), Arc::new(state))
+        .nonces(Arc::new(NonceStore::new()))
+        .audit(None)
+        .native_tools(None)
+        .window_seconds(30)
+        .now(now)
+        .webhook_keys(Arc::new(webhook_tool()))
+        .try_build()
+        .expect("test config is valid");
 
     // The configured route reaches the tool and returns its exact result.
     let res = verifier.verify(&signed_request(&signer, TOOL_SERVER_WEBHOOK_KEY, 1));
