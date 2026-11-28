@@ -7,6 +7,7 @@
 //! All clocks are injected; no real time is read.
 #![cfg(target_os = "linux")]
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::DirBuilderExt;
