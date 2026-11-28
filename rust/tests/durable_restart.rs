@@ -20,7 +20,7 @@ use mcp_jack::server::durable_recovery::{inspect_recovery, reconcile_unknown};
 use mcp_jack::server::durable_store::{DurableNonceStore, DurableStoreOptions};
 use mcp_jack::server::nonce::NonceStore;
 use mcp_jack::server::state::{MemoryState, RegistryEntry, StateStore};
-use mcp_jack::server::verify::{Clock, Request, VerifierBuilder};
+use mcp_jack::server::verify::{Clock, Request, Verifier, VerifierBuilder};
 use mcp_jack::signing::request_signing_string;
 
 const AUD: &str = "candidate-vector-test";
